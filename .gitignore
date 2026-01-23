@@ -6,4 +6,4 @@ venv/
 .venv/
 .idea/
 .vscode/
-README
+README.database_connection_test
