@@ -1,3 +1,0 @@
-# TO restart API server after updating code or .env file
-
-% systemctl restart cgd-api
