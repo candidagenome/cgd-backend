@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+gunicorn>=21.2
+sqlalchemy>=2.0
+pydantic-settings>=2.2
+
+# DB drivers (install the one you need; keep extras for convenience)
+oracledb>=2.0
+psycopg[binary]>=3.1
+pymysql>=1.1

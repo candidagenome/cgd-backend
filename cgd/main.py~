@@ -1,0 +1,20 @@
+from fastapi import FastAPI
+
+from cgd.api.routers.health_router import router as health_router
+from cgd.api.routers.locus_router import router as locus_router
+from cgd.api.routers.search_router import router as search_router
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="CGD API",
+        version="0.1.0",
+    )
+
+    app.include_router(health_router)
+    app.include_router(locus_router)
+    app.include_router(search_router)
+    return app
+
+
+app = create_app()

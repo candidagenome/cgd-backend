@@ -1,0 +1,7 @@
+from cgd.schemas.locus_schema import LocusSearchResponse
+
+@router.get("/{name}", response_model=LocusSearchResponse)
+def locus(name: str, db: Session = Depends(get_db)) -> LocusSearchResponse:
+    return locus_service.get_locus_summary(db, name)
+
+

@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+from fastapi import HTTPException
+
+from cgd.api.crud.locus_crud import find_loci_by_name
+from cgd.api.crud.phenotype_crud import get_phenotype_annotations_for_locus
+from cgd.api.crud.go_crud import get_go_annotations_for_locus
+
+from cgd.schemas.locus_schema import LocusSummaryResponse, LocusBasic, LocusSectionFlags
+from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
+from cgd.schemas.go_schema import GODetailsResponse
+
+def get_locus_summary(db: Session, name: str) -> LocusSummaryResponse:
+    locus = find_loci_by_name(db, name)
+    if locus is None:
+        raise HTTPException(status_code=404, detail=f"Locus '{name}' not found")
+
+    # flags can be computed or stored in DB; start with computed later
+    flags = LocusSectionFlags()
+
+    return LocusSummaryResponse(
+        locus=LocusBasic(
+            gene_name=getattr(locus, "gene_name", None),
+            feature_name=getattr(locus, "feature_name", None),
+            name_description=getattr(locus, "name_description", None),
+        ),
+        flags=flags,
+    )
+
+def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsResponse:
+    locus = find_loci_by_name(db, name)
+    if locus is None:
+        raise HTTPException(status_code=404, detail=f"Locus '{name}' not found")
+
+    ann = get_phenotype_annotations_for_locus(db, getattr(locus, "feature_id", None))
+    # TODO: map ann rows -> schema objects
+    return PhenotypeDetailsResponse(locus_name=name, annotations=[])
+
+def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
+    locus = find_loci_by_name(db, name)
+    if locus is None:
+        raise HTTPException(status_code=404, detail=f"Locus '{name}' not found")
+
+    ann = get_go_annotations_for_locus(db, getattr(locus, "feature_id", None))
+    # TODO: map ann rows -> schema objects
+    return GODetailsResponse(locus_name=name, annotations=[])

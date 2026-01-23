@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+from sqlalchemy import or_, func
+from sqlalchemy.orm import Session
+
+# Use your actual ORM class name that has gene_name + systematic_name
+from cgd.models.locus_model import Feature
+
+
+def find_loci_by_name(db: Session, term: str):
+    t = term.strip()
+    if not t:
+        return []
+
+    # case-insensitive match
+    return (
+        db.query(Feature)
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(t),
+                func.upper(Feature.feature_name) == func.upper(t),
+            )
+        )
+        .all()
+    )

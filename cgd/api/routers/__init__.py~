@@ -1,0 +1,2 @@
+from cgd.api.routers.locus_router import router as locus_router
+app.include_router(locus_router)

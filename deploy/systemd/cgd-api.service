@@ -1,0 +1,31 @@
+[Unit]
+Description=CGD FastAPI backend (gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+
+# --- Adjust these for your EC2 host ---
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/cgd_api
+
+# Load .env from WorkingDirectory (systemd will read KEY=VALUE lines)
+EnvironmentFile=/opt/cgd_api/.env
+
+# Use venv gunicorn
+ExecStart=/opt/cgd_api/.venv/bin/gunicorn \
+  -k uvicorn.workers.UvicornWorker \
+  -w 2 \
+  -b 127.0.0.1:8000 \
+  cgd.main:app
+
+Restart=always
+RestartSec=3
+
+# Helpful for debugging startup issues
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# command for generating models.py 
+
+% python -m sqlacodegen \
+  "oracle+oracledb://MULTI:Enter2multi@cdev-oracle-instance.cpzudjgxpqph.us-west-2.rds.amazonaws.com:1521/?service_name=CDEV" \
+  --schema MULTI \
+  --generator declarative \
+  --outfile cgd/models.py
+
+
+"""
+% python -m sqlacodegen \
+  "oracle+oracledb://MULTI:Enter2multi@cdev-oracle-instance.cpzudjgxpqph.us-west-2.rds.amazonaws.com:1521/?service_name=CDEV" \
+  --schema MULTI \
+  --generator sqlmodels \
+  --outfile cgd/models.py
+"""
