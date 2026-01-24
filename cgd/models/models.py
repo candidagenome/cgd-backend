@@ -21,7 +21,7 @@ class Alias(Base):
      'schema': 'MULTI'}
     )
 
-    alias_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an alias. Oracle sequence generated number.')
+    alias_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an alias. Oracle sequence generated number.')
     alias_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Alternative name for a feature or gene.')
     alias_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of alias for the gene or feature (Coded: Standard or Non-standard).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -39,7 +39,7 @@ class Author(Base):
         {'comment': 'Contains names of authors for a reference.', 'schema': 'MULTI'}
     )
 
-    author_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an author. Oracle sequence generated number.')
+    author_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an author. Oracle sequence generated number.')
     author_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Author name, usually in PubMed format.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
@@ -54,13 +54,13 @@ class Book(Base):
         {'comment': 'Contains information for a book reference.', 'schema': 'MULTI'}
     )
 
-    book_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a book. Oracle sequence generated number.')
+    book_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a book. Oracle sequence generated number.')
     title: Mapped[str] = mapped_column(VARCHAR(400), nullable=False, comment='Title of the book.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
     volume_title: Mapped[Optional[str]] = mapped_column(VARCHAR(400), comment='Title of the book volume.')
     isbn: Mapped[Optional[str]] = mapped_column(VARCHAR(20), comment='Interantional Standard Book Number.')
-    total_pages: Mapped[Optional[float]] = mapped_column(NUMBER(5, 0, False), comment='Total number of pages in the book.')
+    total_pages: Mapped[Optional[int]] = mapped_column(NUMBER(5, 0, False), comment='Total number of pages in the book.')
     publisher: Mapped[Optional[str]] = mapped_column(VARCHAR(100), comment='Publisher of the book.')
     publisher_location: Mapped[Optional[str]] = mapped_column(VARCHAR(100), comment='Location of the book publisher.')
 
@@ -77,7 +77,7 @@ class Code(Base):
      'schema': 'MULTI'}
     )
 
-    code_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a code.  Oracle sequence generated number.')
+    code_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a code.  Oracle sequence generated number.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table name associated with the coded value.')
     col_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Column name associated with the coded value.')
     code_value: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The actual code value.')
@@ -100,7 +100,7 @@ class Colleague(Base):
      'schema': 'MULTI'}
     )
 
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague. Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague. Oracle sequence generated number.')
     last_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Colleague last name.')
     first_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Colleague first name.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source from which which the database obtained this colleague information. Coded.')
@@ -148,7 +148,7 @@ class Dbuser(Base):
      'schema': 'MULTI'}
     )
 
-    dbuser_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a database user.  Oracle sequence generated number.')
+    dbuser_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a database user.  Oracle sequence generated number.')
     userid: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, comment='Assigned unique identifier for non-public user. Usually  their UNIX login name.')
     first_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='First name of the database user.')
     last_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Last name of the database user.')
@@ -170,7 +170,7 @@ class Dbxref(Base):
      'schema': 'MULTI'}
     )
 
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Unique identifier for an database cross reference. Oracle sequence generated number.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Unique identifier for an database cross reference. Oracle sequence generated number.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the database identifier (Coded: SwissProt, NCBI, etc.).')
     dbxref_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of database identifier (Coded: GenBank GI, RefSeq GI, etc.).')
     dbxref_id: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Database identifier assigned by another database.')
@@ -196,9 +196,9 @@ class DeleteLog(Base):
      'schema': 'MULTI'}
     )
 
-    delete_log_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a deleted row.  Oracle sequence generated number.')
+    delete_log_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a deleted row.  Oracle sequence generated number.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table name.')
-    primary_key: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row deleted.')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row deleted.')
     deleted_row: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='Concatenation of all columns in the row deleted.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -213,7 +213,7 @@ class Experiment(Base):
         {'schema': 'MULTI'}
     )
 
-    experiment_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an experiment.  Oracle sequence generated number.')
+    experiment_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an experiment.  Oracle sequence generated number.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The source of the experiment.  Coded.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -232,7 +232,7 @@ class ExptProperty(Base):
      'schema': 'MULTI'}
     )
 
-    expt_property_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an experiment property. Oracle sequence generated number.')
+    expt_property_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an experiment property. Oracle sequence generated number.')
     property_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of experiment attribute or property.  Coded value.')
     property_value: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='The actual experiment attribute or property value.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -254,8 +254,8 @@ class Go(Base):
      'schema': 'MULTI'}
     )
 
-    go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier assigned to a goid. Oracle sequence generated number.')
-    goid: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='GO number assigned by GO software.')
+    go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier assigned to a goid. Oracle sequence generated number.')
+    goid: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='GO number assigned by GO software.')
     go_term: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='Term or word in the Gene Ontology.')
     go_aspect: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Aspect of the GO term (coded: function, process, component).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -277,7 +277,7 @@ class GoSynonym(Base):
         {'comment': 'Contains synonyms for GO terms.', 'schema': 'MULTI'}
     )
 
-    go_synonym_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a GO synonym. Oracle sequence generated number.')
+    go_synonym_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a GO synonym. Oracle sequence generated number.')
     go_synonym: Mapped[str] = mapped_column(VARCHAR(966), nullable=False, comment='Description of the GO synonym.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
@@ -293,7 +293,7 @@ class HomologyGroup(Base):
      'schema': 'MULTI'}
     )
 
-    homology_group_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a homology group.  Oracle generated sequence number.')
+    homology_group_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a homology group.  Oracle generated sequence number.')
     homology_group_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of homology group. Coded: ortholog, paralog, etc.')
     method: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The method used to determine homology. Coded.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -313,7 +313,7 @@ class Interaction(Base):
         {'comment': 'Stores interaction data.', 'schema': 'MULTI'}
     )
 
-    interaction_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an interaction. Oracle generated sequence number.')
+    interaction_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an interaction. Oracle generated sequence number.')
     experiment_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of experiment conducted that produced the interaction (Coded).')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the interaction. Coded value.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -331,7 +331,7 @@ class Journal(Base):
         {'comment': 'Contains information about journals.', 'schema': 'MULTI'}
     )
 
-    journal_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a journal. Oracle sequence generated number.')
+    journal_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a journal. Oracle sequence generated number.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was first entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who first entered the record into the database.')
     full_name: Mapped[Optional[str]] = mapped_column(VARCHAR(200), comment='Full name of the journal.')
@@ -354,7 +354,7 @@ class Keyword(Base):
      'schema': 'MULTI'}
     )
 
-    keyword_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a keyword. Oracle sequence generated number.')
+    keyword_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a keyword. Oracle sequence generated number.')
     keyword: Mapped[str] = mapped_column(VARCHAR(100), nullable=False, comment='Keyword.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the keyword. Coded.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -371,7 +371,7 @@ class Note(Base):
         {'comment': 'Contains notes about items in the database.', 'schema': 'MULTI'}
     )
 
-    note_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a note. Oracle generated sequence number.')
+    note_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a note. Oracle generated sequence number.')
     note: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='The note or description.')
     note_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of note (Coded).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -390,7 +390,7 @@ class Paragraph(Base):
      'schema': 'MULTI'}
     )
 
-    paragraph_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a paragraph. Oracle sequence generated number.')
+    paragraph_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a paragraph. Oracle sequence generated number.')
     paragraph_text: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='Assembled paragraph text.')
     date_edited: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the paragraph was last significantly edited.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -408,7 +408,7 @@ class Phenotype(Base):
      'schema': 'MULTI'}
     )
 
-    phenotype_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a phenotype. Oracle sequence generated number.')
+    phenotype_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a phenotype. Oracle sequence generated number.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The source of the phenotype. Coded value.')
     experiment_type: Mapped[str] = mapped_column(VARCHAR(100), nullable=False, comment='The experimental methodology that produced the phenotype (e.g.,Systematic deletion, Classical genetics, etc.).')
     mutant_type: Mapped[str] = mapped_column(VARCHAR(100), nullable=False, comment='The mutation effect on the gene product function (e.g., Null, Overexpression, Conditional, etc.).')
@@ -430,7 +430,7 @@ class RefBad(Base):
      'schema': 'MULTI'}
     )
 
-    pubmed: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='PubMed identifier for a reference that should not be associated with the database or a given table record.')
+    pubmed: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='PubMed identifier for a reference that should not be associated with the database or a given table record.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was first entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
 
@@ -445,8 +445,8 @@ class RefTemp(Base):
      'schema': 'MULTI'}
     )
 
-    ref_temp_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a temporary reference. Oracle sequence generated number.')
-    pubmed: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='PMID of the reference from NCBI.')
+    ref_temp_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a temporary reference. Oracle sequence generated number.')
+    pubmed: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='PMID of the reference from NCBI.')
     citation: Mapped[str] = mapped_column(VARCHAR(480), nullable=False, comment='Full citation, including authors, journal, title, etc.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -463,7 +463,7 @@ class RefType(Base):
      'schema': 'MULTI'}
     )
 
-    ref_type_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference type. Oracle generated sequence number.')
+    ref_type_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference type. Oracle generated sequence number.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the reference type (Coded: NCBI, SGD).')
     ref_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of publication (NCBI PT) or SGD defined.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -483,10 +483,10 @@ class RefUnlink(Base):
      'schema': 'MULTI'}
     )
 
-    ref_unlink_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an unlinked reference. Oracle sequence generated number.')
-    pubmed: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='PubMed identifier for a reference that should not be associated with a given row in the database.')
+    ref_unlink_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an unlinked reference. Oracle sequence generated number.')
+    pubmed: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='PubMed identifier for a reference that should not be associated with a given row in the database.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table name for which the reference needs to be unlinked.')
-    primary_key: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row that should be unlinked from the reference')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row that should be unlinked from the reference')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
 
@@ -500,7 +500,7 @@ class TabRule(Base):
      'schema': 'MULTI'}
     )
 
-    tab_rule_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a table rule. Oracle generated sequential number.')
+    tab_rule_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a table rule. Oracle generated sequential number.')
     group_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The name or category for the table.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table name.')
     diagram_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Name of the schema diagram.')
@@ -519,7 +519,7 @@ class Taxonomy(Base):
      'schema': 'MULTI'}
     )
 
-    taxon_id: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy term from NCBI.')
+    taxon_id: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy term from NCBI.')
     tax_term: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='The taxonomy term itself (eg. Saccharomyces cerevisiae).')
     is_default_display: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Allowable values are Y or N.  Y indicates that the taxonomy term is used for default displays on SGD pages (eg. Homolog pull-down on a protein page).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -607,10 +607,10 @@ class UpdateLog(Base):
      'schema': 'MULTI'}
     )
 
-    update_log_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an entry in the update log. Oracle sequence generated number.')
+    update_log_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an entry in the update log. Oracle sequence generated number.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Name of the table being updated.')
     col_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Name of the column being updated.')
-    primary_key: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row that was updated.')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key of the row that was updated.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
     old_value: Mapped[Optional[str]] = mapped_column(VARCHAR(4000), comment='Old value.')
@@ -630,7 +630,7 @@ class Url(Base):
      'schema': 'MULTI'}
     )
 
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier assigned to each URL.  Oracle sequence generated number')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier assigned to each URL.  Oracle sequence generated number')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Database or Institution providing the URL (Coded).')
     url_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of URL (Coded).')
     url: Mapped[str] = mapped_column(VARCHAR(480), nullable=False, comment='Actual URL of the particular site.')
@@ -657,7 +657,7 @@ class WebMetadata(Base):
      'schema': 'MULTI'}
     )
 
-    web_metadata_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the web_metadata table. Oracle sequence generated number.')
+    web_metadata_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the web_metadata table. Oracle sequence generated number.')
     application_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Name of the web page or application program (Coded: Locus page, etc.).')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table name from which the data is retrieved.')
     col_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Column name from which the data is retrieved.')
@@ -677,13 +677,13 @@ class BlastHit(Base):
      'schema': 'MULTI'}
     )
 
-    blast_hit_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a blast hit. Oracle generated sequence number.')
+    blast_hit_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a blast hit. Oracle generated sequence number.')
     identifier: Mapped[str] = mapped_column(VARCHAR(100), nullable=False, comment='The idenitifer for the blast hit; for the nr data, will be the nr title line, for example, gi|17945344|gb|AAL48728.1|')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The source of the data (Coded: nr, etc.).')
-    length: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The length of the sequence in amino acids.')
+    length: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The length of the sequence in amino acids.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    taxon_id: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for a taxonomy term assigned by NCBI. Foreign key to the taxonomy table.')
+    taxon_id: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for a taxonomy term assigned by NCBI. Foreign key to the taxonomy table.')
     description: Mapped[Optional[str]] = mapped_column(VARCHAR(2000), comment='The description of the blast hit.')
 
     taxon: Mapped[Optional['Taxonomy']] = relationship('Taxonomy', back_populates='blast_hit')
@@ -699,10 +699,10 @@ class ColRule(Base):
         {'comment': 'Contains column-based rules for the database.', 'schema': 'MULTI'}
     )
 
-    col_rule_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a column rule. Oracle generated sequential number.')
+    col_rule_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a column rule. Oracle generated sequential number.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Table to which the column belongs.')
     col_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Column name.')
-    col_order: Mapped[float] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Order in which the column should be listed.')
+    col_order: Mapped[int] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Order in which the column should be listed.')
     col_rule: Mapped[Optional[str]] = mapped_column(VARCHAR(4000), comment='Rules associated with this column.')
     col_sequence_name: Mapped[Optional[str]] = mapped_column(VARCHAR(30), comment='Name of the Oracle sequence, if any, associated with this column.')
 
@@ -721,9 +721,9 @@ class CollKw(Base):
      'schema': 'MULTI'}
     )
 
-    coll_kw_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the coll_kw table. Oracle sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
-    keyword_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a keyword. Foreign key to the keyword table.')
+    coll_kw_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the coll_kw table. Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
+    keyword_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a keyword. Foreign key to the keyword table.')
 
     colleague: Mapped['Colleague'] = relationship('Colleague', back_populates='coll_kw')
     keyword: Mapped['Keyword'] = relationship('Keyword', back_populates='coll_kw')
@@ -740,9 +740,9 @@ class CollRelationship(Base):
         {'comment': 'Contains relationships between colleagues.', 'schema': 'MULTI'}
     )
 
-    coll_relationship_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague relationship. Oracle sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague who is an associate of another colleague. Foreign key to the colleague table.')
-    associate_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague who is an associate of another colleague. Foreign key to the colleague table.')
+    coll_relationship_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague relationship. Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague who is an associate of another colleague. Foreign key to the colleague table.')
+    associate_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague who is an associate of another colleague. Foreign key to the colleague table.')
     relationship_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of colleague relationship (Coded: Lab member, Associate).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
@@ -763,9 +763,9 @@ class CollUrl(Base):
      'schema': 'MULTI'}
     )
 
-    coll_url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the coll_url table. Oracles sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier assigned to each URL.  Foreign key to the url table.')
+    coll_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the coll_url table. Oracles sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier assigned to each URL.  Foreign key to the url table.')
 
     colleague: Mapped['Colleague'] = relationship('Colleague', back_populates='coll_url')
     url: Mapped['Url'] = relationship('Url', back_populates='coll_url')
@@ -782,8 +782,8 @@ class ColleagueRemark(Base):
      'schema': 'MULTI'}
     )
 
-    colleague_remark_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague remark. Oracle sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
+    colleague_remark_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague remark. Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
     remark: Mapped[str] = mapped_column(VARCHAR(1500), nullable=False, comment='Text of public remarks, research interests supplied by a colleague.')
     remark_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of colleague remark (coded: Announcement, Research Interest).')
     remark_date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, comment='Date the remark was supplied to SGD by a colleague.')
@@ -807,11 +807,11 @@ class Cv(Base):
      'schema': 'MULTI'}
     )
 
-    cv_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary. Oracle sequence generated number.')
+    cv_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary. Oracle sequence generated number.')
     cv_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Unique name of the controlled vocabulary.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    url_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier assigned to each URL.  Foreign key to the URL table.')
+    url_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier assigned to each URL.  Foreign key to the URL table.')
     description: Mapped[Optional[str]] = mapped_column(VARCHAR(240), comment='Full description of the controlled vocabulary.')
 
     url: Mapped[Optional['Url']] = relationship('Url', back_populates='cv')
@@ -829,9 +829,9 @@ class DbxrefHomology(Base):
         {'comment': 'Contains data about external orthologs.', 'schema': 'MULTI'}
     )
 
-    dbxref_homology_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an external ortholog. Oracle generated sequence number.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a dbxref. FK to the DBXREF table.')
-    homology_group_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
+    dbxref_homology_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an external ortholog. Oracle generated sequence number.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a dbxref. FK to the DBXREF table.')
+    homology_group_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
     name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Name associated with the ortholog, e.g., dbxref_id or feature_name.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the records was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -852,9 +852,9 @@ class DbxrefUrl(Base):
      'schema': 'MULTI'}
     )
 
-    dbxref_url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_url table. Oracle sequence generated number.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for a URL.  Foreign key to the url table.')
+    dbxref_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_url table. Oracle sequence generated number.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for a URL.  Foreign key to the url table.')
 
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='dbxref_url')
     url: Mapped['Url'] = relationship('Url', back_populates='dbxref_url')
@@ -873,9 +873,9 @@ class ExptExptprop(Base):
      'schema': 'MULTI'}
     )
 
-    expt_exptprop_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the expt_exptprop table. Linking table between the experiment and expt_property tables.')
-    expt_property_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an experiment property. FK to the expt_property table.')
-    experiment_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an experiment.  FK to the experiment table.')
+    expt_exptprop_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the expt_exptprop table. Linking table between the experiment and expt_property tables.')
+    expt_property_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an experiment property. FK to the expt_property table.')
+    experiment_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an experiment.  FK to the experiment table.')
 
     experiment: Mapped['Experiment'] = relationship('Experiment', back_populates='expt_exptprop')
     expt_property: Mapped['ExptProperty'] = relationship('ExptProperty', back_populates='expt_exptprop')
@@ -893,9 +893,9 @@ class GoGosyn(Base):
      'schema': 'MULTI'}
     )
 
-    go_gosyn_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the go_gosyn table. Oracle sequence generated number.')
-    go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
-    go_synonym_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO synonym. Foreign key to the go_synonym table.')
+    go_gosyn_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the go_gosyn table. Oracle sequence generated number.')
+    go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
+    go_synonym_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO synonym. Foreign key to the go_synonym table.')
 
     go: Mapped['Go'] = relationship('Go', back_populates='go_gosyn')
     go_synonym: Mapped['GoSynonym'] = relationship('GoSynonym', back_populates='go_gosyn')
@@ -915,10 +915,10 @@ class GoPath(Base):
      'schema': 'MULTI'}
     )
 
-    go_path_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go path. Oracle generated sequence number.')
-    ancestor_go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to the ancestor goid. Foreign key to the go table.')
-    child_go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for a child goid. Foreign key to the go table.')
-    generation: Mapped[float] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The number of generations between the parent and child term; for example, for a  grandchild:grandparent relationship, the generation = 2.')
+    go_path_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go path. Oracle generated sequence number.')
+    ancestor_go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to the ancestor goid. Foreign key to the go table.')
+    child_go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for a child goid. Foreign key to the go table.')
+    generation: Mapped[int] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The number of generations between the parent and child term; for example, for a  grandchild:grandparent relationship, the generation = 2.')
     ancestor_path: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='A list of all GOIDs corresponding to all the GO terms in between the ancestor and the child, separated by ::.')
     relationship_type: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='A coded value to describe the type of relationship between the parent and child; valid values are "part of" and "is a".')
 
@@ -937,8 +937,8 @@ class GoSet(Base):
      'schema': 'MULTI'}
     )
 
-    go_set_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go set. Oracle sequence generated number.')
-    go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
+    go_set_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go set. Oracle sequence generated number.')
+    go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
     go_set_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The name of the go set (Coded).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -958,9 +958,9 @@ class InteractPheno(Base):
      'schema': 'MULTI'}
     )
 
-    interact_pheno_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the interact_pheno. Oracle sequence generated number.')
-    interaction_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an interaction. Foreign key to the interaction table.')
-    phenotype_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for a phenotype.  Foreign key to the phenotype table.')
+    interact_pheno_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the interact_pheno. Oracle sequence generated number.')
+    interaction_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an interaction. Foreign key to the interaction table.')
+    phenotype_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for a phenotype.  Foreign key to the phenotype table.')
 
     interaction: Mapped['Interaction'] = relationship('Interaction', back_populates='interact_pheno')
     phenotype: Mapped['Phenotype'] = relationship('Phenotype', back_populates='interact_pheno')
@@ -977,10 +977,10 @@ class NoteLink(Base):
      'schema': 'MULTI'}
     )
 
-    note_link_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a note link. Oracle generated sequence number.')
-    note_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a note. Foreign key to the note table.')
+    note_link_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a note link. Oracle generated sequence number.')
+    note_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a note. Foreign key to the note table.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='The table name of the row to which the note refers.')
-    primary_key: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The primary key of the row to which the note refers.')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The primary key of the row to which the note refers.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
 
@@ -1000,13 +1000,13 @@ class PdbSequence(Base):
      'schema': 'MULTI'}
     )
 
-    pdb_sequence_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB sequence. Oracle sequence generated number.')
+    pdb_sequence_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB sequence. Oracle sequence generated number.')
     sequence_name: Mapped[str] = mapped_column(VARCHAR(50), nullable=False, comment='Name of the PDB sequence.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the PDB sequence. Coded.')
-    sequence_length: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Length of the sequence.')
+    sequence_length: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Length of the sequence.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    taxon_id: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for a taxonomy term assigned by NCBI. Foreign key to the taxonomy table.')
+    taxon_id: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for a taxonomy term assigned by NCBI. Foreign key to the taxonomy table.')
     note: Mapped[Optional[str]] = mapped_column(VARCHAR(960), comment='Comment about the PDB sequence.')
 
     taxon: Mapped[Optional['Taxonomy']] = relationship('Taxonomy', back_populates='pdb_sequence')
@@ -1031,25 +1031,25 @@ class Reference(Base):
      'schema': 'MULTI'}
     )
 
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference. Oracle sequence generated number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference. Oracle sequence generated number.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the reference (Coded: PubMed, Curator, etc.)')
     status: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Status of the reference (coded: published, in press, etc.).')
     pdf_status: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Indicates whether there is a full-text paper for that reference. Coded value: Y(yes, has PDF), YT(yes, PDF text conversion), YF(yes PDF, failed text conversion), N(no PDF), NAA(no PDF automatically), NAM(no PDF manually), NAP(not applicable).')
     dbxref_id: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Primary DBXREF_ID for the reference.')
     citation: Mapped[str] = mapped_column(VARCHAR(480), nullable=False, comment='Full citation of the reference.')
-    year: Mapped[float] = mapped_column(NUMBER(4, 0, False), nullable=False, comment='Year of publication or communication.')
+    year: Mapped[int] = mapped_column(NUMBER(4, 0, False), nullable=False, comment='Year of publication or communication.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
     curation_status: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Status of the reference in the curation process.  Coded value.')
-    pubmed: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='PubMed ID from NCBI.')
+    pubmed: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='PubMed ID from NCBI.')
     date_published: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Date the reference was published.')
-    date_revised: Mapped[Optional[float]] = mapped_column(NUMBER(8, 0, False), comment='Date the reference was revised.')
+    date_revised: Mapped[Optional[int]] = mapped_column(NUMBER(8, 0, False), comment='Date the reference was revised.')
     issue: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Issue of the publication.')
     page: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Pagination of the reference (characters separated by a dash).')
     volume: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Volume of the  publication.')
     title: Mapped[Optional[str]] = mapped_column(VARCHAR(400), comment='Title of the publication or communication.')
-    journal_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier for a journal. Foreign key to the journal table.')
-    book_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier for a book. Foreign key to the book table.')
+    journal_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier for a journal. Foreign key to the journal table.')
+    book_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Assigned unique identifier for a book. Foreign key to the book table.')
 
     book: Mapped[Optional['Book']] = relationship('Book', back_populates='reference')
     journal: Mapped[Optional['Journal']] = relationship('Journal', back_populates='reference')
@@ -1077,10 +1077,10 @@ class TaxRelationship(Base):
      'schema': 'MULTI'}
     )
 
-    tax_relationship_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy relationship. Oracle sequence generated number.')
-    parent_taxon_id: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key, unique identifier for a taxonomy term; ID from NCBI, not an Oracle-generated sequence number.')
-    child_taxon_id: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key, unique identifier for a taxonomy term; ID from NCBI, not an Oracle-generated sequence number.')
-    generation: Mapped[float] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The generation between the parent and the child term.  For example, a direct parent:child relationship would be generation = 1, while a grandparent:grandchild relationship would be generation = 2.')
+    tax_relationship_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy relationship. Oracle sequence generated number.')
+    parent_taxon_id: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key, unique identifier for a taxonomy term; ID from NCBI, not an Oracle-generated sequence number.')
+    child_taxon_id: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key, unique identifier for a taxonomy term; ID from NCBI, not an Oracle-generated sequence number.')
+    generation: Mapped[int] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The generation between the parent and the child term.  For example, a direct parent:child relationship would be generation = 1, while a grandparent:grandchild relationship would be generation = 2.')
 
     child_taxon: Mapped['Taxonomy'] = relationship('Taxonomy', foreign_keys=[child_taxon_id], back_populates='tax_relationship')
     parent_taxon: Mapped['Taxonomy'] = relationship('Taxonomy', foreign_keys=[parent_taxon_id], back_populates='tax_relationship')
@@ -1097,8 +1097,8 @@ class TaxSynonym(Base):
      'schema': 'MULTI'}
     )
 
-    tax_synonym_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy synonym.  Oracle sequence generated number.')
-    taxon_id: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a taxonomy term from NCBI. Foreign key to the taxonomy table.')
+    tax_synonym_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a taxonomy synonym.  Oracle sequence generated number.')
+    taxon_id: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a taxonomy term from NCBI. Foreign key to the taxonomy table.')
     tax_synonym: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='Synonym of the taxonomy term; note that it may not be unique (eg. Yeast can be a synonym for Saccharomyce cerevisiae and pombe).  The Other Name field at NCBI.')
 
     taxon: Mapped['Taxonomy'] = relationship('Taxonomy', back_populates='tax_synonym')
@@ -1116,9 +1116,9 @@ class UrlHomology(Base):
      'schema': 'MULTI'}
     )
 
-    url_homology_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the URL_HOMOLOGY table. Oracle generated sequence number.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a URL. FK to the URL table.')
-    homology_group_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
+    url_homology_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the URL_HOMOLOGY table. Oracle generated sequence number.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a URL. FK to the URL table.')
+    homology_group_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
 
@@ -1140,8 +1140,8 @@ class WebDisplay(Base):
      'schema': 'MULTI'}
     )
 
-    web_display_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a web display location. Oracle sequence generated number.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to each URL.  Foreign key to the url table.')
+    web_display_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a web display location. Oracle sequence generated number.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to each URL.  Foreign key to the url table.')
     web_page_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Name of the web page containing the URL link (Coded: locus, protein, etc.)')
     label_location: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Location on the web page of the URL link.')
     label_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of URL link (Coded: Pull-down, Text, Gif)')
@@ -1166,8 +1166,8 @@ class CvTerm(Base):
      'schema': 'MULTI'}
     )
 
-    cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary term. Oracle sequence generated number.')
-    cv_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary. Oracle sequence generated number.')
+    cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary term. Oracle sequence generated number.')
+    cv_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary. Oracle sequence generated number.')
     term_name: Mapped[str] = mapped_column(VARCHAR(1024), nullable=False, comment='The name of the controlled vocabulary term (e.g., go term, phenotype observable term, etc.)')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -1198,15 +1198,15 @@ class Organism(Base):
      'schema': 'MULTI'}
     )
 
-    organism_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an organism. Oracle generated sequence number.')
+    organism_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an organism. Oracle generated sequence number.')
     organism_name: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='Full name of the organism.')
     organism_abbrev: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Standard abbreviation for the organism used for file names and other applications.')
-    taxon_id: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The NCBI taxon_id if available for this organism. Link to the TAXONOMY table.')
+    taxon_id: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The NCBI taxon_id if available for this organism. Link to the TAXONOMY table.')
     taxonomic_rank: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Taxonomic rank of the organism, e.g., Species, Genus, etc. Coded.')
-    organism_order: Mapped[float] = mapped_column(NUMBER(3, 0, False), nullable=False, comment='Display order of the organism within species and/or within strains.')
+    organism_order: Mapped[int] = mapped_column(NUMBER(3, 0, False), nullable=False, comment='Display order of the organism within species and/or within strains.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    parent_organism_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Parent organism_no for this organism (e.g., parent_organism_no for a species is the genus organism_no). FK to the ORGANISM table.')
+    parent_organism_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Parent organism_no for this organism (e.g., parent_organism_no for a species is the genus organism_no). FK to the ORGANISM table.')
     common_name: Mapped[Optional[str]] = mapped_column(VARCHAR(240), comment='The common name for the organism.')
 
     organism: Mapped[Optional['Organism']] = relationship('Organism', remote_side=[organism_no], back_populates='organism_reverse')
@@ -1229,15 +1229,15 @@ class PdbAlignment(Base):
      'schema': 'MULTI'}
     )
 
-    pdb_alignment_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB alignment. Oracle sequence generated number.')
-    query_seq_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the query sequence. Foreign key to the pdb_sequence table.')
-    target_seq_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a target sequence. Foreign key to the pdb_sequence table.')
+    pdb_alignment_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB alignment. Oracle sequence generated number.')
+    query_seq_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the query sequence. Foreign key to the pdb_sequence table.')
+    target_seq_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a target sequence. Foreign key to the pdb_sequence table.')
     method: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Method used to align the sequences. Coded.')
     matrix: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Matrix used to align the sequences. Coded.')
-    query_align_start_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Query alignment start basepair coordinate.')
-    query_align_stop_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Query alignment stop basepair coordinate.')
-    target_align_start_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Target alignment start basepair coordinate.')
-    target_align_stop_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Target alignment stop basepair coordinate.')
+    query_align_start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Query alignment start basepair coordinate.')
+    query_align_stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Query alignment stop basepair coordinate.')
+    target_align_start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Target alignment start basepair coordinate.')
+    target_align_stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Target alignment stop basepair coordinate.')
     pct_aligned: Mapped[decimal.Decimal] = mapped_column(NUMBER(5, 2, True), nullable=False, comment='Percent alignment.')
     pct_identical: Mapped[decimal.Decimal] = mapped_column(NUMBER(5, 2, True), nullable=False, comment='Percent identity.')
     pct_similar: Mapped[decimal.Decimal] = mapped_column(NUMBER(5, 2, True), nullable=False, comment='Percent similarity.')
@@ -1259,7 +1259,7 @@ class Abstract(Reference):
      'schema': 'MULTI'}
     )
 
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
     abstract: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='Abstract for a reference.')
 
 
@@ -1276,10 +1276,10 @@ class AuthorEditor(Base):
      'schema': 'MULTI'}
     )
 
-    author_editor_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for each author or editor for a reference. Oracle sequence generated number.')
-    author_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an author. Foreign key to the author table.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
-    author_order: Mapped[float] = mapped_column(NUMBER(4, 0, False), nullable=False, comment='Order in which an author is in the list of authors for a particular reference.')
+    author_editor_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for each author or editor for a reference. Oracle sequence generated number.')
+    author_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an author. Foreign key to the author table.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    author_order: Mapped[int] = mapped_column(NUMBER(4, 0, False), nullable=False, comment='Order in which an author is in the list of authors for a particular reference.')
     author_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of author (coded: Author, Editor).')
 
     author: Mapped['Author'] = relationship('Author', back_populates='author_editor')
@@ -1298,9 +1298,9 @@ class DbxrefRef(Base):
      'schema': 'MULTI'}
     )
 
-    dbxref_ref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_ref table. Oracle sequence generated number.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    dbxref_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_ref table. Oracle sequence generated number.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
 
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='dbxref_ref')
     reference: Mapped['Reference'] = relationship('Reference', back_populates='dbxref_ref')
@@ -1323,8 +1323,8 @@ class Feature(Base):
      'schema': 'MULTI'}
     )
 
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature. Oracle sequence generated number.')
-    organism_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an organism. FK to the ORGANISM table.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature. Oracle sequence generated number.')
+    organism_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an organism. FK to the ORGANISM table.')
     feature_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Name of the feature, such as ORF name, tRNA name, etc.')
     dbxref_id: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Primary DBXREF_ID for the feature.')
     feature_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of the feature, based on SO. Coded.')
@@ -1368,9 +1368,9 @@ class GenomeVersion(Base):
         {'comment': 'Contains genome versioning information.', 'schema': 'MULTI'}
     )
 
-    genome_version_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a genome version. Oracle sequence generated number.')
+    genome_version_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a genome version. Oracle sequence generated number.')
     genome_version: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The version of the genome.')
-    organism_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Organism associated with this genome version. FK to the ORGANISM table.')
+    organism_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Organism associated with this genome version. FK to the ORGANISM table.')
     is_ver_current: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether the version is current (Coded: Y/N).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the row was first entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -1389,8 +1389,8 @@ class PdbAlignmentSequence(Base):
         {'comment': 'Raw sequence used in a PDB alignment.', 'schema': 'MULTI'}
     )
 
-    pdb_alignment_sequence_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB aligned sequence. Oracle sequence generated number.')
-    pdb_alignment_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a PDB alignment.  Foreign key to the PDB_ALIGNMENT table.')
+    pdb_alignment_sequence_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a PDB aligned sequence. Oracle sequence generated number.')
+    pdb_alignment_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a PDB alignment.  Foreign key to the PDB_ALIGNMENT table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
     query_seq: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='Raw query sequence.')
@@ -1412,10 +1412,10 @@ class RefLink(Base):
      'schema': 'MULTI'}
     )
 
-    ref_link_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an associated reference. Oracle generated sequence number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    ref_link_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an associated reference. Oracle generated sequence number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
     tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Name of table linked to a reference.')
-    primary_key: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key for the row linked to a reference.')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key for the row linked to a reference.')
     col_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Name of the column linked to a reference.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
@@ -1434,8 +1434,8 @@ class RefProperty(Base):
      'schema': 'MULTI'}
     )
 
-    ref_property_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference property. Oracle sequence generated number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    ref_property_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference property. Oracle sequence generated number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the reference attribute or property. Coded value.')
     property_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of the reference attribute or property. Coded value.')
     property_value: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='The value associated with the reference attribute or property.')
@@ -1459,9 +1459,9 @@ class RefReftype(Base):
      'schema': 'MULTI'}
     )
 
-    ref_reftype_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the ref_reftype table. Oracle sequence generated number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
-    ref_type_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a ref_type. Foreign key to the ref_type table.')
+    ref_reftype_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the ref_reftype table. Oracle sequence generated number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    ref_type_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a ref_type. Foreign key to the ref_type table.')
 
     ref_type: Mapped['RefType'] = relationship('RefType', back_populates='ref_reftype')
     reference: Mapped['Reference'] = relationship('Reference', back_populates='ref_reftype')
@@ -1480,9 +1480,9 @@ class RefRelationship(Base):
      'schema': 'MULTI'}
     )
 
-    ref_relationship_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference relationship. Oracle sequence generated number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
-    related_ref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the related reference. Foreign key to the reference table.')
+    ref_relationship_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a reference relationship. Oracle sequence generated number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    related_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the related reference. Foreign key to the reference table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was first entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who first entered the record into the database.')
     description: Mapped[Optional[str]] = mapped_column(VARCHAR(240), comment='Text of the comment or erratum.')
@@ -1503,9 +1503,9 @@ class RefUrl(Base):
      'schema': 'MULTI'}
     )
 
-    ref_url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the ref_url table. Oracle sequence generated number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for each URL.  Foreign key to the url table.')
+    ref_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the ref_url table. Oracle sequence generated number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference. Foreign key to the reference table.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for each URL.  Foreign key to the url table.')
 
     reference: Mapped['Reference'] = relationship('Reference', back_populates='ref_url')
     url: Mapped['Url'] = relationship('Url', back_populates='ref_url')
@@ -1522,14 +1522,14 @@ class BlastAlignment(Base):
         {'comment': 'This table stores blast hit alignments.', 'schema': 'MULTI'}
     )
 
-    blast_alignment_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a blast alignment. Oracle generated sequence number.')
-    query_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier of the query sequence. Foreign key to the feature table.')
-    target_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a target sequence. Foreign key to homolog table.')
+    blast_alignment_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a blast alignment. Oracle generated sequence number.')
+    query_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier of the query sequence. Foreign key to the feature table.')
+    target_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a target sequence. Foreign key to homolog table.')
     method: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Method used to generate the alignment data (Coded: BLASTp, etc.)')
-    query_start_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of where the alignment begins for the query sequence.')
-    query_stop_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of where the alignment begins for the query sequence.')
-    target_start_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of where the alignment begins for the target sequence.')
-    target_stop_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of where the alignment begins for the target sequence.')
+    query_start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of where the alignment begins for the query sequence.')
+    query_stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of where the alignment begins for the query sequence.')
+    target_start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of where the alignment begins for the target sequence.')
+    target_stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of where the alignment begins for the target sequence.')
     score: Mapped[decimal.Decimal] = mapped_column(NUMBER(8, 3, True), nullable=False, comment='The significance score.')
     score_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of score (Coded:. p value, e value).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -1554,9 +1554,9 @@ class CollFeat(Base):
      'schema': 'MULTI'}
     )
 
-    coll_feat_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague-feature relationship.  Oracle sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    coll_feat_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague-feature relationship.  Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague. Foreign key to the colleague table.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
 
     colleague: Mapped['Colleague'] = relationship('Colleague', back_populates='coll_feat')
     feature: Mapped['Feature'] = relationship('Feature', back_populates='coll_feat')
@@ -1574,9 +1574,9 @@ class CvtermDbxref(Base):
      'schema': 'MULTI'}
     )
 
-    cvterm_dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier to link the cvterm and dbxref tables. Oracle sequence generated number.')
-    cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Foreign key to the cv_term table.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for an database cross reference. Foreign key to the dbxref table.')
+    cvterm_dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier to link the cvterm and dbxref tables. Oracle sequence generated number.')
+    cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Foreign key to the cv_term table.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for an database cross reference. Foreign key to the dbxref table.')
 
     cv_term: Mapped['CvTerm'] = relationship('CvTerm', back_populates='cvterm_dbxref')
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='cvterm_dbxref')
@@ -1595,9 +1595,9 @@ class CvtermGroup(Base):
      'schema': 'MULTI'}
     )
 
-    cvterm_group_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a group of controlled vocabulary terms.  Oracle sequence generated number.')
+    cvterm_group_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a group of controlled vocabulary terms.  Oracle sequence generated number.')
     group_name: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The name of the controlled vocabulary group. Coded value.')
-    cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Foreign key to the cv_term table.')
+    cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Foreign key to the cv_term table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
 
@@ -1618,10 +1618,10 @@ class CvtermPath(Base):
      'schema': 'MULTI'}
     )
 
-    cvterm_path_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a cv term path.  Oracle sequence generated number.')
-    child_cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a child controlled vocabulary term. Foreign key to the cv_term table.')
-    ancestor_cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the ancestor controlled vocabulary term. Foreign key to the cv_term table.')
-    generation: Mapped[float] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The number of generations between the parent and child term; for example, for a grandchild:grandparent relationship, the generation = 2.')
+    cvterm_path_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a cv term path.  Oracle sequence generated number.')
+    child_cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a child controlled vocabulary term. Foreign key to the cv_term table.')
+    ancestor_cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the ancestor controlled vocabulary term. Foreign key to the cv_term table.')
+    generation: Mapped[int] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='The number of generations between the parent and child term; for example, for a grandchild:grandparent relationship, the generation = 2.')
     full_path: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='A list of all terms corresponding to all the terms in between the ancestor and the child, separated by ::.')
     relationship_type: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='The type of relationship between the parent and child term. Coded value.')
 
@@ -1644,9 +1644,9 @@ class CvtermRelationship(Base):
      'schema': 'MULTI'}
     )
 
-    cvterm_relationship_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier')
-    child_cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a child/subject controlled vocabulary term. Foreign key to the cv_term table.')
-    parent_cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a parent controlled vocabulary term. Foreign key to the cv_term table.')
+    cvterm_relationship_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier')
+    child_cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a child/subject controlled vocabulary term. Foreign key to the cv_term table.')
+    parent_cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a parent controlled vocabulary term. Foreign key to the cv_term table.')
     relationship_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of cv relationship.  Coded: is_a, part_of, etc.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -1666,8 +1666,8 @@ class CvtermSynonym(Base):
      'schema': 'MULTI'}
     )
 
-    cvterm_synonym_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary term synonym.  Oracle sequence generated number.')
-    cv_term_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Oracle sequence generated number.')
+    cvterm_synonym_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a controlled vocabulary term synonym.  Oracle sequence generated number.')
+    cv_term_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a controlled vocabulary term. Oracle sequence generated number.')
     term_synonym: Mapped[str] = mapped_column(VARCHAR(1024), nullable=False, comment='The cv term synonym.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -1688,9 +1688,9 @@ class DbxrefFeat(Base):
      'schema': 'MULTI'}
     )
 
-    dbxref_feat_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_feat table. Oracle sequence generated number.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    dbxref_feat_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the dbxref_feat table. Oracle sequence generated number.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to the dbxref table.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
 
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='dbxref_feat')
     feature: Mapped['Feature'] = relationship('Feature', back_populates='dbxref_feat')
@@ -1708,9 +1708,9 @@ class FeatAlias(Base):
      'schema': 'MULTI'}
     )
 
-    feat_alias_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_alias table. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Oracle sequence generated number.')
-    alias_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an alias. Oracle sequence generated number.')
+    feat_alias_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_alias table. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Oracle sequence generated number.')
+    alias_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an alias. Oracle sequence generated number.')
 
     alias: Mapped['Alias'] = relationship('Alias', back_populates='feat_alias')
     feature: Mapped['Feature'] = relationship('Feature', back_populates='feat_alias')
@@ -1728,9 +1728,9 @@ class FeatHomology(Base):
      'schema': 'MULTI'}
     )
 
-    feat_homology_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the FEAT_HOMOLOGY table. Oracle generated sequence number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. FK to the FEATURE table.')
-    homology_group_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
+    feat_homology_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the FEAT_HOMOLOGY table. Oracle generated sequence number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. FK to the FEATURE table.')
+    homology_group_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a homology group. FK to the HOMOLOGY_GROUP table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
 
@@ -1750,9 +1750,9 @@ class FeatInteract(Base):
      'schema': 'MULTI'}
     )
 
-    feat_interact_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature interaction. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    interaction_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an feature interaction. Foreign key to the interaction table.')
+    feat_interact_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature interaction. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    interaction_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an feature interaction. Foreign key to the interaction table.')
     action: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Describes what action the feature is taking while in the interaction (e.g., Suppressor).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -1773,10 +1773,10 @@ class FeatPara(Base):
      'schema': 'MULTI'}
     )
 
-    feat_para_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature-paragraph association. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    paragraph_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a paragraph. Foreign key to the paragraph table.')
-    paragraph_order: Mapped[float] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='Order of the paragraphs associated with the feature.')
+    feat_para_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature-paragraph association. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    paragraph_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a paragraph. Foreign key to the paragraph table.')
+    paragraph_order: Mapped[int] = mapped_column(NUMBER(2, 0, False), nullable=False, comment='Order of the paragraphs associated with the feature.')
 
     feature: Mapped['Feature'] = relationship('Feature', back_populates='feat_para')
     paragraph: Mapped['Paragraph'] = relationship('Paragraph', back_populates='feat_para')
@@ -1793,8 +1793,8 @@ class FeatProperty(Base):
      'schema': 'MULTI'}
     )
 
-    feat_property_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_property table. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for a feature. Foreign key to the feature table.')
+    feat_property_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_property table. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Unique identifier for a feature. Foreign key to the feature table.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the attribute or tag associated with the feature.  Coded value.')
     property_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The attribute or tag associated with the feature. Coded value.')
     property_value: Mapped[str] = mapped_column(VARCHAR(4000), nullable=False, comment='The value associated wwith the feature property or attribute.')
@@ -1816,13 +1816,13 @@ class FeatRelationship(Base):
      'schema': 'MULTI'}
     )
 
-    feat_relationship_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature relationship. Oracle sequence generated number.')
-    parent_feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the parent feature. Foreign key to the feature table.')
-    child_feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the child feature. Foreign key to the feature table..')
+    feat_relationship_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature relationship. Oracle sequence generated number.')
+    parent_feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the parent feature. Foreign key to the feature table.')
+    child_feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the child feature. Foreign key to the feature table..')
     relationship_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of feature relationship. Coded.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    rank: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='The rank or order of the feature.')
+    rank: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='The rank or order of the feature.')
 
     feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[child_feature_no], back_populates='feat_relationship')
     feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[parent_feature_no], back_populates='feat_relationship')
@@ -1840,9 +1840,9 @@ class FeatUrl(Base):
      'schema': 'MULTI'}
     )
 
-    feat_url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_url table. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    url_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for each URL.  Foreign key to the url table.')
+    feat_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the feat_url table. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned for each URL.  Foreign key to the url table.')
 
     feature: Mapped['Feature'] = relationship('Feature', back_populates='feat_url')
     url: Mapped['Url'] = relationship('Url', back_populates='feat_url')
@@ -1857,8 +1857,8 @@ class GeneReservation(Base):
         {'comment': 'Contains all gene name reservations.', 'schema': 'MULTI'}
     )
 
-    gene_reservation_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a gene reservation. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    gene_reservation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a gene reservation. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
     reservation_date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the gene reservation was made.')
     expiration_date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE + 365 '), comment='Date the gene reservation expires.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
@@ -1882,9 +1882,9 @@ class GoAnnotation(Base):
      'schema': 'MULTI'}
     )
 
-    go_annotation_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go annoation. Oracle sequence generated number.')
-    go_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    go_annotation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go annoation. Oracle sequence generated number.')
+    go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
     go_evidence: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Evidence for the go annotation (Coded: IC, ISS, IDA, etc.).')
     annotation_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type or class of GO annotation. Coded value.')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The source of the GO annotation. Coded value.')
@@ -1911,12 +1911,12 @@ class PhenoAnnotation(Base):
      'schema': 'MULTI'}
     )
 
-    pheno_annotation_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature-phenotype annotation. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    phenotype_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a phenotype. Foreign key to the phenotype table.')
+    pheno_annotation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature-phenotype annotation. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    phenotype_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a phenotype. Foreign key to the phenotype table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
-    experiment_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for an experiment. Foreign key to the experiment table.')
+    experiment_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='Unique identifier for an experiment. Foreign key to the experiment table.')
 
     experiment: Mapped[Optional['Experiment']] = relationship('Experiment', back_populates='pheno_annotation')
     feature: Mapped['Feature'] = relationship('Feature', back_populates='pheno_annotation')
@@ -1932,40 +1932,40 @@ class ProteinInfo(Base):
         {'comment': 'Contains protein information about features.', 'schema': 'MULTI'}
     )
 
-    protein_info_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for protein information. Oracle generated sequence number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    protein_info_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for protein information. Oracle generated sequence number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    molecular_weight: Mapped[Optional[float]] = mapped_column(NUMBER(7, 0, False), comment='Molecular weight of the protein.')
+    molecular_weight: Mapped[Optional[int]] = mapped_column(NUMBER(7, 0, False), comment='Molecular weight of the protein.')
     pi: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(4, 2, True), comment='PI of the protein.')
     cai: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(4, 3, True), comment='Codon adaptation index.')
-    protein_length: Mapped[Optional[float]] = mapped_column(NUMBER(5, 0, False), comment='Length of the protein.')
+    protein_length: Mapped[Optional[int]] = mapped_column(NUMBER(5, 0, False), comment='Length of the protein.')
     n_term_seq: Mapped[Optional[str]] = mapped_column(VARCHAR(7), comment='N terminal sequence of protein.')
     c_term_seq: Mapped[Optional[str]] = mapped_column(VARCHAR(7), comment='C terminal sequence of the protein.')
     codon_bias: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(4, 3, True), comment='Codon bias of the protein.')
     fop_score: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(4, 3, True), comment='Frequency of optimal codons, which is the ratio of optimal codons to synonymous codons.')
     gravy_score: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(7, 6, True), comment='General average hydropathicity score for the hypothetical translated gene product.')
     aromaticity_score: Mapped[Optional[decimal.Decimal]] = mapped_column(NUMBER(7, 6, True), comment='Frequency of aromatic amino acids (Phe, Tyr, Trp) in the hypothetical translated gene product.')
-    ala: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of alanines in the protein.')
-    arg: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of arginines in the protein.')
-    asn: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of asparagines in the protein.')
-    asp: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of aspartic acids in the protein.')
-    cys: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of cysteines in the protein.')
-    gln: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of glutamines in the protein.')
-    glu: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of glutamic acids in the protein.')
-    gly: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of glycines in the protein.')
-    his: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of histidines in the protein.')
-    ile: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of isoleucines in the protein.')
-    leu: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of leucines in the protein.')
-    lys: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of lycines in the protein.')
-    met: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of methionines in the protein.')
-    phe: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of phenylalanines in the protein.')
-    pro: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of prolines in the protein.')
-    thr: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of threonines in the protein.')
-    ser: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of serines in the protein.')
-    trp: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of tryptophans in the protein.')
-    tyr: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of tyrosines in the protein.')
-    val: Mapped[Optional[float]] = mapped_column(NUMBER(4, 0, False), comment='Number of valines in the protein.')
+    ala: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of alanines in the protein.')
+    arg: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of arginines in the protein.')
+    asn: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of asparagines in the protein.')
+    asp: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of aspartic acids in the protein.')
+    cys: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of cysteines in the protein.')
+    gln: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of glutamines in the protein.')
+    glu: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of glutamic acids in the protein.')
+    gly: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of glycines in the protein.')
+    his: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of histidines in the protein.')
+    ile: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of isoleucines in the protein.')
+    leu: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of leucines in the protein.')
+    lys: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of lycines in the protein.')
+    met: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of methionines in the protein.')
+    phe: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of phenylalanines in the protein.')
+    pro: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of prolines in the protein.')
+    thr: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of threonines in the protein.')
+    ser: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of serines in the protein.')
+    trp: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of tryptophans in the protein.')
+    tyr: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of tyrosines in the protein.')
+    val: Mapped[Optional[int]] = mapped_column(NUMBER(4, 0, False), comment='Number of valines in the protein.')
 
     feature: Mapped['Feature'] = relationship('Feature', back_populates='protein_info')
     protein_detail: Mapped[list['ProteinDetail']] = relationship('ProteinDetail', back_populates='protein_info')
@@ -1983,9 +1983,9 @@ class RefpropFeat(Base):
      'schema': 'MULTI'}
     )
 
-    refprop_feat_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the refprop_feat table.  Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    ref_property_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference property. Foreign key to the ref_property table.')
+    refprop_feat_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a row in the refprop_feat table.  Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    ref_property_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a reference property. Foreign key to the ref_property table.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was first entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who first entered the record into the database.')
 
@@ -2008,16 +2008,16 @@ class Seq(Base):
      'schema': 'MULTI'}
     )
 
-    seq_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature sequence. Oracle generated sequence number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
-    genome_version_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a genome version. FK to theGENOME_VERSION table.')
+    seq_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature sequence. Oracle generated sequence number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    genome_version_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a genome version. FK to theGENOME_VERSION table.')
     seq_version: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, comment='The version, expressed as a date (e.g., 2005-12-05), of the sequence.')
     seq_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of sequence (Coded: Genomic, Protein).')
     source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source of the sequence (Coded: SGD, NCBI, ATCC, etc.).')
     is_seq_current: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether the sequence is the most current version (Coded: Y/N)')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    seq_length: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The sequence length, in nucleotide or amino acid residues.')
+    seq_length: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='The sequence length, in nucleotide or amino acid residues.')
     residues: Mapped[str] = mapped_column(Text, nullable=False, comment='The actual nucleotide or amino acid residues of the sequence.')
     ftp_file: Mapped[Optional[str]] = mapped_column(VARCHAR(240), comment='The full pathname to the most granular fasta file on the FTP site that contains this sequence.')
 
@@ -2040,9 +2040,9 @@ class CollGeneres(Base):
      'schema': 'MULTI'}
     )
 
-    coll_generes_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague-gene_reservation relationship.  Oracle sequence generated number.')
-    colleague_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague.  Foreign key to the colleague table.')
-    gene_reservation_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a gene reservation. Foreign key to the gene_reservation table.')
+    coll_generes_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a colleague-gene_reservation relationship.  Oracle sequence generated number.')
+    colleague_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a colleague.  Foreign key to the colleague table.')
+    gene_reservation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a gene reservation. Foreign key to the gene_reservation table.')
 
     colleague: Mapped['Colleague'] = relationship('Colleague', back_populates='coll_generes')
     gene_reservation: Mapped['GeneReservation'] = relationship('GeneReservation', back_populates='coll_generes')
@@ -2068,17 +2068,17 @@ class FeatLocation(Base):
      'schema': 'MULTI'}
     )
 
-    feat_location_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature sequence annotation. Oracle sequence generated number.')
-    feature_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for this feature location. Foreign key to the feature table.')
-    root_seq_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the root sequence (e.g., chromosome) associated with this feature location. Foreign key to the seq table.')
+    feat_location_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature sequence annotation. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for this feature location. Foreign key to the feature table.')
+    root_seq_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the root sequence (e.g., chromosome) associated with this feature location. Foreign key to the seq table.')
     coord_version: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, comment='Date the feature was first identified at this location (stop and start coordinates).')
-    start_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of the feature location.')
-    stop_coord: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of the feature location.')
+    start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of the feature location.')
+    stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of the feature location.')
     strand: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='DNA strand on which the feature is located (Coded: W = watson strand, C = crick strand).')
     is_loc_current: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether this feature location is the current version (Coded: Y/N).')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
-    seq_no: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='The sequence associated with this feature location.  Foreign key to the seq table.')
+    seq_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='The sequence associated with this feature location.  Foreign key to the seq table.')
 
     feature: Mapped['Feature'] = relationship('Feature', back_populates='feat_location')
     seq: Mapped['Seq'] = relationship('Seq', foreign_keys=[root_seq_no], back_populates='feat_location')
@@ -2099,9 +2099,9 @@ class GoRef(Base):
      'schema': 'MULTI'}
     )
 
-    go_ref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a GO reference association. Oracle generated sequence number.')
-    reference_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a  reference. Foreign key to the reference table.')
-    go_annotation_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a go annoation. Foreign key to the go_annotation table.')
+    go_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a GO reference association. Oracle generated sequence number.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a  reference. Foreign key to the reference table.')
+    go_annotation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a go annoation. Foreign key to the go_annotation table.')
     has_qualifier: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether this GO reference has a qualifier.')
     has_supporting_evidence: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether this GO reference has supporting evidence.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date this record was entered into the database.')
@@ -2125,16 +2125,16 @@ class ProteinDetail(Base):
      'schema': 'MULTI'}
     )
 
-    protein_detail_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a protein detail. Oracle generated sequence number.')
-    protein_info_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for protein information. Oracle generated sequence number.')
+    protein_detail_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a protein detail. Oracle generated sequence number.')
+    protein_info_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for protein information. Oracle generated sequence number.')
     protein_detail_group: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='A category or group of associated protein details.')
     protein_detail_type: Mapped[str] = mapped_column(VARCHAR(50), nullable=False, comment='The type of information that is being recorded, eg. transmembrane domain.')
     protein_detail_value: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='The value of the type of information that is being stored.  This may be a number, Y or N, or some other type of data, depending on the protein_detail_type.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
     protein_detail_unit: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Units, if any, of the protein_detail_value.')
-    start_coord: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='The start coordinate in terms of the amino acid sequence, relevant to the additional information.')
-    stop_coord: Mapped[Optional[float]] = mapped_column(NUMBER(10, 0, False), comment='The stop coordinate in terms of the amino acid sequence, relevant to the additional information.')
+    start_coord: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='The start coordinate in terms of the amino acid sequence, relevant to the additional information.')
+    stop_coord: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='The stop coordinate in terms of the amino acid sequence, relevant to the additional information.')
     interpro_dbxref_id: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
     member_dbxref_id: Mapped[Optional[str]] = mapped_column(VARCHAR(20))
 
@@ -2153,11 +2153,11 @@ class SeqChangeArchive(Base):
      'schema': 'MULTI'}
     )
 
-    seq_change_archive_no: Mapped[float] = mapped_column(NUMBER(asdecimal=False), primary_key=True, comment='Assigned unique identifier for a DNA sequence change. Oracle generated sequence number.')
-    seq_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the old DNA sequence. Foreign key to the seq table.')
+    seq_change_archive_no: Mapped[int] = mapped_column(NUMBER(asdecimal=False), primary_key=True, comment='Assigned unique identifier for a DNA sequence change. Oracle generated sequence number.')
+    seq_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for the old DNA sequence. Foreign key to the seq table.')
     seq_change_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of sequence change (Coded: Deletion, Insertion, Substitution).')
-    change_start_coord: Mapped[float] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Coordinate where the sequence change starts.')
-    change_stop_coord: Mapped[float] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Coordinate where the sequence change stops.')
+    change_start_coord: Mapped[int] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Coordinate where the sequence change starts.')
+    change_stop_coord: Mapped[int] = mapped_column(NUMBER(asdecimal=False), nullable=False, comment='Coordinate where the sequence change stops.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database. Equals the seq_version of the new sequence.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
     old_seq: Mapped[Optional[str]] = mapped_column(Text)
@@ -2176,8 +2176,8 @@ class GoQualifier(Base):
      'schema': 'MULTI'}
     )
 
-    go_qualifier_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go qualifier. Oracle sequence generated number.')
-    go_ref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO reference association. Foreign key to the go_ref table.')
+    go_qualifier_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a go qualifier. Oracle sequence generated number.')
+    go_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO reference association. Foreign key to the go_ref table.')
     qualifier: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The qualifier for a GO annotation. Coded: associated with, contributes to.')
 
     go_ref: Mapped['GoRef'] = relationship('GoRef', back_populates='go_qualifier')
@@ -2195,9 +2195,9 @@ class GorefDbxref(Base):
      'schema': 'MULTI'}
     )
 
-    goref_dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for go supporting evidence.  Oracle sequence generated number.')
-    go_ref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO reference association. Foreign key to the go_ref table.')
-    dbxref_no: Mapped[float] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to dbxref table.')
+    goref_dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for go supporting evidence.  Oracle sequence generated number.')
+    go_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a GO reference association. Foreign key to the go_ref table.')
+    dbxref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for an database cross reference. Foreign key to dbxref table.')
     support_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='The type of supporting evidence (Coded: WIth, From).')
 
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='goref_dbxref')
