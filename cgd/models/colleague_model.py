@@ -9,12 +9,10 @@ from .models import (
     CollUrl,
     Colleague,
     ColleagueRemark,
-    Colleague_,
 )
 
 __all__ = [
     "Colleague",
-    "Colleague_",
     "ColleagueRemark",
     "CollUrl",
     "CollKw",
