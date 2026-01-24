@@ -1,5 +1,3 @@
-from cgd.api.routers.locus_router import router as locus_router
-from cgd.api.routers.health_router import router as health_router
-
-__all__ = ["locus_router", "health_router"]
+from .health_router import router as health_router  # noqa: F401
+from .locus_router import router as locus_router    # noqa: F401
 

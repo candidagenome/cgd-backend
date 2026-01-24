@@ -1,14 +1,36 @@
 from __future__ import annotations
 
-from typing import List
-from pydantic import BaseModel
+import datetime
+import typing as t
+from pydantic import BaseModel, ConfigDict
 
 
-class LocusHit(BaseModel):
-    id: int
-    name: str
-    display_name: str
+class ORMSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
 
-class LocusSearchResponse(BaseModel):
-    results: List[LocusHit]
+class FeatureOut(ORMSchema):
+    # --- Feature table columns (1:1) ---
+    feature_no: int
+    organism_no: int
+    feature_name: str
+    dbxref_id: str
+    feature_type: str
+    source: str
+    date_created: datetime.datetime
+    created_by: str
+
+    gene_name: t.Optional[str] = None
+    name_description: t.Optional[str] = None
+    headline: t.Optional[str] = None
+
+
+class LocusByOrganismResponse(BaseModel):
+    """
+    {
+      "Candida albicans": { ...FeatureOut... },
+      "Candida glabrata": { ...FeatureOut... },
+      ...
+    }
+    """
+    results: dict[str, FeatureOut]

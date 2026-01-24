@@ -1,24 +1,25 @@
-from __future__ import annotations
-
-from sqlalchemy import or_, func
+# from __future__ import annotations
 from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
 
 from cgd.models.locus_model import Feature
 
 
-def find_features_by_term(db: Session, term: str):
-    t = term.strip()
-    if not t:
-        return []
-
+def get_features_for_locus_name(db: Session, name: str) -> list[Feature]:
+    """
+    Match on:
+      - Feature.feature_name (systematic-like)
+      - Feature.gene_name (common gene name)
+    """
+    n = name.strip()
     return (
         db.query(Feature)
         .filter(
             or_(
-                func.upper(Feature.gene_name) == func.upper(t),
-                func.upper(Feature.feature_name) == func.upper(t),
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
             )
         )
-        .order_by(Feature.feature_no.asc())
         .all()
     )
+
