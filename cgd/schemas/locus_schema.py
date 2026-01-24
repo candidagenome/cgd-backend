@@ -13,6 +13,7 @@ class FeatureOut(ORMSchema):
     # --- Feature table columns (1:1) ---
     feature_no: int
     organism_no: int
+    taxon_id: t.Optional[int] = None
     feature_name: str
     dbxref_id: str
     feature_type: str

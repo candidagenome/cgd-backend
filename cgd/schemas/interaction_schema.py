@@ -25,6 +25,7 @@ class InteractionOut(BaseModel):
 
 class InteractionDetailsForOrganism(BaseModel):
     locus_display_name: str
+    taxon_id: int
     interactions: list[InteractionOut]
 
 

@@ -28,6 +28,7 @@ class GOAnnotationOut(BaseModel):
 
 class GODetailsForOrganism(BaseModel):
     locus_display_name: str
+    taxon_id: int
     annotations: list[GOAnnotationOut]
 
 

@@ -28,6 +28,7 @@ class PhenotypeAnnotationOut(BaseModel):
 
 class PhenotypeDetailsForOrganism(BaseModel):
     locus_display_name: str
+    taxon_id: int
     annotations: list[PhenotypeAnnotationOut]
 
 
