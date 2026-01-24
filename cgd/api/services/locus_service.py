@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, or_
 
 from cgd.api.crud.locus_crud import get_features_for_locus_name
 from cgd.schemas.locus_schema import LocusByOrganismResponse, FeatureOut
@@ -33,6 +34,12 @@ from cgd.schemas.homology_schema import (
     HomologyGroupOut,
     HomologOut,
 )
+from cgd.models.locus_model import Feature
+from cgd.models.go_model import GoAnnotation, GoRef
+from cgd.models.phenotype_model import PhenoAnnotation
+from cgd.models.interaction_model import FeatInteract
+from cgd.models.homology_model import FeatHomology
+from cgd.models.models import RefLink
 
 
 def _get_organism_name(f) -> str:
@@ -67,16 +74,13 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     Query GO annotations for each feature matching the locus name,
     grouped by organism.
     """
-    from cgd.models.locus_model import Feature
-    from sqlalchemy import func, or_
-
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.go_annotation).joinedload("go"),
-            joinedload(Feature.go_annotation).joinedload("go_ref").joinedload("reference"),
+            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
+            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
         )
         .filter(
             or_(
@@ -142,16 +146,13 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
     Query phenotype annotations for each feature matching the locus name,
     grouped by organism.
     """
-    from cgd.models.locus_model import Feature
-    from sqlalchemy import func, or_
-
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.pheno_annotation).joinedload("phenotype"),
-            joinedload(Feature.pheno_annotation).joinedload("experiment"),
+            joinedload(Feature.pheno_annotation).joinedload(PhenoAnnotation.phenotype),
+            joinedload(Feature.pheno_annotation).joinedload(PhenoAnnotation.experiment),
         )
         .filter(
             or_(
@@ -207,16 +208,12 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
     Query interaction data for each feature matching the locus name,
     grouped by organism. Excludes genetic interactions (those in interact_pheno).
     """
-    from cgd.models.locus_model import Feature
-    from cgd.models.models import RefLink
-    from sqlalchemy import func, or_
-
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.feat_interact).joinedload("interaction"),
+            joinedload(Feature.feat_interact).joinedload(FeatInteract.interaction),
         )
         .filter(
             or_(
@@ -300,9 +297,6 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
     Query protein information for each feature matching the locus name,
     grouped by organism.
     """
-    from cgd.models.locus_model import Feature
-    from sqlalchemy import func, or_
-
     n = name.strip()
     features = (
         db.query(Feature)
@@ -383,15 +377,12 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     Query homology group data for each feature matching the locus name,
     grouped by organism.
     """
-    from cgd.models.locus_model import Feature
-    from sqlalchemy import func, or_
-
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.feat_homology).joinedload("homology_group"),
+            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
         )
         .filter(
             or_(
