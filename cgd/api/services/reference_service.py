@@ -32,19 +32,21 @@ from cgd.models.models import (
 )
 
 
-def _get_organism_name(feature) -> str:
-    """Extract organism name from a feature, with fallback."""
+def _get_organism_info(feature) -> tuple[str, int]:
+    """Extract organism name and taxon_id from a feature, with fallback."""
     org = feature.organism
     organism_name = None
+    taxon_id = 0
     if org is not None:
         organism_name = (
             getattr(org, "organism_name", None)
             or getattr(org, "display_name", None)
             or getattr(org, "name", None)
         )
+        taxon_id = getattr(org, "taxon_id", 0) or 0
     if not organism_name:
         organism_name = str(feature.organism_no)
-    return organism_name
+    return organism_name, taxon_id
 
 
 def _get_reference_by_pubmed(db: Session, pubmed_id: int) -> Reference:
@@ -141,12 +143,13 @@ def get_reference_locus_details(db: Session, pubmed_id: int) -> ReferenceLocusRe
             feature = rpf.feature
             if feature and feature.feature_no not in seen_features:
                 seen_features.add(feature.feature_no)
-                organism_name = _get_organism_name(feature)
+                organism_name, taxon_id = _get_organism_info(feature)
                 loci.append(LocusForReference(
                     feature_no=feature.feature_no,
                     feature_name=feature.feature_name,
                     gene_name=feature.gene_name,
                     organism_name=organism_name,
+                    taxon_id=taxon_id,
                     headline=feature.headline,
                 ))
 
@@ -185,13 +188,14 @@ def get_reference_go_details(db: Session, pubmed_id: int) -> ReferenceGOResponse
         if feature is None or go is None:
             continue
 
-        organism_name = _get_organism_name(feature)
+        organism_name, taxon_id = _get_organism_info(feature)
         goid_str = f"GO:{go.goid:07d}" if isinstance(go.goid, int) else str(go.goid)
 
         annotations.append(GOAnnotationForReference(
             feature_name=feature.feature_name,
             gene_name=feature.gene_name,
             organism_name=organism_name,
+            taxon_id=taxon_id,
             goid=goid_str,
             go_term=go.go_term,
             go_aspect=go.go_aspect,
@@ -241,12 +245,13 @@ def get_reference_phenotype_details(db: Session, pubmed_id: int) -> ReferencePhe
             if feature is None or phenotype is None:
                 continue
 
-            organism_name = _get_organism_name(feature)
+            organism_name, taxon_id = _get_organism_info(feature)
 
             annotations.append(PhenotypeForReference(
                 feature_name=feature.feature_name,
                 gene_name=feature.gene_name,
                 organism_name=organism_name,
+                taxon_id=taxon_id,
                 observable=phenotype.observable,
                 qualifier=phenotype.qualifier,
                 experiment_type=phenotype.experiment_type,

@@ -23,6 +23,7 @@ class HomologyGroupOut(BaseModel):
 
 class HomologyDetailsForOrganism(BaseModel):
     locus_display_name: str
+    taxon_id: int
     homology_groups: list[HomologyGroupOut]
 
 

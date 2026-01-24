@@ -42,19 +42,21 @@ from cgd.models.homology_model import FeatHomology
 from cgd.models.models import RefLink
 
 
-def _get_organism_name(f) -> str:
-    """Extract organism name from a feature, with fallback."""
+def _get_organism_info(f) -> tuple[str, int]:
+    """Extract organism name and taxon_id from a feature, with fallback."""
     org = f.organism
     organism_name = None
+    taxon_id = 0
     if org is not None:
         organism_name = (
             getattr(org, "organism_name", None)
             or getattr(org, "display_name", None)
             or getattr(org, "name", None)
         )
+        taxon_id = getattr(org, "taxon_id", 0) or 0
     if not organism_name:
         organism_name = str(f.organism_no)
-    return organism_name
+    return organism_name, taxon_id
 
 
 def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
@@ -63,8 +65,10 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
     out: dict[str, FeatureOut] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
-        out[organism_name] = FeatureOut.model_validate(f)
+        organism_name, taxon_id = _get_organism_info(f)
+        feature_out = FeatureOut.model_validate(f)
+        feature_out.taxon_id = taxon_id
+        out[organism_name] = feature_out
 
     return LocusByOrganismResponse(results=out)
 
@@ -94,7 +98,7 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     out: dict[str, GODetailsForOrganism] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
+        organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
         annotations = []
@@ -135,6 +139,7 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
 
         out[organism_name] = GODetailsForOrganism(
             locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
             annotations=annotations,
         )
 
@@ -166,7 +171,7 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
     out: dict[str, PhenotypeDetailsForOrganism] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
+        organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
         annotations = []
@@ -197,6 +202,7 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
 
         out[organism_name] = PhenotypeDetailsForOrganism(
             locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
             annotations=annotations,
         )
 
@@ -227,7 +233,7 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
     out: dict[str, InteractionDetailsForOrganism] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
+        organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
         interactions = []
@@ -286,6 +292,7 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
 
         out[organism_name] = InteractionDetailsForOrganism(
             locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
             interactions=interactions,
         )
 
@@ -316,7 +323,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
     out: dict[str, ProteinDetailsForOrganism] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
+        organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
         protein_info = None
@@ -366,6 +373,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
 
         out[organism_name] = ProteinDetailsForOrganism(
             locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
             protein_info=protein_info,
         )
 
@@ -396,7 +404,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     out: dict[str, HomologyDetailsForOrganism] = {}
 
     for f in features:
-        organism_name = _get_organism_name(f)
+        organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
         homology_groups = []
@@ -419,7 +427,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
             for other_fh in hg.feat_homology:
                 other_feat = other_fh.feature
                 if other_feat and other_feat.feature_no != f.feature_no:
-                    other_org_name = _get_organism_name(other_feat)
+                    other_org_name, _ = _get_organism_info(other_feat)
                     members.append(HomologOut(
                         feature_name=other_feat.feature_name,
                         gene_name=other_feat.gene_name,
@@ -448,6 +456,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
             homology_groups=homology_groups,
         )
 

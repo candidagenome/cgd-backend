@@ -24,6 +24,7 @@ class ProteinInfoOut(BaseModel):
 
 class ProteinDetailsForOrganism(BaseModel):
     locus_display_name: str
+    taxon_id: int
     protein_info: typing.Optional[ProteinInfoOut] = None
 
 

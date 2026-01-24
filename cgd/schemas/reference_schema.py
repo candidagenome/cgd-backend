@@ -46,6 +46,7 @@ class LocusForReference(BaseModel):
     feature_name: str
     gene_name: typing.Optional[str] = None
     organism_name: str
+    taxon_id: int
     headline: typing.Optional[str] = None
 
 
@@ -60,6 +61,7 @@ class GOAnnotationForReference(BaseModel):
     feature_name: str
     gene_name: typing.Optional[str] = None
     organism_name: str
+    taxon_id: int
     goid: str
     go_term: str
     go_aspect: str
@@ -77,6 +79,7 @@ class PhenotypeForReference(BaseModel):
     feature_name: str
     gene_name: typing.Optional[str] = None
     organism_name: str
+    taxon_id: int
     observable: str
     qualifier: typing.Optional[str] = None
     experiment_type: str
