@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from cgd.api.routers.health_router import router as health_router
 from cgd.api.routers.locus_router import router as locus_router
 from cgd.api.routers.reference_router import router as reference_router
+from cgd.api.routers.chromosome_router import router as chromosome_router
 
 
 def create_app() -> FastAPI:
@@ -19,6 +20,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(locus_router)
     app.include_router(reference_router)
+    app.include_router(chromosome_router)
 
     return app
 
