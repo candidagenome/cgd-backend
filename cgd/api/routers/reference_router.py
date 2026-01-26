@@ -14,51 +14,66 @@ from cgd.schemas.reference_schema import (
 router = APIRouter(prefix="/api/reference", tags=["reference"])
 
 
-@router.get("/{pubmed_id}", response_model=ReferenceResponse)
-def get_reference(pubmed_id: int, db: Session = Depends(get_db)):
+@router.get("/{identifier}", response_model=ReferenceResponse)
+def get_reference(identifier: str, db: Session = Depends(get_db)):
     """
-    Get basic reference info by PubMed ID.
+    Get basic reference info by PubMed ID or DBXREF_ID.
+
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
 
     Returns citation, title, year, authors, abstract, journal info, and URLs.
     """
-    return reference_service.get_reference(db, pubmed_id)
+    return reference_service.get_reference(db, identifier)
 
 
-@router.get("/{pubmed_id}/locus_details", response_model=ReferenceLocusResponse)
-def get_reference_locus_details(pubmed_id: int, db: Session = Depends(get_db)):
+@router.get("/{identifier}/locus_details", response_model=ReferenceLocusResponse)
+def get_reference_locus_details(identifier: str, db: Session = Depends(get_db)):
     """
     Get loci (genes/features) addressed in this paper.
 
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
     Returns list of features linked to this reference via ref_property.
     """
-    return reference_service.get_reference_locus_details(db, pubmed_id)
+    return reference_service.get_reference_locus_details(db, identifier)
 
 
-@router.get("/{pubmed_id}/go_details", response_model=ReferenceGOResponse)
-def get_reference_go_details(pubmed_id: int, db: Session = Depends(get_db)):
+@router.get("/{identifier}/go_details", response_model=ReferenceGOResponse)
+def get_reference_go_details(identifier: str, db: Session = Depends(get_db)):
     """
     Get GO annotations citing this reference.
 
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
     Returns list of GO annotations linked to this reference.
     """
-    return reference_service.get_reference_go_details(db, pubmed_id)
+    return reference_service.get_reference_go_details(db, identifier)
 
 
-@router.get("/{pubmed_id}/phenotype_details", response_model=ReferencePhenotypeResponse)
-def get_reference_phenotype_details(pubmed_id: int, db: Session = Depends(get_db)):
+@router.get("/{identifier}/phenotype_details", response_model=ReferencePhenotypeResponse)
+def get_reference_phenotype_details(identifier: str, db: Session = Depends(get_db)):
     """
     Get phenotype annotations citing this reference.
 
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
     Returns list of phenotype annotations linked to this reference.
     """
-    return reference_service.get_reference_phenotype_details(db, pubmed_id)
+    return reference_service.get_reference_phenotype_details(db, identifier)
 
 
-@router.get("/{pubmed_id}/interaction_details", response_model=ReferenceInteractionResponse)
-def get_reference_interaction_details(pubmed_id: int, db: Session = Depends(get_db)):
+@router.get("/{identifier}/interaction_details", response_model=ReferenceInteractionResponse)
+def get_reference_interaction_details(identifier: str, db: Session = Depends(get_db)):
     """
     Get interactions citing this reference.
 
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
     Returns list of interactions linked to this reference.
     """
-    return reference_service.get_reference_interaction_details(db, pubmed_id)
+    return reference_service.get_reference_interaction_details(db, identifier)

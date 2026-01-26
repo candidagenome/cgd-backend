@@ -49,9 +49,15 @@ def _get_organism_info(feature) -> tuple[str, int]:
     return organism_name, taxon_id
 
 
-def _get_reference_by_pubmed(db: Session, pubmed_id: int) -> Reference:
-    """Get a reference by PubMed ID, raise 404 if not found."""
-    ref = (
+def _get_reference_by_identifier(db: Session, identifier: str) -> Reference:
+    """
+    Get a reference by PubMed ID or DBXREF_ID, raise 404 if not found.
+
+    Args:
+        db: Database session
+        identifier: Either a PubMed ID (numeric string) or a DBXREF_ID (e.g., 'CGD_REF:xxx')
+    """
+    base_query = (
         db.query(Reference)
         .options(
             joinedload(Reference.journal),
@@ -61,19 +67,35 @@ def _get_reference_by_pubmed(db: Session, pubmed_id: int) -> Reference:
             joinedload(Reference.ref_property).joinedload(RefProperty.refprop_feat)
             .joinedload(RefpropFeat.feature).joinedload(Feature.organism),
         )
-        .filter(Reference.pubmed == pubmed_id)
-        .first()
     )
+
+    ref = None
+
+    # Try to parse as integer (PubMed ID) first
+    try:
+        pubmed_id = int(identifier)
+        ref = base_query.filter(Reference.pubmed == pubmed_id).first()
+    except ValueError:
+        # Not an integer, treat as DBXREF_ID
+        pass
+
+    # If not found by PubMed ID, try DBXREF_ID
     if ref is None:
-        raise HTTPException(status_code=404, detail=f"Reference with PubMed ID {pubmed_id} not found")
+        ref = base_query.filter(Reference.dbxref_id == identifier).first()
+
+    if ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Reference with identifier '{identifier}' not found"
+        )
     return ref
 
 
-def get_reference(db: Session, pubmed_id: int) -> ReferenceResponse:
+def get_reference(db: Session, identifier: str) -> ReferenceResponse:
     """
-    Get basic reference info by PubMed ID.
+    Get basic reference info by PubMed ID or DBXREF_ID.
     """
-    ref = _get_reference_by_pubmed(db, pubmed_id)
+    ref = _get_reference_by_identifier(db, identifier)
 
     # Get authors ordered by author_order
     authors = []
@@ -128,11 +150,11 @@ def get_reference(db: Session, pubmed_id: int) -> ReferenceResponse:
     return ReferenceResponse(result=result)
 
 
-def get_reference_locus_details(db: Session, pubmed_id: int) -> ReferenceLocusResponse:
+def get_reference_locus_details(db: Session, identifier: str) -> ReferenceLocusResponse:
     """
     Get loci/genes addressed in this paper via ref_property -> refprop_feat -> feature.
     """
-    ref = _get_reference_by_pubmed(db, pubmed_id)
+    ref = _get_reference_by_identifier(db, identifier)
 
     # Query RefpropFeat linked to this reference via RefProperty
     loci = []
@@ -159,11 +181,11 @@ def get_reference_locus_details(db: Session, pubmed_id: int) -> ReferenceLocusRe
     )
 
 
-def get_reference_go_details(db: Session, pubmed_id: int) -> ReferenceGOResponse:
+def get_reference_go_details(db: Session, identifier: str) -> ReferenceGOResponse:
     """
     Get GO annotations citing this reference via go_ref -> go_annotation -> feature + go.
     """
-    ref = _get_reference_by_pubmed(db, pubmed_id)
+    ref = _get_reference_by_identifier(db, identifier)
 
     # Query GoRef records for this reference
     go_refs = (
@@ -208,12 +230,12 @@ def get_reference_go_details(db: Session, pubmed_id: int) -> ReferenceGOResponse
     )
 
 
-def get_reference_phenotype_details(db: Session, pubmed_id: int) -> ReferencePhenotypeResponse:
+def get_reference_phenotype_details(db: Session, identifier: str) -> ReferencePhenotypeResponse:
     """
     Get phenotype annotations citing this reference via
     ref_link (tab_name='PHENO_ANNOTATION') -> pheno_annotation -> phenotype + feature.
     """
-    ref = _get_reference_by_pubmed(db, pubmed_id)
+    ref = _get_reference_by_identifier(db, identifier)
 
     # Get ref_links for PHENO_ANNOTATION
     ref_links = (
@@ -264,12 +286,12 @@ def get_reference_phenotype_details(db: Session, pubmed_id: int) -> ReferencePhe
     )
 
 
-def get_reference_interaction_details(db: Session, pubmed_id: int) -> ReferenceInteractionResponse:
+def get_reference_interaction_details(db: Session, identifier: str) -> ReferenceInteractionResponse:
     """
     Get interactions citing this reference via
     ref_link (tab_name='INTERACTION') -> interaction -> feat_interact -> feature.
     """
-    ref = _get_reference_by_pubmed(db, pubmed_id)
+    ref = _get_reference_by_identifier(db, identifier)
 
     # Get ref_links for INTERACTION
     ref_links = (
