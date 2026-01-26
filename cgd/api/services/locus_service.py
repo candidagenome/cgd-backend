@@ -1,5 +1,7 @@
+from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
+from collections import defaultdict
 
 from cgd.api.crud.locus_crud import get_features_for_locus_name
 from cgd.schemas.locus_schema import (
@@ -66,10 +68,12 @@ from cgd.models.models import (
     FeatPara,
     Paragraph,
     FeatLocation,
+    FeatRelationship,
     Seq,
     Note,
     NoteLink,
     Reference,
+    FeatProperty,
 )
 
 
@@ -90,6 +94,158 @@ def _get_organism_info(f) -> tuple[str, int]:
     return organism_name, taxon_id
 
 
+# Default sequence sources per organism (matching Perl config)
+DEFAULT_SEQ_SOURCES = {
+    "Candida albicans SC5314": "C. albicans SC5314 Assembly 22",
+    # Add other organisms/strains as needed
+}
+
+
+def _filter_features_by_preference(
+    db: Session,
+    features: list,
+    prefer_seq_source: Optional[str] = None
+) -> list:
+    """
+    Filter multiple features to return one per organism, similar to Perl
+    check_multi_feature_list.
+
+    Logic:
+    1. Group features by organism
+    2. For each organism with multiple features:
+       a. Check for primary allele relationships - prefer parent over secondary
+       b. Check for Assembly 22 relationships - prefer Assembly 22 version
+       c. Prefer features from the default sequence source
+       d. If still multiple, prefer feature_name starting with 'orf'
+    3. Return one feature per organism
+
+    Args:
+        db: Database session
+        features: List of Feature objects
+        prefer_seq_source: Optional sequence source to prefer
+
+    Returns:
+        Filtered list of Feature objects (one per organism)
+    """
+    if not features:
+        return features
+
+    # Group features by organism_no
+    features_by_org: dict[int, list] = defaultdict(list)
+    for f in features:
+        features_by_org[f.organism_no].append(f)
+
+    result = []
+
+    for org_no, org_features in features_by_org.items():
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
+        # Get organism name for default seq source lookup
+        org_name, _ = _get_organism_info(org_features[0])
+        default_source = prefer_seq_source or DEFAULT_SEQ_SOURCES.get(org_name)
+
+        # Build a map of feature_no to feature for quick lookup
+        feat_map = {f.feature_no: f for f in org_features}
+
+        # Step 1: Check for Assembly 22 primary allele relationships
+        # If a feature is an Assembly 21 version with an Assembly 22 equivalent,
+        # prefer the Assembly 22 version
+        a22_replacements = {}
+        for f in org_features:
+            # Query for Assembly 21 Primary Allele relationship where this
+            # feature is the child (Assembly 21) and parent is Assembly 22
+            a22_rel = (
+                db.query(FeatRelationship)
+                .filter(
+                    FeatRelationship.child_feature_no == f.feature_no,
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+                .first()
+            )
+            if a22_rel:
+                # Check if the parent (A22) is in our feature list
+                parent_no = a22_rel.parent_feature_no
+                if parent_no in feat_map:
+                    a22_replacements[f.feature_no] = parent_no
+
+        # Remove Assembly 21 features that have Assembly 22 equivalents in the list
+        if a22_replacements:
+            org_features = [
+                f for f in org_features
+                if f.feature_no not in a22_replacements
+            ]
+
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
+        # Step 2: Prefer features from the default sequence source
+        if default_source:
+            features_with_default_source = []
+            for f in org_features:
+                # Check if feature has sequences from default source
+                seq_sources = (
+                    db.query(Seq.source)
+                    .filter(
+                        Seq.feature_no == f.feature_no,
+                        Seq.is_seq_current == 'Y',
+                    )
+                    .all()
+                )
+                sources = [s[0] for s in seq_sources]
+                if default_source in sources:
+                    features_with_default_source.append(f)
+
+            if features_with_default_source:
+                org_features = features_with_default_source
+
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
+        # Step 3: Check for deleted/unmapped features - deprioritize them
+        non_deleted_features = []
+        for f in org_features:
+            props = (
+                db.query(FeatProperty.property_value)
+                .filter(FeatProperty.feature_no == f.feature_no)
+                .all()
+            )
+            prop_values = [p[0].lower() if p[0] else '' for p in props]
+            is_deleted = any('deleted' in pv for pv in prop_values)
+            if not is_deleted:
+                non_deleted_features.append(f)
+
+        if non_deleted_features:
+            org_features = non_deleted_features
+
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
+        # Step 4: Prefer feature_name starting with 'orf' (common convention)
+        orf_features = [
+            f for f in org_features
+            if f.feature_name and f.feature_name.lower().startswith('orf')
+        ]
+        if orf_features:
+            org_features = orf_features
+
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
+        # Step 5: If still multiple, sort by feature_name and take first
+        # This ensures deterministic behavior
+        org_features.sort(key=lambda f: f.feature_name or '')
+        result.append(org_features[0])
+
+    return result
+
+
 def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
     n = name.strip()
     features = (
@@ -103,10 +259,17 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        # Exclude alleles - match Perl behavior where feature_type 'allele'
+        # is not in the web_metadata allowed list for Locus Page
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, FeatureOut] = {}
 
@@ -172,10 +335,15 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, GODetailsForOrganism] = {}
 
@@ -245,10 +413,15 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, PhenotypeDetailsForOrganism] = {}
 
@@ -307,10 +480,15 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, InteractionDetailsForOrganism] = {}
 
@@ -397,10 +575,15 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, ProteinDetailsForOrganism] = {}
 
@@ -478,10 +661,15 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, HomologyDetailsForOrganism] = {}
 
@@ -562,10 +750,15 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, SequenceDetailsForOrganism] = {}
 
@@ -632,10 +825,15 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, ReferencesForOrganism] = {}
 
@@ -692,10 +890,15 @@ def get_locus_summary_notes(db: Session, name: str) -> LocusSummaryNotesResponse
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, SummaryNotesForOrganism] = {}
 
@@ -738,10 +941,15 @@ def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
             or_(
                 func.upper(Feature.gene_name) == func.upper(n),
                 func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
             )
         )
+        .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Filter to one feature per organism (like Perl check_multi_feature_list)
+    features = _filter_features_by_preference(db, features)
 
     out: dict[str, LocusHistoryForOrganism] = {}
 
