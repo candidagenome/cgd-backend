@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from collections import defaultdict
@@ -103,7 +104,7 @@ DEFAULT_SEQ_SOURCES = {
 def _filter_features_by_preference(
     db: Session,
     features: list,
-    prefer_seq_source: str | None = None
+    prefer_seq_source: Optional[str] = None
 ) -> list:
     """
     Filter multiple features to return one per organism, similar to Perl
