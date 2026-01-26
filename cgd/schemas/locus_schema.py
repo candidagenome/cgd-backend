@@ -24,6 +24,33 @@ class ExternalLinkOut(BaseModel):
     url: str
 
 
+# --- Allele ---
+
+class AlleleOut(BaseModel):
+    feature_no: int
+    feature_name: str
+    gene_name: t.Optional[str] = None
+    dbxref_id: str
+
+
+# --- Candida Ortholog (internal CGD species) ---
+
+class CandidaOrthologOut(BaseModel):
+    feature_name: str
+    gene_name: t.Optional[str] = None
+    organism_name: str
+    dbxref_id: str
+
+
+# --- External Ortholog (non-CGD species) ---
+
+class ExternalOrthologOut(BaseModel):
+    dbxref_id: str
+    description: t.Optional[str] = None
+    source: str
+    url: t.Optional[str] = None
+
+
 # --- Basic Feature Info (updated with aliases and links) ---
 
 class FeatureOut(ORMSchema):
@@ -45,6 +72,16 @@ class FeatureOut(ORMSchema):
     # Extended info
     aliases: list[AliasOut] = []
     external_links: list[ExternalLinkOut] = []
+
+    # New fields for Summary tab enhancements
+    assembly_21_identifier: t.Optional[str] = None  # Assembly 19/21 ORF name
+    feature_qualifier: t.Optional[str] = None  # e.g., "Verified", "Uncharacterized"
+    alleles: list[AlleleOut] = []
+    other_strain_names: list[str] = []  # Systematic names in other strains
+    candida_orthologs: list[CandidaOrthologOut] = []
+    external_orthologs: list[ExternalOrthologOut] = []
+    cug_codons: t.Optional[int] = None  # Number of CUG codons
+    allelic_variation: t.Optional[str] = None  # Allelic variation info
 
 
 class LocusByOrganismResponse(BaseModel):

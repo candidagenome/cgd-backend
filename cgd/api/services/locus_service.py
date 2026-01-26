@@ -9,6 +9,9 @@ from cgd.schemas.locus_schema import (
     FeatureOut,
     AliasOut,
     ExternalLinkOut,
+    AlleleOut,
+    CandidaOrthologOut,
+    ExternalOrthologOut,
     SequenceDetailsResponse,
     SequenceDetailsForOrganism,
     SequenceLocationOut,
@@ -74,7 +77,238 @@ from cgd.models.models import (
     NoteLink,
     Reference,
     FeatProperty,
+    HomologyGroup,
+    Dbxref,
+    DbxrefFeat,
+    DbxrefUrl,
+    DbxrefHomology,
+    ProteinInfo,
 )
+
+
+# Organisms that use translation table 12 (CTG codes for Serine)
+# CUG codons are only relevant for these organisms
+TRANSLATION_TABLE_12_ORGANISMS = {
+    'Candida albicans',
+    'Candida albicans SC5314',
+    'Candida dubliniensis',
+    'Candida dubliniensis CD36',
+    'Candida tropicalis',
+    'Candida tropicalis MYA-3404',
+    'Candida parapsilosis',
+    'Candida parapsilosis CDC317',
+    'Lodderomyces elongisporus',
+    'Lodderomyces elongisporus NRRL YB-4239',
+    'Candida auris',
+    # Add other CTG clade species as needed
+}
+
+
+def _count_cug_codons(cds_sequence: str) -> int:
+    """
+    Count CUG codons (CTG in DNA) in a CDS sequence.
+
+    In translation table 12 (used by most Candida species), CTG codes for
+    Serine instead of Leucine. This function counts how many CTG codons
+    are present in the coding sequence.
+
+    Args:
+        cds_sequence: The CDS DNA sequence (should be in-frame)
+
+    Returns:
+        Number of CTG codons found
+    """
+    if not cds_sequence:
+        return 0
+
+    cds_upper = cds_sequence.upper()
+    count = 0
+
+    # Count CTG codons at codon positions (every 3rd position)
+    for i in range(0, len(cds_upper) - 2, 3):
+        codon = cds_upper[i:i + 3]
+        if codon == 'CTG':
+            count += 1
+
+    return count
+
+
+def _get_cds_sequence(db: Session, feature_no: int) -> Optional[str]:
+    """
+    Get the current CDS sequence for a feature.
+
+    Args:
+        db: Database session
+        feature_no: Feature number to get CDS for
+
+    Returns:
+        CDS sequence string or None if not found
+    """
+    seq_row = (
+        db.query(Seq.residues)
+        .filter(
+            Seq.feature_no == feature_no,
+            func.upper(Seq.seq_type) == 'CDS',
+            Seq.is_seq_current == 'Y',
+        )
+        .first()
+    )
+    return seq_row[0] if seq_row else None
+
+
+def _translate_codon(codon: str, use_table_12: bool = True) -> str:
+    """
+    Translate a single codon to amino acid.
+
+    Args:
+        codon: 3-letter DNA codon
+        use_table_12: If True, use translation table 12 (CTG -> Ser)
+
+    Returns:
+        Single letter amino acid code, or 'X' for unknown
+    """
+    codon = codon.upper()
+
+    # Standard genetic code with table 12 modification
+    codon_table = {
+        'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+        'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+        'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+        'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+        'CTT': 'L', 'CTC': 'L', 'CTA': 'L',
+        'CTG': 'S' if use_table_12 else 'L',  # Key difference for table 12
+        'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+        'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+        'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+        'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+        'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+        'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+        'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+        'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+        'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+        'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+        'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G',
+    }
+
+    return codon_table.get(codon, 'X')
+
+
+def _translate_sequence(cds: str, use_table_12: bool = True) -> str:
+    """
+    Translate a CDS sequence to protein.
+
+    Args:
+        cds: CDS DNA sequence
+        use_table_12: If True, use translation table 12
+
+    Returns:
+        Protein sequence string
+    """
+    if not cds:
+        return ''
+
+    protein = []
+    cds_upper = cds.upper()
+
+    for i in range(0, len(cds_upper) - 2, 3):
+        codon = cds_upper[i:i + 3]
+        # Skip codons with ambiguous bases
+        if any(base not in 'ACGT' for base in codon):
+            protein.append('X')
+        else:
+            protein.append(_translate_codon(codon, use_table_12))
+
+    return ''.join(protein)
+
+
+def _check_allelic_variation(
+    primary_cds: Optional[str],
+    allele_cds: Optional[str],
+    primary_name: str,
+    allele_name: str,
+    use_table_12: bool = True
+) -> Optional[str]:
+    """
+    Compare primary and allele CDS sequences to determine allelic variation.
+
+    This implements the logic from the legacy Perl check_allele_variation()
+    and get_variation_descriptions() functions.
+
+    Args:
+        primary_cds: CDS sequence of primary ORF
+        allele_cds: CDS sequence of allele
+        primary_name: Name of primary feature
+        allele_name: Name of allele feature
+        use_table_12: Whether to use translation table 12
+
+    Returns:
+        Description of allelic variation, or None if no comparison possible
+    """
+    if not primary_cds or not allele_cds:
+        return None
+
+    primary_upper = primary_cds.upper()
+    allele_upper = allele_cds.upper()
+
+    # Check for ambiguous sequences
+    has_ambiguous_primary = any(base not in 'ACGT' for base in primary_upper)
+    has_ambiguous_allele = any(base not in 'ACGT' for base in allele_upper)
+    has_ambiguous = has_ambiguous_primary or has_ambiguous_allele
+
+    descriptions = []
+
+    # Compare CDS sequences
+    if primary_upper == allele_upper:
+        if has_ambiguous:
+            descriptions.append(
+                'Unphased variation between alleles (contains ambiguous sequences)'
+            )
+        else:
+            descriptions.append('No allelic variation in feature')
+    else:
+        # CDS differs - check if synonymous or non-synonymous
+        primary_protein = _translate_sequence(primary_upper, use_table_12)
+        allele_protein = _translate_sequence(allele_upper, use_table_12)
+
+        if primary_protein == allele_protein:
+            descriptions.append('Synonymous variation between alleles')
+        else:
+            descriptions.append('Non-synonymous variation between alleles')
+
+        if has_ambiguous:
+            descriptions.append(
+                'Unphased variation between alleles (contains ambiguous sequences)'
+            )
+
+    # Check for internal stop codons in primary
+    primary_protein = _translate_sequence(primary_upper, use_table_12)
+    if '*' in primary_protein[:-1]:  # Exclude terminal stop
+        descriptions.append(f'{primary_name} contains internal stop codons')
+
+    # Check for missing start codon in primary
+    if len(primary_upper) >= 3:
+        start_codon = primary_upper[:3]
+        if start_codon != 'ATG':
+            descriptions.append(f'{primary_name} lacks a start codon')
+
+    # Check for missing terminal stop in primary
+    if primary_protein and primary_protein[-1] != '*':
+        descriptions.append(f'{primary_name} lacks a terminal stop codon')
+
+    # Same checks for allele
+    allele_protein = _translate_sequence(allele_upper, use_table_12)
+    if '*' in allele_protein[:-1]:
+        descriptions.append(f'{allele_name} contains internal stop codons')
+
+    if len(allele_upper) >= 3:
+        start_codon = allele_upper[:3]
+        if start_codon != 'ATG':
+            descriptions.append(f'{allele_name} lacks a start codon')
+
+    if allele_protein and allele_protein[-1] != '*':
+        descriptions.append(f'{allele_name} lacks a terminal stop codon')
+
+    return '; '.join(descriptions) if descriptions else None
 
 
 def _get_organism_info(f) -> tuple[str, int]:
@@ -254,6 +488,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             joinedload(Feature.organism),
             joinedload(Feature.feat_alias).joinedload(FeatAlias.alias),
             joinedload(Feature.feat_url).joinedload(FeatUrl.url),
+            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
         )
         .filter(
             or_(
@@ -276,8 +511,9 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
     for f in features:
         organism_name, taxon_id = _get_organism_info(f)
 
-        # Get aliases
+        # Get aliases and extract other strain names
         aliases = []
+        other_strain_names = []
         for fa in f.feat_alias:
             alias = fa.alias
             if alias:
@@ -285,6 +521,9 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     alias_name=alias.alias_name,
                     alias_type=alias.alias_type,
                 ))
+                # Collect "Other strain feature name" aliases separately
+                if alias.alias_type == 'Other strain feature name':
+                    other_strain_names.append(alias.alias_name)
 
         # Get external links
         external_links = []
@@ -296,6 +535,171 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     url_type=url.url_type,
                     url=url.url,
                 ))
+
+        # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
+        assembly_21_identifier = None
+        a21_rel = (
+            db.query(FeatRelationship)
+            .filter(
+                FeatRelationship.parent_feature_no == f.feature_no,
+                FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            )
+            .first()
+        )
+        if a21_rel:
+            a21_feature = (
+                db.query(Feature)
+                .filter(Feature.feature_no == a21_rel.child_feature_no)
+                .first()
+            )
+            if a21_feature and a21_feature.feature_name != f.feature_name:
+                assembly_21_identifier = a21_feature.feature_name
+
+        # Get feature qualifier from FEAT_PROPERTY
+        feature_qualifier = None
+        qualifier_row = (
+            db.query(FeatProperty.property_value)
+            .filter(
+                FeatProperty.feature_no == f.feature_no,
+                FeatProperty.property_type == 'feature_qualifier',
+            )
+            .first()
+        )
+        if qualifier_row:
+            feature_qualifier = qualifier_row[0]
+
+        # Get alleles for this locus
+        alleles = []
+        allele_relationships = (
+            db.query(FeatRelationship)
+            .filter(
+                FeatRelationship.parent_feature_no == f.feature_no,
+                FeatRelationship.relationship_type == 'allele',
+            )
+            .all()
+        )
+        for ar in allele_relationships:
+            allele_feature = (
+                db.query(Feature)
+                .filter(
+                    Feature.feature_no == ar.child_feature_no,
+                    func.lower(Feature.feature_type) == 'allele',
+                )
+                .first()
+            )
+            if allele_feature:
+                alleles.append(AlleleOut(
+                    feature_no=allele_feature.feature_no,
+                    feature_name=allele_feature.feature_name,
+                    gene_name=allele_feature.gene_name,
+                    dbxref_id=allele_feature.dbxref_id,
+                ))
+
+        # Get Candida orthologs (internal CGD species via CGOB method)
+        candida_orthologs = []
+        for fh in f.feat_homology:
+            hg = fh.homology_group
+            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+                # Get other features in same homology group
+                other_members = (
+                    db.query(FeatHomology)
+                    .filter(
+                        FeatHomology.homology_group_no == hg.homology_group_no,
+                        FeatHomology.feature_no != f.feature_no,
+                    )
+                    .all()
+                )
+                for om in other_members:
+                    other_feat = (
+                        db.query(Feature)
+                        .options(joinedload(Feature.organism))
+                        .filter(Feature.feature_no == om.feature_no)
+                        .first()
+                    )
+                    if other_feat:
+                        other_org_name, _ = _get_organism_info(other_feat)
+                        candida_orthologs.append(CandidaOrthologOut(
+                            feature_name=other_feat.feature_name,
+                            gene_name=other_feat.gene_name,
+                            organism_name=other_org_name,
+                            dbxref_id=other_feat.dbxref_id,
+                        ))
+
+        # Get external orthologs (non-CGD species)
+        external_orthologs = []
+        dbxref_feats = (
+            db.query(DbxrefFeat)
+            .filter(DbxrefFeat.feature_no == f.feature_no)
+            .all()
+        )
+        for df in dbxref_feats:
+            dbxref = (
+                db.query(Dbxref)
+                .filter(Dbxref.dbxref_no == df.dbxref_no)
+                .first()
+            )
+            if dbxref and dbxref.source and 'BEST_HIT' not in dbxref.source:
+                # Get URL for this dbxref if available
+                dbxref_url_row = (
+                    db.query(DbxrefUrl)
+                    .join(Url)
+                    .filter(DbxrefUrl.dbxref_no == dbxref.dbxref_no)
+                    .first()
+                )
+                url_str = None
+                if dbxref_url_row:
+                    url_obj = (
+                        db.query(Url)
+                        .filter(Url.url_no == dbxref_url_row.url_no)
+                        .first()
+                    )
+                    if url_obj and url_obj.url:
+                        url_str = url_obj.url.replace('_SUBSTITUTE_THIS_', dbxref.dbxref_id or '')
+
+                external_orthologs.append(ExternalOrthologOut(
+                    dbxref_id=dbxref.dbxref_id,
+                    description=dbxref.description,
+                    source=dbxref.source,
+                    url=url_str,
+                ))
+
+        # Get CUG codons by counting CTG in CDS sequence
+        # Only for organisms using translation table 12 (CTG clade)
+        cug_codons = None
+        use_table_12 = any(
+            org_substr in organism_name
+            for org_substr in TRANSLATION_TABLE_12_ORGANISMS
+        )
+
+        # Only compute CUG for ORFs that are not deleted/unmapped
+        if (
+            use_table_12
+            and f.feature_type
+            and f.feature_type.upper() == 'ORF'
+            and feature_qualifier
+            and 'deleted' not in feature_qualifier.lower()
+            and 'not physically mapped' not in feature_qualifier.lower()
+        ):
+            primary_cds = _get_cds_sequence(db, f.feature_no)
+            if primary_cds:
+                cug_codons = _count_cug_codons(primary_cds)
+
+        # Compute allelic variation if alleles exist
+        allelic_variation = None
+        if alleles and use_table_12 and f.feature_type and f.feature_type.upper() == 'ORF':
+            primary_cds = _get_cds_sequence(db, f.feature_no)
+            if primary_cds and len(alleles) > 0:
+                # Get the first allele's CDS for comparison
+                first_allele = alleles[0]
+                allele_cds = _get_cds_sequence(db, first_allele.feature_no)
+                if allele_cds:
+                    allelic_variation = _check_allelic_variation(
+                        primary_cds,
+                        allele_cds,
+                        f.feature_name,
+                        first_allele.feature_name,
+                        use_table_12=use_table_12
+                    )
 
         feature_out = FeatureOut(
             feature_no=f.feature_no,
@@ -312,6 +716,14 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             headline=f.headline,
             aliases=aliases,
             external_links=external_links,
+            assembly_21_identifier=assembly_21_identifier,
+            feature_qualifier=feature_qualifier,
+            alleles=alleles,
+            other_strain_names=other_strain_names,
+            candida_orthologs=candida_orthologs,
+            external_orthologs=external_orthologs,
+            cug_codons=cug_codons,
+            allelic_variation=allelic_variation,
         )
         out[organism_name] = feature_out
 
