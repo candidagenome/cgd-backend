@@ -533,16 +533,21 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 ))
                 # Collect "Other strain feature name" aliases with their strain info
                 if alias.alias_type == 'Other strain feature name':
-                    # Find the feature with this name to get its organism/strain
-                    strain_feat = (
-                        db.query(Feature)
-                        .options(joinedload(Feature.organism))
-                        .filter(func.upper(Feature.feature_name) == func.upper(alias.alias_name))
+                    # Look up strain name from dbxref table (matches Perl behavior)
+                    # The strain name is stored in dbxref.description where:
+                    # source = 'Orthologous genes in Candida species', dbxref_type = 'Gene ID'
+                    strain_dbxref = (
+                        db.query(Dbxref)
+                        .filter(
+                            Dbxref.source == 'Orthologous genes in Candida species',
+                            Dbxref.dbxref_type == 'Gene ID',
+                            Dbxref.dbxref_id == alias.alias_name,
+                        )
                         .first()
                     )
                     strain_name = None
-                    if strain_feat and strain_feat.organism:
-                        strain_name = strain_feat.organism.common_name or strain_feat.organism.organism_name
+                    if strain_dbxref and strain_dbxref.description:
+                        strain_name = strain_dbxref.description
                     other_strain_names.append(OtherStrainNameOut(
                         alias_name=alias.alias_name,
                         strain_name=strain_name,
