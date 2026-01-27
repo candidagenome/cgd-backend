@@ -10,6 +10,8 @@ from cgd.schemas.locus_schema import (
     AliasOut,
     ExternalLinkOut,
     AlleleOut,
+    AlleleLocationOut,
+    AlleleSubfeatureOut,
     CandidaOrthologOut,
     ExternalOrthologOut,
     OtherStrainNameOut,
@@ -1366,6 +1368,172 @@ def _get_sequence_resources(
     )
 
 
+def _get_allele_locations(
+    db: Session,
+    feature_no: int,
+    feature_name: str,
+) -> list[AlleleLocationOut]:
+    """
+    Get location information for alleles associated with a feature.
+
+    This implements the "Allele Location" section from the Perl code.
+    Only returns secondary alleles (not the primary allele which has the
+    same feature_name as the main feature).
+
+    Args:
+        db: Database session
+        feature_no: Feature number of the main feature
+        feature_name: Feature name of the main feature (to exclude primary allele)
+
+    Returns:
+        List of AlleleLocationOut objects for each secondary allele
+    """
+    allele_locations = []
+
+    # Get allele relationships for this feature
+    allele_relationships = (
+        db.query(FeatRelationship)
+        .filter(
+            FeatRelationship.parent_feature_no == feature_no,
+            FeatRelationship.relationship_type == 'allele',
+        )
+        .all()
+    )
+
+    for ar in allele_relationships:
+        # Get the allele feature with its location
+        allele = (
+            db.query(Feature)
+            .options(
+                joinedload(Feature.feat_location),
+                joinedload(Feature.seq),
+            )
+            .filter(
+                Feature.feature_no == ar.child_feature_no,
+                func.lower(Feature.feature_type) == 'allele',
+            )
+            .first()
+        )
+
+        if not allele:
+            continue
+
+        # Skip the primary allele (same name as main feature)
+        if allele.feature_name == feature_name:
+            continue
+
+        # Get current location for this allele
+        chromosome = None
+        start_coord = None
+        stop_coord = None
+        strand = None
+        coord_version = None
+        seq_version = None
+        allele_start = None  # For relative coordinate calculation
+
+        for fl in allele.feat_location:
+            if fl.is_loc_current == 'Y':
+                # Get chromosome name from root_seq if available
+                if hasattr(fl, 'seq') and fl.seq:
+                    root_feat = fl.seq.feature if hasattr(fl.seq, 'feature') else None
+                    if root_feat:
+                        chromosome = root_feat.feature_name
+
+                start_coord = fl.start_coord
+                stop_coord = fl.stop_coord
+                strand = fl.strand
+                coord_version = fl.coord_version if hasattr(fl, 'coord_version') else None
+                allele_start = start_coord
+                break
+
+        # Get seq_version from current sequence
+        for seq in allele.seq:
+            if seq.is_seq_current == 'Y':
+                seq_version = seq.seq_version
+                break
+
+        # Skip alleles without location
+        if start_coord is None:
+            continue
+
+        # Get subfeatures for this allele
+        subfeatures = []
+        subfeature_rows = (
+            db.query(
+                Feature.feature_type,
+                FeatLocation.start_coord,
+                FeatLocation.stop_coord,
+                FeatLocation.coord_version,
+                Seq.seq_version,
+            )
+            .join(FeatRelationship, FeatRelationship.child_feature_no == Feature.feature_no)
+            .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+            .outerjoin(Seq, (Seq.feature_no == Feature.feature_no) & (Seq.is_seq_current == 'Y'))
+            .filter(
+                FeatRelationship.parent_feature_no == allele.feature_no,
+                FeatRelationship.rank == 2,  # rank 2 = subfeature
+                FeatLocation.is_loc_current == 'Y',
+            )
+            .order_by(FeatLocation.start_coord)
+            .all()
+        )
+
+        for row in subfeature_rows:
+            feat_type, sf_start, sf_stop, sf_coord_ver, sf_seq_ver = row
+
+            # Calculate relative coordinates
+            relative_start = None
+            relative_stop = None
+            if allele_start is not None:
+                if strand and strand.upper().startswith('C'):
+                    # Crick strand - reverse relative coords
+                    relative_start = allele_start - sf_start + 1
+                    relative_stop = allele_start - sf_stop + 1
+                else:
+                    # Watson strand
+                    relative_start = sf_start - allele_start + 1
+                    relative_stop = sf_stop - allele_start + 1
+
+                # Genomic relative location doesn't have 0
+                if relative_start is not None and relative_start <= 0:
+                    relative_start -= 1
+                if relative_stop is not None and relative_stop <= 0:
+                    relative_stop -= 1
+
+            # Format feature type for display
+            display_type = feat_type
+            if display_type:
+                display_type = display_type.replace('five_prime_', "5' ")
+                display_type = display_type.replace('three_prime_', "3' ")
+                display_type = display_type.replace('_', ' ')
+                display_type = display_type.capitalize()
+
+            subfeatures.append(AlleleSubfeatureOut(
+                feature_type=display_type or feat_type,
+                start_coord=sf_start,
+                stop_coord=sf_stop,
+                relative_start=relative_start,
+                relative_stop=relative_stop,
+                coord_version=sf_coord_ver,
+                seq_version=sf_seq_ver,
+            ))
+
+        allele_locations.append(AlleleLocationOut(
+            feature_no=allele.feature_no,
+            feature_name=allele.feature_name,
+            gene_name=allele.gene_name,
+            chromosome=chromosome,
+            start_coord=start_coord,
+            stop_coord=stop_coord,
+            strand=strand,
+            coord_version=coord_version,
+            seq_version=seq_version,
+            subfeatures=subfeatures,
+        ))
+
+    return allele_locations
+
+
 def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsResponse:
     """
     Query sequence and location information for each feature matching the locus name,
@@ -1525,6 +1693,9 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
                 break
         sequence_resources = _get_sequence_resources(db, f.feature_name, seq_source)
 
+        # Get allele locations (secondary alleles only)
+        allele_locations = _get_allele_locations(db, f.feature_no, f.feature_name)
+
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
@@ -1532,6 +1703,7 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             sequences=sequences,
             subfeatures=subfeatures,
             sequence_resources=sequence_resources,
+            allele_locations=allele_locations,
         )
 
     return SequenceDetailsResponse(results=out)
