@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
@@ -8,6 +9,7 @@ from cgd.schemas.locus_schema import (
     LocusByOrganismResponse,
     FeatureOut,
     AliasOut,
+    AliasWithRefsOut,
     ExternalLinkOut,
     AlleleOut,
     AlleleLocationOut,
@@ -643,21 +645,172 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     break
         additional_info_links.sort(key=lambda x: x.label or '')
 
-        # Get summary notes (paragraphs) for this feature
+        # Collect all references cited on this page from REF_LINK table and paragraph text
+        # Reference index maps dbxref_id -> index number (1, 2, 3, ...)
+        ref_index = {}
+        next_ref_index = 1
+
+        def add_refs_from_ref_link(tab_name: str, col_name: str, primary_key: int):
+            """Query REF_LINK table and add references to ref_index, return list of dbxref_ids"""
+            nonlocal next_ref_index
+            ref_links = (
+                db.query(RefLink, Reference)
+                .join(Reference, RefLink.reference_no == Reference.reference_no)
+                .filter(
+                    func.upper(RefLink.tab_name) == tab_name.upper(),
+                    func.upper(RefLink.col_name) == col_name.upper(),
+                    RefLink.primary_key == primary_key,
+                )
+                .all()
+            )
+            dbxref_ids = []
+            for rl, ref in ref_links:
+                # Skip "information without a citation" references
+                if ref.citation and 'information without a citation' in ref.citation.lower():
+                    continue
+                if ref.dbxref_id not in ref_index:
+                    ref_index[ref.dbxref_id] = next_ref_index
+                    next_ref_index += 1
+                dbxref_ids.append(ref.dbxref_id)
+            return dbxref_ids
+
+        def format_ref_superscript(dbxref_ids: list) -> str:
+            """Format reference indices as superscript HTML"""
+            if not dbxref_ids:
+                return ""
+            indices = sorted(set(ref_index.get(d) for d in dbxref_ids if d in ref_index))
+            if not indices:
+                return ""
+            links = [f'<a href="#ref{idx}" class="ref-link"><sup>{idx}</sup></a>' for idx in indices]
+            return ''.join(links)
+
+        # Get references for gene_name (Standard Name)
+        gene_name_refs = []
+        gene_name_with_refs = f.gene_name or ""
+        if f.gene_name:
+            gene_name_refs = add_refs_from_ref_link('FEATURE', 'GENE_NAME', f.feature_no)
+            if gene_name_refs:
+                ref_sup = format_ref_superscript(gene_name_refs)
+                gene_name_with_refs = f'<i>{f.gene_name}</i>{ref_sup}'
+
+        # Get references for headline (Description)
+        headline_refs = []
+        headline_with_refs = f.headline or ""
+        if f.headline:
+            headline_refs = add_refs_from_ref_link('FEATURE', 'HEADLINE', f.feature_no)
+            if headline_refs:
+                ref_sup = format_ref_superscript(headline_refs)
+                headline_with_refs = f'{f.headline} ({ref_sup.replace("<sup>", "").replace("</sup>", "")})'
+
+        # Get references for name_description
+        name_desc_refs = []
+        name_description_with_refs = f.name_description or ""
+        if f.name_description:
+            name_desc_refs = add_refs_from_ref_link('FEATURE', 'NAME_DESCRIPTION', f.feature_no)
+            if name_desc_refs:
+                ref_sup = format_ref_superscript(name_desc_refs)
+                name_description_with_refs = f'{f.name_description}{ref_sup}'
+
+        # Get references for aliases
+        aliases_with_refs = []
+        for alias in aliases:
+            # Find feat_alias_no for this alias
+            feat_alias = (
+                db.query(FeatAlias)
+                .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+                .filter(
+                    FeatAlias.feature_no == f.feature_no,
+                    Alias.alias_name == alias.alias_name,
+                )
+                .first()
+            )
+            if feat_alias:
+                alias_refs = add_refs_from_ref_link('FEAT_ALIAS', 'FEAT_ALIAS_NO', feat_alias.feat_alias_no)
+                if alias_refs:
+                    ref_sup = format_ref_superscript(alias_refs)
+                    aliases_with_refs.append({
+                        'alias_name': alias.alias_name,
+                        'alias_type': alias.alias_type,
+                        'alias_name_with_refs': f'{alias.alias_name}{ref_sup}',
+                    })
+                else:
+                    aliases_with_refs.append({
+                        'alias_name': alias.alias_name,
+                        'alias_type': alias.alias_type,
+                        'alias_name_with_refs': alias.alias_name,
+                    })
+            else:
+                aliases_with_refs.append({
+                    'alias_name': alias.alias_name,
+                    'alias_type': alias.alias_type,
+                    'alias_name_with_refs': alias.alias_name,
+                })
+
+        # Get summary notes (paragraphs) and extract references from paragraph text
         summary_notes = []
         summary_notes_last_updated = None
+        all_paragraph_text = ""
         for fp in sorted(f.feat_para, key=lambda x: x.paragraph_order):
             para = fp.paragraph
             if para:
-                summary_notes.append(SummaryNoteOut(
-                    paragraph_no=para.paragraph_no,
-                    paragraph_text=para.paragraph_text,
-                    paragraph_order=fp.paragraph_order,
-                    date_edited=para.date_edited,
-                ))
+                all_paragraph_text += para.paragraph_text + " "
                 # Track the most recent update date
                 if summary_notes_last_updated is None or para.date_edited > summary_notes_last_updated:
                     summary_notes_last_updated = para.date_edited
+
+        # Extract reference IDs from summary notes
+        # Reference tags look like: <reference:CAL0000001>
+        ref_pattern = re.compile(r'<reference:(CA[A-Z][0-9]+)>')
+        ref_matches = ref_pattern.findall(all_paragraph_text)
+        for ref_id in ref_matches:
+            if ref_id not in ref_index:
+                ref_index[ref_id] = next_ref_index
+                next_ref_index += 1
+
+        # Now process paragraph text to replace reference tags with numbered links
+        for fp in sorted(f.feat_para, key=lambda x: x.paragraph_order):
+            para = fp.paragraph
+            if para:
+                processed_text = para.paragraph_text
+                # Replace <reference:CGDID> with numbered link
+                def replace_ref(match):
+                    ref_id = match.group(1)
+                    idx = ref_index.get(ref_id, 0)
+                    if idx:
+                        return f'<a href="#ref{idx}" class="ref-link">{idx}</a>'
+                    return match.group(0)
+                processed_text = ref_pattern.sub(replace_ref, processed_text)
+                summary_notes.append(SummaryNoteOut(
+                    paragraph_no=para.paragraph_no,
+                    paragraph_text=processed_text,
+                    paragraph_order=fp.paragraph_order,
+                    date_edited=para.date_edited,
+                ))
+
+        # Fetch all reference details and build cited_references list
+        cited_references = []
+        if ref_index:
+            all_ref_ids = list(ref_index.keys())
+            refs = (
+                db.query(Reference)
+                .filter(Reference.dbxref_id.in_(all_ref_ids))
+                .all()
+            )
+            ref_map = {r.dbxref_id: r for r in refs}
+            # Sort by index number
+            for ref_id in sorted(ref_index.keys(), key=lambda x: ref_index[x]):
+                ref = ref_map.get(ref_id)
+                if ref:
+                    cited_references.append(ReferenceForLocus(
+                        reference_no=ref.reference_no,
+                        pubmed=ref.pubmed,
+                        citation=ref.citation,
+                        title=ref.title,
+                        year=ref.year,
+                    ))
+
+        # Build literature guide URL
+        literature_guide_url = f"http://www.candidagenome.org/cgi-bin/litGuide.pl?dbid={f.dbxref_id}"
 
         # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
         assembly_21_identifier = None
@@ -839,6 +992,16 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                         use_table_12=use_table_12
                     )
 
+        # Convert aliases_with_refs to AliasWithRefsOut objects
+        aliases_with_refs_out = [
+            AliasWithRefsOut(
+                alias_name=a['alias_name'],
+                alias_type=a['alias_type'],
+                alias_name_with_refs=a['alias_name_with_refs'],
+            )
+            for a in aliases_with_refs
+        ]
+
         feature_out = FeatureOut(
             feature_no=f.feature_no,
             organism_no=f.organism_no,
@@ -857,6 +1020,12 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             additional_info_links=additional_info_links,
             summary_notes=summary_notes,
             summary_notes_last_updated=summary_notes_last_updated,
+            cited_references=cited_references,
+            literature_guide_url=literature_guide_url,
+            gene_name_with_refs=gene_name_with_refs if gene_name_with_refs else None,
+            headline_with_refs=headline_with_refs if headline_with_refs else None,
+            name_description_with_refs=name_description_with_refs if name_description_with_refs else None,
+            aliases_with_refs=aliases_with_refs_out,
             assembly_21_identifier=assembly_21_identifier,
             feature_qualifier=feature_qualifier,
             alleles=alleles,
