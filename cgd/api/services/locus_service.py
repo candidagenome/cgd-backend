@@ -560,16 +560,79 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                         strain_name=strain_name,
                     ))
 
-        # Get external links
+        # Get external links from web_display table (like Perl code)
+        # Query joins feat_url -> url -> web_display to get proper label_name
         external_links = []
-        for fu in f.feat_url:
-            url = fu.url
-            if url:
-                external_links.append(ExternalLinkOut(
-                    source=url.source,
-                    url_type=url.url_type,
-                    url=url.url,
-                ))
+
+        # Query 1: Links via feat_url (substitution_value = 'FEATURE')
+        feat_url_links = (
+            db.query(
+                WebDisplay.label_name,
+                Url.url,
+                Url.source,
+                Url.url_type,
+                Feature.feature_name,
+            )
+            .select_from(FeatUrl)
+            .join(Feature, FeatUrl.feature_no == Feature.feature_no)
+            .join(Url, FeatUrl.url_no == Url.url_no)
+            .join(WebDisplay, Url.url_no == WebDisplay.url_no)
+            .filter(
+                FeatUrl.feature_no == f.feature_no,
+                Url.substitution_value == 'FEATURE',
+                WebDisplay.web_page_name == 'locus',
+                WebDisplay.label_location == 'External Links',
+            )
+            .all()
+        )
+
+        for label_name, url_str, source, url_type, feat_name in feat_url_links:
+            # Substitute feature name in URL
+            if url_str and feat_name:
+                url_str = url_str.replace('_SUBSTITUTE_THIS_', feat_name)
+            external_links.append(ExternalLinkOut(
+                label=label_name,
+                url=url_str,
+                source=source,
+                url_type=url_type,
+            ))
+
+        # Query 2: Links via dbxref_url (substitution_value = 'DBXREF')
+        dbxref_url_links = (
+            db.query(
+                WebDisplay.label_name,
+                Url.url,
+                Url.source,
+                Url.url_type,
+                Dbxref.dbxref_id,
+            )
+            .select_from(DbxrefUrl)
+            .join(Dbxref, DbxrefUrl.dbxref_no == Dbxref.dbxref_no)
+            .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+            .join(Url, DbxrefUrl.url_no == Url.url_no)
+            .join(WebDisplay, Url.url_no == WebDisplay.url_no)
+            .filter(
+                DbxrefFeat.feature_no == f.feature_no,
+                Url.substitution_value == 'DBXREF',
+                WebDisplay.web_page_name == 'locus',
+                WebDisplay.label_location == 'External Links',
+            )
+            .all()
+        )
+
+        for label_name, url_str, source, url_type, dbxref_id in dbxref_url_links:
+            # Substitute dbxref_id in URL
+            if url_str and dbxref_id:
+                url_str = url_str.replace('_SUBSTITUTE_THIS_', dbxref_id)
+            external_links.append(ExternalLinkOut(
+                label=label_name,
+                url=url_str,
+                source=source,
+                url_type=url_type,
+            ))
+
+        # Sort by label name
+        external_links.sort(key=lambda x: x.label or '')
 
         # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
         assembly_21_identifier = None

@@ -19,9 +19,10 @@ class AliasOut(BaseModel):
 # --- External Link ---
 
 class ExternalLinkOut(BaseModel):
-    source: str
-    url_type: str
+    label: str  # Display label from web_display.label_name (e.g., "BioGRID", "FungiDB")
     url: str
+    source: t.Optional[str] = None  # URL source (for reference)
+    url_type: t.Optional[str] = None  # URL type (for reference)
 
 
 # --- Allele ---
