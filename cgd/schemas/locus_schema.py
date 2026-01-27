@@ -33,6 +33,31 @@ class AlleleOut(BaseModel):
     dbxref_id: str
 
 
+class AlleleSubfeatureOut(BaseModel):
+    """Subfeature details for an allele (intron, exon, CDS, UTR, etc.)"""
+    feature_type: str
+    start_coord: int
+    stop_coord: int
+    relative_start: t.Optional[int] = None
+    relative_stop: t.Optional[int] = None
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+
+
+class AlleleLocationOut(BaseModel):
+    """Location information for an allele"""
+    feature_no: int
+    feature_name: str
+    gene_name: t.Optional[str] = None
+    chromosome: t.Optional[str] = None
+    start_coord: t.Optional[int] = None
+    stop_coord: t.Optional[int] = None
+    strand: t.Optional[str] = None
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+    subfeatures: list[AlleleSubfeatureOut] = []
+
+
 # --- Candida Ortholog (internal CGD species) ---
 
 class CandidaOrthologOut(BaseModel):
@@ -150,6 +175,16 @@ class SequenceResources(BaseModel):
     maps_displays: list[SequenceResourceItem] = []
 
 
+class JBrowseInfo(BaseModel):
+    """JBrowse embedded viewer information"""
+    embed_url: str  # URL for embedded iframe
+    full_url: str  # URL for full JBrowse view
+    feature_name: str
+    chromosome: str
+    start_coord: int
+    stop_coord: int
+
+
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
@@ -157,6 +192,8 @@ class SequenceDetailsForOrganism(BaseModel):
     sequences: list[SequenceOut] = []
     subfeatures: list[SubfeatureOut] = []  # Introns, exons, CDS, etc.
     sequence_resources: t.Optional[SequenceResources] = None  # Pulldown menus
+    allele_locations: list[AlleleLocationOut] = []  # Location info for alleles
+    jbrowse_info: t.Optional[JBrowseInfo] = None  # JBrowse embedded viewer info
 
 
 class SequenceDetailsResponse(BaseModel):

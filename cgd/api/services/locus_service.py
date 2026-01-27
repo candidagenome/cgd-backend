@@ -10,6 +10,8 @@ from cgd.schemas.locus_schema import (
     AliasOut,
     ExternalLinkOut,
     AlleleOut,
+    AlleleLocationOut,
+    AlleleSubfeatureOut,
     CandidaOrthologOut,
     ExternalOrthologOut,
     OtherStrainNameOut,
@@ -20,6 +22,7 @@ from cgd.schemas.locus_schema import (
     SubfeatureOut,
     SequenceResources,
     SequenceResourceItem,
+    JBrowseInfo,
     LocusReferencesResponse,
     ReferencesForOrganism,
     ReferenceForLocus,
@@ -1366,6 +1369,278 @@ def _get_sequence_resources(
     )
 
 
+# JBrowse configuration per organism/strain
+# Format: { organism_name: { 'data_path': str, 'tracks': str, 'mini_tracks': str } }
+JBROWSE_CONFIG = {
+    "Candida albicans SC5314": {
+        "data_path": "cgd_data/C_albicans_SC5314",
+        "tracks": "DNA,Transcribed Features",
+        "mini_tracks": "DNA,Transcribed Features",
+    },
+    "Candida glabrata CBS138": {
+        "data_path": "cgd_data/C_glabrata_CBS138",
+        "tracks": "DNA,Transcribed Features",
+        "mini_tracks": "DNA,Transcribed Features",
+    },
+    # Add other organisms as needed
+}
+
+# JBrowse base URL
+JBROWSE_BASE_URL = "http://www.candidagenome.org/jbrowse/index.html"
+
+# Flanking basepairs to add to JBrowse coordinates (matching Perl JBROWSE_EXT)
+JBROWSE_FLANK = 1000
+
+
+def _get_jbrowse_info(
+    organism_name: str,
+    feature_name: str,
+    chromosome: Optional[str],
+    start_coord: Optional[int],
+    stop_coord: Optional[int],
+    feature_qualifier: Optional[str] = None,
+) -> Optional[JBrowseInfo]:
+    """
+    Generate JBrowse URLs for embedding and linking.
+
+    This implements the JBrowse section from the Perl code.
+    Returns None if the feature is deleted/unmapped or has no location.
+
+    Args:
+        organism_name: Name of the organism (for config lookup)
+        feature_name: Name of the feature
+        chromosome: Chromosome/contig name
+        start_coord: Start coordinate
+        stop_coord: Stop coordinate
+        feature_qualifier: Feature qualifier (to check for deleted/unmapped)
+
+    Returns:
+        JBrowseInfo object or None if not applicable
+    """
+    from urllib.parse import quote
+
+    # Skip deleted or unmapped features (matching Perl behavior)
+    if feature_qualifier:
+        qual_lower = feature_qualifier.lower()
+        if 'deleted' in qual_lower or 'not physically mapped' in qual_lower:
+            return None
+
+    # Skip if no location data
+    if not chromosome or start_coord is None or stop_coord is None:
+        return None
+
+    # Get JBrowse config for this organism
+    config = JBROWSE_CONFIG.get(organism_name)
+    if not config:
+        # Try partial match (e.g., "Candida albicans" matches "Candida albicans SC5314")
+        for org_key, org_config in JBROWSE_CONFIG.items():
+            if organism_name in org_key or org_key in organism_name:
+                config = org_config
+                break
+
+    if not config:
+        return None
+
+    # Calculate coordinates with flanking region
+    low = min(start_coord, stop_coord)
+    high = max(start_coord, stop_coord)
+    low_flanked = max(1, low - JBROWSE_FLANK)
+    high_flanked = high + JBROWSE_FLANK
+
+    # URL encode the parameters
+    data_encoded = quote(config['data_path'], safe='')
+    tracks_encoded = quote(config['tracks'], safe='')
+    mini_tracks_encoded = quote(config['mini_tracks'], safe='')
+    loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
+
+    # Build URLs with proper JBrowse parameters
+    # Format: ?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    base_params = f"?data={data_encoded}&tracklist=1&nav=1&overview=1"
+
+    embed_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={mini_tracks_encoded}&loc={loc_encoded}&highlight="
+    full_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={tracks_encoded}&loc={loc_encoded}&highlight="
+
+    return JBrowseInfo(
+        embed_url=embed_url,
+        full_url=full_url,
+        feature_name=feature_name,
+        chromosome=chromosome,
+        start_coord=start_coord,
+        stop_coord=stop_coord,
+    )
+
+
+def _get_allele_locations(
+    db: Session,
+    feature_no: int,
+    feature_name: str,
+) -> list[AlleleLocationOut]:
+    """
+    Get location information for alleles associated with a feature.
+
+    This implements the "Allele Location" section from the Perl code.
+    Only returns secondary alleles (not the primary allele which has the
+    same feature_name as the main feature).
+
+    Args:
+        db: Database session
+        feature_no: Feature number of the main feature
+        feature_name: Feature name of the main feature (to exclude primary allele)
+
+    Returns:
+        List of AlleleLocationOut objects for each secondary allele
+    """
+    allele_locations = []
+
+    # Get allele relationships for this feature
+    allele_relationships = (
+        db.query(FeatRelationship)
+        .filter(
+            FeatRelationship.parent_feature_no == feature_no,
+            FeatRelationship.relationship_type == 'allele',
+        )
+        .all()
+    )
+
+    for ar in allele_relationships:
+        # Get the allele feature with its location
+        allele = (
+            db.query(Feature)
+            .options(
+                joinedload(Feature.feat_location),
+                joinedload(Feature.seq),
+            )
+            .filter(
+                Feature.feature_no == ar.child_feature_no,
+                func.lower(Feature.feature_type) == 'allele',
+            )
+            .first()
+        )
+
+        if not allele:
+            continue
+
+        # Skip the primary allele (same name as main feature)
+        if allele.feature_name == feature_name:
+            continue
+
+        # Get current location for this allele
+        chromosome = None
+        start_coord = None
+        stop_coord = None
+        strand = None
+        coord_version = None
+        seq_version = None
+        allele_start = None  # For relative coordinate calculation
+
+        for fl in allele.feat_location:
+            if fl.is_loc_current == 'Y':
+                # Get chromosome name from root_seq_no
+                if fl.root_seq_no:
+                    root_seq_result = (
+                        db.query(Feature.feature_name)
+                        .join(Seq, Seq.feature_no == Feature.feature_no)
+                        .filter(Seq.seq_no == fl.root_seq_no)
+                        .first()
+                    )
+                    if root_seq_result:
+                        chromosome = root_seq_result[0]
+
+                start_coord = fl.start_coord
+                stop_coord = fl.stop_coord
+                strand = fl.strand
+                coord_version = fl.coord_version if hasattr(fl, 'coord_version') else None
+                allele_start = start_coord
+                break
+
+        # Get seq_version from current sequence
+        for seq in allele.seq:
+            if seq.is_seq_current == 'Y':
+                seq_version = seq.seq_version
+                break
+
+        # Skip alleles without location
+        if start_coord is None:
+            continue
+
+        # Get subfeatures for this allele
+        subfeatures = []
+        subfeature_rows = (
+            db.query(
+                Feature.feature_type,
+                FeatLocation.start_coord,
+                FeatLocation.stop_coord,
+                FeatLocation.coord_version,
+                Seq.seq_version,
+            )
+            .join(FeatRelationship, FeatRelationship.child_feature_no == Feature.feature_no)
+            .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+            .outerjoin(Seq, (Seq.feature_no == Feature.feature_no) & (Seq.is_seq_current == 'Y'))
+            .filter(
+                FeatRelationship.parent_feature_no == allele.feature_no,
+                FeatRelationship.rank == 2,  # rank 2 = subfeature
+                FeatLocation.is_loc_current == 'Y',
+            )
+            .order_by(FeatLocation.start_coord)
+            .all()
+        )
+
+        for row in subfeature_rows:
+            feat_type, sf_start, sf_stop, sf_coord_ver, sf_seq_ver = row
+
+            # Calculate relative coordinates
+            relative_start = None
+            relative_stop = None
+            if allele_start is not None:
+                if strand and strand.upper().startswith('C'):
+                    # Crick strand - reverse relative coords
+                    relative_start = allele_start - sf_start + 1
+                    relative_stop = allele_start - sf_stop + 1
+                else:
+                    # Watson strand
+                    relative_start = sf_start - allele_start + 1
+                    relative_stop = sf_stop - allele_start + 1
+
+                # Genomic relative location doesn't have 0
+                if relative_start is not None and relative_start <= 0:
+                    relative_start -= 1
+                if relative_stop is not None and relative_stop <= 0:
+                    relative_stop -= 1
+
+            # Format feature type for display
+            display_type = feat_type
+            if display_type:
+                display_type = display_type.replace('five_prime_', "5' ")
+                display_type = display_type.replace('three_prime_', "3' ")
+                display_type = display_type.replace('_', ' ')
+                display_type = display_type.capitalize()
+
+            subfeatures.append(AlleleSubfeatureOut(
+                feature_type=display_type or feat_type,
+                start_coord=sf_start,
+                stop_coord=sf_stop,
+                relative_start=relative_start,
+                relative_stop=relative_stop,
+                coord_version=sf_coord_ver,
+                seq_version=sf_seq_ver,
+            ))
+
+        allele_locations.append(AlleleLocationOut(
+            feature_no=allele.feature_no,
+            feature_name=allele.feature_name,
+            gene_name=allele.gene_name,
+            chromosome=chromosome,
+            start_coord=start_coord,
+            stop_coord=stop_coord,
+            strand=strand,
+            coord_version=coord_version,
+            seq_version=seq_version,
+            subfeatures=subfeatures,
+        ))
+
+    return allele_locations
+
+
 def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsResponse:
     """
     Query sequence and location information for each feature matching the locus name,
@@ -1406,12 +1681,19 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
         # Get locations
         locations = []
         for fl in f.feat_location:
-            # Get chromosome name from root_seq if available
+            # Get chromosome name from root_seq_no
+            # root_seq_no points to the Seq record for the chromosome,
+            # which is linked to a Feature with the chromosome name
             chromosome = None
-            if hasattr(fl, 'seq') and fl.seq:
-                root_feat = fl.seq.feature if hasattr(fl.seq, 'feature') else None
-                if root_feat:
-                    chromosome = root_feat.feature_name
+            if fl.root_seq_no:
+                root_seq_result = (
+                    db.query(Feature.feature_name)
+                    .join(Seq, Seq.feature_no == Feature.feature_no)
+                    .filter(Seq.seq_no == fl.root_seq_no)
+                    .first()
+                )
+                if root_seq_result:
+                    chromosome = root_seq_result[0]
 
             # Store first current location's start for relative coords
             if fl.is_loc_current == 'Y' and feature_start is None:
@@ -1525,6 +1807,37 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
                 break
         sequence_resources = _get_sequence_resources(db, f.feature_name, seq_source)
 
+        # Get allele locations (secondary alleles only)
+        allele_locations = _get_allele_locations(db, f.feature_no, f.feature_name)
+
+        # Get feature qualifier for JBrowse check
+        feature_qualifier = None
+        qualifier_row = (
+            db.query(FeatProperty.property_value)
+            .filter(
+                FeatProperty.feature_no == f.feature_no,
+                FeatProperty.property_type == 'feature_qualifier',
+            )
+            .first()
+        )
+        if qualifier_row:
+            feature_qualifier = qualifier_row[0]
+
+        # Get JBrowse info (only for features with location that are not deleted/unmapped)
+        jbrowse_info = None
+        if locations:
+            # Use first current location for JBrowse
+            current_loc = next((loc for loc in locations if loc.is_current), None)
+            if current_loc:
+                jbrowse_info = _get_jbrowse_info(
+                    organism_name=organism_name,
+                    feature_name=f.feature_name,
+                    chromosome=current_loc.chromosome,
+                    start_coord=current_loc.start_coord,
+                    stop_coord=current_loc.stop_coord,
+                    feature_qualifier=feature_qualifier,
+                )
+
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
@@ -1532,6 +1845,8 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             sequences=sequences,
             subfeatures=subfeatures,
             sequence_resources=sequence_resources,
+            allele_locations=allele_locations,
+            jbrowse_info=jbrowse_info,
         )
 
     return SequenceDetailsResponse(results=out)
