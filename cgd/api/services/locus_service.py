@@ -779,6 +779,8 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     Query GO annotations for each feature matching the locus name,
     grouped by organism.
     """
+    from cgd.models.models import GoQualifier, GorefDbxref
+
     n = name.strip()
     features = (
         db.query(Feature)
@@ -786,6 +788,8 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
             joinedload(Feature.organism),
             joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
             joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
+            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.go_qualifier),
+            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.goref_dbxref).joinedload(GorefDbxref.dbxref),
         )
         .filter(
             or_(
@@ -800,6 +804,15 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
 
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
+
+    # Source to species mapping for "with" display
+    source_to_species = {
+        'SGD': 'S. cerevisiae',
+        'POMBASE': 'S. pombe',
+        'AspGD': 'A. nidulans',
+        'CGD': 'C. albicans',
+        'BROAD_NEUROSPORA': 'N. crassa',
+    }
 
     out: dict[str, GODetailsForOrganism] = {}
 
@@ -823,10 +836,44 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 link=f"/go/{goid_str}",
             )
 
+            # Collect qualifiers and with_from from all go_refs
+            qualifiers = set()
+            with_from_parts = []
+
+            for gr in ga.go_ref:
+                # Get qualifiers
+                for gq in gr.go_qualifier:
+                    if gq.qualifier:
+                        qualifiers.add(gq.qualifier)
+
+                # Get "with" supporting evidence
+                for grd in gr.goref_dbxref:
+                    if grd.support_type and grd.support_type.upper() == 'WITH':
+                        dbx = grd.dbxref
+                        if dbx:
+                            source = dbx.source
+                            # Use description (gene name) if available, otherwise dbxref_id
+                            display_name = dbx.description or dbx.dbxref_id
+                            species = source_to_species.get(source, source)
+                            with_from_parts.append(f"{species}: {display_name}")
+
+            # Build with_from string
+            with_from_str = None
+            if with_from_parts:
+                with_from_str = ", ".join(sorted(set(with_from_parts)))
+
             evidence = GOEvidence(
                 code=ga.go_evidence,
-                with_from=None,  # Could be extended if with_from data exists
+                with_from=with_from_str,
             )
+
+            # Build qualifier string (NOT takes precedence)
+            qualifier_str = None
+            if qualifiers:
+                if 'NOT' in qualifiers:
+                    qualifier_str = 'NOT'
+                else:
+                    qualifier_str = ', '.join(sorted(qualifiers))
 
             # Get references from go_ref relationship
             references = []
@@ -841,6 +888,8 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 term=term,
                 evidence=evidence,
                 references=references,
+                qualifier=qualifier_str,
+                annotation_type=ga.annotation_type,
             ))
 
         out[organism_name] = GODetailsForOrganism(
