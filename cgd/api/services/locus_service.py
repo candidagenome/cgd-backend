@@ -912,6 +912,34 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     return GODetailsResponse(results=out)
 
 
+def _map_experiment_type_to_root(experiment_type: str) -> str:
+    """
+    Map experiment types to root categories: 'Classical genetics' or 'Large-scale survey'.
+    This mimics the Perl _mapAllExperimentTypesToRootNode function.
+    """
+    if not experiment_type:
+        return 'Classical genetics'
+
+    exp_lower = experiment_type.lower()
+
+    # Large-scale survey experiment types
+    large_scale_types = [
+        'large-scale survey',
+        'systematic mutation set',
+        'systematic deletion',
+        'systematic overexpression',
+        'tn insertion mutagenesis',
+        'signature-tagged mutagenesis',
+        'uv mutagenesis',
+    ]
+
+    for ls_type in large_scale_types:
+        if ls_type in exp_lower:
+            return 'Large-scale survey'
+
+    return 'Classical genetics'
+
+
 def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsResponse:
     """
     Query phenotype annotations for each feature matching the locus name,
@@ -957,16 +985,28 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             )
 
             experiment = pa.experiment
-            experiment_comment = None
             strain = None
             if experiment:
-                experiment_comment = getattr(experiment, "experiment_comment", None)
                 strain = getattr(experiment, "strain_background", None)
+
+            # Map experiment_type to root category
+            mapped_experiment_type = _map_experiment_type_to_root(phenotype.experiment_type)
+
+            # CGD-specific handling: combine diploid info with null mutant type
+            # For "homozygous diploid" or "heterozygous diploid" with mutant_type="null",
+            # display as "homozygous null" or "heterozygous null"
+            mutant_type = phenotype.mutant_type
+            raw_experiment_type = phenotype.experiment_type or ''
+            if 'homozygous diploid' in raw_experiment_type.lower() and mutant_type == 'null':
+                mutant_type = 'homozygous null'
+            elif 'heterozygous diploid' in raw_experiment_type.lower() and mutant_type == 'null':
+                mutant_type = 'heterozygous null'
 
             annotations.append(PhenotypeAnnotationOut(
                 phenotype=pheno_term,
                 qualifier=phenotype.qualifier,
-                experiment=phenotype.experiment_type,
+                experiment_type=mapped_experiment_type,
+                mutant_type=mutant_type,
                 strain=strain,
                 references=[],  # References could be added via ref_link if needed
             ))
