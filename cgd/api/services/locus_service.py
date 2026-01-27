@@ -694,13 +694,17 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 ))
 
         # Build ortholog cluster URL from SGD ortholog (for CGOB viewer)
+        # Use gene name (description) instead of SGD ID (dbxref_id)
         ortholog_cluster_url = None
         sgd_ortholog = next(
             (eo for eo in external_orthologs if eo.source == 'SGD'),
             None
         )
-        if sgd_ortholog and sgd_ortholog.dbxref_id:
-            ortholog_cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={sgd_ortholog.dbxref_id}"
+        if sgd_ortholog:
+            # Prefer description (gene name like "ACT1") over dbxref_id (SGD ID like "S000001855")
+            gene_name = sgd_ortholog.description or sgd_ortholog.dbxref_id
+            if gene_name:
+                ortholog_cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={gene_name}"
 
         # Get CUG codons by counting CTG in CDS sequence
         # Only for organisms using translation table 12 (CTG clade)
