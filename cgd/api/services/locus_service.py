@@ -12,6 +12,7 @@ from cgd.schemas.locus_schema import (
     AlleleOut,
     CandidaOrthologOut,
     ExternalOrthologOut,
+    OtherStrainNameOut,
     SequenceDetailsResponse,
     SequenceDetailsForOrganism,
     SequenceLocationOut,
@@ -101,6 +102,15 @@ TRANSLATION_TABLE_12_ORGANISMS = {
     'Lodderomyces elongisporus NRRL YB-4239',
     'Candida auris',
     # Add other CTG clade species as needed
+}
+
+
+# Non-CGD ortholog sources to display with their species names
+NON_CGD_ORTHOLOG_SOURCES = {
+    'SGD': 'S. cerevisiae',
+    'POMBASE': 'S. pombe',
+    'AspGD': 'A. nidulans',
+    'BROAD_NEUROSPORA': 'N. crassa',
 }
 
 
@@ -521,9 +531,22 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     alias_name=alias.alias_name,
                     alias_type=alias.alias_type,
                 ))
-                # Collect "Other strain feature name" aliases separately
+                # Collect "Other strain feature name" aliases with their strain info
                 if alias.alias_type == 'Other strain feature name':
-                    other_strain_names.append(alias.alias_name)
+                    # Find the feature with this name to get its organism/strain
+                    strain_feat = (
+                        db.query(Feature)
+                        .options(joinedload(Feature.organism))
+                        .filter(func.upper(Feature.feature_name) == func.upper(alias.alias_name))
+                        .first()
+                    )
+                    strain_name = None
+                    if strain_feat and strain_feat.organism:
+                        strain_name = strain_feat.organism.common_name or strain_feat.organism.organism_name
+                    other_strain_names.append(OtherStrainNameOut(
+                        alias_name=alias.alias_name,
+                        strain_name=strain_name,
+                    ))
 
         # Get external links
         external_links = []
@@ -638,7 +661,8 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 .filter(Dbxref.dbxref_no == df.dbxref_no)
                 .first()
             )
-            if dbxref and dbxref.source and 'BEST_HIT' not in dbxref.source:
+            # Only include the 4 allowed non-CGD ortholog sources
+            if dbxref and dbxref.source in NON_CGD_ORTHOLOG_SOURCES:
                 # Get URL for this dbxref if available
                 dbxref_url_row = (
                     db.query(DbxrefUrl)
@@ -661,7 +685,17 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     description=dbxref.description,
                     source=dbxref.source,
                     url=url_str,
+                    species_name=NON_CGD_ORTHOLOG_SOURCES.get(dbxref.source),
                 ))
+
+        # Build ortholog cluster URL from SGD ortholog (for CGOB viewer)
+        ortholog_cluster_url = None
+        sgd_ortholog = next(
+            (eo for eo in external_orthologs if eo.source == 'SGD'),
+            None
+        )
+        if sgd_ortholog and sgd_ortholog.dbxref_id:
+            ortholog_cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={sgd_ortholog.dbxref_id}"
 
         # Get CUG codons by counting CTG in CDS sequence
         # Only for organisms using translation table 12 (CTG clade)
@@ -722,6 +756,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             other_strain_names=other_strain_names,
             candida_orthologs=candida_orthologs,
             external_orthologs=external_orthologs,
+            ortholog_cluster_url=ortholog_cluster_url,
             cug_codons=cug_codons,
             allelic_variation=allelic_variation,
         )

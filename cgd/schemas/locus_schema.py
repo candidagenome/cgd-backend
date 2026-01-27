@@ -42,6 +42,13 @@ class CandidaOrthologOut(BaseModel):
     dbxref_id: str
 
 
+# --- Other Strain Name ---
+
+class OtherStrainNameOut(BaseModel):
+    alias_name: str
+    strain_name: t.Optional[str] = None
+
+
 # --- External Ortholog (non-CGD species) ---
 
 class ExternalOrthologOut(BaseModel):
@@ -49,6 +56,7 @@ class ExternalOrthologOut(BaseModel):
     description: t.Optional[str] = None
     source: str
     url: t.Optional[str] = None
+    species_name: t.Optional[str] = None  # Display name like "S. cerevisiae"
 
 
 # --- Basic Feature Info (updated with aliases and links) ---
@@ -77,7 +85,8 @@ class FeatureOut(ORMSchema):
     assembly_21_identifier: t.Optional[str] = None  # Assembly 19/21 ORF name
     feature_qualifier: t.Optional[str] = None  # e.g., "Verified", "Uncharacterized"
     alleles: list[AlleleOut] = []
-    other_strain_names: list[str] = []  # Systematic names in other strains
+    other_strain_names: list[OtherStrainNameOut] = []  # Systematic names in other strains
+    ortholog_cluster_url: t.Optional[str] = None  # URL to CGOB ortholog cluster viewer
     candida_orthologs: list[CandidaOrthologOut] = []
     external_orthologs: list[ExternalOrthologOut] = []
     cug_codons: t.Optional[int] = None  # Number of CUG codons
