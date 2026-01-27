@@ -12,7 +12,7 @@ REQ_FILE="${BACKEND_REQ_FILE:-requirements.txt}"
 PIP_INSTALL_ON="${BACKEND_PIP_INSTALL_ON:-req_change}"      # always | req_change | never
 
 # Restart / checks
-WAIT_HOST="${BACKEND_WAIT_HOST:-127.0.0.1}"
+WAIT_HOST="${BACKEND_WAIT_HOST:-127.0.0.1}"   # retained for logging only (port check is host-agnostic)
 WAIT_PORT="${BACKEND_WAIT_PORT:-8000}"
 WAIT_SECS="${BACKEND_WAIT_SECS:-30}"
 HEALTH_RETRIES="${BACKEND_HEALTH_RETRIES:-30}"
@@ -28,10 +28,14 @@ die() {
 
 wait_for_port() {
   local host="$1" port="$2" timeout="$3"
-  log "Waiting for $host:$port (up to ${timeout}s)"
+  log "Waiting for *:$port (up to ${timeout}s) [host hint: ${host}]"
+
+  # NOTE: We intentionally do NOT require an exact host match.
+  # Gunicorn may bind 0.0.0.0:8000 (common) or 127.0.0.1:8000.
+  # Checking only the port avoids false negatives.
   for ((i=1; i<=timeout; i++)); do
-    if ss -lnt 2>/dev/null | awk '{print $4}' | grep -q "^${host}:${port}\$"; then
-      log "Port is listening: $host:$port"
+    if ss -lntH "sport = :$port" 2>/dev/null | grep -q .; then
+      log "Port is listening on at least one address: *:$port"
       return 0
     fi
     sleep 1
@@ -124,7 +128,7 @@ sudo systemctl restart "$SERVICE"
 sleep 1
 
 log "Service status"
-systemctl status "$SERVICE" -l --no-pager || true
+sudo systemctl status "$SERVICE" -l --no-pager || true
 
 log "Recent logs (last 2 minutes)"
 sudo journalctl -u "$SERVICE" --since "2 minutes ago" --no-pager || true
@@ -134,9 +138,9 @@ log "Ports (8000/80/443)"
 ss -lntp | egrep ':(8000|80|443)\b' || true
 
 if ! wait_for_port "$WAIT_HOST" "$WAIT_PORT" "$WAIT_SECS"; then
-  warn "Backend did not start listening on $WAIT_HOST:$WAIT_PORT within ${WAIT_SECS}s"
+  warn "Backend did not start listening on port $WAIT_PORT within ${WAIT_SECS}s"
   log "Service status (full)"
-  systemctl status "$SERVICE" -l --no-pager || true
+  sudo systemctl status "$SERVICE" -l --no-pager || true
   log "Logs since 10 minutes ago"
   sudo journalctl -u "$SERVICE" --since "10 minutes ago" --no-pager || true
   die "Backend port not listening"
@@ -145,7 +149,7 @@ fi
 if ! health_check "$HEALTH_URL" "$HEALTH_RETRIES" "$HEALTH_SLEEP_SECS"; then
   warn "Health check failed after retries"
   log "Service status (full)"
-  systemctl status "$SERVICE" -l --no-pager || true
+  sudo systemctl status "$SERVICE" -l --no-pager || true
   log "Logs since 10 minutes ago"
   sudo journalctl -u "$SERVICE" --since "10 minutes ago" --no-pager || true
   # Still show a final attempt output
