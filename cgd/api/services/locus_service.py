@@ -561,43 +561,31 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     ))
 
         # Get external links from web_display table (like Perl code)
-        # Query joins feat_url -> url -> web_display to get proper label_name
+        # Use ORM relationships to iterate through URLs and find labels from web_display
         external_links = []
 
-        # Query 1: Links via feat_url (substitution_value = 'FEATURE')
-        feat_url_links = (
-            db.query(
-                WebDisplay.label_name,
-                Url.url,
-                Url.source,
-                Url.url_type,
-                Feature.feature_name,
-            )
-            .select_from(FeatUrl)
-            .join(Feature, FeatUrl.feature_no == Feature.feature_no)
-            .join(Url, FeatUrl.url_no == Url.url_no)
-            .join(WebDisplay, Url.url_no == WebDisplay.url_no)
-            .filter(
-                FeatUrl.feature_no == f.feature_no,
-                Url.substitution_value == 'FEATURE',
-                WebDisplay.web_page_name == 'Locus',
-                WebDisplay.label_location == 'External Links',
-            )
-            .all()
-        )
+        # Links via feat_url relationship (substitution_value = 'FEATURE')
+        for fu in f.feat_url:
+            url = fu.url
+            if not url or url.substitution_value != 'FEATURE':
+                continue
 
-        for label_name, url_str, source, url_type, feat_name in feat_url_links:
-            # Substitute feature name in URL
-            if url_str and feat_name:
-                url_str = url_str.replace('_SUBSTITUTE_THIS_', feat_name)
-            external_links.append(ExternalLinkOut(
-                label=label_name,
-                url=url_str,
-                source=source,
-                url_type=url_type,
-            ))
+            # Find web_display entry for this URL with 'Locus' page and 'External Links' location
+            for wd in url.web_display:
+                if wd.web_page_name == 'Locus' and wd.label_location == 'External Links':
+                    url_str = url.url
+                    # Substitute feature name in URL
+                    if url_str:
+                        url_str = url_str.replace('_SUBSTITUTE_THIS_', f.feature_name)
+                    external_links.append(ExternalLinkOut(
+                        label=wd.label_name,
+                        url=url_str,
+                        source=url.source,
+                        url_type=url.url_type,
+                    ))
+                    break  # Only need one web_display entry per URL
 
-        # Query 2: Links via dbxref_url (substitution_value = 'DBXREF')
+        # Links via dbxref_url (for DBXREF substitution)
         dbxref_url_links = (
             db.query(
                 WebDisplay.label_name,
