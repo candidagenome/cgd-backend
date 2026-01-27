@@ -106,12 +106,26 @@ class LocusByOrganismResponse(BaseModel):
 
 # --- Sequence Info ---
 
+class SubfeatureOut(BaseModel):
+    """Subfeature details (intron, exon, CDS, UTR, etc.)"""
+    feature_type: str  # e.g., "Intron", "CDS", "five_prime_UTR"
+    start_coord: int  # Chromosomal start
+    stop_coord: int  # Chromosomal stop
+    relative_start: t.Optional[int] = None  # Relative to gene start
+    relative_stop: t.Optional[int] = None  # Relative to gene start
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+
+
 class SequenceLocationOut(BaseModel):
     chromosome: t.Optional[str] = None
     start_coord: int
     stop_coord: int
     strand: str
     is_current: bool
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+    source: t.Optional[str] = None  # Assembly source
 
 
 class SequenceOut(BaseModel):
@@ -128,6 +142,7 @@ class SequenceDetailsForOrganism(BaseModel):
     taxon_id: int
     locations: list[SequenceLocationOut] = []
     sequences: list[SequenceOut] = []
+    subfeatures: list[SubfeatureOut] = []  # Introns, exons, CDS, etc.
 
 
 class SequenceDetailsResponse(BaseModel):
