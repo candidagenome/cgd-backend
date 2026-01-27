@@ -1370,20 +1370,23 @@ def _get_sequence_resources(
 
 
 # JBrowse configuration per organism/strain
-# Format: { organism_name: { 'base_url': str, 'tracks': str, 'mini_tracks': str } }
+# Format: { organism_name: { 'data_path': str, 'tracks': str, 'mini_tracks': str } }
 JBROWSE_CONFIG = {
     "Candida albicans SC5314": {
-        "base_url": "https://www.candidagenome.org/jbrowse/index.html?data=C_albicans_SC5314",
-        "tracks": "DNA,ORFs",
-        "mini_tracks": "DNA,ORFs",
+        "data_path": "cgd_data/C_albicans_SC5314",
+        "tracks": "DNA,Transcribed Features",
+        "mini_tracks": "DNA,Transcribed Features",
     },
     "Candida glabrata CBS138": {
-        "base_url": "https://www.candidagenome.org/jbrowse/index.html?data=C_glabrata_CBS138",
-        "tracks": "DNA,ORFs",
-        "mini_tracks": "DNA,ORFs",
+        "data_path": "cgd_data/C_glabrata_CBS138",
+        "tracks": "DNA,Transcribed Features",
+        "mini_tracks": "DNA,Transcribed Features",
     },
     # Add other organisms as needed
 }
+
+# JBrowse base URL
+JBROWSE_BASE_URL = "http://www.candidagenome.org/jbrowse/index.html"
 
 # Flanking basepairs to add to JBrowse coordinates (matching Perl JBROWSE_EXT)
 JBROWSE_FLANK = 1000
@@ -1414,6 +1417,8 @@ def _get_jbrowse_info(
     Returns:
         JBrowseInfo object or None if not applicable
     """
+    from urllib.parse import quote
+
     # Skip deleted or unmapped features (matching Perl behavior)
     if feature_qualifier:
         qual_lower = feature_qualifier.lower()
@@ -1442,11 +1447,18 @@ def _get_jbrowse_info(
     low_flanked = max(1, low - JBROWSE_FLANK)
     high_flanked = high + JBROWSE_FLANK
 
-    # Build URLs
-    loc_param = f"&loc={chromosome}:{low_flanked}..{high_flanked}"
+    # URL encode the parameters
+    data_encoded = quote(config['data_path'], safe='')
+    tracks_encoded = quote(config['tracks'], safe='')
+    mini_tracks_encoded = quote(config['mini_tracks'], safe='')
+    loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
 
-    embed_url = f"{config['base_url']}&tracks={config['mini_tracks']}{loc_param}"
-    full_url = f"{config['base_url']}&tracks={config['tracks']}{loc_param}"
+    # Build URLs with proper JBrowse parameters
+    # Format: ?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    base_params = f"?data={data_encoded}&tracklist=1&nav=1&overview=1"
+
+    embed_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={mini_tracks_encoded}&loc={loc_encoded}&highlight="
+    full_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={tracks_encoded}&loc={loc_encoded}&highlight="
 
     return JBrowseInfo(
         embed_url=embed_url,
@@ -1523,11 +1535,16 @@ def _get_allele_locations(
 
         for fl in allele.feat_location:
             if fl.is_loc_current == 'Y':
-                # Get chromosome name from root_seq if available
-                if hasattr(fl, 'seq') and fl.seq:
-                    root_feat = fl.seq.feature if hasattr(fl.seq, 'feature') else None
-                    if root_feat:
-                        chromosome = root_feat.feature_name
+                # Get chromosome name from root_seq_no
+                if fl.root_seq_no:
+                    root_seq_result = (
+                        db.query(Feature.feature_name)
+                        .join(Seq, Seq.feature_no == Feature.feature_no)
+                        .filter(Seq.seq_no == fl.root_seq_no)
+                        .first()
+                    )
+                    if root_seq_result:
+                        chromosome = root_seq_result[0]
 
                 start_coord = fl.start_coord
                 stop_coord = fl.stop_coord
@@ -1664,12 +1681,19 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
         # Get locations
         locations = []
         for fl in f.feat_location:
-            # Get chromosome name from root_seq if available
+            # Get chromosome name from root_seq_no
+            # root_seq_no points to the Seq record for the chromosome,
+            # which is linked to a Feature with the chromosome name
             chromosome = None
-            if hasattr(fl, 'seq') and fl.seq:
-                root_feat = fl.seq.feature if hasattr(fl.seq, 'feature') else None
-                if root_feat:
-                    chromosome = root_feat.feature_name
+            if fl.root_seq_no:
+                root_seq_result = (
+                    db.query(Feature.feature_name)
+                    .join(Seq, Seq.feature_no == Feature.feature_no)
+                    .filter(Seq.seq_no == fl.root_seq_no)
+                    .first()
+                )
+                if root_seq_result:
+                    chromosome = root_seq_result[0]
 
             # Store first current location's start for relative coords
             if fl.is_loc_current == 'Y' and feature_start is None:
