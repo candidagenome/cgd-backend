@@ -16,6 +16,12 @@ class AliasOut(BaseModel):
     alias_type: str
 
 
+class AliasWithRefsOut(BaseModel):
+    alias_name: str
+    alias_type: str
+    alias_name_with_refs: str  # alias name with reference superscripts as HTML
+
+
 # --- External Link ---
 
 class ExternalLinkOut(BaseModel):
@@ -125,9 +131,15 @@ class FeatureOut(ORMSchema):
     summary_notes: list["SummaryNoteOut"] = []
     summary_notes_last_updated: t.Optional[datetime.datetime] = None  # Most recent update date
 
-    # References cited on this page (extracted from summary notes)
+    # References cited on this page (extracted from summary notes and REF_LINK table)
     cited_references: list["ReferenceForLocus"] = []
     literature_guide_url: t.Optional[str] = None  # URL to complete literature guide
+
+    # Text fields with reference annotations (HTML with superscript links)
+    gene_name_with_refs: t.Optional[str] = None
+    headline_with_refs: t.Optional[str] = None
+    name_description_with_refs: t.Optional[str] = None
+    aliases_with_refs: list["AliasWithRefsOut"] = []
 
 
 class LocusByOrganismResponse(BaseModel):
