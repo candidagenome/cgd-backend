@@ -18,6 +18,8 @@ from cgd.schemas.locus_schema import (
     SequenceLocationOut,
     SequenceOut,
     SubfeatureOut,
+    SequenceResources,
+    SequenceResourceItem,
     LocusReferencesResponse,
     ReferencesForOrganism,
     ReferenceForLocus,
@@ -85,6 +87,7 @@ from cgd.models.models import (
     DbxrefUrl,
     DbxrefHomology,
     ProteinInfo,
+    WebDisplay,
 )
 
 
@@ -1290,6 +1293,79 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     return HomologyDetailsResponse(results=out)
 
 
+def _get_sequence_resources(
+    db: Session,
+    feature_name: str,
+    seq_source: Optional[str] = None,
+) -> Optional[SequenceResources]:
+    """
+    Get sequence resource pulldown menu data for a feature.
+
+    Queries the web_display table to get URLs for:
+    - Retrieve Sequences
+    - Sequence Analysis Tools
+    - Maps & Displays
+
+    Args:
+        db: Database session
+        feature_name: Name of the feature (used to substitute in URLs)
+        seq_source: Optional sequence source for filtering
+
+    Returns:
+        SequenceResources object with pulldown menu items, or None if no data
+    """
+    retrieve_sequences = []
+    sequence_analysis_tools = []
+    maps_displays = []
+
+    # Query web_display for locus page resources
+    web_displays = (
+        db.query(WebDisplay)
+        .filter(
+            WebDisplay.web_page_name == 'locus',
+            WebDisplay.label_type == 'Pull-down',
+            WebDisplay.label_location.in_([
+                'Retrieve Sequences',
+                'Sequence Analysis Tools',
+                'Maps & Displays',
+            ]),
+        )
+        .all()
+    )
+
+    for wd in web_displays:
+        url = wd.url
+        if not url:
+            continue
+
+        # Substitute feature name in URL
+        url_str = url.url
+        if url_str:
+            url_str = url_str.replace('_SUBSTITUTE_THIS_', feature_name)
+
+        item = SequenceResourceItem(
+            label=wd.label_name,
+            url=url_str or '',
+        )
+
+        if wd.label_location == 'Retrieve Sequences':
+            retrieve_sequences.append(item)
+        elif wd.label_location == 'Sequence Analysis Tools':
+            sequence_analysis_tools.append(item)
+        elif wd.label_location == 'Maps & Displays':
+            maps_displays.append(item)
+
+    # Only return resources if we have at least one item
+    if not retrieve_sequences and not sequence_analysis_tools and not maps_displays:
+        return None
+
+    return SequenceResources(
+        retrieve_sequences=retrieve_sequences,
+        sequence_analysis_tools=sequence_analysis_tools,
+        maps_displays=maps_displays,
+    )
+
+
 def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsResponse:
     """
     Query sequence and location information for each feature matching the locus name,
@@ -1441,12 +1517,21 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
                 seq_version=seq_ver,
             ))
 
+        # Get sequence resources (pulldown menus)
+        seq_source = None
+        for loc in locations:
+            if loc.is_current and loc.source:
+                seq_source = loc.source
+                break
+        sequence_resources = _get_sequence_resources(db, f.feature_name, seq_source)
+
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             locations=locations,
             sequences=sequences,
             subfeatures=subfeatures,
+            sequence_resources=sequence_resources,
         )
 
     return SequenceDetailsResponse(results=out)

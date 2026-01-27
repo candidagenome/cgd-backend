@@ -137,12 +137,26 @@ class SequenceOut(BaseModel):
     residues: t.Optional[str] = None  # Can be omitted for large sequences
 
 
+class SequenceResourceItem(BaseModel):
+    """Single item in a sequence resource pulldown menu"""
+    label: str
+    url: str
+
+
+class SequenceResources(BaseModel):
+    """Resource pulldown menus for sequence tools"""
+    retrieve_sequences: list[SequenceResourceItem] = []
+    sequence_analysis_tools: list[SequenceResourceItem] = []
+    maps_displays: list[SequenceResourceItem] = []
+
+
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     locations: list[SequenceLocationOut] = []
     sequences: list[SequenceOut] = []
     subfeatures: list[SubfeatureOut] = []  # Introns, exons, CDS, etc.
+    sequence_resources: t.Optional[SequenceResources] = None  # Pulldown menus
 
 
 class SequenceDetailsResponse(BaseModel):
