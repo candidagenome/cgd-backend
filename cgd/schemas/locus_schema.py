@@ -175,6 +175,16 @@ class SequenceResources(BaseModel):
     maps_displays: list[SequenceResourceItem] = []
 
 
+class JBrowseInfo(BaseModel):
+    """JBrowse embedded viewer information"""
+    embed_url: str  # URL for embedded iframe
+    full_url: str  # URL for full JBrowse view
+    feature_name: str
+    chromosome: str
+    start_coord: int
+    stop_coord: int
+
+
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
@@ -183,6 +193,7 @@ class SequenceDetailsForOrganism(BaseModel):
     subfeatures: list[SubfeatureOut] = []  # Introns, exons, CDS, etc.
     sequence_resources: t.Optional[SequenceResources] = None  # Pulldown menus
     allele_locations: list[AlleleLocationOut] = []  # Location info for alleles
+    jbrowse_info: t.Optional[JBrowseInfo] = None  # JBrowse embedded viewer info
 
 
 class SequenceDetailsResponse(BaseModel):

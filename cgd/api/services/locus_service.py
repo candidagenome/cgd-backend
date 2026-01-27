@@ -22,6 +22,7 @@ from cgd.schemas.locus_schema import (
     SubfeatureOut,
     SequenceResources,
     SequenceResourceItem,
+    JBrowseInfo,
     LocusReferencesResponse,
     ReferencesForOrganism,
     ReferenceForLocus,
@@ -1368,6 +1369,95 @@ def _get_sequence_resources(
     )
 
 
+# JBrowse configuration per organism/strain
+# Format: { organism_name: { 'base_url': str, 'tracks': str, 'mini_tracks': str } }
+JBROWSE_CONFIG = {
+    "Candida albicans SC5314": {
+        "base_url": "https://www.candidagenome.org/jbrowse/index.html?data=C_albicans_SC5314",
+        "tracks": "DNA,ORFs",
+        "mini_tracks": "DNA,ORFs",
+    },
+    "Candida glabrata CBS138": {
+        "base_url": "https://www.candidagenome.org/jbrowse/index.html?data=C_glabrata_CBS138",
+        "tracks": "DNA,ORFs",
+        "mini_tracks": "DNA,ORFs",
+    },
+    # Add other organisms as needed
+}
+
+# Flanking basepairs to add to JBrowse coordinates (matching Perl JBROWSE_EXT)
+JBROWSE_FLANK = 1000
+
+
+def _get_jbrowse_info(
+    organism_name: str,
+    feature_name: str,
+    chromosome: Optional[str],
+    start_coord: Optional[int],
+    stop_coord: Optional[int],
+    feature_qualifier: Optional[str] = None,
+) -> Optional[JBrowseInfo]:
+    """
+    Generate JBrowse URLs for embedding and linking.
+
+    This implements the JBrowse section from the Perl code.
+    Returns None if the feature is deleted/unmapped or has no location.
+
+    Args:
+        organism_name: Name of the organism (for config lookup)
+        feature_name: Name of the feature
+        chromosome: Chromosome/contig name
+        start_coord: Start coordinate
+        stop_coord: Stop coordinate
+        feature_qualifier: Feature qualifier (to check for deleted/unmapped)
+
+    Returns:
+        JBrowseInfo object or None if not applicable
+    """
+    # Skip deleted or unmapped features (matching Perl behavior)
+    if feature_qualifier:
+        qual_lower = feature_qualifier.lower()
+        if 'deleted' in qual_lower or 'not physically mapped' in qual_lower:
+            return None
+
+    # Skip if no location data
+    if not chromosome or start_coord is None or stop_coord is None:
+        return None
+
+    # Get JBrowse config for this organism
+    config = JBROWSE_CONFIG.get(organism_name)
+    if not config:
+        # Try partial match (e.g., "Candida albicans" matches "Candida albicans SC5314")
+        for org_key, org_config in JBROWSE_CONFIG.items():
+            if organism_name in org_key or org_key in organism_name:
+                config = org_config
+                break
+
+    if not config:
+        return None
+
+    # Calculate coordinates with flanking region
+    low = min(start_coord, stop_coord)
+    high = max(start_coord, stop_coord)
+    low_flanked = max(1, low - JBROWSE_FLANK)
+    high_flanked = high + JBROWSE_FLANK
+
+    # Build URLs
+    loc_param = f"&loc={chromosome}:{low_flanked}..{high_flanked}"
+
+    embed_url = f"{config['base_url']}&tracks={config['mini_tracks']}{loc_param}"
+    full_url = f"{config['base_url']}&tracks={config['tracks']}{loc_param}"
+
+    return JBrowseInfo(
+        embed_url=embed_url,
+        full_url=full_url,
+        feature_name=feature_name,
+        chromosome=chromosome,
+        start_coord=start_coord,
+        stop_coord=stop_coord,
+    )
+
+
 def _get_allele_locations(
     db: Session,
     feature_no: int,
@@ -1696,6 +1786,34 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
         # Get allele locations (secondary alleles only)
         allele_locations = _get_allele_locations(db, f.feature_no, f.feature_name)
 
+        # Get feature qualifier for JBrowse check
+        feature_qualifier = None
+        qualifier_row = (
+            db.query(FeatProperty.property_value)
+            .filter(
+                FeatProperty.feature_no == f.feature_no,
+                FeatProperty.property_type == 'feature_qualifier',
+            )
+            .first()
+        )
+        if qualifier_row:
+            feature_qualifier = qualifier_row[0]
+
+        # Get JBrowse info (only for features with location that are not deleted/unmapped)
+        jbrowse_info = None
+        if locations:
+            # Use first current location for JBrowse
+            current_loc = next((loc for loc in locations if loc.is_current), None)
+            if current_loc:
+                jbrowse_info = _get_jbrowse_info(
+                    organism_name=organism_name,
+                    feature_name=f.feature_name,
+                    chromosome=current_loc.chromosome,
+                    start_coord=current_loc.start_coord,
+                    stop_coord=current_loc.stop_coord,
+                    feature_qualifier=feature_qualifier,
+                )
+
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
@@ -1704,6 +1822,7 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             subfeatures=subfeatures,
             sequence_resources=sequence_resources,
             allele_locations=allele_locations,
+            jbrowse_info=jbrowse_info,
         )
 
     return SequenceDetailsResponse(results=out)
