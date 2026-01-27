@@ -24,6 +24,8 @@ class GOAnnotationOut(BaseModel):
     term: GOTerm
     evidence: GOEvidence = GOEvidence()
     references: list[str] = []     # PMID strings
+    qualifier: typing.Optional[str] = None  # contributes_to, NOT, etc.
+    annotation_type: typing.Optional[str] = None  # manually_curated, computational, high-throughput
 
 
 class GODetailsForOrganism(BaseModel):
