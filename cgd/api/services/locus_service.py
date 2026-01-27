@@ -674,15 +674,19 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 dbxref_ids.append(ref.dbxref_id)
             return dbxref_ids
 
-        def format_ref_superscript(dbxref_ids: list) -> str:
-            """Format reference indices as superscript HTML"""
+        def format_ref_superscript(dbxref_ids: list, use_parentheses: bool = False) -> str:
+            """Format reference indices as superscript HTML with commas between indices"""
             if not dbxref_ids:
                 return ""
             indices = sorted(set(ref_index.get(d) for d in dbxref_ids if d in ref_index))
             if not indices:
                 return ""
-            links = [f'<a href="#ref{idx}" class="ref-link"><sup>{idx}</sup></a>' for idx in indices]
-            return ''.join(links)
+            # Create comma-separated list of linked indices
+            links = [f'<a href="#ref{idx}" class="ref-link">{idx}</a>' for idx in indices]
+            indices_str = ', '.join(links)
+            if use_parentheses:
+                return f'({indices_str})'
+            return f'<sup>{indices_str}</sup>'
 
         # Get references for gene_name (Standard Name)
         gene_name_refs = []
@@ -693,25 +697,8 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 ref_sup = format_ref_superscript(gene_name_refs)
                 gene_name_with_refs = f'<i>{f.gene_name}</i>{ref_sup}'
 
-        # Get references for headline (Description)
-        headline_refs = []
-        headline_with_refs = f.headline or ""
-        if f.headline:
-            headline_refs = add_refs_from_ref_link('FEATURE', 'HEADLINE', f.feature_no)
-            if headline_refs:
-                ref_sup = format_ref_superscript(headline_refs)
-                headline_with_refs = f'{f.headline} ({ref_sup.replace("<sup>", "").replace("</sup>", "")})'
-
-        # Get references for name_description
-        name_desc_refs = []
-        name_description_with_refs = f.name_description or ""
-        if f.name_description:
-            name_desc_refs = add_refs_from_ref_link('FEATURE', 'NAME_DESCRIPTION', f.feature_no)
-            if name_desc_refs:
-                ref_sup = format_ref_superscript(name_desc_refs)
-                name_description_with_refs = f'{f.name_description}{ref_sup}'
-
-        # Get references for aliases
+        # Get references for aliases BEFORE headline/description
+        # so that alias references get smaller index numbers
         aliases_with_refs = []
         for alias in aliases:
             # Find feat_alias_no for this alias
@@ -745,6 +732,25 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     'alias_type': alias.alias_type,
                     'alias_name_with_refs': alias.alias_name,
                 })
+
+        # Get references for headline (Description) - AFTER aliases
+        headline_refs = []
+        headline_with_refs = f.headline or ""
+        if f.headline:
+            headline_refs = add_refs_from_ref_link('FEATURE', 'HEADLINE', f.feature_no)
+            if headline_refs:
+                # Use parentheses format for description references
+                ref_str = format_ref_superscript(headline_refs, use_parentheses=True)
+                headline_with_refs = f'{f.headline} {ref_str}'
+
+        # Get references for name_description
+        name_desc_refs = []
+        name_description_with_refs = f.name_description or ""
+        if f.name_description:
+            name_desc_refs = add_refs_from_ref_link('FEATURE', 'NAME_DESCRIPTION', f.feature_no)
+            if name_desc_refs:
+                ref_sup = format_ref_superscript(name_desc_refs)
+                name_description_with_refs = f'{f.name_description}{ref_sup}'
 
         # Get summary notes (paragraphs) and extract references from paragraph text
         summary_notes = []
