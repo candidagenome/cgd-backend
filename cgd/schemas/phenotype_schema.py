@@ -21,7 +21,8 @@ class ReferenceStub(BaseModel):
 class PhenotypeAnnotationOut(BaseModel):
     phenotype: PhenotypeTerm
     qualifier: typing.Optional[str] = None
-    experiment: typing.Optional[str] = None
+    experiment_type: typing.Optional[str] = None  # Mapped to "Classical genetics" or "Large-scale survey"
+    mutant_type: typing.Optional[str] = None  # e.g., "null", "overexpression", "homozygous null"
     strain: typing.Optional[str] = None
     references: list[ReferenceStub] = []
 
