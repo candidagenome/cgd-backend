@@ -125,6 +125,10 @@ class FeatureOut(ORMSchema):
     summary_notes: list["SummaryNoteOut"] = []
     summary_notes_last_updated: t.Optional[datetime.datetime] = None  # Most recent update date
 
+    # References cited on this page (extracted from summary notes)
+    cited_references: list["ReferenceForLocus"] = []
+    literature_guide_url: t.Optional[str] = None  # URL to complete literature guide
+
 
 class LocusByOrganismResponse(BaseModel):
     """

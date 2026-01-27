@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
@@ -646,6 +647,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         # Get summary notes (paragraphs) for this feature
         summary_notes = []
         summary_notes_last_updated = None
+        all_paragraph_text = ""
         for fp in sorted(f.feat_para, key=lambda x: x.paragraph_order):
             para = fp.paragraph
             if para:
@@ -658,6 +660,48 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                 # Track the most recent update date
                 if summary_notes_last_updated is None or para.date_edited > summary_notes_last_updated:
                     summary_notes_last_updated = para.date_edited
+                # Collect all paragraph text for reference extraction
+                all_paragraph_text += para.paragraph_text + " "
+
+        # Extract reference IDs from summary notes and fetch reference details
+        # Reference tags look like: <reference:CAL0000001>
+        cited_references = []
+        ref_index = {}  # To track reference order
+        ref_pattern = re.compile(r'<reference:(CA[A-Z][0-9]+)>')
+        ref_matches = ref_pattern.findall(all_paragraph_text)
+
+        # Get unique references in order of appearance
+        seen_refs = set()
+        ordered_ref_ids = []
+        for ref_id in ref_matches:
+            if ref_id not in seen_refs:
+                seen_refs.add(ref_id)
+                ordered_ref_ids.append(ref_id)
+
+        # Fetch reference details for each unique reference ID
+        if ordered_ref_ids:
+            refs = (
+                db.query(Reference)
+                .filter(Reference.dbxref_id.in_(ordered_ref_ids))
+                .all()
+            )
+            # Create a map for easy lookup
+            ref_map = {r.dbxref_id: r for r in refs}
+            # Build cited_references list in order of appearance
+            for idx, ref_id in enumerate(ordered_ref_ids, start=1):
+                ref = ref_map.get(ref_id)
+                if ref:
+                    cited_references.append(ReferenceForLocus(
+                        reference_no=ref.reference_no,
+                        pubmed=ref.pubmed,
+                        citation=ref.citation,
+                        title=ref.title,
+                        year=ref.year,
+                    ))
+                    ref_index[ref_id] = idx
+
+        # Build literature guide URL
+        literature_guide_url = f"http://www.candidagenome.org/cgi-bin/litGuide.pl?dbid={f.dbxref_id}"
 
         # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
         assembly_21_identifier = None
@@ -857,6 +901,8 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             additional_info_links=additional_info_links,
             summary_notes=summary_notes,
             summary_notes_last_updated=summary_notes_last_updated,
+            cited_references=cited_references,
+            literature_guide_url=literature_guide_url,
             assembly_21_identifier=assembly_21_identifier,
             feature_qualifier=feature_qualifier,
             alleles=alleles,
