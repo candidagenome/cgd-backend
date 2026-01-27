@@ -852,8 +852,19 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                         dbx = grd.dbxref
                         if dbx:
                             source = dbx.source
-                            # Use description (gene name) if available, otherwise dbxref_id
                             display_name = dbx.description or dbx.dbxref_id
+
+                            # For CGD internal references, look up the feature to
+                            # get gene_name/feature_name instead of dbxref_id
+                            if source == 'CGD' and dbx.dbxref_id:
+                                feat = (
+                                    db.query(Feature)
+                                    .filter(Feature.dbxref_id == dbx.dbxref_id)
+                                    .first()
+                                )
+                                if feat:
+                                    display_name = feat.gene_name or feat.feature_name
+
                             species = source_to_species.get(source, source)
                             with_from_parts.append(f"{species}: {display_name}")
 
