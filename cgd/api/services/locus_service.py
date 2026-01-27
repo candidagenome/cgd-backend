@@ -17,6 +17,9 @@ from cgd.schemas.locus_schema import (
     SequenceDetailsForOrganism,
     SequenceLocationOut,
     SequenceOut,
+    SubfeatureOut,
+    SequenceResources,
+    SequenceResourceItem,
     LocusReferencesResponse,
     ReferencesForOrganism,
     ReferenceForLocus,
@@ -84,6 +87,7 @@ from cgd.models.models import (
     DbxrefUrl,
     DbxrefHomology,
     ProteinInfo,
+    WebDisplay,
 )
 
 
@@ -1289,10 +1293,83 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     return HomologyDetailsResponse(results=out)
 
 
+def _get_sequence_resources(
+    db: Session,
+    feature_name: str,
+    seq_source: Optional[str] = None,
+) -> Optional[SequenceResources]:
+    """
+    Get sequence resource pulldown menu data for a feature.
+
+    Queries the web_display table to get URLs for:
+    - Retrieve Sequences
+    - Sequence Analysis Tools
+    - Maps & Displays
+
+    Args:
+        db: Database session
+        feature_name: Name of the feature (used to substitute in URLs)
+        seq_source: Optional sequence source for filtering
+
+    Returns:
+        SequenceResources object with pulldown menu items, or None if no data
+    """
+    retrieve_sequences = []
+    sequence_analysis_tools = []
+    maps_displays = []
+
+    # Query web_display for locus page resources
+    web_displays = (
+        db.query(WebDisplay)
+        .filter(
+            WebDisplay.web_page_name == 'locus',
+            WebDisplay.label_type == 'Pull-down',
+            WebDisplay.label_location.in_([
+                'Retrieve Sequences',
+                'Sequence Analysis Tools',
+                'Maps & Displays',
+            ]),
+        )
+        .all()
+    )
+
+    for wd in web_displays:
+        url = wd.url
+        if not url:
+            continue
+
+        # Substitute feature name in URL
+        url_str = url.url
+        if url_str:
+            url_str = url_str.replace('_SUBSTITUTE_THIS_', feature_name)
+
+        item = SequenceResourceItem(
+            label=wd.label_name,
+            url=url_str or '',
+        )
+
+        if wd.label_location == 'Retrieve Sequences':
+            retrieve_sequences.append(item)
+        elif wd.label_location == 'Sequence Analysis Tools':
+            sequence_analysis_tools.append(item)
+        elif wd.label_location == 'Maps & Displays':
+            maps_displays.append(item)
+
+    # Only return resources if we have at least one item
+    if not retrieve_sequences and not sequence_analysis_tools and not maps_displays:
+        return None
+
+    return SequenceResources(
+        retrieve_sequences=retrieve_sequences,
+        sequence_analysis_tools=sequence_analysis_tools,
+        maps_displays=maps_displays,
+    )
+
+
 def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsResponse:
     """
     Query sequence and location information for each feature matching the locus name,
-    grouped by organism.
+    grouped by organism. Includes subfeatures (introns, exons, CDS, UTRs).
     """
     n = name.strip()
     features = (
@@ -1322,6 +1399,10 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
+        # Get the feature's start coord for relative coordinate calculation
+        feature_start = None
+        feature_strand = None
+
         # Get locations
         locations = []
         for fl in f.feat_location:
@@ -1332,21 +1413,33 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
                 if root_feat:
                     chromosome = root_feat.feature_name
 
+            # Store first current location's start for relative coords
+            if fl.is_loc_current == 'Y' and feature_start is None:
+                feature_start = fl.start_coord
+                feature_strand = fl.strand
+
             locations.append(SequenceLocationOut(
                 chromosome=chromosome,
                 start_coord=fl.start_coord,
                 stop_coord=fl.stop_coord,
                 strand=fl.strand,
                 is_current=(fl.is_loc_current == 'Y'),
+                coord_version=fl.coord_version if hasattr(fl, 'coord_version') else None,
+                source=fl.source if hasattr(fl, 'source') else None,
             ))
 
-        # Get sequences
+        # Get sequences - also capture seq_version for the location
         sequences = []
+        seq_version_for_location = None
         for seq in f.seq:
             # Truncate residues for API response (full sequence available via separate endpoint)
             residues = seq.residues
             if residues and len(residues) > 1000:
                 residues = residues[:1000] + "..."
+
+            # Store current sequence version for display
+            if seq.is_seq_current == 'Y' and seq_version_for_location is None:
+                seq_version_for_location = seq.seq_version
 
             sequences.append(SequenceOut(
                 seq_type=seq.seq_type,
@@ -1357,11 +1450,88 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
                 residues=residues,
             ))
 
+        # Update locations with seq_version
+        for loc in locations:
+            if loc.is_current and seq_version_for_location:
+                loc.seq_version = seq_version_for_location
+
+        # Get subfeatures via feat_relationship (rank=2 means subfeature)
+        subfeatures = []
+        subfeature_rows = (
+            db.query(
+                Feature.feature_type,
+                FeatLocation.start_coord,
+                FeatLocation.stop_coord,
+                FeatLocation.coord_version,
+                Seq.seq_version,
+            )
+            .join(FeatRelationship, FeatRelationship.child_feature_no == Feature.feature_no)
+            .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+            .outerjoin(Seq, (Seq.feature_no == Feature.feature_no) & (Seq.is_seq_current == 'Y'))
+            .filter(
+                FeatRelationship.parent_feature_no == f.feature_no,
+                FeatRelationship.rank == 2,  # rank 2 = subfeature
+                FeatLocation.is_loc_current == 'Y',
+            )
+            .order_by(FeatLocation.start_coord)
+            .all()
+        )
+
+        for row in subfeature_rows:
+            feat_type, start, stop, coord_ver, seq_ver = row
+
+            # Calculate relative coordinates
+            relative_start = None
+            relative_stop = None
+            if feature_start is not None:
+                if feature_strand and feature_strand.upper().startswith('C'):
+                    # Crick strand - reverse relative coords
+                    relative_start = feature_start - start + 1
+                    relative_stop = feature_start - stop + 1
+                else:
+                    # Watson strand
+                    relative_start = start - feature_start + 1
+                    relative_stop = stop - feature_start + 1
+
+                # Genomic relative location doesn't have 0
+                if relative_start is not None and relative_start <= 0:
+                    relative_start -= 1
+                if relative_stop is not None and relative_stop <= 0:
+                    relative_stop -= 1
+
+            # Format feature type for display (five_prime_UTR -> 5' UTR)
+            display_type = feat_type
+            if display_type:
+                display_type = display_type.replace('five_prime_', "5' ")
+                display_type = display_type.replace('three_prime_', "3' ")
+                display_type = display_type.replace('_', ' ')
+                display_type = display_type.capitalize()
+
+            subfeatures.append(SubfeatureOut(
+                feature_type=display_type or feat_type,
+                start_coord=start,
+                stop_coord=stop,
+                relative_start=relative_start,
+                relative_stop=relative_stop,
+                coord_version=coord_ver,
+                seq_version=seq_ver,
+            ))
+
+        # Get sequence resources (pulldown menus)
+        seq_source = None
+        for loc in locations:
+            if loc.is_current and loc.source:
+                seq_source = loc.source
+                break
+        sequence_resources = _get_sequence_resources(db, f.feature_name, seq_source)
+
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             locations=locations,
             sequences=sequences,
+            subfeatures=subfeatures,
+            sequence_resources=sequence_resources,
         )
 
     return SequenceDetailsResponse(results=out)

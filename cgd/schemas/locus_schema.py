@@ -106,12 +106,26 @@ class LocusByOrganismResponse(BaseModel):
 
 # --- Sequence Info ---
 
+class SubfeatureOut(BaseModel):
+    """Subfeature details (intron, exon, CDS, UTR, etc.)"""
+    feature_type: str  # e.g., "Intron", "CDS", "five_prime_UTR"
+    start_coord: int  # Chromosomal start
+    stop_coord: int  # Chromosomal stop
+    relative_start: t.Optional[int] = None  # Relative to gene start
+    relative_stop: t.Optional[int] = None  # Relative to gene start
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+
+
 class SequenceLocationOut(BaseModel):
     chromosome: t.Optional[str] = None
     start_coord: int
     stop_coord: int
     strand: str
     is_current: bool
+    coord_version: t.Optional[datetime.datetime] = None
+    seq_version: t.Optional[datetime.datetime] = None
+    source: t.Optional[str] = None  # Assembly source
 
 
 class SequenceOut(BaseModel):
@@ -123,11 +137,26 @@ class SequenceOut(BaseModel):
     residues: t.Optional[str] = None  # Can be omitted for large sequences
 
 
+class SequenceResourceItem(BaseModel):
+    """Single item in a sequence resource pulldown menu"""
+    label: str
+    url: str
+
+
+class SequenceResources(BaseModel):
+    """Resource pulldown menus for sequence tools"""
+    retrieve_sequences: list[SequenceResourceItem] = []
+    sequence_analysis_tools: list[SequenceResourceItem] = []
+    maps_displays: list[SequenceResourceItem] = []
+
+
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     locations: list[SequenceLocationOut] = []
     sequences: list[SequenceOut] = []
+    subfeatures: list[SubfeatureOut] = []  # Introns, exons, CDS, etc.
+    sequence_resources: t.Optional[SequenceResources] = None  # Pulldown menus
 
 
 class SequenceDetailsResponse(BaseModel):
