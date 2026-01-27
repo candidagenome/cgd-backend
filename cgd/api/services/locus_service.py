@@ -622,6 +622,43 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         # Sort by label name
         external_links.sort(key=lambda x: x.label or '')
 
+        # Get Additional Info links (similar to external links but with label_location='Additional Info')
+        additional_info_links = []
+        for fu in f.feat_url:
+            url = fu.url
+            if not url or url.substitution_value != 'FEATURE':
+                continue
+            # Find web_display entry for this URL with 'Locus' page and 'Additional Info' location
+            for wd in url.web_display:
+                if wd.web_page_name == 'Locus' and wd.label_location == 'Additional Info':
+                    url_str = url.url
+                    if url_str:
+                        url_str = url_str.replace('_SUBSTITUTE_THIS_', f.feature_name)
+                    additional_info_links.append(ExternalLinkOut(
+                        label=wd.label_name,
+                        url=url_str,
+                        source=url.source,
+                        url_type=url.url_type,
+                    ))
+                    break
+        additional_info_links.sort(key=lambda x: x.label or '')
+
+        # Get summary notes (paragraphs) for this feature
+        summary_notes = []
+        summary_notes_last_updated = None
+        for fp in sorted(f.feat_para, key=lambda x: x.paragraph_order):
+            para = fp.paragraph
+            if para:
+                summary_notes.append(SummaryNoteOut(
+                    paragraph_no=para.paragraph_no,
+                    paragraph_text=para.paragraph_text,
+                    paragraph_order=fp.paragraph_order,
+                    date_edited=para.date_edited,
+                ))
+                # Track the most recent update date
+                if summary_notes_last_updated is None or para.date_edited > summary_notes_last_updated:
+                    summary_notes_last_updated = para.date_edited
+
         # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
         assembly_21_identifier = None
         a21_rel = (
@@ -817,6 +854,9 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             headline=f.headline,
             aliases=aliases,
             external_links=external_links,
+            additional_info_links=additional_info_links,
+            summary_notes=summary_notes,
+            summary_notes_last_updated=summary_notes_last_updated,
             assembly_21_identifier=assembly_21_identifier,
             feature_qualifier=feature_qualifier,
             alleles=alleles,

@@ -118,6 +118,13 @@ class FeatureOut(ORMSchema):
     cug_codons: t.Optional[int] = None  # Number of CUG codons
     allelic_variation: t.Optional[str] = None  # Allelic variation info
 
+    # Additional Info links (from web_display with label_location='Additional Info')
+    additional_info_links: list[ExternalLinkOut] = []
+
+    # Summary notes (paragraphs) for display on Summary tab
+    summary_notes: list["SummaryNoteOut"] = []
+    summary_notes_last_updated: t.Optional[datetime.datetime] = None  # Most recent update date
+
 
 class LocusByOrganismResponse(BaseModel):
     """
