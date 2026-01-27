@@ -580,7 +580,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             .filter(
                 FeatUrl.feature_no == f.feature_no,
                 Url.substitution_value == 'FEATURE',
-                WebDisplay.web_page_name == 'locus',
+                WebDisplay.web_page_name == 'Locus',
                 WebDisplay.label_location == 'External Links',
             )
             .all()
@@ -614,7 +614,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             .filter(
                 DbxrefFeat.feature_no == f.feature_no,
                 Url.substitution_value == 'DBXREF',
-                WebDisplay.web_page_name == 'locus',
+                WebDisplay.web_page_name == 'Locus',
                 WebDisplay.label_location == 'External Links',
             )
             .all()
