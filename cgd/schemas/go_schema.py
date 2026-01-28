@@ -26,6 +26,8 @@ class GOAnnotationOut(BaseModel):
     references: list[str] = []     # PMID strings
     qualifier: typing.Optional[str] = None  # contributes_to, NOT, etc.
     annotation_type: typing.Optional[str] = None  # manually_curated, computational, high-throughput
+    source: typing.Optional[str] = None  # Assigned by (e.g., CGD)
+    date_created: typing.Optional[str] = None  # When annotation was assigned
 
 
 class GODetailsForOrganism(BaseModel):
