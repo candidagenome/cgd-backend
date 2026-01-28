@@ -1168,12 +1168,19 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 elif ref:
                     references.append(ref.dbxref_id)
 
+            # Format date_created
+            date_created_str = None
+            if ga.date_created:
+                date_created_str = ga.date_created.strftime('%Y-%m-%d')
+
             annotations.append(GOAnnotationOut(
                 term=term,
                 evidence=evidence,
                 references=references,
                 qualifier=qualifier_str,
                 annotation_type=ga.annotation_type,
+                source=ga.source,
+                date_created=date_created_str,
             ))
 
         out[organism_name] = GODetailsForOrganism(
