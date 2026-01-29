@@ -1624,18 +1624,29 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         protein_standard_name = _gene_name_to_protein_name(stanford_name) if stanford_name else None
         protein_systematic_name = _systematic_name_to_protein_name(systematic_name) if systematic_name else None
 
-        # Section 3: Aliases - only show "Other strain feature name" type (B allele) in protein format
+        # Section 3: Aliases - only show aliases that match the systematic name prefix
+        # e.g., if systematic_name is C1_13700W_A, only show aliases starting with "C1_13700"
         aliases = []
+        # Extract prefix from systematic name (e.g., "C1_13700" from "C1_13700W_A")
+        systematic_prefix = None
+        if systematic_name:
+            import re
+            prefix_match = re.match(r'^([A-Z]\d+_\d+)', systematic_name, re.IGNORECASE)
+            if prefix_match:
+                systematic_prefix = prefix_match.group(1).upper()
+
         for fa in f.feat_alias:
             alias = fa.alias
             if alias and alias.alias_type == 'Other strain feature name':
-                # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
-                protein_alias = _systematic_name_to_protein_name(alias.alias_name)
-                aliases.append(ProteinAliasOut(
-                    alias_name=alias.alias_name,
-                    protein_alias_name=protein_alias,
-                    alias_type=alias.alias_type or '',
-                ))
+                # Only include if alias starts with same prefix as systematic name
+                if systematic_prefix and alias.alias_name.upper().startswith(systematic_prefix):
+                    # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
+                    protein_alias = _systematic_name_to_protein_name(alias.alias_name)
+                    aliases.append(ProteinAliasOut(
+                        alias_name=alias.alias_name,
+                        protein_alias_name=protein_alias,
+                        alias_type=alias.alias_type or '',
+                    ))
 
         # Section 4: Description
         description = f.headline
