@@ -1523,7 +1523,6 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             joinedload(Feature.feat_url).joinedload(FeatUrl.url).joinedload(Url.web_display),
             joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
             joinedload(Feature.seq),
-            joinedload(Feature.ref_link).joinedload(RefLink.reference),
         )
         .filter(
             or_(
@@ -1760,10 +1759,21 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         external_links.sort(key=lambda x: x.label or '')
 
         # Section 11: References Cited on This Page
+        # Query RefLink table for references linked to this feature
+        ref_links = (
+            db.query(RefLink)
+            .options(joinedload(RefLink.reference))
+            .filter(
+                RefLink.tab_name == "FEATURE",
+                RefLink.primary_key == f.feature_no,
+            )
+            .all()
+        )
+
         cited_references = []
         seen_refs = set()
 
-        for rl in f.ref_link:
+        for rl in ref_links:
             ref = rl.reference
             if ref and ref.reference_no not in seen_refs:
                 seen_refs.add(ref.reference_no)
