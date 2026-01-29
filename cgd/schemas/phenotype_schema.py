@@ -23,12 +23,23 @@ class ReferenceForAnnotation(BaseModel):
     year: typing.Optional[int] = None
 
 
+class ExperimentProperty(BaseModel):
+    """Experiment property from expt_property table"""
+    property_type: str
+    property_value: str
+    property_description: typing.Optional[str] = None
+
+
 class PhenotypeAnnotationOut(BaseModel):
     phenotype: PhenotypeTerm
     qualifier: typing.Optional[str] = None
     experiment_type: typing.Optional[str] = None  # Mapped to "Classical genetics" or "Large-scale survey"
+    experiment_comment: typing.Optional[str] = None  # Comment about the experiment
     mutant_type: typing.Optional[str] = None  # e.g., "null", "overexpression", "homozygous null"
-    strain: typing.Optional[str] = None
+    strain: typing.Optional[str] = None  # strain_background from expt_property
+    alleles: list[ExperimentProperty] = []  # Allele properties
+    chemicals: list[ExperimentProperty] = []  # Chemical_pending or chebi_ontology properties
+    details: list[ExperimentProperty] = []  # Condition, Details, Reporter, Numerical_value properties
     references: list[ReferenceForAnnotation] = []
 
 
