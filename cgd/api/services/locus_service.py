@@ -34,6 +34,16 @@ from cgd.schemas.locus_schema import (
     LocusHistoryResponse,
     LocusHistoryForOrganism,
     HistoryEventOut,
+    ReferenceOutForHistory,
+    ContactOut,
+    ReservedNameInfoOut,
+    StandardNameInfoOut,
+    AliasNameInfoOut,
+    NomenclatureHistoryOut,
+    NoteWithReferencesOut,
+    NoteCategoryOut,
+    NomenclatureNameWithRef,
+    NomenclatureOut,
 )
 from cgd.schemas.go_schema import (
     GODetailsResponse,
@@ -93,6 +103,9 @@ from cgd.models.models import (
     DbxrefHomology,
     ProteinInfo,
     WebDisplay,
+    GeneReservation,
+    CollGeneres,
+    Colleague,
 )
 
 
@@ -2241,9 +2254,333 @@ def get_locus_summary_notes(db: Session, name: str) -> LocusSummaryNotesResponse
     return LocusSummaryNotesResponse(results=out)
 
 
+def _format_citation(citation: str) -> str:
+    """Format citation to 'FirstAuthor et al' format"""
+    if not citation:
+        return ""
+    # Extract first author and add "et al"
+    # Citation format is typically "Author1, Author2... (Year) Title..."
+    match = re.match(r'^([^\s,]+)', citation)
+    if match:
+        return f"{match.group(1)} et al"
+    return citation[:30] + "..." if len(citation) > 30 else citation
+
+
+def _get_references_for_entity(
+    db: Session, tab_name: str, col_name: str, primary_key: int
+) -> list[ReferenceOutForHistory]:
+    """Get references linked to an entity via ref_link table"""
+    ref_links = (
+        db.query(RefLink)
+        .options(joinedload(RefLink.reference))
+        .filter(
+            RefLink.tab_name == tab_name,
+            RefLink.col_name == col_name,
+            RefLink.primary_key == primary_key,
+        )
+        .all()
+    )
+
+    refs = []
+    for rl in ref_links:
+        ref = rl.reference
+        if ref:
+            formatted = _format_citation(ref.citation)
+            refs.append(ReferenceOutForHistory(
+                reference_no=ref.reference_no,
+                dbxref_id=ref.dbxref_id,
+                citation=ref.citation,
+                formatted_citation=formatted,
+                display_name=formatted,  # Use formatted citation for display
+                link=f"/reference/{ref.dbxref_id}",
+            ))
+    return refs
+
+
+def _get_nomenclature_history(
+    db: Session, feature: Feature
+) -> Optional[NomenclatureHistoryOut]:
+    """
+    Get nomenclature history for a feature including:
+    - Reserved name info (if name is still reserved)
+    - Standard name info (with date standardized and references)
+    - Alias names with references
+    """
+    # Get gene reservation info
+    gene_reservations = (
+        db.query(GeneReservation)
+        .options(joinedload(GeneReservation.coll_generes).joinedload(CollGeneres.colleague))
+        .filter(GeneReservation.feature_no == feature.feature_no)
+        .all()
+    )
+
+    reserved_name_info = None
+    standard_name_info = None
+    date_standardized = None
+
+    if gene_reservations:
+        gr = gene_reservations[0]
+        date_standardized = gr.date_standardized
+
+        # Get contacts for this reservation
+        contacts = []
+        for cg in gr.coll_generes:
+            if cg.colleague:
+                contacts.append(ContactOut(
+                    colleague_no=cg.colleague.colleague_no,
+                    first_name=cg.colleague.first_name,
+                    last_name=cg.colleague.last_name,
+                ))
+
+        # Get references for gene name
+        gene_name_refs = _get_references_for_entity(
+            db, "FEATURE", "GENE_NAME", feature.feature_no
+        )
+
+        # If no standardization date, show as reserved name
+        if not date_standardized:
+            reserved_name_info = ReservedNameInfoOut(
+                reserved_name=feature.gene_name or feature.feature_name,
+                contacts=contacts,
+                reservation_date=gr.reservation_date,
+                expiration_date=gr.expiration_date,
+                references=gene_name_refs,
+            )
+        else:
+            # Has been standardized - show standard name info
+            standard_name_info = StandardNameInfoOut(
+                standard_name=feature.gene_name or feature.feature_name,
+                date_standardized=date_standardized,
+                references=gene_name_refs,
+            )
+    else:
+        # No reservation record - only show standard name if there are references
+        # (per Perl logic: show only if references OR date_standardized, and
+        # without a reservation there's no date_standardized)
+        gene_name_refs = _get_references_for_entity(
+            db, "FEATURE", "GENE_NAME", feature.feature_no
+        )
+        if gene_name_refs:
+            standard_name_info = StandardNameInfoOut(
+                standard_name=feature.gene_name or feature.feature_name,
+                date_standardized=None,
+                references=gene_name_refs,
+            )
+
+    # Get alias names with references
+    feat_aliases = (
+        db.query(FeatAlias)
+        .options(joinedload(FeatAlias.alias))
+        .filter(FeatAlias.feature_no == feature.feature_no)
+        .all()
+    )
+
+    alias_names = []
+    for fa in feat_aliases:
+        if fa.alias:
+            # Get references for this feat_alias
+            alias_refs = _get_references_for_entity(
+                db, "FEAT_ALIAS", "FEAT_ALIAS_NO", fa.feat_alias_no
+            )
+            # Only include aliases that have references (per Perl logic)
+            if alias_refs:
+                alias_names.append(AliasNameInfoOut(
+                    alias_name=fa.alias.alias_name,
+                    references=alias_refs,
+                ))
+
+    # Only return if there's something to show
+    if reserved_name_info or standard_name_info or alias_names:
+        return NomenclatureHistoryOut(
+            reserved_name_info=reserved_name_info,
+            standard_name_info=standard_name_info,
+            alias_names=alias_names,
+        )
+    return None
+
+
+# Note categories configuration (from LocusHistory.conf)
+NOTE_CATEGORIES = [
+    ("Nomenclature History Notes", ["Nomenclature history", "Nomenclature conflict"]),
+    ("Sequence Annotation Notes", [
+        "Proposed annotation change", "Proposed sequence change",
+        "Annotation change", "Sequence change"
+    ]),
+    ("Curation Notes", ["Curation note"]),
+    ("Mapping Notes", ["Mapping"]),
+    ("Other Notes", ["Other"]),
+    ("Alternative processing Notes", ["Alternative processing"]),
+    ("Repeated Notes", ["Repeated"]),
+]
+
+
+def _get_categorized_notes(
+    db: Session, feature: Feature
+) -> list[NoteCategoryOut]:
+    """
+    Get notes for a feature organized by category.
+    Each note includes its references.
+    """
+    # Get all notes for this feature
+    note_links = (
+        db.query(NoteLink)
+        .options(joinedload(NoteLink.note))
+        .filter(
+            NoteLink.tab_name == "FEATURE",
+            NoteLink.primary_key == feature.feature_no,
+        )
+        .all()
+    )
+
+    # Build a dict of note_type -> list of notes
+    notes_by_type: dict[str, list] = defaultdict(list)
+    seen_notes = set()
+    for nl in note_links:
+        note = nl.note
+        if note and note.note_no not in seen_notes:
+            seen_notes.add(note.note_no)
+            # Get references for this note
+            note_refs = _get_references_for_entity(
+                db, "NOTE", "NOTE_NO", note.note_no
+            )
+            notes_by_type[note.note_type.upper() if note.note_type else ""].append({
+                "note_no": note.note_no,
+                "note": note.note,
+                "note_type": note.note_type,
+                "date": nl.date_created or note.date_created,
+                "references": note_refs,
+            })
+
+    # Build categorized output
+    categories = []
+    for category_name, note_types in NOTE_CATEGORIES:
+        category_notes = []
+        for nt in note_types:
+            for note_data in notes_by_type.get(nt.upper(), []):
+                category_notes.append(NoteWithReferencesOut(
+                    date=note_data["date"],
+                    note=note_data["note"],
+                    references=note_data["references"],
+                ))
+
+        if category_notes:
+            # Sort by date within category
+            category_notes.sort(key=lambda x: x.date, reverse=True)
+            categories.append(NoteCategoryOut(
+                category=category_name,
+                notes=category_notes,
+            ))
+
+    return categories
+
+
+def _build_nomenclature_for_frontend(
+    nomenclature_history: Optional[NomenclatureHistoryOut]
+) -> Optional[NomenclatureOut]:
+    """
+    Convert nomenclature_history to the format expected by the frontend.
+    Frontend expects:
+    - nomenclature.standard: array of {name, reference}
+    - nomenclature.aliases: array of {name, reference}
+    """
+    if not nomenclature_history:
+        return None
+
+    standard_names = []
+    aliases = []
+
+    # Convert standard name info
+    if nomenclature_history.standard_name_info:
+        std = nomenclature_history.standard_name_info
+        # If there are references, create one entry per reference
+        if std.references:
+            for ref in std.references:
+                # Add link and display_name to reference
+                ref_with_link = ReferenceOutForHistory(
+                    reference_no=ref.reference_no,
+                    dbxref_id=ref.dbxref_id,
+                    citation=ref.citation,
+                    formatted_citation=ref.formatted_citation,
+                    display_name=ref.formatted_citation,
+                    link=f"/reference/{ref.dbxref_id}",
+                )
+                standard_names.append(NomenclatureNameWithRef(
+                    name=std.standard_name,
+                    reference=ref_with_link,
+                ))
+        else:
+            # No references, just show the name
+            standard_names.append(NomenclatureNameWithRef(
+                name=std.standard_name,
+                reference=None,
+            ))
+
+    # Convert reserved name info (show as standard if reserved)
+    if nomenclature_history.reserved_name_info:
+        res = nomenclature_history.reserved_name_info
+        if res.references:
+            for ref in res.references:
+                ref_with_link = ReferenceOutForHistory(
+                    reference_no=ref.reference_no,
+                    dbxref_id=ref.dbxref_id,
+                    citation=ref.citation,
+                    formatted_citation=ref.formatted_citation,
+                    display_name=ref.formatted_citation,
+                    link=f"/reference/{ref.dbxref_id}",
+                )
+                standard_names.append(NomenclatureNameWithRef(
+                    name=res.reserved_name,
+                    reference=ref_with_link,
+                ))
+        else:
+            standard_names.append(NomenclatureNameWithRef(
+                name=res.reserved_name,
+                reference=None,
+            ))
+
+    # Convert alias names
+    for alias in nomenclature_history.alias_names:
+        if alias.references:
+            for ref in alias.references:
+                ref_with_link = ReferenceOutForHistory(
+                    reference_no=ref.reference_no,
+                    dbxref_id=ref.dbxref_id,
+                    citation=ref.citation,
+                    formatted_citation=ref.formatted_citation,
+                    display_name=ref.formatted_citation,
+                    link=f"/reference/{ref.dbxref_id}",
+                )
+                aliases.append(NomenclatureNameWithRef(
+                    name=alias.alias_name,
+                    reference=ref_with_link,
+                ))
+        else:
+            aliases.append(NomenclatureNameWithRef(
+                name=alias.alias_name,
+                reference=None,
+            ))
+
+    if standard_names or aliases:
+        return NomenclatureOut(
+            standard=standard_names,
+            aliases=aliases,
+        )
+    return None
+
+
+# Note types for sequence annotation and curation notes
+SEQUENCE_ANNOTATION_NOTE_TYPES = [
+    "Proposed annotation change", "Proposed sequence change",
+    "Annotation change", "Sequence change"
+]
+CURATION_NOTE_TYPES = ["Curation note"]
+
+
 def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
     """
     Query history/notes for this locus, grouped by organism.
+    Includes nomenclature history (reserved name, standard name, aliases)
+    and notes organized by category.
     """
     n = name.strip()
     features = (
@@ -2271,7 +2608,16 @@ def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
-        # Get history notes via note_link
+        # Get nomenclature history (internal format)
+        nomenclature_history = _get_nomenclature_history(db, f)
+
+        # Convert to frontend format
+        nomenclature = _build_nomenclature_for_frontend(nomenclature_history)
+
+        # Get categorized notes
+        note_categories = _get_categorized_notes(db, f)
+
+        # Get all notes for this feature
         note_links = (
             db.query(NoteLink)
             .options(joinedload(NoteLink.note))
@@ -2283,23 +2629,41 @@ def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
         )
 
         history = []
+        sequence_annotation_notes = []
+        curation_notes = []
         seen_notes = set()
+
         for nl in note_links:
             note = nl.note
             if note and note.note_no not in seen_notes:
                 seen_notes.add(note.note_no)
-                history.append(HistoryEventOut(
+                event = HistoryEventOut(
                     event_type=note.note_type,
                     date=note.date_created,
                     note=note.note,
-                ))
+                )
+                history.append(event)
+
+                # Categorize into sequence annotation or curation notes
+                note_type_upper = (note.note_type or "").upper()
+                if any(nt.upper() == note_type_upper for nt in SEQUENCE_ANNOTATION_NOTE_TYPES):
+                    sequence_annotation_notes.append(event)
+                elif any(nt.upper() == note_type_upper for nt in CURATION_NOTE_TYPES):
+                    curation_notes.append(event)
 
         # Sort by date descending (most recent first)
         history.sort(key=lambda x: x.date, reverse=True)
+        sequence_annotation_notes.sort(key=lambda x: x.date, reverse=True)
+        curation_notes.sort(key=lambda x: x.date, reverse=True)
 
         out[organism_name] = LocusHistoryForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
+            nomenclature=nomenclature,
+            nomenclature_history=nomenclature_history,
+            note_categories=note_categories,
+            sequence_annotation_notes=sequence_annotation_notes,
+            curation_notes=curation_notes,
             history=history,
         )
 

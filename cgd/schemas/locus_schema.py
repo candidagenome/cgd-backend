@@ -265,16 +265,93 @@ class LocusSummaryNotesResponse(BaseModel):
 
 # --- Locus History ---
 
+class ReferenceOutForHistory(BaseModel):
+    """Reference citation for history display"""
+    reference_no: int
+    dbxref_id: str
+    citation: str  # Full citation text
+    formatted_citation: str  # "FirstAuthor et al" format
+    display_name: t.Optional[str] = None  # Display name for frontend (same as formatted_citation)
+    link: t.Optional[str] = None  # URL link to reference
+
+
+class ContactOut(BaseModel):
+    """Contact person for gene reservation"""
+    colleague_no: int
+    first_name: str
+    last_name: str
+
+
+class ReservedNameInfoOut(BaseModel):
+    """Reserved name information"""
+    reserved_name: str
+    contacts: list[ContactOut] = []
+    reservation_date: t.Optional[datetime.datetime] = None
+    expiration_date: t.Optional[datetime.datetime] = None
+    references: list[ReferenceOutForHistory] = []
+
+
+class StandardNameInfoOut(BaseModel):
+    """Standard name information"""
+    standard_name: str
+    date_standardized: t.Optional[datetime.datetime] = None
+    references: list[ReferenceOutForHistory] = []
+
+
+class AliasNameInfoOut(BaseModel):
+    """Alias name with references"""
+    alias_name: str
+    references: list[ReferenceOutForHistory] = []
+
+
+class NomenclatureHistoryOut(BaseModel):
+    """Nomenclature history section"""
+    reserved_name_info: t.Optional[ReservedNameInfoOut] = None
+    standard_name_info: t.Optional[StandardNameInfoOut] = None
+    alias_names: list[AliasNameInfoOut] = []
+
+
+class NoteWithReferencesOut(BaseModel):
+    """A single note with its references"""
+    date: datetime.datetime
+    note: str
+    references: list[ReferenceOutForHistory] = []
+
+
+class NoteCategoryOut(BaseModel):
+    """Notes grouped by category"""
+    category: str
+    notes: list[NoteWithReferencesOut] = []
+
+
 class HistoryEventOut(BaseModel):
     event_type: str
     date: datetime.datetime
     note: t.Optional[str] = None
 
 
+# New schema to match frontend expectations
+class NomenclatureNameWithRef(BaseModel):
+    """Name with reference for nomenclature history (frontend format)"""
+    name: str
+    reference: t.Optional[ReferenceOutForHistory] = None
+
+
+class NomenclatureOut(BaseModel):
+    """Nomenclature history in frontend-expected format"""
+    standard: list[NomenclatureNameWithRef] = []
+    aliases: list[NomenclatureNameWithRef] = []
+
+
 class LocusHistoryForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
-    history: list[HistoryEventOut] = []
+    nomenclature: t.Optional[NomenclatureOut] = None  # New format for frontend
+    nomenclature_history: t.Optional[NomenclatureHistoryOut] = None  # Legacy format
+    note_categories: list[NoteCategoryOut] = []
+    sequence_annotation_notes: list[HistoryEventOut] = []  # Notes matching frontend
+    curation_notes: list[HistoryEventOut] = []  # Notes matching frontend
+    history: list[HistoryEventOut] = []  # Keep for backwards compatibility
 
 
 class LocusHistoryResponse(BaseModel):
