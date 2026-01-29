@@ -1074,9 +1074,16 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
         .options(
             joinedload(Feature.organism),
             joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.go_qualifier),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.goref_dbxref).joinedload(GorefDbxref.dbxref),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.reference),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.go_qualifier),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.goref_dbxref)
+                .joinedload(GorefDbxref.dbxref),
         )
         .filter(
             or_(

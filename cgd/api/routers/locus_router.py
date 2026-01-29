@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends
+import logging
+import traceback
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
@@ -15,6 +18,8 @@ from cgd.schemas.go_schema import GODetailsResponse
 from cgd.schemas.interaction_schema import InteractionDetailsResponse
 from cgd.schemas.protein_schema import ProteinDetailsResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/locus", tags=["locus"])
 
@@ -34,7 +39,12 @@ def go_details(name: str, db: Session = Depends(get_db)):
     """
     Get GO annotations for this locus, grouped by organism.
     """
-    return locus_service.get_locus_go_details(db, name)
+    try:
+        return locus_service.get_locus_go_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in go_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/phenotype_details", response_model=PhenotypeDetailsResponse)
@@ -42,7 +52,12 @@ def phenotype_details(name: str, db: Session = Depends(get_db)):
     """
     Get phenotype annotations for this locus, grouped by organism.
     """
-    return locus_service.get_locus_phenotype_details(db, name)
+    try:
+        return locus_service.get_locus_phenotype_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in phenotype_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/interaction_details", response_model=InteractionDetailsResponse)
