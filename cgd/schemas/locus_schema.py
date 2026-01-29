@@ -265,6 +265,63 @@ class LocusSummaryNotesResponse(BaseModel):
 
 # --- Locus History ---
 
+class ReferenceOutForHistory(BaseModel):
+    """Reference citation for history display"""
+    reference_no: int
+    dbxref_id: str
+    citation: str  # Full citation text
+    formatted_citation: str  # "FirstAuthor et al" format
+
+
+class ContactOut(BaseModel):
+    """Contact person for gene reservation"""
+    colleague_no: int
+    first_name: str
+    last_name: str
+
+
+class ReservedNameInfoOut(BaseModel):
+    """Reserved name information"""
+    reserved_name: str
+    contacts: list[ContactOut] = []
+    reservation_date: t.Optional[datetime.datetime] = None
+    expiration_date: t.Optional[datetime.datetime] = None
+    references: list[ReferenceOutForHistory] = []
+
+
+class StandardNameInfoOut(BaseModel):
+    """Standard name information"""
+    standard_name: str
+    date_standardized: t.Optional[datetime.datetime] = None
+    references: list[ReferenceOutForHistory] = []
+
+
+class AliasNameInfoOut(BaseModel):
+    """Alias name with references"""
+    alias_name: str
+    references: list[ReferenceOutForHistory] = []
+
+
+class NomenclatureHistoryOut(BaseModel):
+    """Nomenclature history section"""
+    reserved_name_info: t.Optional[ReservedNameInfoOut] = None
+    standard_name_info: t.Optional[StandardNameInfoOut] = None
+    alias_names: list[AliasNameInfoOut] = []
+
+
+class NoteWithReferencesOut(BaseModel):
+    """A single note with its references"""
+    date: datetime.datetime
+    note: str
+    references: list[ReferenceOutForHistory] = []
+
+
+class NoteCategoryOut(BaseModel):
+    """Notes grouped by category"""
+    category: str
+    notes: list[NoteWithReferencesOut] = []
+
+
 class HistoryEventOut(BaseModel):
     event_type: str
     date: datetime.datetime
@@ -274,7 +331,9 @@ class HistoryEventOut(BaseModel):
 class LocusHistoryForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
-    history: list[HistoryEventOut] = []
+    nomenclature_history: t.Optional[NomenclatureHistoryOut] = None
+    note_categories: list[NoteCategoryOut] = []
+    history: list[HistoryEventOut] = []  # Keep for backwards compatibility
 
 
 class LocusHistoryResponse(BaseModel):
