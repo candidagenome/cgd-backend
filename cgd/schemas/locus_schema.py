@@ -271,8 +271,10 @@ class ReferenceOutForHistory(BaseModel):
     dbxref_id: str
     citation: str  # Full citation text
     formatted_citation: str  # "FirstAuthor et al" format
-    display_name: t.Optional[str] = None  # Display name for frontend (same as formatted_citation)
+    display_name: t.Optional[str] = None  # Display name for frontend (full citation)
     link: t.Optional[str] = None  # URL link to reference
+    pubmed: t.Optional[int] = None  # PubMed ID for linking to PubMed
+    journal_name: t.Optional[str] = None  # Journal name for citation formatting
 
 
 class ContactOut(BaseModel):
