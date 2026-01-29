@@ -71,6 +71,14 @@ from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
     ProteinDetailsForOrganism,
     ProteinInfoOut,
+    AliasOut as ProteinAliasOut,
+    ExternalLinkOut as ProteinExternalLinkOut,
+    ConservedDomainOut,
+    StructuralInfoOut,
+    ExperimentalObservationOut,
+    HomologOut as ProteinHomologOut,
+    SequenceDetailOut,
+    ReferenceForProtein,
 )
 from cgd.schemas.homology_schema import (
     HomologyDetailsResponse,
@@ -104,6 +112,7 @@ from cgd.models.models import (
     DbxrefUrl,
     DbxrefHomology,
     ProteinInfo,
+    ProteinDetail,
     WebDisplay,
     GeneReservation,
     CollGeneres,
@@ -1490,13 +1499,31 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
     """
     Query protein information for each feature matching the locus name,
     grouped by organism.
+
+    Returns data matching the Perl protein page format:
+    - Stanford Name (gene_name)
+    - Systematic Name (feature_name)
+    - Alias Names
+    - Description (headline)
+    - Experimental Observations
+    - Structural Information
+    - Conserved Domains
+    - Sequence Detail
+    - Homologs
+    - External Sequence Database
+    - References Cited on This Page
     """
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.protein_info),
+            joinedload(Feature.protein_info).joinedload(ProteinInfo.protein_detail),
+            joinedload(Feature.feat_alias).joinedload(FeatAlias.alias),
+            joinedload(Feature.feat_url).joinedload(FeatUrl.url).joinedload(Url.web_display),
+            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
+            joinedload(Feature.seq),
+            joinedload(Feature.ref_link).joinedload(RefLink.reference),
         )
         .filter(
             or_(
@@ -1518,35 +1545,42 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
+        # Section 1 & 2: Stanford Name and Systematic Name
+        stanford_name = f.gene_name
+        systematic_name = f.feature_name
+
+        # Section 3: Aliases
+        aliases = []
+        for fa in f.feat_alias:
+            alias = fa.alias
+            if alias:
+                aliases.append(ProteinAliasOut(
+                    alias_name=alias.alias_name,
+                    alias_type=alias.alias_type or '',
+                ))
+
+        # Section 4: Description
+        description = f.headline
+
+        # Section 5: Experimental Observations (from protein_detail with specific groups)
+        experimental_observations = []
+
+        # Section 6 & 7: Structural Information and Conserved Domains
+        structural_info = []
+        conserved_domains = []
         protein_info = None
-        # Typically one protein_info per feature, but handle list
+
         if f.protein_info:
             pi = f.protein_info[0]
 
             # Build amino acid composition dictionary
             amino_acids = {
-                "ala": pi.ala,
-                "arg": pi.arg,
-                "asn": pi.asn,
-                "asp": pi.asp,
-                "cys": pi.cys,
-                "gln": pi.gln,
-                "glu": pi.glu,
-                "gly": pi.gly,
-                "his": pi.his,
-                "ile": pi.ile,
-                "leu": pi.leu,
-                "lys": pi.lys,
-                "met": pi.met,
-                "phe": pi.phe,
-                "pro": pi.pro,
-                "ser": pi.ser,
-                "thr": pi.thr,
-                "trp": pi.trp,
-                "tyr": pi.tyr,
-                "val": pi.val,
+                "ala": pi.ala, "arg": pi.arg, "asn": pi.asn, "asp": pi.asp,
+                "cys": pi.cys, "gln": pi.gln, "glu": pi.glu, "gly": pi.gly,
+                "his": pi.his, "ile": pi.ile, "leu": pi.leu, "lys": pi.lys,
+                "met": pi.met, "phe": pi.phe, "pro": pi.pro, "ser": pi.ser,
+                "thr": pi.thr, "trp": pi.trp, "tyr": pi.tyr, "val": pi.val,
             }
-            # Filter out None values
             amino_acids = {k: v for k, v in amino_acids.items() if v is not None}
 
             protein_info = ProteinInfoOut(
@@ -1563,10 +1597,206 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 amino_acids=amino_acids if amino_acids else None,
             )
 
+            # Process protein_detail for domains and structural info
+            for pd in pi.protein_detail:
+                group = pd.protein_detail_group or ''
+                group_lower = group.lower()
+
+                # Conserved domains typically have group containing 'domain' or specific types
+                if 'domain' in group_lower or group_lower in ('pfam', 'smart', 'interpro', 'prosite'):
+                    conserved_domains.append(ConservedDomainOut(
+                        domain_name=pd.protein_detail_value,
+                        domain_type=pd.protein_detail_type,
+                        domain_group=pd.protein_detail_group,
+                        start_coord=pd.start_coord,
+                        stop_coord=pd.stop_coord,
+                        interpro_id=pd.interpro_dbxref_id,
+                        member_db_id=pd.member_dbxref_id,
+                    ))
+                else:
+                    # Other protein details go to structural info
+                    structural_info.append(StructuralInfoOut(
+                        info_type=pd.protein_detail_type,
+                        info_value=pd.protein_detail_value,
+                        info_unit=pd.protein_detail_unit,
+                        start_coord=pd.start_coord,
+                        stop_coord=pd.stop_coord,
+                    ))
+
+        # Section 8: Sequence Detail
+        sequence_detail = None
+        protein_sequence = None
+        cds_length = None
+
+        for seq in f.seq:
+            if seq.is_seq_current == 'Y':
+                seq_type_upper = (seq.seq_type or '').upper()
+                if seq_type_upper == 'PROTEIN':
+                    protein_sequence = seq.residues
+                elif seq_type_upper == 'CDS':
+                    cds_length = seq.seq_length
+
+        if protein_info or protein_sequence:
+            sequence_detail = SequenceDetailOut(
+                protein_length=protein_info.protein_length if protein_info else None,
+                protein_sequence=protein_sequence,
+                n_term_seq=protein_info.n_term_seq if protein_info else None,
+                c_term_seq=protein_info.c_term_seq if protein_info else None,
+                cds_length=cds_length,
+            )
+
+        # Section 9: Homologs
+        homologs = []
+        seen_homologs = set()
+
+        for fh in f.feat_homology:
+            hg = fh.homology_group
+            if hg is None:
+                continue
+
+            # Get internal (CGD) members via feat_homology
+            for other_fh in hg.feat_homology:
+                other_feat = other_fh.feature
+                if other_feat and other_feat.feature_no != f.feature_no:
+                    key = (other_feat.feature_no, 'internal')
+                    if key in seen_homologs:
+                        continue
+                    seen_homologs.add(key)
+
+                    other_org_name, _ = _get_organism_info(other_feat)
+                    homologs.append(ProteinHomologOut(
+                        feature_name=other_feat.feature_name,
+                        gene_name=other_feat.gene_name,
+                        organism_name=other_org_name,
+                        dbxref_id=other_feat.dbxref_id,
+                        source=hg.homology_group_type,
+                    ))
+
+        # Get external homologs (SGD, POMBASE, etc.)
+        ext_homologs = (
+            db.query(
+                DbxrefHomology.dbxref_id,
+                DbxrefHomology.description,
+                Dbxref.source,
+            )
+            .select_from(DbxrefHomology)
+            .join(HomologyGroup, DbxrefHomology.homology_group_no == HomologyGroup.homology_group_no)
+            .join(FeatHomology, HomologyGroup.homology_group_no == FeatHomology.homology_group_no)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .filter(FeatHomology.feature_no == f.feature_no)
+            .all()
+        )
+
+        for dbxref_id, desc, source in ext_homologs:
+            key = (dbxref_id, source)
+            if key in seen_homologs:
+                continue
+            seen_homologs.add(key)
+
+            species = NON_CGD_ORTHOLOG_SOURCES.get(source, source)
+            homologs.append(ProteinHomologOut(
+                feature_name=dbxref_id,
+                gene_name=None,
+                organism_name=species,
+                dbxref_id=dbxref_id,
+                source=source,
+            ))
+
+        # Section 10: External Sequence Database links
+        external_links = []
+
+        # Links via feat_url relationship for protein page
+        for fu in f.feat_url:
+            url = fu.url
+            if not url or url.substitution_value != 'FEATURE':
+                continue
+
+            for wd in url.web_display:
+                if wd.web_page_name == 'protein' and wd.label_location == 'External Links':
+                    url_str = url.url
+                    if url_str:
+                        url_str = url_str.replace('_SUBSTITUTE_THIS_', f.feature_name)
+                    external_links.append(ProteinExternalLinkOut(
+                        label=wd.label_name,
+                        url=url_str,
+                        source=url.source,
+                        url_type=url.url_type,
+                    ))
+                    break
+
+        # Links via dbxref_url (for DBXREF substitution) - protein page
+        dbxref_url_links = (
+            db.query(
+                WebDisplay.label_name,
+                Url.url,
+                Url.source,
+                Url.url_type,
+                Dbxref.dbxref_id,
+            )
+            .select_from(DbxrefUrl)
+            .join(Dbxref, DbxrefUrl.dbxref_no == Dbxref.dbxref_no)
+            .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+            .join(Url, DbxrefUrl.url_no == Url.url_no)
+            .join(WebDisplay, Url.url_no == WebDisplay.url_no)
+            .filter(
+                DbxrefFeat.feature_no == f.feature_no,
+                Url.substitution_value == 'DBXREF',
+                WebDisplay.web_page_name == 'protein',
+                WebDisplay.label_location == 'External Links',
+            )
+            .all()
+        )
+
+        for label_name, url_str, source, url_type, dbxref_id in dbxref_url_links:
+            if url_str:
+                url_str = url_str.replace('_SUBSTITUTE_THIS_', dbxref_id)
+            external_links.append(ProteinExternalLinkOut(
+                label=label_name,
+                url=url_str or '',
+                source=source,
+                url_type=url_type,
+            ))
+
+        external_links.sort(key=lambda x: x.label or '')
+
+        # Section 11: References Cited on This Page
+        cited_references = []
+        seen_refs = set()
+
+        for rl in f.ref_link:
+            ref = rl.reference
+            if ref and ref.reference_no not in seen_refs:
+                seen_refs.add(ref.reference_no)
+                cited_references.append(ReferenceForProtein(
+                    reference_no=ref.reference_no,
+                    pubmed=ref.pubmed,
+                    citation=ref.citation or '',
+                    title=ref.title,
+                    year=ref.year,
+                ))
+
+        # Sort references by year (descending)
+        cited_references.sort(key=lambda x: x.year or 0, reverse=True)
+
+        # Literature guide URL
+        literature_guide_url = f"/cgi-bin/reference/referenceTab.pl?locus={f.feature_name}"
+
         out[organism_name] = ProteinDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
+            stanford_name=stanford_name,
+            systematic_name=systematic_name,
+            aliases=aliases,
+            description=description,
+            experimental_observations=experimental_observations,
+            structural_info=structural_info,
             protein_info=protein_info,
+            conserved_domains=conserved_domains,
+            sequence_detail=sequence_detail,
+            homologs=homologs,
+            external_links=external_links,
+            cited_references=cited_references,
+            literature_guide_url=literature_guide_url,
         )
 
     return ProteinDetailsResponse(results=out)
