@@ -271,6 +271,8 @@ class ReferenceOutForHistory(BaseModel):
     dbxref_id: str
     citation: str  # Full citation text
     formatted_citation: str  # "FirstAuthor et al" format
+    display_name: t.Optional[str] = None  # Display name for frontend (same as formatted_citation)
+    link: t.Optional[str] = None  # URL link to reference
 
 
 class ContactOut(BaseModel):
@@ -328,11 +330,27 @@ class HistoryEventOut(BaseModel):
     note: t.Optional[str] = None
 
 
+# New schema to match frontend expectations
+class NomenclatureNameWithRef(BaseModel):
+    """Name with reference for nomenclature history (frontend format)"""
+    name: str
+    reference: t.Optional[ReferenceOutForHistory] = None
+
+
+class NomenclatureOut(BaseModel):
+    """Nomenclature history in frontend-expected format"""
+    standard: list[NomenclatureNameWithRef] = []
+    aliases: list[NomenclatureNameWithRef] = []
+
+
 class LocusHistoryForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
-    nomenclature_history: t.Optional[NomenclatureHistoryOut] = None
+    nomenclature: t.Optional[NomenclatureOut] = None  # New format for frontend
+    nomenclature_history: t.Optional[NomenclatureHistoryOut] = None  # Legacy format
     note_categories: list[NoteCategoryOut] = []
+    sequence_annotation_notes: list[HistoryEventOut] = []  # Notes matching frontend
+    curation_notes: list[HistoryEventOut] = []  # Notes matching frontend
     history: list[HistoryEventOut] = []  # Keep for backwards compatibility
 
 
