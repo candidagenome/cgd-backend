@@ -21,7 +21,8 @@ class ReferenceForProtein(BaseModel):
 # --- Alias (Protein-specific) ---
 
 class ProteinAliasOut(BaseModel):
-    alias_name: str
+    alias_name: str  # Original alias name
+    protein_alias_name: str  # Protein format (e.g., C1_13700wp_b)
     alias_type: str
 
 
@@ -56,6 +57,14 @@ class StructuralInfoOut(BaseModel):
     stop_coord: typing.Optional[int] = None
 
 
+# --- AlphaFold Info ---
+
+class AlphaFoldInfo(BaseModel):
+    uniprot_id: typing.Optional[str] = None
+    alphafold_url: typing.Optional[str] = None
+    structure_available: bool = False
+
+
 # --- Experimental Observation ---
 
 class ExperimentalObservationOut(BaseModel):
@@ -69,6 +78,7 @@ class ExperimentalObservationOut(BaseModel):
 class ProteinHomologOut(BaseModel):
     feature_name: str
     gene_name: typing.Optional[str] = None
+    protein_name: typing.Optional[str] = None  # Protein format (e.g., Act1p)
     organism_name: str
     dbxref_id: str
     source: typing.Optional[str] = None  # InParanoid, SGD, etc.
@@ -79,7 +89,8 @@ class ProteinHomologOut(BaseModel):
 
 class SequenceDetailOut(BaseModel):
     protein_length: typing.Optional[int] = None
-    protein_sequence: typing.Optional[str] = None
+    protein_sequence: typing.Optional[str] = None  # Raw sequence
+    protein_sequence_gcg: typing.Optional[str] = None  # GCG format
     n_term_seq: typing.Optional[str] = None
     c_term_seq: typing.Optional[str] = None
     cds_length: typing.Optional[int] = None
@@ -108,13 +119,15 @@ class ProteinDetailsForOrganism(BaseModel):
     locus_display_name: str  # Stanford Name (gene_name) or Systematic Name (feature_name)
     taxon_id: int
 
-    # Section 1: Stanford Name
-    stanford_name: typing.Optional[str] = None  # gene_name
+    # Section 1: Protein Standard Name (e.g., Act1p)
+    stanford_name: typing.Optional[str] = None  # gene_name (ACT1)
+    protein_standard_name: typing.Optional[str] = None  # protein format (Act1p)
 
-    # Section 2: Systematic Name
-    systematic_name: str  # feature_name
+    # Section 2: Protein Systematic Name (e.g., C1_13700wp_a)
+    systematic_name: str  # feature_name (C1_13700W_A)
+    protein_systematic_name: typing.Optional[str] = None  # protein format (C1_13700wp_a)
 
-    # Section 3: Alias Names
+    # Section 3: Alias Names (protein format only, e.g., C1_13700wp_b)
     aliases: list[ProteinAliasOut] = []
 
     # Section 4: Description
@@ -126,6 +139,7 @@ class ProteinDetailsForOrganism(BaseModel):
     # Section 6: Structural Information
     structural_info: list[StructuralInfoOut] = []
     protein_info: typing.Optional[ProteinInfoOut] = None  # MW, pI, CAI, etc.
+    alphafold_info: typing.Optional[AlphaFoldInfo] = None  # AlphaFold structure
 
     # Section 7: Conserved Domains
     conserved_domains: list[ConservedDomainOut] = []
@@ -135,6 +149,7 @@ class ProteinDetailsForOrganism(BaseModel):
 
     # Section 9: Homologs
     homologs: list[ProteinHomologOut] = []
+    blast_url: typing.Optional[str] = None  # BLAST against Candida sequences
 
     # Section 10: External Sequence Database
     external_links: list[ProteinExternalLinkOut] = []

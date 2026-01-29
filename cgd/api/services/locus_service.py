@@ -79,6 +79,7 @@ from cgd.schemas.protein_schema import (
     ProteinHomologOut,
     SequenceDetailOut,
     ReferenceForProtein,
+    AlphaFoldInfo,
 )
 from cgd.schemas.homology_schema import (
     HomologyDetailsResponse,
@@ -148,6 +149,79 @@ NON_CGD_ORTHOLOG_SOURCES = {
     'AspGD': 'A. nidulans',
     'BROAD_NEUROSPORA': 'N. crassa',
 }
+
+
+def _gene_name_to_protein_name(gene_name: str) -> str:
+    """
+    Convert gene name to protein name format.
+    e.g., ACT1 -> Act1p, CDC42 -> Cdc42p, BRG1 -> Brg1p
+    """
+    if not gene_name:
+        return ''
+    # Capitalize first letter, lowercase rest, add 'p' suffix
+    return gene_name.capitalize() + 'p'
+
+
+def _systematic_name_to_protein_name(systematic_name: str) -> str:
+    """
+    Convert systematic ORF name to protein name format.
+    e.g., C1_13700W_A -> C1_13700wp_a, C1_13700W_B -> C1_13700wp_b
+    """
+    if not systematic_name:
+        return ''
+    # Replace uppercase W with lowercase 'wp', and uppercase final letter with lowercase
+    # Pattern: C1_13700W_A -> C1_13700wp_a
+    import re
+    # Match pattern like C1_13700W_A or orf19.1234
+    match = re.match(r'^([A-Z]\d+_\d+)([A-Z])_([A-Z])$', systematic_name, re.IGNORECASE)
+    if match:
+        prefix = match.group(1)  # C1_13700
+        letter = match.group(2)  # W
+        allele = match.group(3)  # A
+        return f"{prefix}{letter.lower()}p_{allele.lower()}"
+
+    # Try pattern like orf19.1234
+    if systematic_name.lower().startswith('orf'):
+        return systematic_name.lower() + 'p'
+
+    # Default: lowercase + p
+    return systematic_name.lower() + 'p'
+
+
+def _format_sequence_gcg(sequence: str, name: str, length: int, seq_type: str = 'Protein') -> str:
+    """
+    Format a sequence in GCG/Wisconsin format.
+
+    GCG format:
+    !!AA_SEQUENCE 1.0
+    Name: ACT1p  Length: 375  Type: Protein  Check: 1234
+
+    MDDDIAALV DSEVNHFNVE LDAIKG...
+    """
+    if not sequence:
+        return ''
+
+    # Calculate a simple checksum (sum of ASCII values mod 10000)
+    checksum = sum(ord(c) for c in sequence) % 10000
+
+    lines = [
+        f"!!AA_SEQUENCE 1.0",
+        f"{name}  Length: {length}  {seq_type}  Check: {checksum}",
+        "",
+    ]
+
+    # Format sequence: 10 blocks of 6 chars per line (60 chars per line)
+    # With position numbers at the start
+    pos = 1
+    for i in range(0, len(sequence), 50):
+        chunk = sequence[i:i+50]
+        # Split into groups of 10
+        groups = [chunk[j:j+10] for j in range(0, len(chunk), 10)]
+        line = f"{pos:8d}  " + " ".join(groups)
+        lines.append(line)
+        pos += 50
+
+    return "\n".join(lines)
 
 
 def _count_cug_codons(cds_sequence: str) -> int:
@@ -1544,17 +1618,22 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
-        # Section 1 & 2: Stanford Name and Systematic Name
+        # Section 1 & 2: Stanford Name and Systematic Name (with protein format)
         stanford_name = f.gene_name
         systematic_name = f.feature_name
+        protein_standard_name = _gene_name_to_protein_name(stanford_name) if stanford_name else None
+        protein_systematic_name = _systematic_name_to_protein_name(systematic_name) if systematic_name else None
 
-        # Section 3: Aliases
+        # Section 3: Aliases - only show "Other strain feature name" type (B allele) in protein format
         aliases = []
         for fa in f.feat_alias:
             alias = fa.alias
-            if alias:
+            if alias and alias.alias_type == 'Other strain feature name':
+                # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
+                protein_alias = _systematic_name_to_protein_name(alias.alias_name)
                 aliases.append(ProteinAliasOut(
                     alias_name=alias.alias_name,
+                    protein_alias_name=protein_alias,
                     alias_type=alias.alias_type or '',
                 ))
 
@@ -1636,9 +1715,17 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     cds_length = seq.seq_length
 
         if protein_info or protein_sequence:
+            # Generate GCG format sequence
+            protein_seq_gcg = None
+            if protein_sequence:
+                seq_name = protein_standard_name or protein_systematic_name or systematic_name
+                seq_length = len(protein_sequence)
+                protein_seq_gcg = _format_sequence_gcg(protein_sequence, seq_name, seq_length)
+
             sequence_detail = SequenceDetailOut(
                 protein_length=protein_info.protein_length if protein_info else None,
                 protein_sequence=protein_sequence,
+                protein_sequence_gcg=protein_seq_gcg,
                 n_term_seq=protein_info.n_term_seq if protein_info else None,
                 c_term_seq=protein_info.c_term_seq if protein_info else None,
                 cds_length=cds_length,
@@ -1663,9 +1750,12 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     seen_homologs.add(key)
 
                     other_org_name, _ = _get_organism_info(other_feat)
+                    # Convert to protein name format
+                    other_protein_name = _gene_name_to_protein_name(other_feat.gene_name) if other_feat.gene_name else None
                     homologs.append(ProteinHomologOut(
                         feature_name=other_feat.feature_name,
                         gene_name=other_feat.gene_name,
+                        protein_name=other_protein_name,
                         organism_name=other_org_name,
                         dbxref_id=other_feat.dbxref_id,
                         source=hg.homology_group_type,
@@ -1696,10 +1786,14 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             homologs.append(ProteinHomologOut(
                 feature_name=dbxref_id,
                 gene_name=None,
+                protein_name=None,
                 organism_name=species,
                 dbxref_id=dbxref_id,
                 source=source,
             ))
+
+        # BLAST URL for homologs
+        blast_url = f"/cgi-bin/compute/blast-sgd.pl?protein={protein_standard_name or systematic_name}"
 
         # Section 10: External Sequence Database links
         external_links = []
@@ -1758,6 +1852,31 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
 
         external_links.sort(key=lambda x: x.label or '')
 
+        # AlphaFold structure lookup
+        # Look for UniProt ID in dbxref_feat and construct AlphaFold URL
+        alphafold_info = None
+        uniprot_id = None
+
+        # Query for UniProt/SwissProt dbxref
+        uniprot_dbxref = (
+            db.query(Dbxref.dbxref_id)
+            .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+            .filter(
+                DbxrefFeat.feature_no == f.feature_no,
+                Dbxref.source.in_(['UniProtKB/Swiss-Prot', 'UniProt', 'SwissProt', 'UniProtKB']),
+            )
+            .first()
+        )
+
+        if uniprot_dbxref:
+            uniprot_id = uniprot_dbxref[0]
+            alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{uniprot_id}"
+            alphafold_info = AlphaFoldInfo(
+                uniprot_id=uniprot_id,
+                alphafold_url=alphafold_url,
+                structure_available=True,
+            )
+
         # Section 11: References Cited on This Page
         # Query RefLink table for references linked to this feature
         ref_links = (
@@ -1795,15 +1914,19 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             stanford_name=stanford_name,
+            protein_standard_name=protein_standard_name,
             systematic_name=systematic_name,
+            protein_systematic_name=protein_systematic_name,
             aliases=aliases,
             description=description,
             experimental_observations=experimental_observations,
             structural_info=structural_info,
             protein_info=protein_info,
+            alphafold_info=alphafold_info,
             conserved_domains=conserved_domains,
             sequence_detail=sequence_detail,
             homologs=homologs,
+            blast_url=blast_url,
             external_links=external_links,
             cited_references=cited_references,
             literature_guide_url=literature_guide_url,
