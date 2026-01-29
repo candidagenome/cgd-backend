@@ -88,6 +88,7 @@ from cgd.schemas.homology_schema import (
     HomologOut,
     OrthologClusterOut,
     OrthologOut,
+    DownloadLinkOut,
 )
 from cgd.models.locus_model import Feature
 from cgd.models.go_model import GoAnnotation, GoRef
@@ -2092,6 +2093,12 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
             if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
                 orthologs = []
 
+                # Helper to format sequence_id as "gene_name/feature_name"
+                def format_seq_id(gene_name, feature_name):
+                    if gene_name and gene_name != feature_name:
+                        return f"{gene_name}/{feature_name}"
+                    return feature_name
+
                 # Add query gene first
                 query_status = None
                 qualifier_row = (
@@ -2103,10 +2110,10 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     .first()
                 )
                 if qualifier_row:
-                    query_status = qualifier_row[0]
+                    query_status = qualifier_row[0].upper() if qualifier_row[0] else None
 
                 orthologs.append(OrthologOut(
-                    sequence_id=f.gene_name or f.feature_name,
+                    sequence_id=format_seq_id(f.gene_name, f.feature_name),
                     feature_name=f.feature_name,
                     organism_name=organism_name,
                     source='CGD',
@@ -2130,10 +2137,10 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             .first()
                         )
                         if other_qualifier:
-                            other_status = other_qualifier[0]
+                            other_status = other_qualifier[0].upper() if other_qualifier[0] else None
 
                         orthologs.append(OrthologOut(
-                            sequence_id=other_feat.gene_name or other_feat.feature_name,
+                            sequence_id=format_seq_id(other_feat.gene_name, other_feat.feature_name),
                             feature_name=other_feat.feature_name,
                             organism_name=other_org_name,
                             source='CGD',
@@ -2141,35 +2148,60 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                         ))
 
-                # Add external orthologs (SGD, etc.)
+                # Add external orthologs (SGD, EnsemblFungi, etc.)
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
                     if dbxref:
                         ext_source = dbxref.source or 'External'
+                        ext_org = dbxref.description or ext_source
                         ext_url = None
+
                         # Build URL for external orthologs
                         if ext_source == 'SGD':
                             ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
                         elif ext_source == 'POMBASE':
                             ext_url = f"https://www.pombase.org/gene/{dbxref.dbxref_id}"
+                        elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
+                            ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
 
                         orthologs.append(OrthologOut(
                             sequence_id=dbxref.dbxref_id,
                             feature_name=dbxref.dbxref_id,
-                            organism_name=dbxref.description or ext_source,
+                            organism_name=ext_org,
                             source=ext_source,
                             status=None,
                             is_query=False,
                             url=ext_url,
                         ))
 
-                # Build cluster URL
+                # Build cluster URL and download links
                 cluster_url = f"/cgi-bin/homolog/homologTab.pl?locus={f.feature_name}"
+                cluster_id = hg.homology_group_id or f.feature_name
+
+                download_links = [
+                    DownloadLinkOut(
+                        label="Proteins (multi-FASTA format)",
+                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=protein"
+                    ),
+                    DownloadLinkOut(
+                        label="Coding (multi-FASTA format)",
+                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=cds"
+                    ),
+                    DownloadLinkOut(
+                        label="Genomic (multi-FASTA format)",
+                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=genomic"
+                    ),
+                    DownloadLinkOut(
+                        label="Genomic +/- 1000 BP (multi-FASTA format)",
+                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=genomic_extended"
+                    ),
+                ]
 
                 ortholog_cluster = OrthologClusterOut(
                     cluster_name=hg.homology_group_id,
                     method=hg.method,
                     cluster_url=cluster_url,
+                    download_links=download_links,
                     orthologs=orthologs,
                 )
                 break  # Only use first CGOB cluster
