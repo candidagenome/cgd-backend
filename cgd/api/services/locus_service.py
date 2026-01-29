@@ -71,7 +71,7 @@ from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
     ProteinDetailsForOrganism,
     ProteinInfoOut,
-    ProteinAliasOut,
+    ProteinAlleleNameOut,
     ProteinExternalLinkOut,
     ConservedDomainOut,
     StructuralInfoOut,
@@ -171,7 +171,6 @@ def _systematic_name_to_protein_name(systematic_name: str) -> str:
         return ''
     # Replace uppercase W with lowercase 'wp', and uppercase final letter with lowercase
     # Pattern: C1_13700W_A -> C1_13700wp_a
-    import re
     # Match pattern like C1_13700W_A or orf19.1234
     match = re.match(r'^([A-Z]\d+_\d+)([A-Z])_([A-Z])$', systematic_name, re.IGNORECASE)
     if match:
@@ -1618,19 +1617,64 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
+        # --- Reference tracking for this feature ---
+        ref_index: dict[str, int] = {}  # dbxref_id -> reference number (1-indexed)
+        next_ref_index = 1
+
+        def add_refs_from_ref_link(tab_name: str, col_name: str, primary_key: int) -> list[str]:
+            """Query RefLink table and add references to ref_index. Returns list of dbxref_ids."""
+            nonlocal next_ref_index
+            refs = (
+                db.query(Reference)
+                .join(RefLink, RefLink.reference_no == Reference.reference_no)
+                .filter(
+                    RefLink.tab_name == tab_name,
+                    RefLink.col_name == col_name,
+                    RefLink.primary_key == primary_key,
+                )
+                .all()
+            )
+            dbxref_ids = []
+            for ref in refs:
+                if ref.dbxref_id not in ref_index:
+                    ref_index[ref.dbxref_id] = next_ref_index
+                    next_ref_index += 1
+                dbxref_ids.append(ref.dbxref_id)
+            return dbxref_ids
+
+        def format_ref_superscript(dbxref_ids: list[str], use_parentheses: bool = False) -> str:
+            """Format reference indices as HTML superscript links."""
+            if not dbxref_ids:
+                return ""
+            indices = sorted(set(ref_index.get(d) for d in dbxref_ids if d in ref_index))
+            if not indices:
+                return ""
+            links = [f'<a href="#ref{idx}" class="ref-link">{idx}</a>' for idx in indices]
+            indices_str = ', '.join(links)
+            if use_parentheses:
+                return f'({indices_str})'
+            return f'<sup>{indices_str}</sup>'
+
         # Section 1 & 2: Stanford Name and Systematic Name (with protein format)
         stanford_name = f.gene_name
         systematic_name = f.feature_name
         protein_standard_name = _gene_name_to_protein_name(stanford_name) if stanford_name else None
         protein_systematic_name = _systematic_name_to_protein_name(systematic_name) if systematic_name else None
 
-        # Section 3: Aliases - only show aliases that match the systematic name prefix
+        # Get references for protein standard name (gene_name)
+        protein_standard_name_with_refs = protein_standard_name or ""
+        if stanford_name:
+            gene_name_refs = add_refs_from_ref_link('FEATURE', 'GENE_NAME', f.feature_no)
+            if gene_name_refs and protein_standard_name:
+                ref_sup = format_ref_superscript(gene_name_refs)
+                protein_standard_name_with_refs = f'{protein_standard_name}{ref_sup}'
+
+        # Section 3: Allele Names - only show aliases that match the systematic name prefix
         # e.g., if systematic_name is C1_13700W_A, only show aliases starting with "C1_13700"
-        aliases = []
+        allele_names = []
         # Extract prefix from systematic name (e.g., "C1_13700" from "C1_13700W_A")
         systematic_prefix = None
         if systematic_name:
-            import re
             prefix_match = re.match(r'^([A-Z]\d+_\d+)', systematic_name, re.IGNORECASE)
             if prefix_match:
                 systematic_prefix = prefix_match.group(1).upper()
@@ -1641,15 +1685,30 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 # Only include if alias starts with same prefix as systematic name
                 if systematic_prefix and alias.alias_name.upper().startswith(systematic_prefix):
                     # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
-                    protein_alias = _systematic_name_to_protein_name(alias.alias_name)
-                    aliases.append(ProteinAliasOut(
-                        alias_name=alias.alias_name,
-                        protein_alias_name=protein_alias,
-                        alias_type=alias.alias_type or '',
+                    protein_allele = _systematic_name_to_protein_name(alias.alias_name)
+
+                    # Get references for this allele name
+                    alias_refs = add_refs_from_ref_link('FEAT_ALIAS', 'FEAT_ALIAS_NO', fa.feat_alias_no)
+                    if alias_refs:
+                        ref_sup = format_ref_superscript(alias_refs)
+                        allele_with_refs = f'{protein_allele}{ref_sup}'
+                    else:
+                        allele_with_refs = protein_allele
+
+                    allele_names.append(ProteinAlleleNameOut(
+                        allele_name=alias.alias_name,
+                        protein_allele_name=protein_allele,
+                        allele_name_with_refs=allele_with_refs,
                     ))
 
         # Section 4: Description
         description = f.headline
+        description_with_refs = description or ""
+        if description:
+            headline_refs = add_refs_from_ref_link('FEATURE', 'HEADLINE', f.feature_no)
+            if headline_refs:
+                ref_str = format_ref_superscript(headline_refs, use_parentheses=True)
+                description_with_refs = f'{description} {ref_str}'
 
         # Section 5: Experimental Observations (from protein_detail with specific groups)
         experimental_observations = []
@@ -1889,34 +1948,25 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             )
 
         # Section 11: References Cited on This Page
-        # Query RefLink table for references linked to this feature
-        ref_links = (
-            db.query(RefLink)
-            .options(joinedload(RefLink.reference))
-            .filter(
-                RefLink.tab_name == "FEATURE",
-                RefLink.primary_key == f.feature_no,
-            )
-            .all()
-        )
-
+        # Build cited_references list ordered by ref_index (the order they were cited)
         cited_references = []
-        seen_refs = set()
-
-        for rl in ref_links:
-            ref = rl.reference
-            if ref and ref.reference_no not in seen_refs:
-                seen_refs.add(ref.reference_no)
-                cited_references.append(ReferenceForProtein(
-                    reference_no=ref.reference_no,
-                    pubmed=ref.pubmed,
-                    citation=ref.citation or '',
-                    title=ref.title,
-                    year=ref.year,
-                ))
-
-        # Sort references by year (descending)
-        cited_references.sort(key=lambda x: x.year or 0, reverse=True)
+        if ref_index:
+            # Sort by index number to maintain citation order
+            sorted_refs = sorted(ref_index.items(), key=lambda x: x[1])
+            for dbxref_id, idx in sorted_refs:
+                ref = (
+                    db.query(Reference)
+                    .filter(Reference.dbxref_id == dbxref_id)
+                    .first()
+                )
+                if ref:
+                    cited_references.append(ReferenceForProtein(
+                        reference_no=ref.reference_no,
+                        pubmed=ref.pubmed,
+                        citation=ref.citation or '',
+                        title=ref.title,
+                        year=ref.year,
+                    ))
 
         # Literature guide URL
         literature_guide_url = f"/cgi-bin/reference/referenceTab.pl?locus={f.feature_name}"
@@ -1926,10 +1976,12 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             taxon_id=taxon_id,
             stanford_name=stanford_name,
             protein_standard_name=protein_standard_name,
+            protein_standard_name_with_refs=protein_standard_name_with_refs if protein_standard_name_with_refs else None,
             systematic_name=systematic_name,
             protein_systematic_name=protein_systematic_name,
-            aliases=aliases,
+            allele_names=allele_names,
             description=description,
+            description_with_refs=description_with_refs if description_with_refs else None,
             experimental_observations=experimental_observations,
             structural_info=structural_info,
             protein_info=protein_info,

@@ -18,12 +18,12 @@ class ReferenceForProtein(BaseModel):
     year: typing.Optional[int] = None
 
 
-# --- Alias (Protein-specific) ---
+# --- Allele Name (Protein-specific) ---
 
-class ProteinAliasOut(BaseModel):
-    alias_name: str  # Original alias name
-    protein_alias_name: str  # Protein format (e.g., C1_13700wp_b)
-    alias_type: str
+class ProteinAlleleNameOut(BaseModel):
+    allele_name: str  # Original allele name (e.g., C1_13700W_B)
+    protein_allele_name: str  # Protein format (e.g., C1_13700wp_b)
+    allele_name_with_refs: typing.Optional[str] = None  # HTML with reference superscripts
 
 
 # --- External Link (Protein-specific) ---
@@ -122,16 +122,18 @@ class ProteinDetailsForOrganism(BaseModel):
     # Section 1: Protein Standard Name (e.g., Act1p)
     stanford_name: typing.Optional[str] = None  # gene_name (ACT1)
     protein_standard_name: typing.Optional[str] = None  # protein format (Act1p)
+    protein_standard_name_with_refs: typing.Optional[str] = None  # HTML with ref superscripts
 
     # Section 2: Protein Systematic Name (e.g., C1_13700wp_a)
     systematic_name: str  # feature_name (C1_13700W_A)
     protein_systematic_name: typing.Optional[str] = None  # protein format (C1_13700wp_a)
 
-    # Section 3: Alias Names (protein format only, e.g., C1_13700wp_b)
-    aliases: list[ProteinAliasOut] = []
+    # Section 3: Allele Names (protein format only, e.g., C1_13700wp_b)
+    allele_names: list[ProteinAlleleNameOut] = []
 
     # Section 4: Description
     description: typing.Optional[str] = None  # headline
+    description_with_refs: typing.Optional[str] = None  # HTML with ref superscripts
 
     # Section 5: Experimental Observations
     experimental_observations: list[ExperimentalObservationOut] = []
