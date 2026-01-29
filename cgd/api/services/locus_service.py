@@ -59,6 +59,7 @@ from cgd.schemas.phenotype_schema import (
     PhenotypeAnnotationOut,
     PhenotypeTerm,
     ReferenceForAnnotation as PhenoRefForAnnotation,
+    ExperimentProperty,
 )
 from cgd.schemas.interaction_schema import (
     InteractionDetailsResponse,
@@ -107,6 +108,9 @@ from cgd.models.models import (
     GeneReservation,
     CollGeneres,
     Colleague,
+    Experiment,
+    ExptExptprop,
+    ExptProperty,
 )
 
 
@@ -1291,9 +1295,43 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             )
 
             experiment = pa.experiment
+            experiment_comment = None
             strain = None
+            alleles_list = []
+            chemicals_list = []
+            details_list = []
+
             if experiment:
-                strain = getattr(experiment, "strain_background", None)
+                experiment_comment = experiment.experiment_comment
+                # Get experiment properties via expt_exptprop junction table
+                expt_props = (
+                    db.query(ExptProperty)
+                    .join(ExptExptprop, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+                    .filter(ExptExptprop.experiment_no == experiment.experiment_no)
+                    .all()
+                )
+                for prop in expt_props:
+                    prop_type = prop.property_type
+                    if prop_type == 'strain_background':
+                        strain = prop.property_value
+                    elif prop_type == 'Allele':
+                        alleles_list.append(ExperimentProperty(
+                            property_type=prop_type,
+                            property_value=prop.property_value,
+                            property_description=prop.property_description,
+                        ))
+                    elif prop_type in ('Chemical_pending', 'chebi_ontology'):
+                        chemicals_list.append(ExperimentProperty(
+                            property_type=prop_type,
+                            property_value=prop.property_value,
+                            property_description=prop.property_description,
+                        ))
+                    elif prop_type in ('Condition', 'Details', 'Reporter', 'Numerical_value'):
+                        details_list.append(ExperimentProperty(
+                            property_type=prop_type,
+                            property_value=prop.property_value,
+                            property_description=prop.property_description,
+                        ))
 
             # Map experiment_type to root category
             mapped_experiment_type = _map_experiment_type_to_root(phenotype.experiment_type)
@@ -1312,7 +1350,7 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             pheno_references = []
             ref_links = (
                 db.query(RefLink)
-                .options(joinedload(RefLink.reference))
+                .options(joinedload(RefLink.reference).joinedload(Reference.journal))
                 .filter(
                     RefLink.tab_name == "PHENO_ANNOTATION",
                     RefLink.primary_key == pa.pheno_annotation_no,
@@ -1335,8 +1373,12 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
                 phenotype=pheno_term,
                 qualifier=phenotype.qualifier,
                 experiment_type=mapped_experiment_type,
+                experiment_comment=experiment_comment,
                 mutant_type=mutant_type,
                 strain=strain,
+                alleles=alleles_list,
+                chemicals=chemicals_list,
+                details=details_list,
                 references=pheno_references,
             ))
 
