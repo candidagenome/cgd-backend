@@ -13,9 +13,14 @@ class PhenotypeTerm(BaseModel):
     link: typing.Optional[str] = None
 
 
-class ReferenceStub(BaseModel):
-    display_name: typing.Optional[str] = None
-    link: typing.Optional[str] = None
+class ReferenceForAnnotation(BaseModel):
+    """Reference with full citation data for annotation display"""
+    reference_no: typing.Optional[int] = None
+    pubmed: typing.Optional[int] = None
+    dbxref_id: typing.Optional[str] = None
+    citation: typing.Optional[str] = None  # Full citation text
+    journal_name: typing.Optional[str] = None
+    year: typing.Optional[int] = None
 
 
 class PhenotypeAnnotationOut(BaseModel):
@@ -24,7 +29,7 @@ class PhenotypeAnnotationOut(BaseModel):
     experiment_type: typing.Optional[str] = None  # Mapped to "Classical genetics" or "Large-scale survey"
     mutant_type: typing.Optional[str] = None  # e.g., "null", "overexpression", "homozygous null"
     strain: typing.Optional[str] = None
-    references: list[ReferenceStub] = []
+    references: list[ReferenceForAnnotation] = []
 
 
 class PhenotypeDetailsForOrganism(BaseModel):

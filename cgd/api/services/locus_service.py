@@ -51,13 +51,14 @@ from cgd.schemas.go_schema import (
     GOAnnotationOut,
     GOTerm,
     GOEvidence,
+    ReferenceForAnnotation as GORefForAnnotation,
 )
 from cgd.schemas.phenotype_schema import (
     PhenotypeDetailsResponse,
     PhenotypeDetailsForOrganism,
     PhenotypeAnnotationOut,
     PhenotypeTerm,
-    ReferenceStub,
+    ReferenceForAnnotation as PhenoRefForAnnotation,
 )
 from cgd.schemas.interaction_schema import (
     InteractionDetailsResponse,
@@ -1073,9 +1074,16 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
         .options(
             joinedload(Feature.organism),
             joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.go_qualifier),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go_ref).joinedload(GoRef.goref_dbxref).joinedload(GorefDbxref.dbxref),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.reference),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.go_qualifier),
+            joinedload(Feature.go_annotation)
+                .joinedload(GoAnnotation.go_ref)
+                .joinedload(GoRef.goref_dbxref)
+                .joinedload(GorefDbxref.dbxref),
         )
         .filter(
             or_(
@@ -1172,14 +1180,19 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 else:
                     qualifier_str = ', '.join(sorted(qualifiers))
 
-            # Get references from go_ref relationship
+            # Get references from go_ref relationship with full citation data
             references = []
             for gr in ga.go_ref:
                 ref = gr.reference
-                if ref and ref.pubmed:
-                    references.append(f"PMID:{ref.pubmed}")
-                elif ref:
-                    references.append(ref.dbxref_id)
+                if ref:
+                    references.append(GORefForAnnotation(
+                        reference_no=ref.reference_no,
+                        pubmed=ref.pubmed,
+                        dbxref_id=ref.dbxref_id,
+                        citation=ref.citation,
+                        journal_name=ref.journal.full_name if ref.journal else None,
+                        year=ref.year,
+                    ))
 
             # Format date_created
             date_created_str = None
@@ -1295,13 +1308,36 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             elif 'heterozygous diploid' in raw_experiment_type.lower() and mutant_type == 'null':
                 mutant_type = 'heterozygous null'
 
+            # Get references via ref_link table for this phenotype annotation
+            pheno_references = []
+            ref_links = (
+                db.query(RefLink)
+                .options(joinedload(RefLink.reference))
+                .filter(
+                    RefLink.tab_name == "PHENO_ANNOTATION",
+                    RefLink.primary_key == pa.pheno_annotation_no,
+                )
+                .all()
+            )
+            for rl in ref_links:
+                ref = rl.reference
+                if ref:
+                    pheno_references.append(PhenoRefForAnnotation(
+                        reference_no=ref.reference_no,
+                        pubmed=ref.pubmed,
+                        dbxref_id=ref.dbxref_id,
+                        citation=ref.citation,
+                        journal_name=ref.journal.full_name if ref.journal else None,
+                        year=ref.year,
+                    ))
+
             annotations.append(PhenotypeAnnotationOut(
                 phenotype=pheno_term,
                 qualifier=phenotype.qualifier,
                 experiment_type=mapped_experiment_type,
                 mutant_type=mutant_type,
                 strain=strain,
-                references=[],  # References could be added via ref_link if needed
+                references=pheno_references,
             ))
 
         out[organism_name] = PhenotypeDetailsForOrganism(
