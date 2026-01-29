@@ -34,11 +34,18 @@ class OrthologOut(BaseModel):
     url: typing.Optional[str] = None  # External link for non-CGD orthologs
 
 
+class DownloadLinkOut(BaseModel):
+    """Download link for cluster sequences."""
+    label: str
+    url: str
+
+
 class OrthologClusterOut(BaseModel):
     """Ortholog cluster section data."""
     cluster_name: typing.Optional[str] = None  # Cluster identifier
     method: typing.Optional[str] = None  # e.g., CGOB, InParanoid
     cluster_url: typing.Optional[str] = None  # URL to ortholog cluster viewer
+    download_links: list[DownloadLinkOut] = []  # Download sequence files
     orthologs: list[OrthologOut] = []
 
 
