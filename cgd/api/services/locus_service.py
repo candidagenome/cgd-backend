@@ -86,6 +86,8 @@ from cgd.schemas.homology_schema import (
     HomologyDetailsForOrganism,
     HomologyGroupOut,
     HomologOut,
+    OrthologClusterOut,
+    OrthologOut,
 )
 from cgd.models.locus_model import Feature
 from cgd.models.go_model import GoAnnotation, GoRef
@@ -2083,10 +2085,100 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 members=members,
             ))
 
+        # Build Ortholog Cluster section (CGOB orthologs)
+        ortholog_cluster = None
+        for fh in f.feat_homology:
+            hg = fh.homology_group
+            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+                orthologs = []
+
+                # Add query gene first
+                query_status = None
+                qualifier_row = (
+                    db.query(FeatProperty.property_value)
+                    .filter(
+                        FeatProperty.feature_no == f.feature_no,
+                        FeatProperty.property_type == 'Qualifier',
+                    )
+                    .first()
+                )
+                if qualifier_row:
+                    query_status = qualifier_row[0]
+
+                orthologs.append(OrthologOut(
+                    sequence_id=f.gene_name or f.feature_name,
+                    feature_name=f.feature_name,
+                    organism_name=organism_name,
+                    source='CGD',
+                    status=query_status,
+                    is_query=True,
+                ))
+
+                # Add other CGD orthologs
+                for other_fh in hg.feat_homology:
+                    other_feat = other_fh.feature
+                    if other_feat and other_feat.feature_no != f.feature_no:
+                        other_org_name, _ = _get_organism_info(other_feat)
+                        # Get status for this ortholog
+                        other_status = None
+                        other_qualifier = (
+                            db.query(FeatProperty.property_value)
+                            .filter(
+                                FeatProperty.feature_no == other_feat.feature_no,
+                                FeatProperty.property_type == 'Qualifier',
+                            )
+                            .first()
+                        )
+                        if other_qualifier:
+                            other_status = other_qualifier[0]
+
+                        orthologs.append(OrthologOut(
+                            sequence_id=other_feat.gene_name or other_feat.feature_name,
+                            feature_name=other_feat.feature_name,
+                            organism_name=other_org_name,
+                            source='CGD',
+                            status=other_status,
+                            is_query=False,
+                        ))
+
+                # Add external orthologs (SGD, etc.)
+                for dh in hg.dbxref_homology:
+                    dbxref = dh.dbxref
+                    if dbxref:
+                        ext_source = dbxref.source or 'External'
+                        ext_url = None
+                        # Build URL for external orthologs
+                        if ext_source == 'SGD':
+                            ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                        elif ext_source == 'POMBASE':
+                            ext_url = f"https://www.pombase.org/gene/{dbxref.dbxref_id}"
+
+                        orthologs.append(OrthologOut(
+                            sequence_id=dbxref.dbxref_id,
+                            feature_name=dbxref.dbxref_id,
+                            organism_name=dbxref.description or ext_source,
+                            source=ext_source,
+                            status=None,
+                            is_query=False,
+                            url=ext_url,
+                        ))
+
+                # Build cluster URL
+                cluster_url = f"/cgi-bin/homolog/homologTab.pl?locus={f.feature_name}"
+
+                ortholog_cluster = OrthologClusterOut(
+                    cluster_name=hg.homology_group_id,
+                    method=hg.method,
+                    cluster_url=cluster_url,
+                    orthologs=orthologs,
+                )
+                break  # Only use first CGOB cluster
+
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             homology_groups=homology_groups,
+            ortholog_cluster=ortholog_cluster,
         )
 
     return HomologyDetailsResponse(results=out)
