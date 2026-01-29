@@ -1190,7 +1190,7 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                         pubmed=ref.pubmed,
                         dbxref_id=ref.dbxref_id,
                         citation=ref.citation,
-                        journal_name=ref.journal,
+                        journal_name=ref.journal.full_name if ref.journal else None,
                         year=ref.year,
                     ))
 
@@ -1327,7 +1327,7 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
                         pubmed=ref.pubmed,
                         dbxref_id=ref.dbxref_id,
                         citation=ref.citation,
-                        journal_name=ref.journal,
+                        journal_name=ref.journal.full_name if ref.journal else None,
                         year=ref.year,
                     ))
 
