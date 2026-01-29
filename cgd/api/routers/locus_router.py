@@ -72,8 +72,26 @@ def interaction_details(name: str, db: Session = Depends(get_db)):
 def protein_details(name: str, db: Session = Depends(get_db)):
     """
     Get protein information for this locus, grouped by organism.
+
+    Returns data matching the Perl protein page format:
+    - Stanford Name (gene_name)
+    - Systematic Name (feature_name)
+    - Alias Names
+    - Description (headline)
+    - Experimental Observations
+    - Structural Information
+    - Conserved Domains
+    - Sequence Detail
+    - Homologs
+    - External Sequence Database
+    - References Cited on This Page
     """
-    return locus_service.get_locus_protein_details(db, name)
+    try:
+        return locus_service.get_locus_protein_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in protein_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/homology_details", response_model=HomologyDetailsResponse)
