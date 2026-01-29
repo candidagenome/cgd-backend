@@ -1669,37 +1669,43 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 ref_sup = format_ref_superscript(gene_name_refs)
                 protein_standard_name_with_refs = f'{protein_standard_name}{ref_sup}'
 
-        # Section 3: Allele Names - only show aliases that match the systematic name prefix
-        # e.g., if systematic_name is C1_13700W_A, only show aliases starting with "C1_13700"
+        # Section 3: Allele Names - get from FeatRelationship (like Summary tab)
         allele_names = []
-        # Extract prefix from systematic name (e.g., "C1_13700" from "C1_13700W_A")
-        systematic_prefix = None
-        if systematic_name:
-            prefix_match = re.match(r'^([A-Z]\d+_\d+)', systematic_name, re.IGNORECASE)
-            if prefix_match:
-                systematic_prefix = prefix_match.group(1).upper()
+        allele_relationships = (
+            db.query(FeatRelationship)
+            .filter(
+                FeatRelationship.parent_feature_no == f.feature_no,
+                FeatRelationship.relationship_type == 'allele',
+            )
+            .all()
+        )
+        for ar in allele_relationships:
+            allele_feature = (
+                db.query(Feature)
+                .filter(
+                    Feature.feature_no == ar.child_feature_no,
+                    func.lower(Feature.feature_type) == 'allele',
+                )
+                .first()
+            )
+            if allele_feature:
+                # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
+                allele_name = allele_feature.feature_name
+                protein_allele = _systematic_name_to_protein_name(allele_name)
 
-        for fa in f.feat_alias:
-            alias = fa.alias
-            if alias and alias.alias_type == 'Other strain feature name':
-                # Only include if alias starts with same prefix as systematic name
-                if systematic_prefix and alias.alias_name.upper().startswith(systematic_prefix):
-                    # Convert to protein format (e.g., C1_13700W_B -> C1_13700wp_b)
-                    protein_allele = _systematic_name_to_protein_name(alias.alias_name)
+                # Get references for this allele (from FEATURE table, GENE_NAME column)
+                allele_refs = add_refs_from_ref_link('FEATURE', 'GENE_NAME', allele_feature.feature_no)
+                if allele_refs:
+                    ref_sup = format_ref_superscript(allele_refs)
+                    allele_with_refs = f'{protein_allele}{ref_sup}'
+                else:
+                    allele_with_refs = protein_allele
 
-                    # Get references for this allele name
-                    alias_refs = add_refs_from_ref_link('FEAT_ALIAS', 'FEAT_ALIAS_NO', fa.feat_alias_no)
-                    if alias_refs:
-                        ref_sup = format_ref_superscript(alias_refs)
-                        allele_with_refs = f'{protein_allele}{ref_sup}'
-                    else:
-                        allele_with_refs = protein_allele
-
-                    allele_names.append(ProteinAlleleNameOut(
-                        allele_name=alias.alias_name,
-                        protein_allele_name=protein_allele,
-                        allele_name_with_refs=allele_with_refs,
-                    ))
+                allele_names.append(ProteinAlleleNameOut(
+                    allele_name=allele_name,
+                    protein_allele_name=protein_allele,
+                    allele_name_with_refs=allele_with_refs,
+                ))
 
         # Section 4: Description
         description = f.headline
