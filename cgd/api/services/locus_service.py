@@ -2308,7 +2308,9 @@ def _get_references_for_entity(
     """Get references linked to an entity via ref_link table"""
     ref_links = (
         db.query(RefLink)
-        .options(joinedload(RefLink.reference))
+        .options(
+            joinedload(RefLink.reference).joinedload(Reference.journal)
+        )
         .filter(
             RefLink.tab_name == tab_name,
             RefLink.col_name == col_name,
@@ -2322,13 +2324,19 @@ def _get_references_for_entity(
         ref = rl.reference
         if ref:
             formatted = _format_citation(ref.citation)
+            # Get journal name if available
+            journal_name = None
+            if ref.journal:
+                journal_name = ref.journal.abbreviation or ref.journal.full_name
             refs.append(ReferenceOutForHistory(
                 reference_no=ref.reference_no,
                 dbxref_id=ref.dbxref_id,
                 citation=ref.citation,
                 formatted_citation=formatted,
-                display_name=formatted,  # Use formatted citation for display
+                display_name=ref.citation,  # Use full citation for display (like GO tab)
                 link=f"/reference/{ref.dbxref_id}",
+                pubmed=ref.pubmed,  # Include PubMed ID for linking
+                journal_name=journal_name,  # Include journal name for formatting
             ))
     return refs
 
