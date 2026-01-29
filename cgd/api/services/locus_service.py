@@ -1674,8 +1674,8 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         # Get external homologs (SGD, POMBASE, etc.)
         ext_homologs = (
             db.query(
-                DbxrefHomology.dbxref_id,
-                DbxrefHomology.description,
+                Dbxref.dbxref_id,
+                Dbxref.description,
                 Dbxref.source,
             )
             .select_from(DbxrefHomology)
