@@ -57,9 +57,9 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
     Generates links for:
     - CGD Paper (internal link to reference page)
     - PubMed (external link to NCBI PubMed)
-    - Access Full Text (if available in ref_url)
-    - Download Datasets (if available in ref_url)
-    - Web Supplement (if available in ref_url)
+    - Access Full Text (if url_type contains "full" and "text", e.g., "Reference full text")
+    - Download Datasets (if url_type contains "reference data", "download", or "dataset")
+    - Reference Supplement (if url_type contains "supplement", e.g., "Reference supplement")
 
     Args:
         ref: Reference object with pubmed and dbxref_id
@@ -105,10 +105,10 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # Web Supplement
-            elif "web" in url_type and "supplement" in url_type:
+            # Reference Supplement / Web Supplement
+            elif "supplement" in url_type:
                 links.append(CitationLink(
-                    name="Web Supplement",
+                    name="Reference Supplement",
                     url=url_obj.url,
                     link_type="external"
                 ))
