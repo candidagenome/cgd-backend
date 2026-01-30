@@ -5,6 +5,7 @@ from cgd.schemas.reference_schema import (
     ReferenceResponse,
     ReferenceOut,
     AuthorOut,
+    CitationLink,
     ReferenceLocusResponse,
     LocusForReference,
     ReferenceGOResponse,
@@ -47,6 +48,76 @@ def _get_organism_info(feature) -> tuple[str, int]:
     if not organism_name:
         organism_name = str(feature.organism_no)
     return organism_name, taxon_id
+
+
+def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
+    """
+    Build citation links for a reference.
+
+    Generates links for:
+    - CGD Paper (internal link to reference page)
+    - PubMed (external link to NCBI PubMed)
+    - Access Full Text (if available in ref_url)
+    - Download Datasets (if available in ref_url)
+    - Web Supplement (if available in ref_url)
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: List of RefUrl objects linked to this reference
+
+    Returns:
+        List of CitationLink objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - use pubmed if available, otherwise dbxref_id
+    if ref.pubmed:
+        cgd_paper_url = f"/reference/{ref.pubmed}"
+    else:
+        cgd_paper_url = f"/reference/{ref.dbxref_id}"
+    links.append(CitationLink(
+        name="CGD Paper",
+        url=cgd_paper_url,
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLink(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table
+    for ref_url in ref_urls:
+        url_obj = ref_url.url
+        if url_obj and url_obj.url:
+            url_type = (url_obj.url_type or "").lower()
+
+            # Access Full Text
+            if "full" in url_type and "text" in url_type:
+                links.append(CitationLink(
+                    name="Access Full Text",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+            # Download Datasets / Reference Data
+            elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                links.append(CitationLink(
+                    name="Download Datasets",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+            # Web Supplement
+            elif "web" in url_type and "supplement" in url_type:
+                links.append(CitationLink(
+                    name="Web Supplement",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+
+    return links
 
 
 def _get_reference_by_identifier(db: Session, identifier: str) -> Reference:
@@ -128,6 +199,9 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
         if url_obj:
             urls.append(url_obj.url)
 
+    # Build citation links (CGD Paper, PubMed, Full Text, etc.)
+    citation_links = _build_citation_links(ref, ref.ref_url)
+
     result = ReferenceOut(
         reference_no=ref.reference_no,
         dbxref_id=ref.dbxref_id,
@@ -145,6 +219,7 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
         authors=authors,
         abstract=abstract_text,
         urls=urls,
+        links=citation_links,
     )
 
     return ReferenceResponse(result=result)
