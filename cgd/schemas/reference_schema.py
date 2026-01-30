@@ -43,6 +43,8 @@ class ReferenceOut(BaseModel):
     abstract: typing.Optional[str] = None
     urls: list[str] = []
     links: list[CitationLink] = []  # Formatted citation links
+    full_text_url: typing.Optional[str] = None  # URL for Reference full text
+    supplement_url: typing.Optional[str] = None  # URL for Reference supplement
 
 
 class ReferenceResponse(BaseModel):

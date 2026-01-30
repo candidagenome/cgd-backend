@@ -22,6 +22,7 @@ from cgd.models.models import (
     RefLink,
     RefProperty,
     RefUrl,
+    Url,
     AuthorEditor,
     Interaction,
     FeatInteract,
@@ -57,9 +58,9 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
     Generates links for:
     - CGD Paper (internal link to reference page)
     - PubMed (external link to NCBI PubMed)
-    - Access Full Text (if available in ref_url)
-    - Download Datasets (if available in ref_url)
-    - Web Supplement (if available in ref_url)
+    - Access Full Text (if url_type contains "linkout", e.g., "Reference LINKOUT")
+    - Download Datasets (if url_type contains "reference data", "download", or "dataset")
+    - Reference Supplement (if url_type contains "supplement", e.g., "Reference supplement")
 
     Args:
         ref: Reference object with pubmed and dbxref_id
@@ -91,8 +92,8 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
         if url_obj and url_obj.url:
             url_type = (url_obj.url_type or "").lower()
 
-            # Access Full Text
-            if "full" in url_type and "text" in url_type:
+            # Access Full Text (url_type = "Reference LINKOUT")
+            if "linkout" in url_type:
                 links.append(CitationLink(
                     name="Access Full Text",
                     url=url_obj.url,
@@ -105,10 +106,10 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # Web Supplement
-            elif "web" in url_type and "supplement" in url_type:
+            # Reference Supplement / Web Supplement
+            elif "supplement" in url_type:
                 links.append(CitationLink(
-                    name="Web Supplement",
+                    name="Reference Supplement",
                     url=url_obj.url,
                     link_type="external"
                 ))
@@ -188,15 +189,35 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
     if abstract_obj:
         abstract_text = abstract_obj.abstract
 
-    # Get URLs from ref_url relationship
+    # Query URLs explicitly from ref_url and url tables
+    ref_url_records = (
+        db.query(RefUrl, Url)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(RefUrl.reference_no == ref.reference_no)
+        .all()
+    )
+
+    # Extract URLs and specific URL types
     urls = []
-    for ref_url in ref.ref_url:
-        url_obj = ref_url.url
-        if url_obj:
+    full_text_url = None
+    supplement_url = None
+    ref_url_list = []  # For building citation links
+    for ref_url_obj, url_obj in ref_url_records:
+        if url_obj and url_obj.url:
             urls.append(url_obj.url)
+            url_type = (url_obj.url_type or "").lower()
+            # Extract full text URL (url_type = "Reference LINKOUT")
+            if "linkout" in url_type:
+                full_text_url = url_obj.url
+            # Extract supplement URL (url_type = "Reference supplement")
+            elif "supplement" in url_type:
+                supplement_url = url_obj.url
+            # Build a simple object for citation links
+            ref_url_obj.url = url_obj
+            ref_url_list.append(ref_url_obj)
 
     # Build citation links (CGD Paper, PubMed, Full Text, etc.)
-    citation_links = _build_citation_links(ref, ref.ref_url)
+    citation_links = _build_citation_links(ref, ref_url_list)
 
     result = ReferenceOut(
         reference_no=ref.reference_no,
@@ -216,6 +237,8 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
         abstract=abstract_text,
         urls=urls,
         links=citation_links,
+        full_text_url=full_text_url,
+        supplement_url=supplement_url,
     )
 
     return ReferenceResponse(result=result)

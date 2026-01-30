@@ -192,8 +192,8 @@ def _build_citation_links_for_locus(ref, ref_urls=None) -> list[CitationLinkForL
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text
-                if "full" in url_type and "text" in url_type:
+                # Access Full Text (url_type = "Reference LINKOUT")
+                if "linkout" in url_type:
                     links.append(CitationLinkForLocus(
                         name="Access Full Text",
                         url=url_obj.url,
@@ -206,10 +206,10 @@ def _build_citation_links_for_locus(ref, ref_urls=None) -> list[CitationLinkForL
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Web Supplement
-                elif "web" in url_type and "supplement" in url_type:
+                # Reference Supplement / Web Supplement
+                elif "supplement" in url_type:
                     links.append(CitationLinkForLocus(
-                        name="Web Supplement",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
@@ -252,8 +252,8 @@ def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkFo
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text
-                if "full" in url_type and "text" in url_type:
+                # Access Full Text (url_type = "Reference LINKOUT")
+                if "linkout" in url_type:
                     links.append(CitationLinkForProtein(
                         name="Access Full Text",
                         url=url_obj.url,
@@ -266,10 +266,10 @@ def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkFo
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Web Supplement
-                elif "web" in url_type and "supplement" in url_type:
+                # Reference Supplement / Web Supplement
+                elif "supplement" in url_type:
                     links.append(CitationLinkForProtein(
-                        name="Web Supplement",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
