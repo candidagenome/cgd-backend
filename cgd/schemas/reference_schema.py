@@ -8,6 +8,15 @@ class ORMSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# --- Citation Links ---
+
+class CitationLink(BaseModel):
+    """Represents a link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", "Access Full Text", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 # --- Basic Reference Info ---
 
 class AuthorOut(BaseModel):
@@ -33,6 +42,7 @@ class ReferenceOut(BaseModel):
     authors: list[AuthorOut] = []
     abstract: typing.Optional[str] = None
     urls: list[str] = []
+    links: list[CitationLink] = []  # Formatted citation links
 
 
 class ReferenceResponse(BaseModel):

@@ -10,12 +10,21 @@ class ORMSchema(BaseModel):
 
 # --- Reference for Protein Page ---
 
+class CitationLinkForProtein(BaseModel):
+    """Link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 class ReferenceForProtein(BaseModel):
     reference_no: int
     pubmed: typing.Optional[int] = None
+    dbxref_id: typing.Optional[str] = None
     citation: str
     title: typing.Optional[str] = None
     year: typing.Optional[int] = None
+    links: list[CitationLinkForProtein] = []  # Citation links
 
 
 # --- Allele Name (Protein-specific) ---
