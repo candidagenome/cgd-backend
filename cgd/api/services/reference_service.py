@@ -70,14 +70,10 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
     """
     links = []
 
-    # CGD Paper link (always present) - use pubmed if available, otherwise dbxref_id
-    if ref.pubmed:
-        cgd_paper_url = f"/reference/{ref.pubmed}"
-    else:
-        cgd_paper_url = f"/reference/{ref.dbxref_id}"
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
     links.append(CitationLink(
         name="CGD Paper",
-        url=cgd_paper_url,
+        url=f"/reference/{ref.dbxref_id}",
         link_type="internal"
     ))
 

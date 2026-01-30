@@ -28,6 +28,7 @@ from cgd.schemas.locus_schema import (
     LocusReferencesResponse,
     ReferencesForOrganism,
     ReferenceForLocus,
+    CitationLinkForLocus,
     LocusSummaryNotesResponse,
     SummaryNotesForOrganism,
     SummaryNoteOut,
@@ -79,6 +80,7 @@ from cgd.schemas.protein_schema import (
     ProteinHomologOut,
     SequenceDetailOut,
     ReferenceForProtein,
+    CitationLinkForProtein,
     AlphaFoldInfo,
 )
 from cgd.schemas.homology_schema import (
@@ -97,6 +99,7 @@ from cgd.models.interaction_model import FeatInteract
 from cgd.models.homology_model import FeatHomology
 from cgd.models.models import (
     RefLink,
+    RefUrl,
     FeatAlias,
     Alias,
     FeatUrl,
@@ -152,6 +155,126 @@ NON_CGD_ORTHOLOG_SOURCES = {
     'AspGD': 'A. nidulans',
     'BROAD_NEUROSPORA': 'N. crassa',
 }
+
+
+def _build_citation_links_for_locus(ref, ref_urls=None) -> list[CitationLinkForLocus]:
+    """
+    Build citation links for a reference in locus context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForLocus objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForLocus(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForLocus(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Access Full Text
+                if "full" in url_type and "text" in url_type:
+                    links.append(CitationLinkForLocus(
+                        name="Access Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Download Datasets / Reference Data
+                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                    links.append(CitationLinkForLocus(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Web Supplement
+                elif "web" in url_type and "supplement" in url_type:
+                    links.append(CitationLinkForLocus(
+                        name="Web Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
+
+
+def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkForProtein]:
+    """
+    Build citation links for a reference in protein context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForProtein objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForProtein(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForProtein(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Access Full Text
+                if "full" in url_type and "text" in url_type:
+                    links.append(CitationLinkForProtein(
+                        name="Access Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Download Datasets / Reference Data
+                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                    links.append(CitationLinkForProtein(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Web Supplement
+                elif "web" in url_type and "supplement" in url_type:
+                    links.append(CitationLinkForProtein(
+                        name="Web Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
 
 
 def _gene_name_to_protein_name(gene_name: str) -> str:
@@ -902,6 +1025,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             all_ref_ids = list(ref_index.keys())
             refs = (
                 db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                 .filter(Reference.dbxref_id.in_(all_ref_ids))
                 .all()
             )
@@ -913,9 +1037,11 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     cited_references.append(ReferenceForLocus(
                         reference_no=ref.reference_no,
                         pubmed=ref.pubmed,
+                        dbxref_id=ref.dbxref_id,
                         citation=ref.citation,
                         title=ref.title,
                         year=ref.year,
+                        links=_build_citation_links_for_locus(ref, ref.ref_url),
                     ))
 
         # Build literature guide URL
@@ -1965,6 +2091,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             for dbxref_id, idx in sorted_refs:
                 ref = (
                     db.query(Reference)
+                    .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                     .filter(Reference.dbxref_id == dbxref_id)
                     .first()
                 )
@@ -1972,9 +2099,11 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     cited_references.append(ReferenceForProtein(
                         reference_no=ref.reference_no,
                         pubmed=ref.pubmed,
+                        dbxref_id=ref.dbxref_id,
                         citation=ref.citation or '',
                         title=ref.title,
                         year=ref.year,
+                        links=_build_citation_links_for_protein(ref, ref.ref_url),
                     ))
 
         # Literature guide URL
@@ -2805,7 +2934,9 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
         # Get references via ref_link
         ref_links = (
             db.query(RefLink)
-            .options(joinedload(RefLink.reference))
+            .options(
+                joinedload(RefLink.reference).joinedload(Reference.ref_url).joinedload(RefUrl.url)
+            )
             .filter(
                 RefLink.tab_name == "FEATURE",
                 RefLink.primary_key == f.feature_no,
@@ -2822,9 +2953,11 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 references.append(ReferenceForLocus(
                     reference_no=ref.reference_no,
                     pubmed=ref.pubmed,
+                    dbxref_id=ref.dbxref_id,
                     citation=ref.citation,
                     title=ref.title,
                     year=ref.year,
+                    links=_build_citation_links_for_locus(ref, ref.ref_url),
                 ))
 
         out[organism_name] = ReferencesForOrganism(

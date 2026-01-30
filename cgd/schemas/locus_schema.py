@@ -226,12 +226,21 @@ class SequenceDetailsResponse(BaseModel):
 
 # --- References ---
 
+class CitationLinkForLocus(BaseModel):
+    """Link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 class ReferenceForLocus(BaseModel):
     reference_no: int
     pubmed: t.Optional[int] = None
+    dbxref_id: t.Optional[str] = None
     citation: str
     title: t.Optional[str] = None
     year: int
+    links: list[CitationLinkForLocus] = []  # Citation links (CGD Paper, PubMed, etc.)
 
 
 class ReferencesForOrganism(BaseModel):
