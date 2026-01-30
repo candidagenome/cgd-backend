@@ -188,12 +188,21 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
     if abstract_obj:
         abstract_text = abstract_obj.abstract
 
-    # Get URLs from ref_url relationship
+    # Get URLs from ref_url relationship and extract specific URL types
     urls = []
+    full_text_url = None
+    supplement_url = None
     for ref_url in ref.ref_url:
         url_obj = ref_url.url
-        if url_obj:
+        if url_obj and url_obj.url:
             urls.append(url_obj.url)
+            url_type = (url_obj.url_type or "").lower()
+            # Extract full text URL (url_type = "Reference full text")
+            if "full" in url_type and "text" in url_type:
+                full_text_url = url_obj.url
+            # Extract supplement URL (url_type = "Reference supplement")
+            elif "supplement" in url_type:
+                supplement_url = url_obj.url
 
     # Build citation links (CGD Paper, PubMed, Full Text, etc.)
     citation_links = _build_citation_links(ref, ref.ref_url)
@@ -216,6 +225,8 @@ def get_reference(db: Session, identifier: str) -> ReferenceResponse:
         abstract=abstract_text,
         urls=urls,
         links=citation_links,
+        full_text_url=full_text_url,
+        supplement_url=supplement_url,
     )
 
     return ReferenceResponse(result=result)
