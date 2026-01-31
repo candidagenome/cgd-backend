@@ -2946,8 +2946,8 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         reciprocal_best_hits = ExternalHomologsSectionOut(by_source=reciprocal_by_source) if reciprocal_by_source else None
 
         # Load phylogenetic tree if available
-        # Use feature_name (systematic name) as the dbid for tree files
-        phylogenetic_tree = _load_phylogenetic_tree(f.feature_name)
+        # Use dbxref_id (Stanford ID like CAL0126527) as the dbid for tree files
+        phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
 
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
