@@ -3046,21 +3046,28 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
 
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
-        # Filter to same organism, exclude alleles, and only include features with current location
-        # (matching Perl check_multi_feature_list behavior)
+        # Filter to match Perl _get_gene_list: same organism, current location, current seq,
+        # current genome version, and specific feature types (ORF, etc.)
         other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
 
         if ref_nos:
+            # Valid feature types for locus page (matching Perl web_metadata query)
+            valid_feature_types = ['ORF', 'blocked_reading_frame', 'pseudogene',
+                                   'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+                                   'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene']
+
             other_genes_query = (
                 db.query(RefProperty.reference_no, Feature.gene_name, Feature.feature_name)
                 .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
                 .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
                 .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+                .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
                 .filter(RefProperty.reference_no.in_(ref_nos))
                 .filter(Feature.feature_no != f.feature_no)  # Exclude current feature
                 .filter(Feature.organism_no == f.organism_no)  # Same organism only
-                .filter(func.lower(Feature.feature_type) != 'allele')  # Exclude alleles
+                .filter(Feature.feature_type.in_(valid_feature_types))  # Only valid feature types
                 .filter(FeatLocation.is_loc_current == 'Y')  # Only features with current location
+                .filter(Seq.is_seq_current == 'Y')  # Only current sequences
                 .distinct()
                 .all()
             )
