@@ -29,6 +29,8 @@ from cgd.schemas.locus_schema import (
     ReferencesForOrganism,
     ReferenceForLocus,
     CitationLinkForLocus,
+    LiteratureTopicOut,
+    LiteratureTopicGroupOut,
     LocusSummaryNotesResponse,
     SummaryNotesForOrganism,
     SummaryNoteOut,
@@ -100,6 +102,8 @@ from cgd.models.homology_model import FeatHomology
 from cgd.models.models import (
     RefLink,
     RefUrl,
+    RefProperty,
+    RefpropFeat,
     FeatAlias,
     Alias,
     FeatUrl,
@@ -127,6 +131,10 @@ from cgd.models.models import (
     Experiment,
     ExptExptprop,
     ExptProperty,
+    CvtermGroup,
+    CvtermRelationship,
+    CvTerm,
+    Cv,
 )
 
 
@@ -2904,6 +2912,8 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
 def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
     """
     Query references citing this locus, grouped by organism.
+    Uses RefProperty and RefpropFeat tables (like Perl LiteratureGuide.pm)
+    to get all references associated with literature topics for this feature.
     """
     n = name.strip()
     features = (
@@ -2925,45 +2935,204 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
 
+    # Get all literature topic parent-child relationships from cvterm_relationship table
+    # Query (like Perl): SELECT CT1.term_name (parent), CT2.term_name (child)
+    #        FROM cv_term CT1, cv_term CT2, cvterm_relationship CR, cv CV
+    #        WHERE CR.child_cv_term_no = CT2.cv_term_no
+    #        AND CR.parent_cv_term_no = CT1.cv_term_no
+    #        AND CT1.cv_no = CV.cv_no AND CV.cv_name = 'literature_topic'
+    from sqlalchemy.orm import aliased
+    ParentTerm = aliased(CvTerm)
+    ChildTerm = aliased(CvTerm)
+
+    topic_relations_query = (
+        db.query(ParentTerm.term_name.label('parent'), ChildTerm.term_name.label('child'))
+        .join(CvtermRelationship, CvtermRelationship.parent_cv_term_no == ParentTerm.cv_term_no)
+        .join(ChildTerm, CvtermRelationship.child_cv_term_no == ChildTerm.cv_term_no)
+        .join(Cv, ParentTerm.cv_no == Cv.cv_no)
+        .filter(Cv.cv_name == 'literature_topic')
+        .all()
+    )
+
+    # Build a mapping of parent_topic -> [child_topics]
+    all_topic_groups: dict[str, list[str]] = {}
+    for parent, child in topic_relations_query:
+        if parent not in all_topic_groups:
+            all_topic_groups[parent] = []
+        all_topic_groups[parent].append(child)
+
+    # Get max PubMed search date (global, not per-locus)
+    # SELECT max(date_created) FROM reference WHERE source = 'PubMed script'
+    max_pubmed_date_result = (
+        db.query(func.max(Reference.date_created))
+        .filter(Reference.source == 'PubMed script')
+        .scalar()
+    )
+
     out: dict[str, ReferencesForOrganism] = {}
 
     for f in features:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
-        # Get references via ref_link
-        ref_links = (
-            db.query(RefLink)
+        # Get references via RefProperty and RefpropFeat tables
+        # This matches the Perl LiteratureGuide query:
+        # SELECT distinct REF_PROPERTY.reference_no, REF_PROPERTY.property_value, REFPROP_FEAT.feature_no
+        # FROM REF_PROPERTY, REFPROP_FEAT
+        # WHERE REF_PROPERTY.ref_property_no = REFPROP_FEAT.ref_property_no(+)
+        # AND REFPROP_FEAT.feature_no = ?
+        ref_props = (
+            db.query(RefProperty, Reference, RefpropFeat.date_created)
+            .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+            .join(Reference, RefProperty.reference_no == Reference.reference_no)
             .options(
-                joinedload(RefLink.reference).joinedload(Reference.ref_url).joinedload(RefUrl.url)
+                joinedload(Reference.ref_url).joinedload(RefUrl.url)
             )
-            .filter(
-                RefLink.tab_name == "FEATURE",
-                RefLink.primary_key == f.feature_no,
-            )
+            .filter(RefpropFeat.feature_no == f.feature_no)
             .all()
         )
 
+        # Collect unique references with their topics
         references = []
         seen_refs = set()
-        for rl in ref_links:
-            ref = rl.reference
-            if ref and ref.reference_no not in seen_refs:
-                seen_refs.add(ref.reference_no)
-                references.append(ReferenceForLocus(
-                    reference_no=ref.reference_no,
-                    pubmed=ref.pubmed,
-                    dbxref_id=ref.dbxref_id,
-                    citation=ref.citation,
-                    title=ref.title,
-                    year=ref.year,
-                    links=_build_citation_links_for_locus(ref, ref.ref_url),
+        ref_topics: dict[int, list[str]] = {}  # reference_no -> list of topics
+        topic_counts: dict[str, int] = {}  # topic_name -> count of refs with this topic
+        max_curated_date = None
+
+        for rp, ref, refprop_feat_date in ref_props:
+            if ref:
+                # Track topics for each reference
+                if ref.reference_no not in ref_topics:
+                    ref_topics[ref.reference_no] = []
+                if rp.property_value:
+                    ref_topics[ref.reference_no].append(rp.property_value)
+                    # Count topics
+                    if rp.property_value not in topic_counts:
+                        topic_counts[rp.property_value] = 0
+                    topic_counts[rp.property_value] += 1
+
+                    # Track max curated date (for curated refs, not 'Not yet curated')
+                    if rp.property_value != 'Not yet curated' and refprop_feat_date:
+                        if max_curated_date is None or refprop_feat_date > max_curated_date:
+                            max_curated_date = refprop_feat_date
+
+                # Add reference if not seen
+                if ref.reference_no not in seen_refs:
+                    seen_refs.add(ref.reference_no)
+                    references.append({
+                        'ref': ref,
+                        'reference_no': ref.reference_no,
+                    })
+
+        # Get curation status properties (High Priority, Not yet curated) that might not be in refprop_feat
+        # These are stored in ref_property without a feature link
+        ref_nos = list(seen_refs)
+        if ref_nos:
+            curation_status_query = (
+                db.query(RefProperty.reference_no, RefProperty.property_value)
+                .filter(RefProperty.reference_no.in_(ref_nos))
+                .filter(RefProperty.property_value.in_(['High Priority', 'Not yet curated']))
+                .all()
+            )
+
+            for ref_no, prop_value in curation_status_query:
+                if ref_no in ref_topics:
+                    if prop_value not in ref_topics[ref_no]:
+                        ref_topics[ref_no].append(prop_value)
+                        # Update topic counts
+                        if prop_value not in topic_counts:
+                            topic_counts[prop_value] = 0
+                        topic_counts[prop_value] += 1
+
+        # Get other genes for all references in one query
+        # Query: Find all features associated with these references via refprop_feat
+        # Filter to match Perl _get_gene_list: same organism, current location, current seq,
+        # same seq source, and specific feature types (ORF, etc.)
+        other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
+
+        # Get the seq_source for current feature
+        current_seq_source = (
+            db.query(Seq.source)
+            .join(FeatLocation, Seq.seq_no == FeatLocation.root_seq_no)
+            .filter(FeatLocation.feature_no == f.feature_no)
+            .filter(FeatLocation.is_loc_current == 'Y')
+            .filter(Seq.is_seq_current == 'Y')
+            .first()
+        )
+        seq_source = current_seq_source[0] if current_seq_source else None
+
+        if ref_nos and seq_source:
+            # Valid feature types for locus page (matching Perl web_metadata query)
+            valid_feature_types = ['ORF', 'blocked_reading_frame', 'pseudogene',
+                                   'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+                                   'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene']
+
+            other_genes_query = (
+                db.query(RefProperty.reference_no, Feature.gene_name, Feature.feature_name)
+                .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+                .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+                .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+                .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+                .filter(RefProperty.reference_no.in_(ref_nos))
+                .filter(Feature.feature_no != f.feature_no)  # Exclude current feature
+                .filter(Feature.organism_no == f.organism_no)  # Same organism only
+                .filter(Feature.feature_type.in_(valid_feature_types))  # Only valid feature types
+                .filter(FeatLocation.is_loc_current == 'Y')  # Only features with current location
+                .filter(Seq.is_seq_current == 'Y')  # Only current sequences
+                .filter(Seq.source == seq_source)  # Same seq source as current feature
+                .distinct()
+                .all()
+            )
+
+            for ref_no, gene_name, feature_name in other_genes_query:
+                if ref_no not in other_genes_map:
+                    other_genes_map[ref_no] = []
+                display_name = gene_name or feature_name
+                if display_name and display_name not in other_genes_map[ref_no]:
+                    other_genes_map[ref_no].append(display_name)
+
+        # Build final reference list with topics and other genes
+        final_references = []
+        for ref_data in references:
+            ref = ref_data['ref']
+            topics = ref_topics.get(ref.reference_no, [])
+            other_genes = other_genes_map.get(ref.reference_no, [])
+            final_references.append(ReferenceForLocus(
+                reference_no=ref.reference_no,
+                pubmed=ref.pubmed,
+                dbxref_id=ref.dbxref_id,
+                citation=ref.citation,
+                title=ref.title,
+                year=ref.year,
+                links=_build_citation_links_for_locus(ref, ref.ref_url),
+                topics=list(set(topics)),  # Deduplicate topics
+                other_genes=sorted(other_genes),  # Sort for consistent display
+            ))
+
+        # Build topic groups with counts (only include topics that have refs)
+        topic_groups_out = []
+        for group_name, topics in sorted(all_topic_groups.items()):
+            group_topics = []
+            for topic_name in sorted(topics):
+                count = topic_counts.get(topic_name, 0)
+                if count > 0:
+                    group_topics.append(LiteratureTopicOut(
+                        topic_name=topic_name,
+                        count=count,
+                    ))
+            if group_topics:
+                topic_groups_out.append(LiteratureTopicGroupOut(
+                    group_name=group_name,
+                    topics=group_topics,
                 ))
 
         out[organism_name] = ReferencesForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
-            references=references,
+            references=final_references,
+            topic_groups=topic_groups_out,
+            last_curated_date=max_curated_date,
+            last_pubmed_search_date=max_pubmed_date_result,
         )
 
     return LocusReferencesResponse(results=out)
