@@ -13,6 +13,13 @@ class PhenotypeTerm(BaseModel):
     link: typing.Optional[str] = None
 
 
+class CitationLinkForPhenotype(BaseModel):
+    """Link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", "Full Text", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 class ReferenceForAnnotation(BaseModel):
     """Reference with full citation data for annotation display"""
     reference_no: typing.Optional[int] = None
@@ -21,6 +28,7 @@ class ReferenceForAnnotation(BaseModel):
     citation: typing.Optional[str] = None  # Full citation text
     journal_name: typing.Optional[str] = None
     year: typing.Optional[int] = None
+    links: list[CitationLinkForPhenotype] = []  # Citation links (CGD Paper, PubMed, Full Text, etc.)
 
 
 class ExperimentProperty(BaseModel):

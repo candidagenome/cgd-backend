@@ -291,6 +291,13 @@ class LocusSummaryNotesResponse(BaseModel):
 
 # --- Locus History ---
 
+class CitationLinkForHistory(BaseModel):
+    """Link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", "Full Text", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 class ReferenceOutForHistory(BaseModel):
     """Reference citation for history display"""
     reference_no: int
@@ -301,6 +308,7 @@ class ReferenceOutForHistory(BaseModel):
     link: t.Optional[str] = None  # URL link to reference
     pubmed: t.Optional[int] = None  # PubMed ID for linking to PubMed
     journal_name: t.Optional[str] = None  # Journal name for citation formatting
+    links: list[CitationLinkForHistory] = []  # Citation links (CGD Paper, PubMed, Full Text, etc.)
 
 
 class ContactOut(BaseModel):
