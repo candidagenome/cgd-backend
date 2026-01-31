@@ -29,6 +29,8 @@ from cgd.schemas.locus_schema import (
     ReferencesForOrganism,
     ReferenceForLocus,
     CitationLinkForLocus,
+    LiteratureTopicOut,
+    LiteratureTopicGroupOut,
     LocusSummaryNotesResponse,
     SummaryNotesForOrganism,
     SummaryNoteOut,
@@ -129,6 +131,9 @@ from cgd.models.models import (
     Experiment,
     ExptExptprop,
     ExptProperty,
+    CvtermGroup,
+    CvTerm,
+    Cv,
 )
 
 
@@ -2929,6 +2934,33 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
 
+    # Get all literature topic groups from cvterm_group table
+    # Query: SELECT group_name, term_name FROM cv_term, cvterm_group, cv
+    #        WHERE cvterm_group.cv_term_no = cv_term.cv_term_no
+    #        AND cv_term.cv_no = cv.cv_no AND cv.cv_name = 'literature_topic'
+    topic_groups_query = (
+        db.query(CvtermGroup.group_name, CvTerm.term_name)
+        .join(CvTerm, CvtermGroup.cv_term_no == CvTerm.cv_term_no)
+        .join(Cv, CvTerm.cv_no == Cv.cv_no)
+        .filter(Cv.cv_name == 'literature_topic')
+        .all()
+    )
+
+    # Build a mapping of group_name -> [topic_names]
+    all_topic_groups: dict[str, list[str]] = {}
+    for group_name, term_name in topic_groups_query:
+        if group_name not in all_topic_groups:
+            all_topic_groups[group_name] = []
+        all_topic_groups[group_name].append(term_name)
+
+    # Get max PubMed search date (global, not per-locus)
+    # SELECT max(date_created) FROM reference WHERE source = 'PubMed script'
+    max_pubmed_date_result = (
+        db.query(func.max(Reference.date_created))
+        .filter(Reference.source == 'PubMed script')
+        .scalar()
+    )
+
     out: dict[str, ReferencesForOrganism] = {}
 
     for f in features:
@@ -2942,7 +2974,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
         # WHERE REF_PROPERTY.ref_property_no = REFPROP_FEAT.ref_property_no(+)
         # AND REFPROP_FEAT.feature_no = ?
         ref_props = (
-            db.query(RefProperty, Reference)
+            db.query(RefProperty, Reference, RefpropFeat.date_created)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
             .join(Reference, RefProperty.reference_no == Reference.reference_no)
             .options(
@@ -2956,14 +2988,25 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
         references = []
         seen_refs = set()
         ref_topics: dict[int, list[str]] = {}  # reference_no -> list of topics
+        topic_counts: dict[str, int] = {}  # topic_name -> count of refs with this topic
+        max_curated_date = None
 
-        for rp, ref in ref_props:
+        for rp, ref, refprop_feat_date in ref_props:
             if ref:
                 # Track topics for each reference
                 if ref.reference_no not in ref_topics:
                     ref_topics[ref.reference_no] = []
                 if rp.property_value:
                     ref_topics[ref.reference_no].append(rp.property_value)
+                    # Count topics
+                    if rp.property_value not in topic_counts:
+                        topic_counts[rp.property_value] = 0
+                    topic_counts[rp.property_value] += 1
+
+                    # Track max curated date (for curated refs, not 'Not yet curated')
+                    if rp.property_value != 'Not yet curated' and refprop_feat_date:
+                        if max_curated_date is None or refprop_feat_date > max_curated_date:
+                            max_curated_date = refprop_feat_date
 
                 # Add reference if not seen
                 if ref.reference_no not in seen_refs:
@@ -2989,10 +3032,30 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 topics=list(set(topics)),  # Deduplicate topics
             ))
 
+        # Build topic groups with counts (only include topics that have refs)
+        topic_groups_out = []
+        for group_name, topics in sorted(all_topic_groups.items()):
+            group_topics = []
+            for topic_name in sorted(topics):
+                count = topic_counts.get(topic_name, 0)
+                if count > 0:
+                    group_topics.append(LiteratureTopicOut(
+                        topic_name=topic_name,
+                        count=count,
+                    ))
+            if group_topics:
+                topic_groups_out.append(LiteratureTopicGroupOut(
+                    group_name=group_name,
+                    topics=group_topics,
+                ))
+
         out[organism_name] = ReferencesForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             references=final_references,
+            topic_groups=topic_groups_out,
+            last_curated_date=max_curated_date,
+            last_pubmed_search_date=max_pubmed_date_result,
         )
 
     return LocusReferencesResponse(results=out)

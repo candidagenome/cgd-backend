@@ -244,10 +244,25 @@ class ReferenceForLocus(BaseModel):
     topics: list[str] = []  # Literature topics (Gene Ontology, Phenotype, etc.)
 
 
+class LiteratureTopicOut(BaseModel):
+    """A literature topic with its count for this locus"""
+    topic_name: str
+    count: int
+
+
+class LiteratureTopicGroupOut(BaseModel):
+    """A group of literature topics"""
+    group_name: str
+    topics: list[LiteratureTopicOut] = []
+
+
 class ReferencesForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     references: list[ReferenceForLocus] = []
+    topic_groups: list[LiteratureTopicGroupOut] = []  # Topics organized by group
+    last_curated_date: t.Optional[datetime.datetime] = None
+    last_pubmed_search_date: t.Optional[datetime.datetime] = None
 
 
 class LocusReferencesResponse(BaseModel):
