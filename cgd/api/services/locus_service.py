@@ -2624,6 +2624,18 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 # Add external orthologs (SGD, EnsemblFungi) to the cluster table
                 # Use the eager-loaded relationship from homology_group
                 # dh.name stores the organism name (matches Perl behavior in CGOB.pm)
+
+                # "Aliens" are excluded from the cluster table (from Perl CGOB.pm)
+                # These are non-standard strains not in the main CGOB analysis
+                alien_organisms = {
+                    'Candida tenuis NRRL Y-1498',
+                    'Pichia stipitis Pignal',
+                    'Spathaspora passalidarum NRRL Y-27907',
+                    'Candida metapsilosis',
+                    'Candida orthopsilosis NEW ASSEMBLY',
+                    'Candida tropicalis NEW ASSEMBLY',
+                }
+
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
                     if not dbxref:
@@ -2633,6 +2645,10 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     # SELECT d.dbxref_id, dh.name where dh.name is used as organism)
                     ext_org = dh.name or ''
                     ext_org = ext_org.strip()
+
+                    # Skip "alien" organisms (matches Perl FormatHomolog.pm behavior)
+                    if ext_org in alien_organisms:
+                        continue
 
                     # Determine source based on organism name (matching Perl CGOB.pm)
                     # SGD = Saccharomyces cerevisiae, EnsemblFungi = non-CGD strains
