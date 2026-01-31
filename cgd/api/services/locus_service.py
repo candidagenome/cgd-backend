@@ -2999,9 +2999,6 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
             db.query(RefProperty, Reference, RefpropFeat.date_created)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
             .join(Reference, RefProperty.reference_no == Reference.reference_no)
-            .options(
-                joinedload(Reference.ref_url).joinedload(RefUrl.url)
-            )
             .filter(RefpropFeat.feature_no == f.feature_no)
             .all()
         )
@@ -3058,6 +3055,20 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                             topic_counts[prop_value] = 0
                         topic_counts[prop_value] += 1
 
+        # Load ref_urls for all references (Full Text links, supplements, etc.)
+        ref_url_map: dict[int, list] = {}  # reference_no -> list of RefUrl objects
+        if ref_nos:
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(ref_nos))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
+
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
         # Filter to match Perl _get_gene_list: same organism, current location, current seq,
@@ -3111,6 +3122,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
             ref = ref_data['ref']
             topics = ref_topics.get(ref.reference_no, [])
             other_genes = other_genes_map.get(ref.reference_no, [])
+            ref_urls = ref_url_map.get(ref.reference_no, [])
             final_references.append(ReferenceForLocus(
                 reference_no=ref.reference_no,
                 pubmed=ref.pubmed,
@@ -3118,7 +3130,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 citation=ref.citation,
                 title=ref.title,
                 year=ref.year,
-                links=_build_citation_links_for_locus(ref, ref.ref_url),
+                links=_build_citation_links_for_locus(ref, ref_urls),
                 topics=list(set(topics)),  # Deduplicate topics
                 other_genes=sorted(other_genes),  # Sort for consistent display
             ))
