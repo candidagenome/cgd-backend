@@ -2647,6 +2647,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 # Add external orthologs (SGD, EnsemblFungi) to the cluster table
                 # Use the eager-loaded relationship from homology_group
                 # dh.name stores the organism name (matches Perl behavior in CGOB.pm)
+                # Order: CGD first (already added), then SGD, then EnsemblFungi
 
                 # "Aliens" are excluded from the cluster table (from Perl CGOB.pm)
                 # These are non-standard strains not in the main CGOB analysis
@@ -2658,6 +2659,10 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     'Candida orthopsilosis NEW ASSEMBLY',
                     'Candida tropicalis NEW ASSEMBLY',
                 }
+
+                # Collect SGD and EnsemblFungi orthologs separately for ordering
+                sgd_orthologs = []
+                ensembl_orthologs = []
 
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
@@ -2687,19 +2692,31 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             ext_seq_id = f"{sgd_gene_name}/{dbxref.dbxref_id}"
                         if sgd_status:
                             ext_status = sgd_status.upper()
+                        sgd_orthologs.append(OrthologOut(
+                            sequence_id=ext_seq_id,
+                            feature_name=dbxref.dbxref_id,
+                            organism_name=ext_org,
+                            source=ext_source,
+                            status=ext_status,
+                            is_query=False,
+                            url=ext_url,
+                        ))
                     else:
                         ext_source = 'EnsemblFungi'
                         ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
+                        ensembl_orthologs.append(OrthologOut(
+                            sequence_id=ext_seq_id,
+                            feature_name=dbxref.dbxref_id,
+                            organism_name=ext_org,
+                            source=ext_source,
+                            status=ext_status,
+                            is_query=False,
+                            url=ext_url,
+                        ))
 
-                    orthologs.append(OrthologOut(
-                        sequence_id=ext_seq_id,
-                        feature_name=dbxref.dbxref_id,
-                        organism_name=ext_org,
-                        source=ext_source,
-                        status=ext_status,
-                        is_query=False,
-                        url=ext_url,
-                    ))
+                # Add SGD orthologs first (after CGD), then EnsemblFungi
+                orthologs.extend(sgd_orthologs)
+                orthologs.extend(ensembl_orthologs)
 
                 # Build CGOB cluster URL using orf19 identifier
                 cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={orf19_id}"
