@@ -2099,6 +2099,15 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 ref_str = format_ref_superscript(headline_refs, use_parentheses=True)
                 description_with_refs = f'{description} {ref_str}'
 
+        # Section 4b: Name Description
+        name_description = f.name_description
+        name_description_with_refs = name_description or ""
+        if name_description:
+            name_desc_refs = add_refs_from_ref_link('FEATURE', 'NAME_DESCRIPTION', f.feature_no)
+            if name_desc_refs:
+                ref_str = format_ref_superscript(name_desc_refs)
+                name_description_with_refs = f'{name_description}{ref_str}'
+
         # Section 5: Experimental Observations (from protein_detail with specific groups)
         experimental_observations = []
 
@@ -2374,6 +2383,8 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             allele_names=allele_names,
             description=description,
             description_with_refs=description_with_refs if description_with_refs else None,
+            name_description=name_description,
+            name_description_with_refs=name_description_with_refs if name_description_with_refs else None,
             experimental_observations=experimental_observations,
             structural_info=structural_info,
             protein_info=protein_info,
