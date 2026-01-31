@@ -2613,17 +2613,28 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                         ))
 
-                # Add only SGD orthologs (S. cerevisiae) to the cluster table
-                # Other external sources are displayed in separate sections
+                # Add SGD and EnsemblFungi orthologs to the cluster table
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
-                    if dbxref and dbxref.source == 'SGD':
-                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                    if dbxref:
+                        ext_source = dbxref.source or ''
+                        ext_url = None
+                        ext_org = dbxref.description or ext_source
+
+                        if ext_source == 'SGD':
+                            ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                            ext_org = 'Saccharomyces cerevisiae S288C'
+                        elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
+                            ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
+                        else:
+                            # Skip other sources - they're shown in separate sections
+                            continue
+
                         orthologs.append(OrthologOut(
                             sequence_id=dbxref.dbxref_id,
                             feature_name=dbxref.dbxref_id,
-                            organism_name='Saccharomyces cerevisiae S288C',
-                            source='SGD',
+                            organism_name=ext_org,
+                            source=ext_source,
                             status=None,
                             is_query=False,
                             url=ext_url,
