@@ -2545,6 +2545,25 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                         return f"{gene_name}/{feature_name}"
                     return feature_name
 
+                # Get orf19 identifier for CGOB link (Assembly 19/21 identifier)
+                # For Assembly 22 features, look up via feat_relationship
+                orf19_id = f.feature_name  # Default to current feature name
+                orf19_row = (
+                    db.query(Feature.feature_name)
+                    .join(
+                        FeatRelationship,
+                        Feature.feature_no == FeatRelationship.child_feature_no
+                    )
+                    .filter(
+                        FeatRelationship.parent_feature_no == f.feature_no,
+                        FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                        FeatRelationship.rank == 3,
+                    )
+                    .first()
+                )
+                if orf19_row:
+                    orf19_id = orf19_row[0]
+
                 # Add query gene first
                 query_status = None
                 qualifier_row = (
@@ -2567,7 +2586,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     is_query=True,
                 ))
 
-                # Add other CGD orthologs
+                # Add other CGD orthologs (only from database strains, not "aliens")
                 for other_fh in hg.feat_homology:
                     other_feat = other_fh.feature
                     if other_feat and other_feat.feature_no != f.feature_no:
@@ -2594,34 +2613,24 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                         ))
 
-                # Add external orthologs (SGD, EnsemblFungi, etc.)
+                # Add only SGD orthologs (S. cerevisiae) to the cluster table
+                # Other external sources are displayed in separate sections
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
-                    if dbxref:
-                        ext_source = dbxref.source or 'External'
-                        ext_org = dbxref.description or ext_source
-                        ext_url = None
-
-                        # Build URL for external orthologs
-                        if ext_source == 'SGD':
-                            ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
-                        elif ext_source == 'POMBASE':
-                            ext_url = f"https://www.pombase.org/gene/{dbxref.dbxref_id}"
-                        elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
-                            ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
-
+                    if dbxref and dbxref.source == 'SGD':
+                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
                         orthologs.append(OrthologOut(
                             sequence_id=dbxref.dbxref_id,
                             feature_name=dbxref.dbxref_id,
-                            organism_name=ext_org,
-                            source=ext_source,
+                            organism_name='Saccharomyces cerevisiae S288C',
+                            source='SGD',
                             status=None,
                             is_query=False,
                             url=ext_url,
                         ))
 
-                # Build cluster URL and download links
-                cluster_url = f"/cgi-bin/homolog/homologTab.pl?locus={f.feature_name}"
+                # Build CGOB cluster URL using orf19 identifier
+                cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={orf19_id}"
                 cluster_id = hg.homology_group_id or f.feature_name
 
                 download_links = [
