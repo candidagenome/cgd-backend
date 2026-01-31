@@ -2458,8 +2458,6 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     Query homology group data for each feature matching the locus name,
     grouped by organism.
     """
-    from cgd.models.models import DbxrefHomology
-
     n = name.strip()
     features = (
         db.query(Feature)
@@ -2623,28 +2621,27 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                         ))
 
-                # Add SGD and EnsemblFungi orthologs to the cluster table
-                # Explicitly query for external orthologs linked to this homology group
-                external_orthologs = (
-                    db.query(DbxrefHomology, Dbxref)
-                    .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
-                    .filter(DbxrefHomology.homology_group_no == hg.homology_group_no)
-                    .all()
-                )
-
-                for dh, dbxref in external_orthologs:
-                    ext_source = dbxref.source or ''
-                    ext_url = None
-                    ext_org = dbxref.description or ext_source
-
-                    if ext_source == 'SGD':
-                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
-                        ext_org = 'Saccharomyces cerevisiae S288C'
-                    elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
-                        ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
-                    else:
-                        # Skip other sources - they're shown in separate sections
+                # Add external orthologs (SGD, EnsemblFungi) to the cluster table
+                # Use the eager-loaded relationship from homology_group
+                # dh.name stores the organism name (matches Perl behavior in CGOB.pm)
+                for dh in hg.dbxref_homology:
+                    dbxref = dh.dbxref
+                    if not dbxref:
                         continue
+
+                    # dh.name stores the organism name (from Perl CGOB.pm SQL:
+                    # SELECT d.dbxref_id, dh.name where dh.name is used as organism)
+                    ext_org = dh.name or ''
+                    ext_org = ext_org.strip()
+
+                    # Determine source based on organism name (matching Perl CGOB.pm)
+                    # SGD = Saccharomyces cerevisiae, EnsemblFungi = non-CGD strains
+                    if 'Saccharomyces cerevisiae' in ext_org:
+                        ext_source = 'SGD'
+                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                    else:
+                        ext_source = 'EnsemblFungi'
+                        ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
 
                     orthologs.append(OrthologOut(
                         sequence_id=dbxref.dbxref_id,
