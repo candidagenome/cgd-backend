@@ -55,6 +55,7 @@ from cgd.schemas.go_schema import (
     GOTerm,
     GOEvidence,
     ReferenceForAnnotation as GORefForAnnotation,
+    CitationLinkForGO,
 )
 from cgd.schemas.phenotype_schema import (
     PhenotypeDetailsResponse,
@@ -194,30 +195,99 @@ def _build_citation_links_for_locus(ref, ref_urls=None) -> list[CitationLinkForL
         ))
 
     # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
     if ref_urls:
         for ref_url in ref_urls:
             url_obj = ref_url.url
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text (url_type = "Reference LINKOUT")
-                if "linkout" in url_type:
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
                     links.append(CitationLinkForLocus(
-                        name="Access Full Text",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Download Datasets / Reference Data
-                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
                     links.append(CitationLinkForLocus(
                         name="Download Datasets",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Reference Supplement / Web Supplement
-                elif "supplement" in url_type:
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                # This includes: Reference LINKOUT, Reference full text, and any others
+                else:
                     links.append(CitationLinkForLocus(
+                        name="Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
+
+
+def _build_citation_links_for_go(ref, ref_urls=None) -> list[CitationLinkForGO]:
+    """
+    Build citation links for a reference in GO annotation context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForGO objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForGO(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForGO(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
+                    links.append(CitationLinkForGO(
                         name="Reference Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
+                    links.append(CitationLinkForGO(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
+                    links.append(CitationLinkForGO(
+                        name="Full Text",
                         url=url_obj.url,
                         link_type="external"
                     ))
@@ -254,30 +324,34 @@ def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkFo
         ))
 
     # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
     if ref_urls:
         for ref_url in ref_urls:
             url_obj = ref_url.url
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text (url_type = "Reference LINKOUT")
-                if "linkout" in url_type:
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
                     links.append(CitationLinkForProtein(
-                        name="Access Full Text",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Download Datasets / Reference Data
-                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
                     links.append(CitationLinkForProtein(
                         name="Download Datasets",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Reference Supplement / Web Supplement
-                elif "supplement" in url_type:
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
                     links.append(CitationLinkForProtein(
-                        name="Reference Supplement",
+                        name="Full Text",
                         url=url_obj.url,
                         link_type="external"
                     ))
@@ -1333,6 +1407,29 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
 
     out: dict[str, GODetailsForOrganism] = {}
 
+    # First pass: collect all reference_nos from all GO annotations
+    all_ref_nos = set()
+    for f in features:
+        for ga in f.go_annotation:
+            for gr in ga.go_ref:
+                if gr.reference:
+                    all_ref_nos.add(gr.reference.reference_no)
+
+    # Load ref_urls for all references in one query
+    ref_url_map: dict[int, list] = {}
+    if all_ref_nos:
+        ref_url_query = (
+            db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
+            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
+            .all()
+        )
+        for ref_url in ref_url_query:
+            if ref_url.reference_no not in ref_url_map:
+                ref_url_map[ref_url.reference_no] = []
+            ref_url_map[ref_url.reference_no].append(ref_url)
+
+    # Second pass: build annotations with links
     for f in features:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
@@ -1405,11 +1502,12 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 else:
                     qualifier_str = ', '.join(sorted(qualifiers))
 
-            # Get references from go_ref relationship with full citation data
+            # Get references from go_ref relationship with full citation data and links
             references = []
             for gr in ga.go_ref:
                 ref = gr.reference
                 if ref:
+                    ref_urls = ref_url_map.get(ref.reference_no, [])
                     references.append(GORefForAnnotation(
                         reference_no=ref.reference_no,
                         pubmed=ref.pubmed,
@@ -1417,6 +1515,7 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                         citation=ref.citation,
                         journal_name=ref.journal.full_name if ref.journal else None,
                         year=ref.year,
+                        links=_build_citation_links_for_go(ref, ref_urls),
                     ))
 
             # Format date_created
@@ -2999,9 +3098,6 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
             db.query(RefProperty, Reference, RefpropFeat.date_created)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
             .join(Reference, RefProperty.reference_no == Reference.reference_no)
-            .options(
-                joinedload(Reference.ref_url).joinedload(RefUrl.url)
-            )
             .filter(RefpropFeat.feature_no == f.feature_no)
             .all()
         )
@@ -3058,6 +3154,20 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                             topic_counts[prop_value] = 0
                         topic_counts[prop_value] += 1
 
+        # Load ref_urls for all references (Full Text links, supplements, etc.)
+        ref_url_map: dict[int, list] = {}  # reference_no -> list of RefUrl objects
+        if ref_nos:
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(ref_nos))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
+
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
         # Filter to match Perl _get_gene_list: same organism, current location, current seq,
@@ -3111,6 +3221,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
             ref = ref_data['ref']
             topics = ref_topics.get(ref.reference_no, [])
             other_genes = other_genes_map.get(ref.reference_no, [])
+            ref_urls = ref_url_map.get(ref.reference_no, [])
             final_references.append(ReferenceForLocus(
                 reference_no=ref.reference_no,
                 pubmed=ref.pubmed,
@@ -3118,7 +3229,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 citation=ref.citation,
                 title=ref.title,
                 year=ref.year,
-                links=_build_citation_links_for_locus(ref, ref.ref_url),
+                links=_build_citation_links_for_locus(ref, ref_urls),
                 topics=list(set(topics)),  # Deduplicate topics
                 other_genes=sorted(other_genes),  # Sort for consistent display
             ))
