@@ -3024,9 +3024,28 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                         'reference_no': ref.reference_no,
                     })
 
+        # Get curation status properties (High Priority, Not yet curated) that might not be in refprop_feat
+        # These are stored in ref_property without a feature link
+        ref_nos = list(seen_refs)
+        if ref_nos:
+            curation_status_query = (
+                db.query(RefProperty.reference_no, RefProperty.property_value)
+                .filter(RefProperty.reference_no.in_(ref_nos))
+                .filter(RefProperty.property_value.in_(['High Priority', 'Not yet curated']))
+                .all()
+            )
+
+            for ref_no, prop_value in curation_status_query:
+                if ref_no in ref_topics:
+                    if prop_value not in ref_topics[ref_no]:
+                        ref_topics[ref_no].append(prop_value)
+                        # Update topic counts
+                        if prop_value not in topic_counts:
+                            topic_counts[prop_value] = 0
+                        topic_counts[prop_value] += 1
+
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
-        ref_nos = list(seen_refs)
         other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
 
         if ref_nos:
