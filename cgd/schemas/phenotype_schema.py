@@ -13,6 +13,13 @@ class PhenotypeTerm(BaseModel):
     link: typing.Optional[str] = None
 
 
+class CitationLinkForPhenotype(BaseModel):
+    """Link associated with a citation (PubMed, Full Text, etc.)"""
+    name: str  # Display name: "CGD Paper", "PubMed", "Full Text", etc.
+    url: str   # The actual URL
+    link_type: str  # "internal" or "external"
+
+
 class ReferenceForAnnotation(BaseModel):
     """Reference with full citation data for annotation display"""
     reference_no: typing.Optional[int] = None
@@ -21,6 +28,7 @@ class ReferenceForAnnotation(BaseModel):
     citation: typing.Optional[str] = None  # Full citation text
     journal_name: typing.Optional[str] = None
     year: typing.Optional[int] = None
+    links: list[CitationLinkForPhenotype] = []  # Citation links (CGD Paper, PubMed, Full Text, etc.)
 
 
 class ExperimentProperty(BaseModel):
@@ -33,9 +41,9 @@ class ExperimentProperty(BaseModel):
 class PhenotypeAnnotationOut(BaseModel):
     phenotype: PhenotypeTerm
     qualifier: typing.Optional[str] = None
-    experiment_type: typing.Optional[str] = None  # Mapped to "Classical genetics" or "Large-scale survey"
+    experiment_type: typing.Optional[str] = None  # Raw experiment type from DB (e.g., "heterozygous diploid, competitive growth")
     experiment_comment: typing.Optional[str] = None  # Comment about the experiment
-    mutant_type: typing.Optional[str] = None  # e.g., "null", "overexpression", "homozygous null"
+    mutant_type: typing.Optional[str] = None  # Raw mutant type from DB (e.g., "null", "overexpression")
     strain: typing.Optional[str] = None  # strain_background from expt_property
     alleles: list[ExperimentProperty] = []  # Allele properties
     chemicals: list[ExperimentProperty] = []  # Chemical_pending or chebi_ontology properties

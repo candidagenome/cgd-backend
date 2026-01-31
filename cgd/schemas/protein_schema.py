@@ -144,6 +144,10 @@ class ProteinDetailsForOrganism(BaseModel):
     description: typing.Optional[str] = None  # headline
     description_with_refs: typing.Optional[str] = None  # HTML with ref superscripts
 
+    # Section 4b: Name Description
+    name_description: typing.Optional[str] = None
+    name_description_with_refs: typing.Optional[str] = None  # HTML with ref superscripts
+
     # Section 5: Experimental Observations
     experimental_observations: list[ExperimentalObservationOut] = []
 

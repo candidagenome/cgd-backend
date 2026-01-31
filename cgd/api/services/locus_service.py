@@ -38,6 +38,7 @@ from cgd.schemas.locus_schema import (
     LocusHistoryForOrganism,
     HistoryEventOut,
     ReferenceOutForHistory,
+    CitationLinkForHistory,
     ContactOut,
     ReservedNameInfoOut,
     StandardNameInfoOut,
@@ -63,6 +64,7 @@ from cgd.schemas.phenotype_schema import (
     PhenotypeAnnotationOut,
     PhenotypeTerm,
     ReferenceForAnnotation as PhenoRefForAnnotation,
+    CitationLinkForPhenotype,
     ExperimentProperty,
 )
 from cgd.schemas.interaction_schema import (
@@ -351,6 +353,134 @@ def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkFo
                 # All other URL types are shown as Full Text (matching Perl default behavior)
                 else:
                     links.append(CitationLinkForProtein(
+                        name="Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
+
+
+def _build_citation_links_for_phenotype(ref, ref_urls=None) -> list[CitationLinkForPhenotype]:
+    """
+    Build citation links for a reference in phenotype annotation context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForPhenotype objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForPhenotype(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForPhenotype(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
+                    links.append(CitationLinkForPhenotype(
+                        name="Reference Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
+                    links.append(CitationLinkForPhenotype(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
+                    links.append(CitationLinkForPhenotype(
+                        name="Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
+
+
+def _build_citation_links_for_history(ref, ref_urls=None) -> list[CitationLinkForHistory]:
+    """
+    Build citation links for a reference in history/nomenclature context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForHistory objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForHistory(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForHistory(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
+                    links.append(CitationLinkForHistory(
+                        name="Reference Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
+                    links.append(CitationLinkForHistory(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
+                    links.append(CitationLinkForHistory(
                         name="Full Text",
                         url=url_obj.url,
                         link_type="external"
@@ -1554,34 +1684,6 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     return GODetailsResponse(results=out)
 
 
-def _map_experiment_type_to_root(experiment_type: str) -> str:
-    """
-    Map experiment types to root categories: 'Classical genetics' or 'Large-scale survey'.
-    This mimics the Perl _mapAllExperimentTypesToRootNode function.
-    """
-    if not experiment_type:
-        return 'Classical genetics'
-
-    exp_lower = experiment_type.lower()
-
-    # Large-scale survey experiment types
-    large_scale_types = [
-        'large-scale survey',
-        'systematic mutation set',
-        'systematic deletion',
-        'systematic overexpression',
-        'tn insertion mutagenesis',
-        'signature-tagged mutagenesis',
-        'uv mutagenesis',
-    ]
-
-    for ls_type in large_scale_types:
-        if ls_type in exp_lower:
-            return 'Large-scale survey'
-
-    return 'Classical genetics'
-
-
 def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsResponse:
     """
     Query phenotype annotations for each feature matching the locus name,
@@ -1611,6 +1713,51 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
 
     out: dict[str, PhenotypeDetailsForOrganism] = {}
 
+    # First pass: collect all pheno_annotation_nos to fetch references
+    all_pheno_annotation_nos = []
+    for f in features:
+        for pa in f.pheno_annotation:
+            if pa.phenotype:
+                all_pheno_annotation_nos.append(pa.pheno_annotation_no)
+
+    # Load all ref_links for phenotype annotations in one query
+    all_ref_links = []
+    if all_pheno_annotation_nos:
+        all_ref_links = (
+            db.query(RefLink)
+            .options(joinedload(RefLink.reference).joinedload(Reference.journal))
+            .filter(
+                RefLink.tab_name == "PHENO_ANNOTATION",
+                RefLink.primary_key.in_(all_pheno_annotation_nos),
+            )
+            .all()
+        )
+
+    # Collect all reference_nos and build ref_link map
+    ref_link_map: dict[int, list] = {}  # pheno_annotation_no -> list of RefLink
+    all_ref_nos = set()
+    for rl in all_ref_links:
+        if rl.reference:
+            all_ref_nos.add(rl.reference.reference_no)
+            if rl.primary_key not in ref_link_map:
+                ref_link_map[rl.primary_key] = []
+            ref_link_map[rl.primary_key].append(rl)
+
+    # Load ref_urls for all references in one query
+    ref_url_map: dict[int, list] = {}
+    if all_ref_nos:
+        ref_url_query = (
+            db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
+            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
+            .all()
+        )
+        for ref_url in ref_url_query:
+            if ref_url.reference_no not in ref_url_map:
+                ref_url_map[ref_url.reference_no] = []
+            ref_url_map[ref_url.reference_no].append(ref_url)
+
+    # Second pass: build annotations with links
     for f in features:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
@@ -1665,33 +1812,18 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
                             property_description=prop.property_description,
                         ))
 
-            # Map experiment_type to root category
-            mapped_experiment_type = _map_experiment_type_to_root(phenotype.experiment_type)
-
-            # CGD-specific handling: combine diploid info with null mutant type
-            # For "homozygous diploid" or "heterozygous diploid" with mutant_type="null",
-            # display as "homozygous null" or "heterozygous null"
+            # Use raw experiment_type and mutant_type values (matching Perl behavior)
+            # Frontend handles grouping into "Classical Genetics" / "Large-scale Survey" categories
+            raw_experiment_type = phenotype.experiment_type
             mutant_type = phenotype.mutant_type
-            raw_experiment_type = phenotype.experiment_type or ''
-            if 'homozygous diploid' in raw_experiment_type.lower() and mutant_type == 'null':
-                mutant_type = 'homozygous null'
-            elif 'heterozygous diploid' in raw_experiment_type.lower() and mutant_type == 'null':
-                mutant_type = 'heterozygous null'
 
-            # Get references via ref_link table for this phenotype annotation
+            # Get references from pre-loaded ref_link_map with links
             pheno_references = []
-            ref_links = (
-                db.query(RefLink)
-                .options(joinedload(RefLink.reference).joinedload(Reference.journal))
-                .filter(
-                    RefLink.tab_name == "PHENO_ANNOTATION",
-                    RefLink.primary_key == pa.pheno_annotation_no,
-                )
-                .all()
-            )
-            for rl in ref_links:
+            annotation_ref_links = ref_link_map.get(pa.pheno_annotation_no, [])
+            for rl in annotation_ref_links:
                 ref = rl.reference
                 if ref:
+                    ref_urls = ref_url_map.get(ref.reference_no, [])
                     pheno_references.append(PhenoRefForAnnotation(
                         reference_no=ref.reference_no,
                         pubmed=ref.pubmed,
@@ -1699,12 +1831,13 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
                         citation=ref.citation,
                         journal_name=ref.journal.full_name if ref.journal else None,
                         year=ref.year,
+                        links=_build_citation_links_for_phenotype(ref, ref_urls),
                     ))
 
             annotations.append(PhenotypeAnnotationOut(
                 phenotype=pheno_term,
                 qualifier=phenotype.qualifier,
-                experiment_type=mapped_experiment_type,
+                experiment_type=raw_experiment_type,
                 experiment_comment=experiment_comment,
                 mutant_type=mutant_type,
                 strain=strain,
@@ -1966,6 +2099,15 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 ref_str = format_ref_superscript(headline_refs, use_parentheses=True)
                 description_with_refs = f'{description} {ref_str}'
 
+        # Section 4b: Name Description
+        name_description = f.name_description
+        name_description_with_refs = name_description or ""
+        if name_description:
+            name_desc_refs = add_refs_from_ref_link('FEATURE', 'NAME_DESCRIPTION', f.feature_no)
+            if name_desc_refs:
+                ref_str = format_ref_superscript(name_desc_refs)
+                name_description_with_refs = f'{name_description}{ref_str}'
+
         # Section 5: Experimental Observations (from protein_detail with specific groups)
         experimental_observations = []
 
@@ -2180,22 +2322,29 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
 
         # AlphaFold structure lookup
         # Look for UniProt ID in dbxref_feat and construct AlphaFold URL
+        # Perl query: source = 'EBI' and dbxref_type in ('SwissProt', 'TrEMBL')
         alphafold_info = None
         uniprot_id = None
 
-        # Query for UniProt/SwissProt dbxref
+        # Query for UniProt/SwissProt dbxref (matching Perl get_uniprot_dbxref)
         uniprot_dbxref = (
-            db.query(Dbxref.dbxref_id)
+            db.query(Dbxref.dbxref_id, Dbxref.dbxref_type)
             .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
             .filter(
                 DbxrefFeat.feature_no == f.feature_no,
-                Dbxref.source.in_(['UniProtKB/Swiss-Prot', 'UniProt', 'SwissProt', 'UniProtKB']),
+                Dbxref.source == 'EBI',
+                Dbxref.dbxref_type.in_(['SwissProt', 'TrEMBL']),
             )
-            .first()
+            .all()
         )
 
-        if uniprot_dbxref:
-            uniprot_id = uniprot_dbxref[0]
+        # Prefer SwissProt over TrEMBL (like Perl does)
+        for dbxref_id, dbxref_type in uniprot_dbxref:
+            uniprot_id = dbxref_id
+            if dbxref_type == 'SwissProt':
+                break  # SwissProt is preferred
+
+        if uniprot_id:
             alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{uniprot_id}"
             alphafold_info = AlphaFoldInfo(
                 uniprot_id=uniprot_id,
@@ -2241,6 +2390,8 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             allele_names=allele_names,
             description=description,
             description_with_refs=description_with_refs if description_with_refs else None,
+            name_description=name_description,
+            name_description_with_refs=name_description_with_refs if name_description_with_refs else None,
             experimental_observations=experimental_observations,
             structural_info=structural_info,
             protein_info=protein_info,
@@ -3344,6 +3495,26 @@ def _get_references_for_entity(
         .all()
     )
 
+    # Collect all reference_nos
+    all_ref_nos = set()
+    for rl in ref_links:
+        if rl.reference:
+            all_ref_nos.add(rl.reference.reference_no)
+
+    # Load ref_urls for all references in one query
+    ref_url_map: dict[int, list] = {}
+    if all_ref_nos:
+        ref_url_query = (
+            db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
+            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
+            .all()
+        )
+        for ref_url in ref_url_query:
+            if ref_url.reference_no not in ref_url_map:
+                ref_url_map[ref_url.reference_no] = []
+            ref_url_map[ref_url.reference_no].append(ref_url)
+
     refs = []
     for rl in ref_links:
         ref = rl.reference
@@ -3353,6 +3524,7 @@ def _get_references_for_entity(
             journal_name = None
             if ref.journal:
                 journal_name = ref.journal.abbreviation or ref.journal.full_name
+            ref_urls = ref_url_map.get(ref.reference_no, [])
             refs.append(ReferenceOutForHistory(
                 reference_no=ref.reference_no,
                 dbxref_id=ref.dbxref_id,
@@ -3362,6 +3534,7 @@ def _get_references_for_entity(
                 link=f"/reference/{ref.dbxref_id}",
                 pubmed=ref.pubmed,  # Include PubMed ID for linking
                 journal_name=journal_name,  # Include journal name for formatting
+                links=_build_citation_links_for_history(ref, ref_urls),
             ))
     return refs
 
