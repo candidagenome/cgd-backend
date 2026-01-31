@@ -1,4 +1,5 @@
 import re
+import requests
 from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
@@ -2453,6 +2454,24 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
     return ProteinDetailsResponse(results=out)
 
 
+def _fetch_sgd_gene_info(systematic_name: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Fetch gene name and status from SGD API for a given systematic name.
+    Returns (gene_name, status) tuple, or (None, None) on error.
+    """
+    try:
+        url = f"https://www.yeastgenome.org/backend/locus/{systematic_name}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            gene_name = data.get('gene_name') or data.get('display_name')
+            status = data.get('qualifier')  # "Verified", "Uncharacterized", etc.
+            return gene_name, status
+    except Exception:
+        pass
+    return None, None
+
+
 def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsResponse:
     """
     Query homology group data for each feature matching the locus name,
@@ -2652,19 +2671,28 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
                     # Determine source based on organism name (matching Perl CGOB.pm)
                     # SGD = Saccharomyces cerevisiae, EnsemblFungi = non-CGD strains
+                    ext_seq_id = dbxref.dbxref_id
+                    ext_status = None
+
                     if 'Saccharomyces cerevisiae' in ext_org:
                         ext_source = 'SGD'
                         ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                        # Fetch gene name and status from SGD API
+                        sgd_gene_name, sgd_status = _fetch_sgd_gene_info(dbxref.dbxref_id)
+                        if sgd_gene_name:
+                            ext_seq_id = f"{sgd_gene_name}/{dbxref.dbxref_id}"
+                        if sgd_status:
+                            ext_status = sgd_status.upper()
                     else:
                         ext_source = 'EnsemblFungi'
                         ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
 
                     orthologs.append(OrthologOut(
-                        sequence_id=dbxref.dbxref_id,
+                        sequence_id=ext_seq_id,
                         feature_name=dbxref.dbxref_id,
                         organism_name=ext_org,
                         source=ext_source,
-                        status=None,
+                        status=ext_status,
                         is_query=False,
                         url=ext_url,
                     ))
