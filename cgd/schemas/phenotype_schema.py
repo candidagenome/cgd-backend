@@ -41,9 +41,9 @@ class ExperimentProperty(BaseModel):
 class PhenotypeAnnotationOut(BaseModel):
     phenotype: PhenotypeTerm
     qualifier: typing.Optional[str] = None
-    experiment_type: typing.Optional[str] = None  # Mapped to "Classical genetics" or "Large-scale survey"
+    experiment_type: typing.Optional[str] = None  # Raw experiment type from DB (e.g., "heterozygous diploid, competitive growth")
     experiment_comment: typing.Optional[str] = None  # Comment about the experiment
-    mutant_type: typing.Optional[str] = None  # e.g., "null", "overexpression", "homozygous null"
+    mutant_type: typing.Optional[str] = None  # Raw mutant type from DB (e.g., "null", "overexpression")
     strain: typing.Optional[str] = None  # strain_background from expt_property
     alleles: list[ExperimentProperty] = []  # Allele properties
     chemicals: list[ExperimentProperty] = []  # Chemical_pending or chebi_ontology properties
