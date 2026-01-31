@@ -1,8 +1,10 @@
+import os
 import re
 import json
 import urllib.request
 import urllib.error
 from typing import Optional
+from pathlib import Path
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from collections import defaultdict
@@ -103,7 +105,9 @@ from cgd.schemas.homology_schema import (
     BestHitsInCGDOut,
     ExternalHomologOut,
     ExternalHomologsSectionOut,
+    PhylogeneticTreeOut,
 )
+from cgd.core.settings import settings
 from cgd.models.locus_model import Feature
 from cgd.models.go_model import GoAnnotation, GoRef
 from cgd.models.phenotype_model import PhenoAnnotation
@@ -2476,6 +2480,61 @@ def _fetch_sgd_gene_info(systematic_name: str) -> tuple[Optional[str], Optional[
     return None, None
 
 
+def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
+    """
+    Load phylogenetic tree data for a given locus.
+    Tree files are stored in {CGD_DATA_DIR}/homology/alignments/{dbid}_tree_*.par
+    Returns PhylogeneticTreeOut or None if no tree files exist.
+    """
+    alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments"
+    unrooted_tree_file = alignment_dir / f"{dbid}_tree_unrooted.par"
+    rooted_tree_file = alignment_dir / f"{dbid}_tree_rooted.par"
+
+    # Check if tree files exist
+    if not unrooted_tree_file.exists():
+        return None
+
+    try:
+        # Read the rooted tree (preferred) or unrooted tree
+        tree_file = rooted_tree_file if rooted_tree_file.exists() else unrooted_tree_file
+        newick_tree = tree_file.read_text().strip()
+
+        # Parse basic tree statistics from Newick format
+        # Count leaves (number of names before colons or commas)
+        # This is a simple heuristic - leaves are text between ( or , and : or )
+        leaf_count = newick_tree.count(',') + 1 if ',' in newick_tree else 1
+
+        # Calculate approximate tree length by summing branch lengths
+        # Branch lengths appear after : in Newick format
+        import re
+        branch_lengths = re.findall(r':([0-9.]+)', newick_tree)
+        tree_length = sum(float(bl) for bl in branch_lengths) if branch_lengths else None
+
+        # Build download links
+        download_links = []
+        if unrooted_tree_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Unrooted Tree (Newick format)",
+                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=unrooted"
+            ))
+        if rooted_tree_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Rooted Tree (Newick format)",
+                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=rooted"
+            ))
+
+        return PhylogeneticTreeOut(
+            newick_tree=newick_tree,
+            tree_length=round(tree_length, 4) if tree_length else None,
+            leaf_count=leaf_count,
+            method="SEMPHY",
+            download_links=download_links,
+        )
+
+    except Exception:
+        return None
+
+
 def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsResponse:
     """
     Query homology group data for each feature matching the locus name,
@@ -2877,11 +2936,16 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         best_hits_fungal = ExternalHomologsSectionOut(by_source=best_hits_fungal_by_source) if best_hits_fungal_by_source else None
         reciprocal_best_hits = ExternalHomologsSectionOut(by_source=reciprocal_by_source) if reciprocal_by_source else None
 
+        # Load phylogenetic tree if available
+        # Use feature_name (systematic name) as the dbid for tree files
+        phylogenetic_tree = _load_phylogenetic_tree(f.feature_name)
+
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             homology_groups=homology_groups,
             ortholog_cluster=ortholog_cluster,
+            phylogenetic_tree=phylogenetic_tree,
             best_hits_cgd=best_hits_cgd,
             orthologs_fungal=orthologs_fungal,
             best_hits_fungal=best_hits_fungal,

@@ -81,12 +81,27 @@ class ExternalHomologsSectionOut(BaseModel):
     by_source: dict[str, list[ExternalHomologOut]] = {}
 
 
+class PhylogeneticTreeOut(BaseModel):
+    """Phylogenetic tree section data."""
+    # Newick format tree string for rendering
+    newick_tree: typing.Optional[str] = None
+    # Tree statistics
+    tree_length: typing.Optional[float] = None  # Total tree length in subs/site
+    leaf_count: typing.Optional[int] = None  # Number of leaves/species
+    # Method used to build tree
+    method: typing.Optional[str] = None  # e.g., "SEMPHY"
+    # Download links for different tree formats
+    download_links: list[DownloadLinkOut] = []
+
+
 class HomologyDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     homology_groups: list[HomologyGroupOut]
     # Ortholog Cluster section (CGOB)
     ortholog_cluster: typing.Optional[OrthologClusterOut] = None
+    # Phylogenetic Tree section
+    phylogenetic_tree: typing.Optional[PhylogeneticTreeOut] = None
     # Best hits in CGD species (BLAST)
     best_hits_cgd: typing.Optional[BestHitsInCGDOut] = None
     # Orthologs in fungal species (external)
