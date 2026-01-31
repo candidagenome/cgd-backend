@@ -34,6 +34,8 @@ from cgd.models.models import (
     RefpropFeat,
     PhenoAnnotation,
     Feature,
+    Cv,
+    CvTerm,
 )
 
 
@@ -452,17 +454,26 @@ def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLi
     """
     Get literature topics (curation topics) for this reference.
 
-    Literature topics are stored in ref_property table with property_type='Curation Topics'.
-    Each topic can be linked to specific features via refprop_feat, or can be a general
-    (non-gene) topic if not linked to any features.
+    Literature topics are stored in ref_property table. Only topics that exist in
+    cv_term table with cv_name='literature_topic' are included (filtering out
+    internal curation states like "Basic, lit guide, GO, Pheno curation done").
 
     Returns topics grouped by topic name, with lists of features for each topic,
     plus a list of all unique features for building the topic matrix.
     """
     ref = _get_reference_by_identifier(db, identifier)
 
-    # Query RefProperty for this reference where property_type is a curation topic
-    # Based on the Perl code, topics are in property_value and property_type='Curation Topics'
+    # Get valid literature topics from cv_term table
+    # This filters out curation status values like "Basic, lit guide, GO, Pheno curation done"
+    valid_topics_query = (
+        db.query(CvTerm.term_name)
+        .join(Cv, CvTerm.cv_no == Cv.cv_no)
+        .filter(Cv.cv_name == 'literature_topic')
+        .all()
+    )
+    valid_topics = {row[0] for row in valid_topics_query}
+
+    # Query RefProperty for this reference
     ref_properties = (
         db.query(RefProperty)
         .options(
@@ -483,8 +494,8 @@ def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLi
         if not topic:
             continue
 
-        # Skip internal curation states (like "Not yet curated")
-        if topic.lower() in ('not yet curated', 'not yet'):
+        # Only include topics that are valid literature topics (not curation states)
+        if topic not in valid_topics:
             continue
 
         if topic not in topic_features:
