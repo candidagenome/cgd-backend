@@ -121,3 +121,27 @@ class InteractionForReference(BaseModel):
 class ReferenceInteractionResponse(BaseModel):
     reference_no: int
     interactions: list[InteractionForReference]
+
+
+# --- Literature Topics for Reference ---
+
+class FeatureForTopic(BaseModel):
+    """A feature/gene associated with a literature topic."""
+    feature_no: int
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+    organism_name: str
+    taxon_id: int
+
+
+class LiteratureTopic(BaseModel):
+    """A literature topic with its associated features."""
+    topic: str
+    features: list[FeatureForTopic] = []
+
+
+class ReferenceLiteratureTopicsResponse(BaseModel):
+    """Response containing all literature topics for a reference."""
+    reference_no: int
+    topics: list[LiteratureTopic]
+    all_features: list[FeatureForTopic]  # All unique features for building the matrix

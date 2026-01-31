@@ -9,6 +9,7 @@ from cgd.schemas.reference_schema import (
     ReferenceGOResponse,
     ReferencePhenotypeResponse,
     ReferenceInteractionResponse,
+    ReferenceLiteratureTopicsResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
@@ -77,3 +78,18 @@ def get_reference_interaction_details(identifier: str, db: Session = Depends(get
     Returns list of interactions linked to this reference.
     """
     return reference_service.get_reference_interaction_details(db, identifier)
+
+
+@router.get("/{identifier}/literature_topics", response_model=ReferenceLiteratureTopicsResponse)
+def get_reference_literature_topics(identifier: str, db: Session = Depends(get_db)):
+    """
+    Get literature/curation topics for this reference.
+
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
+    Returns topics addressed in this paper, with associated genes/features for each topic.
+    This data is used to build the topic matrix showing which topics are addressed
+    for which genes.
+    """
+    return reference_service.get_reference_literature_topics(db, identifier)

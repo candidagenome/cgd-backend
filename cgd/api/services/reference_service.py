@@ -15,6 +15,9 @@ from cgd.schemas.reference_schema import (
     ReferenceInteractionResponse,
     InteractionForReference,
     InteractorForReference,
+    ReferenceLiteratureTopicsResponse,
+    LiteratureTopic,
+    FeatureForTopic,
 )
 from cgd.models.models import (
     Reference,
@@ -435,4 +438,88 @@ def get_reference_interaction_details(db: Session, identifier: str) -> Reference
     return ReferenceInteractionResponse(
         reference_no=ref.reference_no,
         interactions=interactions,
+    )
+
+
+def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLiteratureTopicsResponse:
+    """
+    Get literature topics (curation topics) for this reference.
+
+    Literature topics are stored in ref_property table with property_type='Curation Topics'.
+    Each topic can be linked to specific features via refprop_feat, or can be a general
+    (non-gene) topic if not linked to any features.
+
+    Returns topics grouped by topic name, with lists of features for each topic,
+    plus a list of all unique features for building the topic matrix.
+    """
+    ref = _get_reference_by_identifier(db, identifier)
+
+    # Query RefProperty for this reference where property_type is a curation topic
+    # Based on the Perl code, topics are in property_value and property_type='Curation Topics'
+    ref_properties = (
+        db.query(RefProperty)
+        .options(
+            joinedload(RefProperty.refprop_feat)
+            .joinedload(RefpropFeat.feature)
+            .joinedload(Feature.organism),
+        )
+        .filter(RefProperty.reference_no == ref.reference_no)
+        .all()
+    )
+
+    # Build a mapping of topic -> features
+    topic_features: dict[str, list[FeatureForTopic]] = {}
+    all_features_dict: dict[int, FeatureForTopic] = {}  # feature_no -> FeatureForTopic
+
+    for ref_prop in ref_properties:
+        topic = ref_prop.property_value
+        if not topic:
+            continue
+
+        # Skip internal curation states (like "Not yet curated")
+        if topic.lower() in ('not yet curated', 'not yet'):
+            continue
+
+        if topic not in topic_features:
+            topic_features[topic] = []
+
+        # Get features linked to this topic via refprop_feat
+        for rpf in ref_prop.refprop_feat:
+            feature = rpf.feature
+            if feature:
+                organism_name, taxon_id = _get_organism_info(feature)
+                feat_obj = FeatureForTopic(
+                    feature_no=feature.feature_no,
+                    feature_name=feature.feature_name,
+                    gene_name=feature.gene_name,
+                    organism_name=organism_name,
+                    taxon_id=taxon_id,
+                )
+                # Add to topic's features if not already present
+                if not any(f.feature_no == feature.feature_no for f in topic_features[topic]):
+                    topic_features[topic].append(feat_obj)
+
+                # Add to all_features dict
+                if feature.feature_no not in all_features_dict:
+                    all_features_dict[feature.feature_no] = feat_obj
+
+    # Build the response
+    topics = []
+    for topic_name in sorted(topic_features.keys()):
+        features = sorted(topic_features[topic_name], key=lambda f: f.gene_name or f.feature_name)
+        topics.append(LiteratureTopic(
+            topic=topic_name,
+            features=features,
+        ))
+
+    # Sort all_features by gene_name/feature_name
+    all_features = sorted(
+        all_features_dict.values(),
+        key=lambda f: f.gene_name or f.feature_name
+    )
+
+    return ReferenceLiteratureTopicsResponse(
+        reference_no=ref.reference_no,
+        topics=topics,
+        all_features=all_features,
     )
