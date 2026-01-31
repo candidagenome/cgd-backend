@@ -301,6 +301,8 @@ def get_reference_go_details(db: Session, identifier: str) -> ReferenceGORespons
     )
 
     annotations = []
+    seen_annotations = set()  # Track (feature_no, goid, evidence) to deduplicate
+
     for gr in go_refs:
         ga = gr.go_annotation
         if ga is None:
@@ -310,6 +312,12 @@ def get_reference_go_details(db: Session, identifier: str) -> ReferenceGORespons
         go = ga.go
         if feature is None or go is None:
             continue
+
+        # Deduplicate by (feature_no, goid, evidence)
+        dedup_key = (feature.feature_no, go.goid, ga.go_evidence)
+        if dedup_key in seen_annotations:
+            continue
+        seen_annotations.add(dedup_key)
 
         organism_name, taxon_id = _get_organism_info(feature)
         goid_str = f"GO:{go.goid:07d}" if isinstance(go.goid, int) else str(go.goid)
