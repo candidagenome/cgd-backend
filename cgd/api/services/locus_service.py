@@ -1,5 +1,7 @@
 import re
-import requests
+import json
+import urllib.request
+import urllib.error
 from typing import Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
@@ -2458,16 +2460,18 @@ def _fetch_sgd_gene_info(systematic_name: str) -> tuple[Optional[str], Optional[
     """
     Fetch gene name and status from SGD API for a given systematic name.
     Returns (gene_name, status) tuple, or (None, None) on error.
+    Uses urllib to avoid adding requests as a dependency.
     """
     try:
         url = f"https://www.yeastgenome.org/backend/locus/{systematic_name}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            gene_name = data.get('gene_name') or data.get('display_name')
-            status = data.get('qualifier')  # "Verified", "Uncharacterized", etc.
-            return gene_name, status
-    except Exception:
+        req = urllib.request.Request(url, headers={'User-Agent': 'CGD-Backend/1.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                gene_name = data.get('gene_name') or data.get('display_name')
+                status = data.get('qualifier')  # "Verified", "Uncharacterized", etc.
+                return gene_name, status
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, Exception):
         pass
     return None, None
 
