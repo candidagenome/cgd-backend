@@ -242,6 +242,7 @@ class ReferenceForLocus(BaseModel):
     year: int
     links: list[CitationLinkForLocus] = []  # Citation links (CGD Paper, PubMed, etc.)
     topics: list[str] = []  # Literature topics (Gene Ontology, Phenotype, etc.)
+    other_genes: list[str] = []  # Other genes addressed in this reference
 
 
 class LiteratureTopicOut(BaseModel):

@@ -132,6 +132,7 @@ from cgd.models.models import (
     ExptExptprop,
     ExptProperty,
     CvtermGroup,
+    CvtermRelationship,
     CvTerm,
     Cv,
 )
@@ -2934,24 +2935,31 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
 
-    # Get all literature topic groups from cvterm_group table
-    # Query: SELECT group_name, term_name FROM cv_term, cvterm_group, cv
-    #        WHERE cvterm_group.cv_term_no = cv_term.cv_term_no
-    #        AND cv_term.cv_no = cv.cv_no AND cv.cv_name = 'literature_topic'
-    topic_groups_query = (
-        db.query(CvtermGroup.group_name, CvTerm.term_name)
-        .join(CvTerm, CvtermGroup.cv_term_no == CvTerm.cv_term_no)
-        .join(Cv, CvTerm.cv_no == Cv.cv_no)
+    # Get all literature topic parent-child relationships from cvterm_relationship table
+    # Query (like Perl): SELECT CT1.term_name (parent), CT2.term_name (child)
+    #        FROM cv_term CT1, cv_term CT2, cvterm_relationship CR, cv CV
+    #        WHERE CR.child_cv_term_no = CT2.cv_term_no
+    #        AND CR.parent_cv_term_no = CT1.cv_term_no
+    #        AND CT1.cv_no = CV.cv_no AND CV.cv_name = 'literature_topic'
+    from sqlalchemy.orm import aliased
+    ParentTerm = aliased(CvTerm)
+    ChildTerm = aliased(CvTerm)
+
+    topic_relations_query = (
+        db.query(ParentTerm.term_name.label('parent'), ChildTerm.term_name.label('child'))
+        .join(CvtermRelationship, CvtermRelationship.parent_cv_term_no == ParentTerm.cv_term_no)
+        .join(ChildTerm, CvtermRelationship.child_cv_term_no == ChildTerm.cv_term_no)
+        .join(Cv, ParentTerm.cv_no == Cv.cv_no)
         .filter(Cv.cv_name == 'literature_topic')
         .all()
     )
 
-    # Build a mapping of group_name -> [topic_names]
+    # Build a mapping of parent_topic -> [child_topics]
     all_topic_groups: dict[str, list[str]] = {}
-    for group_name, term_name in topic_groups_query:
-        if group_name not in all_topic_groups:
-            all_topic_groups[group_name] = []
-        all_topic_groups[group_name].append(term_name)
+    for parent, child in topic_relations_query:
+        if parent not in all_topic_groups:
+            all_topic_groups[parent] = []
+        all_topic_groups[parent].append(child)
 
     # Get max PubMed search date (global, not per-locus)
     # SELECT max(date_created) FROM reference WHERE source = 'PubMed script'
@@ -3016,11 +3024,35 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                         'reference_no': ref.reference_no,
                     })
 
-        # Build final reference list with topics
+        # Get other genes for all references in one query
+        # Query: Find all features associated with these references via refprop_feat
+        ref_nos = list(seen_refs)
+        other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
+
+        if ref_nos:
+            other_genes_query = (
+                db.query(RefProperty.reference_no, Feature.gene_name, Feature.feature_name)
+                .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+                .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+                .filter(RefProperty.reference_no.in_(ref_nos))
+                .filter(Feature.feature_no != f.feature_no)  # Exclude current feature
+                .distinct()
+                .all()
+            )
+
+            for ref_no, gene_name, feature_name in other_genes_query:
+                if ref_no not in other_genes_map:
+                    other_genes_map[ref_no] = []
+                display_name = gene_name or feature_name
+                if display_name and display_name not in other_genes_map[ref_no]:
+                    other_genes_map[ref_no].append(display_name)
+
+        # Build final reference list with topics and other genes
         final_references = []
         for ref_data in references:
             ref = ref_data['ref']
             topics = ref_topics.get(ref.reference_no, [])
+            other_genes = other_genes_map.get(ref.reference_no, [])
             final_references.append(ReferenceForLocus(
                 reference_no=ref.reference_no,
                 pubmed=ref.pubmed,
@@ -3030,6 +3062,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 year=ref.year,
                 links=_build_citation_links_for_locus(ref, ref.ref_url),
                 topics=list(set(topics)),  # Deduplicate topics
+                other_genes=sorted(other_genes),  # Sort for consistent display
             ))
 
         # Build topic groups with counts (only include topics that have refs)
