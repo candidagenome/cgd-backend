@@ -241,6 +241,7 @@ class ReferenceForLocus(BaseModel):
     title: t.Optional[str] = None
     year: int
     links: list[CitationLinkForLocus] = []  # Citation links (CGD Paper, PubMed, etc.)
+    topics: list[str] = []  # Literature topics (Gene Ontology, Phenotype, etc.)
 
 
 class ReferencesForOrganism(BaseModel):

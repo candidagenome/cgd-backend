@@ -100,6 +100,8 @@ from cgd.models.homology_model import FeatHomology
 from cgd.models.models import (
     RefLink,
     RefUrl,
+    RefProperty,
+    RefpropFeat,
     FeatAlias,
     Alias,
     FeatUrl,
@@ -2904,6 +2906,8 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
 def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
     """
     Query references citing this locus, grouped by organism.
+    Uses RefProperty and RefpropFeat tables (like Perl LiteratureGuide.pm)
+    to get all references associated with literature topics for this feature.
     """
     n = name.strip()
     features = (
@@ -2931,39 +2935,64 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
         organism_name, taxon_id = _get_organism_info(f)
         locus_display_name = f.gene_name or f.feature_name
 
-        # Get references via ref_link
-        ref_links = (
-            db.query(RefLink)
+        # Get references via RefProperty and RefpropFeat tables
+        # This matches the Perl LiteratureGuide query:
+        # SELECT distinct REF_PROPERTY.reference_no, REF_PROPERTY.property_value, REFPROP_FEAT.feature_no
+        # FROM REF_PROPERTY, REFPROP_FEAT
+        # WHERE REF_PROPERTY.ref_property_no = REFPROP_FEAT.ref_property_no(+)
+        # AND REFPROP_FEAT.feature_no = ?
+        ref_props = (
+            db.query(RefProperty, Reference)
+            .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+            .join(Reference, RefProperty.reference_no == Reference.reference_no)
             .options(
-                joinedload(RefLink.reference).joinedload(Reference.ref_url).joinedload(RefUrl.url)
+                joinedload(Reference.ref_url).joinedload(RefUrl.url)
             )
-            .filter(
-                RefLink.tab_name == "FEATURE",
-                RefLink.primary_key == f.feature_no,
-            )
+            .filter(RefpropFeat.feature_no == f.feature_no)
             .all()
         )
 
+        # Collect unique references with their topics
         references = []
         seen_refs = set()
-        for rl in ref_links:
-            ref = rl.reference
-            if ref and ref.reference_no not in seen_refs:
-                seen_refs.add(ref.reference_no)
-                references.append(ReferenceForLocus(
-                    reference_no=ref.reference_no,
-                    pubmed=ref.pubmed,
-                    dbxref_id=ref.dbxref_id,
-                    citation=ref.citation,
-                    title=ref.title,
-                    year=ref.year,
-                    links=_build_citation_links_for_locus(ref, ref.ref_url),
-                ))
+        ref_topics: dict[int, list[str]] = {}  # reference_no -> list of topics
+
+        for rp, ref in ref_props:
+            if ref:
+                # Track topics for each reference
+                if ref.reference_no not in ref_topics:
+                    ref_topics[ref.reference_no] = []
+                if rp.property_value:
+                    ref_topics[ref.reference_no].append(rp.property_value)
+
+                # Add reference if not seen
+                if ref.reference_no not in seen_refs:
+                    seen_refs.add(ref.reference_no)
+                    references.append({
+                        'ref': ref,
+                        'reference_no': ref.reference_no,
+                    })
+
+        # Build final reference list with topics
+        final_references = []
+        for ref_data in references:
+            ref = ref_data['ref']
+            topics = ref_topics.get(ref.reference_no, [])
+            final_references.append(ReferenceForLocus(
+                reference_no=ref.reference_no,
+                pubmed=ref.pubmed,
+                dbxref_id=ref.dbxref_id,
+                citation=ref.citation,
+                title=ref.title,
+                year=ref.year,
+                links=_build_citation_links_for_locus(ref, ref.ref_url),
+                topics=list(set(topics)),  # Deduplicate topics
+            ))
 
         out[organism_name] = ReferencesForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
-            references=references,
+            references=final_references,
         )
 
     return LocusReferencesResponse(results=out)
