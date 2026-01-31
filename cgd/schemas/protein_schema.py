@@ -173,6 +173,9 @@ class ProteinDetailsForOrganism(BaseModel):
     cited_references: list[ReferenceForProtein] = []
     literature_guide_url: typing.Optional[str] = None
 
+    # PBrowse URL for domain visualization
+    pbrowse_url: typing.Optional[str] = None
+
 
 class ProteinDetailsResponse(BaseModel):
     """

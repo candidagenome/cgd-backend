@@ -2379,6 +2379,42 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         # Literature guide URL
         literature_guide_url = f"/cgi-bin/reference/referenceTab.pl?locus={f.feature_name}"
 
+        # PBrowse URL for domain visualization
+        # URL structure: /jbrowse/index.html?data=cgd_data/{strain}_prot&loc={feature}:1..{len}&tracklist=0&nav=0&overview=0&tracks=...
+        pbrowse_url = None
+        protein_length = protein_info.protein_length if protein_info else None
+        if protein_length and f.organism:
+            strain_abbrev = f.organism.organism_abbrev
+            # Build tracks list based on conserved domains present
+            domain_order = ['Pfam', 'PANTHER', 'SUPERFAMILY', 'CATH', 'SMART',
+                            'ProSiteProfiles', 'CDD', 'NCBIfam', 'PIRSF', 'Hamap', 'SFLD']
+            motif_order = ['PRINTS', 'ProSitePatterns', 'SignalP']
+            strux_order = ['TMHMM', 'Coils', 'MobiDBLite']
+
+            # Collect domain types present in this protein
+            domain_types_present = set()
+            for cd in conserved_domains:
+                if cd.domain_type:
+                    domain_types_present.add(cd.domain_type)
+
+            # Also check structural info for motifs and structural regions
+            for si in structural_info:
+                if si.info_type:
+                    domain_types_present.add(si.info_type)
+
+            # Build tracks string: always include Sequence and Protein
+            tracks = ['Sequence', 'Protein']
+            for trk in domain_order + motif_order + strux_order:
+                if trk in domain_types_present:
+                    tracks.append(trk)
+
+            tracks_str = '%2C'.join(tracks)  # URL-encoded comma
+            pbrowse_url = (
+                f"/jbrowse/index.html?data=cgd_data/{strain_abbrev}_prot"
+                f"&loc={f.feature_name}:1..{protein_length}"
+                f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
+            )
+
         out[organism_name] = ProteinDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
@@ -2403,6 +2439,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             external_links=external_links,
             cited_references=cited_references,
             literature_guide_url=literature_guide_url,
+            pbrowse_url=pbrowse_url,
         )
 
     return ProteinDetailsResponse(results=out)
