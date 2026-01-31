@@ -2458,12 +2458,22 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
     Query homology group data for each feature matching the locus name,
     grouped by organism.
     """
+    from cgd.models.models import DbxrefHomology
+
     n = name.strip()
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.dbxref_homology)
+                .joinedload(DbxrefHomology.dbxref),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.feat_homology)
+                .joinedload(FeatHomology.feature)
+                .joinedload(Feature.organism),
         )
         .filter(
             or_(
