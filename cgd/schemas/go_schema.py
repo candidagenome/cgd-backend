@@ -44,6 +44,7 @@ class GODetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     annotations: list[GOAnnotationOut]
+    last_reviewed_date: typing.Optional[str] = None  # Max date_last_reviewed for manually curated annotations
 
 
 class GODetailsResponse(BaseModel):

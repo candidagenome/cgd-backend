@@ -1338,6 +1338,8 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
         locus_display_name = f.gene_name or f.feature_name
 
         annotations = []
+        max_last_reviewed = None  # Track max date_last_reviewed for manually curated annotations
+
         for ga in f.go_annotation:
             go = ga.go
             if go is None:
@@ -1422,6 +1424,12 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
             if ga.date_created:
                 date_created_str = ga.date_created.strftime('%Y-%m-%d')
 
+            # Track max date_last_reviewed for manually curated annotations
+            if ga.annotation_type and ga.annotation_type.lower() == 'manually curated':
+                if ga.date_last_reviewed:
+                    if max_last_reviewed is None or ga.date_last_reviewed > max_last_reviewed:
+                        max_last_reviewed = ga.date_last_reviewed
+
             annotations.append(GOAnnotationOut(
                 term=term,
                 evidence=evidence,
@@ -1432,10 +1440,16 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                 date_created=date_created_str,
             ))
 
+        # Format last_reviewed_date
+        last_reviewed_str = None
+        if max_last_reviewed:
+            last_reviewed_str = max_last_reviewed.strftime('%Y-%m-%d')
+
         out[organism_name] = GODetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             annotations=annotations,
+            last_reviewed_date=last_reviewed_str,
         )
 
     return GODetailsResponse(results=out)
