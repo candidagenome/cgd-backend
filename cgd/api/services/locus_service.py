@@ -2483,10 +2483,20 @@ def _fetch_sgd_gene_info(systematic_name: str) -> tuple[Optional[str], Optional[
 def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
     """
     Load phylogenetic tree data for a given locus.
-    Tree files are stored in {CGD_DATA_DIR}/homology/alignments/{dbid}_tree_*.par
+    Tree files are stored in {CGD_DATA_DIR}/homology/alignments/{bucket}/{dbid}_tree_*.par
+    where bucket = int(numeric_part_of_dbid / 100)
     Returns PhylogeneticTreeOut or None if no tree files exist.
     """
-    alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments"
+    # Extract numeric part from dbid (e.g., "13700" from "C1_13700W_A")
+    # Pattern matches digits, ignoring leading zeros
+    match = re.search(r'[^\d]*0*(\d+)', dbid)
+    if not match:
+        return None
+
+    numeric_tag = int(match.group(1))
+    bucket = numeric_tag // 100
+
+    alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
     unrooted_tree_file = alignment_dir / f"{dbid}_tree_unrooted.par"
     rooted_tree_file = alignment_dir / f"{dbid}_tree_rooted.par"
 
