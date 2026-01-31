@@ -3047,10 +3047,21 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
         # Filter to match Perl _get_gene_list: same organism, current location, current seq,
-        # current genome version, and specific feature types (ORF, etc.)
+        # same seq source, and specific feature types (ORF, etc.)
         other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
 
-        if ref_nos:
+        # Get the seq_source for current feature
+        current_seq_source = (
+            db.query(Seq.source)
+            .join(FeatLocation, Seq.seq_no == FeatLocation.root_seq_no)
+            .filter(FeatLocation.feature_no == f.feature_no)
+            .filter(FeatLocation.is_loc_current == 'Y')
+            .filter(Seq.is_seq_current == 'Y')
+            .first()
+        )
+        seq_source = current_seq_source[0] if current_seq_source else None
+
+        if ref_nos and seq_source:
             # Valid feature types for locus page (matching Perl web_metadata query)
             valid_feature_types = ['ORF', 'blocked_reading_frame', 'pseudogene',
                                    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
@@ -3068,6 +3079,7 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 .filter(Feature.feature_type.in_(valid_feature_types))  # Only valid feature types
                 .filter(FeatLocation.is_loc_current == 'Y')  # Only features with current location
                 .filter(Seq.is_seq_current == 'Y')  # Only current sequences
+                .filter(Seq.source == seq_source)  # Same seq source as current feature
                 .distinct()
                 .all()
             )
