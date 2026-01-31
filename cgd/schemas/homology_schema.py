@@ -49,12 +49,52 @@ class OrthologClusterOut(BaseModel):
     orthologs: list[OrthologOut] = []
 
 
+# --- Best Hits / External Homologs ---
+
+class BestHitOut(BaseModel):
+    """Single best hit entry."""
+    feature_name: str  # Systematic name
+    gene_name: typing.Optional[str] = None  # Standard gene name
+    display_name: str  # "gene_name/feature_name" or just feature_name
+    organism_name: str  # Full organism name
+    url: typing.Optional[str] = None  # Link to locus page
+
+
+class BestHitsInCGDOut(BaseModel):
+    """Best hits in CGD species section."""
+    # Dict: species_name -> list of best hits
+    by_species: dict[str, list[BestHitOut]] = {}
+
+
+class ExternalHomologOut(BaseModel):
+    """External ortholog or best hit entry."""
+    dbxref_id: str  # External ID
+    display_name: str  # Gene name for display
+    organism_name: str  # e.g., "S. cerevisiae"
+    source: str  # SGD, POMBASE, etc.
+    url: typing.Optional[str] = None  # Link to external database
+
+
+class ExternalHomologsSectionOut(BaseModel):
+    """Section for external orthologs or best hits."""
+    # Dict: source (SGD, POMBASE, etc.) -> list of homologs
+    by_source: dict[str, list[ExternalHomologOut]] = {}
+
+
 class HomologyDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     homology_groups: list[HomologyGroupOut]
-    # New: Ortholog Cluster section
+    # Ortholog Cluster section (CGOB)
     ortholog_cluster: typing.Optional[OrthologClusterOut] = None
+    # Best hits in CGD species (BLAST)
+    best_hits_cgd: typing.Optional[BestHitsInCGDOut] = None
+    # Orthologs in fungal species (external)
+    orthologs_fungal: typing.Optional[ExternalHomologsSectionOut] = None
+    # Best hits in fungal species (external)
+    best_hits_fungal: typing.Optional[ExternalHomologsSectionOut] = None
+    # Reciprocal best hits in other species (MGD, RGD, dictyBase)
+    reciprocal_best_hits: typing.Optional[ExternalHomologsSectionOut] = None
 
 
 class HomologyDetailsResponse(BaseModel):

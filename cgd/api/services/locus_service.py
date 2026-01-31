@@ -96,6 +96,10 @@ from cgd.schemas.homology_schema import (
     OrthologClusterOut,
     OrthologOut,
     DownloadLinkOut,
+    BestHitOut,
+    BestHitsInCGDOut,
+    ExternalHomologOut,
+    ExternalHomologsSectionOut,
 )
 from cgd.models.locus_model import Feature
 from cgd.models.go_model import GoAnnotation, GoRef
@@ -2648,11 +2652,142 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 )
                 break  # Only use first CGOB cluster
 
+        # --- Best hits in CGD species (BLAST) ---
+        best_hits_cgd = None
+        cgd_organism_name = f.organism.common_name if f.organism else organism_name
+        best_hit_type = f"best hit for {cgd_organism_name}"
+
+        # Find best hit homology groups for this feature
+        best_hit_by_species: dict[str, list[BestHitOut]] = {}
+        for fh in f.feat_homology:
+            hg = fh.homology_group
+            if hg and hg.homology_group_type == best_hit_type and hg.method == 'BLAST':
+                # Get all other features in this homology group
+                for other_fh in hg.feat_homology:
+                    other_feat = other_fh.feature
+                    if other_feat and other_feat.feature_no != f.feature_no:
+                        other_org_name, _ = _get_organism_info(other_feat)
+                        display_name = other_feat.feature_name
+                        if other_feat.gene_name and other_feat.gene_name != other_feat.feature_name:
+                            display_name = f"{other_feat.gene_name}/{other_feat.feature_name}"
+
+                        if other_org_name not in best_hit_by_species:
+                            best_hit_by_species[other_org_name] = []
+
+                        best_hit_by_species[other_org_name].append(BestHitOut(
+                            feature_name=other_feat.feature_name,
+                            gene_name=other_feat.gene_name,
+                            display_name=display_name,
+                            organism_name=other_org_name,
+                            url=f"/locus/{other_feat.feature_name}",
+                        ))
+
+        if best_hit_by_species:
+            best_hits_cgd = BestHitsInCGDOut(by_species=best_hit_by_species)
+
+        # --- External orthologs and best hits (via dbxref_feat) ---
+        # Source to species mapping
+        source_to_species = {
+            'SGD': 'S. cerevisiae',
+            'SGD_BEST_HIT': 'S. cerevisiae',
+            'POMBASE': 'S. pombe',
+            'POMBASE_BEST_HIT': 'S. pombe',
+            'AspGD': 'A. nidulans',
+            'AspGD_BEST_HIT': 'A. nidulans',
+            'BROAD_NEUROSPORA': 'N. crassa',
+            'BROAD_NEUROSPORA_BEST_HIT': 'N. crassa',
+            'dictyBase': 'D. discoideum',
+            'MGD': 'M. musculus',
+            'RGD': 'R. norvegicus',
+        }
+
+        # Source to URL template mapping
+        source_to_url = {
+            'SGD': 'https://www.yeastgenome.org/locus/{id}',
+            'SGD_BEST_HIT': 'https://www.yeastgenome.org/locus/{id}',
+            'POMBASE': 'https://www.pombase.org/gene/{id}',
+            'POMBASE_BEST_HIT': 'https://www.pombase.org/gene/{id}',
+            'AspGD': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
+            'AspGD_BEST_HIT': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
+            'BROAD_NEUROSPORA': 'https://fungidb.org/fungidb/app/record/gene/{id}',
+            'BROAD_NEUROSPORA_BEST_HIT': 'https://fungidb.org/fungidb/app/record/gene/{id}',
+            'dictyBase': 'http://dictybase.org/gene/{id}',
+            'MGD': 'http://www.informatics.jax.org/marker/{id}',
+            'RGD': 'https://rgd.mcw.edu/rgdweb/report/gene/main.html?id={id}',
+        }
+
+        # Fungal sources (for Orthologs/Best hits in fungal species)
+        fungal_sources = {'SGD', 'SGD_BEST_HIT', 'POMBASE', 'POMBASE_BEST_HIT',
+                         'AspGD', 'AspGD_BEST_HIT', 'BROAD_NEUROSPORA', 'BROAD_NEUROSPORA_BEST_HIT'}
+        # Other species sources (for Reciprocal best hits)
+        other_sources = {'dictyBase', 'MGD', 'RGD'}
+
+        # Query external homologs via dbxref_feat
+        external_dbxrefs = (
+            db.query(Dbxref)
+            .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+            .filter(DbxrefFeat.feature_no == f.feature_no)
+            .filter(Dbxref.source.in_(list(source_to_species.keys())))
+            .all()
+        )
+
+        orthologs_fungal_by_source: dict[str, list[ExternalHomologOut]] = {}
+        best_hits_fungal_by_source: dict[str, list[ExternalHomologOut]] = {}
+        reciprocal_by_source: dict[str, list[ExternalHomologOut]] = {}
+
+        for dbx in external_dbxrefs:
+            source = dbx.source
+            if not source:
+                continue
+
+            species_name = source_to_species.get(source, source)
+            url_template = source_to_url.get(source)
+            url = url_template.format(id=dbx.dbxref_id) if url_template else None
+
+            # Use description as display name if available, otherwise dbxref_id
+            display_name = dbx.description or dbx.dbxref_id
+
+            homolog = ExternalHomologOut(
+                dbxref_id=dbx.dbxref_id,
+                display_name=display_name,
+                organism_name=species_name,
+                source=source.replace('_BEST_HIT', ''),  # Normalize source name
+                url=url,
+            )
+
+            # Categorize based on source
+            if source in other_sources:
+                # Reciprocal best hits in other species
+                norm_source = source
+                if norm_source not in reciprocal_by_source:
+                    reciprocal_by_source[norm_source] = []
+                reciprocal_by_source[norm_source].append(homolog)
+            elif source in fungal_sources:
+                if 'BEST_HIT' in source:
+                    # Best hits in fungal species
+                    norm_source = source.replace('_BEST_HIT', '')
+                    if norm_source not in best_hits_fungal_by_source:
+                        best_hits_fungal_by_source[norm_source] = []
+                    best_hits_fungal_by_source[norm_source].append(homolog)
+                else:
+                    # Orthologs in fungal species
+                    if source not in orthologs_fungal_by_source:
+                        orthologs_fungal_by_source[source] = []
+                    orthologs_fungal_by_source[source].append(homolog)
+
+        orthologs_fungal = ExternalHomologsSectionOut(by_source=orthologs_fungal_by_source) if orthologs_fungal_by_source else None
+        best_hits_fungal = ExternalHomologsSectionOut(by_source=best_hits_fungal_by_source) if best_hits_fungal_by_source else None
+        reciprocal_best_hits = ExternalHomologsSectionOut(by_source=reciprocal_by_source) if reciprocal_by_source else None
+
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             homology_groups=homology_groups,
             ortholog_cluster=ortholog_cluster,
+            best_hits_cgd=best_hits_cgd,
+            orthologs_fungal=orthologs_fungal,
+            best_hits_fungal=best_hits_fungal,
+            reciprocal_best_hits=reciprocal_best_hits,
         )
 
     return HomologyDetailsResponse(results=out)
