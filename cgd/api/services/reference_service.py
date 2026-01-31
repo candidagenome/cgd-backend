@@ -87,29 +87,33 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
         ))
 
     # Process URLs from ref_url table
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
     for ref_url in ref_urls:
         url_obj = ref_url.url
         if url_obj and url_obj.url:
             url_type = (url_obj.url_type or "").lower()
 
-            # Access Full Text (url_type = "Reference LINKOUT")
-            if "linkout" in url_type:
+            # Skip Reference supplement (displayed separately)
+            if "supplement" in url_type:
                 links.append(CitationLink(
-                    name="Access Full Text",
+                    name="Reference Supplement",
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # Download Datasets / Reference Data
-            elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+            # Skip Reference Data (not shown as full text)
+            elif "reference data" in url_type:
+                continue
+            # Download Datasets
+            elif any(kw in url_type for kw in ["download", "dataset"]):
                 links.append(CitationLink(
                     name="Download Datasets",
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # Reference Supplement / Web Supplement
-            elif "supplement" in url_type:
+            # All other URL types are shown as Full Text (matching Perl default behavior)
+            else:
                 links.append(CitationLink(
-                    name="Reference Supplement",
+                    name="Full Text",
                     url=url_obj.url,
                     link_type="external"
                 ))

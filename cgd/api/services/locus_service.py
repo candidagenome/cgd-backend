@@ -194,30 +194,35 @@ def _build_citation_links_for_locus(ref, ref_urls=None) -> list[CitationLinkForL
         ))
 
     # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
     if ref_urls:
         for ref_url in ref_urls:
             url_obj = ref_url.url
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text (url_type = "Reference LINKOUT" or "Reference full text")
-                if "linkout" in url_type or "full text" in url_type:
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
                     links.append(CitationLinkForLocus(
-                        name="Full Text",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Download Datasets / Reference Data
-                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
                     links.append(CitationLinkForLocus(
                         name="Download Datasets",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Reference Supplement / Web Supplement
-                elif "supplement" in url_type:
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                # This includes: Reference LINKOUT, Reference full text, and any others
+                else:
                     links.append(CitationLinkForLocus(
-                        name="Reference Supplement",
+                        name="Full Text",
                         url=url_obj.url,
                         link_type="external"
                     ))
@@ -254,30 +259,34 @@ def _build_citation_links_for_protein(ref, ref_urls=None) -> list[CitationLinkFo
         ))
 
     # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
     if ref_urls:
         for ref_url in ref_urls:
             url_obj = ref_url.url
             if url_obj and url_obj.url:
                 url_type = (url_obj.url_type or "").lower()
 
-                # Access Full Text (url_type = "Reference LINKOUT")
-                if "linkout" in url_type:
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
                     links.append(CitationLinkForProtein(
-                        name="Access Full Text",
+                        name="Reference Supplement",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Download Datasets / Reference Data
-                elif any(kw in url_type for kw in ["reference data", "download", "dataset"]):
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
                     links.append(CitationLinkForProtein(
                         name="Download Datasets",
                         url=url_obj.url,
                         link_type="external"
                     ))
-                # Reference Supplement / Web Supplement
-                elif "supplement" in url_type:
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
                     links.append(CitationLinkForProtein(
-                        name="Reference Supplement",
+                        name="Full Text",
                         url=url_obj.url,
                         link_type="external"
                     ))
