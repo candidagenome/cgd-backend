@@ -2516,7 +2516,6 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
 
         # Calculate approximate tree length by summing branch lengths
         # Branch lengths appear after : in Newick format
-        import re
         branch_lengths = re.findall(r':([0-9.]+)', newick_tree)
         tree_length = sum(float(bl) for bl in branch_lengths) if branch_lengths else None
 
