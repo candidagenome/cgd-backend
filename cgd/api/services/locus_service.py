@@ -1,5 +1,10 @@
+import os
 import re
+import json
+import urllib.request
+import urllib.error
 from typing import Optional
+from pathlib import Path
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from collections import defaultdict
@@ -96,7 +101,13 @@ from cgd.schemas.homology_schema import (
     OrthologClusterOut,
     OrthologOut,
     DownloadLinkOut,
+    BestHitOut,
+    BestHitsInCGDOut,
+    ExternalHomologOut,
+    ExternalHomologsSectionOut,
+    PhylogeneticTreeOut,
 )
+from cgd.core.settings import settings
 from cgd.models.locus_model import Feature
 from cgd.models.go_model import GoAnnotation, GoRef
 from cgd.models.phenotype_model import PhenoAnnotation
@@ -2379,6 +2390,46 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         # Literature guide URL
         literature_guide_url = f"/cgi-bin/reference/referenceTab.pl?locus={f.feature_name}"
 
+        # PBrowse URL for domain visualization
+        # URL structure: /jbrowse/index.html?data=cgd_data/{strain}_prot&loc={feature}:1..{len}&tracklist=0&nav=0&overview=0&tracks=...
+        pbrowse_url = None
+        protein_length = protein_info.protein_length if protein_info else None
+        if protein_length and f.organism:
+            strain_abbrev = f.organism.organism_abbrev
+            # Build tracks list based on conserved domains present
+            domain_order = ['Pfam', 'PANTHER', 'SUPERFAMILY', 'CATH', 'SMART',
+                            'ProSiteProfiles', 'CDD', 'NCBIfam', 'PIRSF', 'Hamap', 'SFLD']
+            motif_order = ['PRINTS', 'ProSitePatterns', 'SignalP']
+            strux_order = ['TMHMM', 'Coils', 'MobiDBLite']
+
+            # Collect domain types present in this protein
+            domain_types_present = set()
+            for cd in conserved_domains:
+                if cd.domain_type:
+                    domain_types_present.add(cd.domain_type)
+
+            # Also check structural info for motifs and structural regions
+            for si in structural_info:
+                if si.info_type:
+                    domain_types_present.add(si.info_type)
+
+            # Build tracks string: Sequence, Protein, then add domain types present
+            # Match Perl: tracks=Sequence%2CProtein%2C{domain_types}
+            tracks = ['Sequence', 'Protein']
+            for trk in domain_order + motif_order + strux_order:
+                if trk in domain_types_present:
+                    tracks.append(trk)
+
+            tracks_str = '%2C'.join(tracks)  # URL-encoded comma
+            # Use full CGD URL for JBrowse iframe - match Perl URL format exactly
+            # Perl: pbrowseHome + '&loc=' + feature + ':1..' + len + '&tracklist=0&nav=0&overview=0&tracks=...'
+            pbrowse_url = (
+                f"http://www.candidagenome.org/jbrowse/index.html"
+                f"?data=cgd_data/{strain_abbrev}_prot"
+                f"&loc={f.feature_name}:1..{protein_length}"
+                f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
+            )
+
         out[organism_name] = ProteinDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
@@ -2403,9 +2454,94 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             external_links=external_links,
             cited_references=cited_references,
             literature_guide_url=literature_guide_url,
+            pbrowse_url=pbrowse_url,
         )
 
     return ProteinDetailsResponse(results=out)
+
+
+def _fetch_sgd_gene_info(systematic_name: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Fetch gene name and status from SGD API for a given systematic name.
+    Returns (gene_name, status) tuple, or (None, None) on error.
+    Uses urllib to avoid adding requests as a dependency.
+    """
+    try:
+        url = f"https://www.yeastgenome.org/backend/locus/{systematic_name}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'CGD-Backend/1.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                gene_name = data.get('gene_name') or data.get('display_name')
+                status = data.get('qualifier')  # "Verified", "Uncharacterized", etc.
+                return gene_name, status
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, Exception):
+        pass
+    return None, None
+
+
+def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
+    """
+    Load phylogenetic tree data for a given locus.
+    Tree files are stored in {CGD_DATA_DIR}/homology/alignments/{bucket}/{dbid}_tree_*.par
+    where bucket = int(numeric_part_of_dbid / 100)
+    Returns PhylogeneticTreeOut or None if no tree files exist.
+    """
+    # Extract numeric part from dbid (e.g., "13700" from "C1_13700W_A")
+    # Pattern matches digits, ignoring leading zeros
+    match = re.search(r'[^\d]*0*(\d+)', dbid)
+    if not match:
+        return None
+
+    numeric_tag = int(match.group(1))
+    bucket = numeric_tag // 100
+
+    alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
+    unrooted_tree_file = alignment_dir / f"{dbid}_tree_unrooted.par"
+    rooted_tree_file = alignment_dir / f"{dbid}_tree_rooted.par"
+
+    # Check if tree files exist
+    if not unrooted_tree_file.exists():
+        return None
+
+    try:
+        # Read the rooted tree (preferred) or unrooted tree
+        tree_file = rooted_tree_file if rooted_tree_file.exists() else unrooted_tree_file
+        newick_tree = tree_file.read_text().strip()
+
+        # Parse basic tree statistics from Newick format
+        # Count leaves (number of names before colons or commas)
+        # This is a simple heuristic - leaves are text between ( or , and : or )
+        leaf_count = newick_tree.count(',') + 1 if ',' in newick_tree else 1
+
+        # Calculate approximate tree length by summing branch lengths
+        # Branch lengths appear after : in Newick format
+        branch_lengths = re.findall(r':([0-9.]+)', newick_tree)
+        tree_length = sum(float(bl) for bl in branch_lengths) if branch_lengths else None
+
+        # Build download links
+        download_links = []
+        if unrooted_tree_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Unrooted Tree (Newick format)",
+                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=unrooted"
+            ))
+        if rooted_tree_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Rooted Tree (Newick format)",
+                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=rooted"
+            ))
+
+        return PhylogeneticTreeOut(
+            newick_tree=newick_tree,
+            tree_length=round(tree_length, 4) if tree_length else None,
+            leaf_count=leaf_count,
+            method="SEMPHY",
+            download_links=download_links,
+        )
+
+    except Exception:
+        return None
 
 
 def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsResponse:
@@ -2418,7 +2554,15 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.dbxref_homology)
+                .joinedload(DbxrefHomology.dbxref),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.feat_homology)
+                .joinedload(FeatHomology.feature)
+                .joinedload(Feature.organism),
         )
         .filter(
             or_(
@@ -2500,13 +2644,32 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                         return f"{gene_name}/{feature_name}"
                     return feature_name
 
+                # Get orf19 identifier for CGOB link (Assembly 19/21 identifier)
+                # For Assembly 22 features, look up via feat_relationship
+                orf19_id = f.feature_name  # Default to current feature name
+                orf19_row = (
+                    db.query(Feature.feature_name)
+                    .join(
+                        FeatRelationship,
+                        Feature.feature_no == FeatRelationship.child_feature_no
+                    )
+                    .filter(
+                        FeatRelationship.parent_feature_no == f.feature_no,
+                        FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                        FeatRelationship.rank == 3,
+                    )
+                    .first()
+                )
+                if orf19_row:
+                    orf19_id = orf19_row[0]
+
                 # Add query gene first
                 query_status = None
                 qualifier_row = (
                     db.query(FeatProperty.property_value)
                     .filter(
                         FeatProperty.feature_no == f.feature_no,
-                        FeatProperty.property_type == 'Qualifier',
+                        FeatProperty.property_type == 'feature_qualifier',
                     )
                     .first()
                 )
@@ -2522,7 +2685,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     is_query=True,
                 ))
 
-                # Add other CGD orthologs
+                # Add other CGD orthologs (only from database strains, not "aliens")
                 for other_fh in hg.feat_homology:
                     other_feat = other_fh.feature
                     if other_feat and other_feat.feature_no != f.feature_no:
@@ -2533,7 +2696,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             db.query(FeatProperty.property_value)
                             .filter(
                                 FeatProperty.feature_no == other_feat.feature_no,
-                                FeatProperty.property_type == 'Qualifier',
+                                FeatProperty.property_type == 'feature_qualifier',
                             )
                             .first()
                         )
@@ -2549,34 +2712,82 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                         ))
 
-                # Add external orthologs (SGD, EnsemblFungi, etc.)
+                # Add external orthologs (SGD, EnsemblFungi) to the cluster table
+                # Use the eager-loaded relationship from homology_group
+                # dh.name stores the organism name (matches Perl behavior in CGOB.pm)
+                # Order: CGD first (already added), then SGD, then EnsemblFungi
+
+                # "Aliens" are excluded from the cluster table (from Perl CGOB.pm)
+                # These are non-standard strains not in the main CGOB analysis
+                alien_organisms = {
+                    'Candida tenuis NRRL Y-1498',
+                    'Pichia stipitis Pignal',
+                    'Spathaspora passalidarum NRRL Y-27907',
+                    'Candida metapsilosis',
+                    'Candida orthopsilosis NEW ASSEMBLY',
+                    'Candida tropicalis NEW ASSEMBLY',
+                }
+
+                # Collect SGD and EnsemblFungi orthologs separately for ordering
+                sgd_orthologs = []
+                ensembl_orthologs = []
+
                 for dh in hg.dbxref_homology:
                     dbxref = dh.dbxref
-                    if dbxref:
-                        ext_source = dbxref.source or 'External'
-                        ext_org = dbxref.description or ext_source
-                        ext_url = None
+                    if not dbxref:
+                        continue
 
-                        # Build URL for external orthologs
-                        if ext_source == 'SGD':
-                            ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
-                        elif ext_source == 'POMBASE':
-                            ext_url = f"https://www.pombase.org/gene/{dbxref.dbxref_id}"
-                        elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
-                            ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
+                    # dh.name stores the organism name (from Perl CGOB.pm SQL:
+                    # SELECT d.dbxref_id, dh.name where dh.name is used as organism)
+                    ext_org = dh.name or ''
+                    ext_org = ext_org.strip()
 
-                        orthologs.append(OrthologOut(
-                            sequence_id=dbxref.dbxref_id,
+                    # Skip "alien" organisms (matches Perl FormatHomolog.pm behavior)
+                    if ext_org in alien_organisms:
+                        continue
+
+                    # Determine source based on organism name (matching Perl CGOB.pm)
+                    # SGD = Saccharomyces cerevisiae, EnsemblFungi = non-CGD strains
+                    ext_seq_id = dbxref.dbxref_id
+                    ext_status = None
+
+                    if 'Saccharomyces cerevisiae' in ext_org:
+                        ext_source = 'SGD'
+                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                        # Fetch gene name and status from SGD API
+                        sgd_gene_name, sgd_status = _fetch_sgd_gene_info(dbxref.dbxref_id)
+                        if sgd_gene_name:
+                            ext_seq_id = f"{sgd_gene_name}/{dbxref.dbxref_id}"
+                        if sgd_status:
+                            ext_status = sgd_status.upper()
+                        sgd_orthologs.append(OrthologOut(
+                            sequence_id=ext_seq_id,
                             feature_name=dbxref.dbxref_id,
                             organism_name=ext_org,
                             source=ext_source,
-                            status=None,
+                            status=ext_status,
+                            is_query=False,
+                            url=ext_url,
+                        ))
+                    else:
+                        ext_source = 'EnsemblFungi'
+                        ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
+                        ensembl_orthologs.append(OrthologOut(
+                            sequence_id=ext_seq_id,
+                            feature_name=dbxref.dbxref_id,
+                            organism_name=ext_org,
+                            source=ext_source,
+                            status=ext_status,
                             is_query=False,
                             url=ext_url,
                         ))
 
-                # Build cluster URL and download links
-                cluster_url = f"/cgi-bin/homolog/homologTab.pl?locus={f.feature_name}"
+                # Add SGD orthologs first (after CGD), then EnsemblFungi
+                orthologs.extend(sgd_orthologs)
+                orthologs.extend(ensembl_orthologs)
+
+                # Build CGOB cluster URL using orf19 identifier
+                cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={orf19_id}"
                 cluster_id = hg.homology_group_id or f.feature_name
 
                 download_links = [
@@ -2607,11 +2818,147 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 )
                 break  # Only use first CGOB cluster
 
+        # --- Best hits in CGD species (BLAST) ---
+        best_hits_cgd = None
+        cgd_organism_name = f.organism.common_name if f.organism else organism_name
+        best_hit_type = f"best hit for {cgd_organism_name}"
+
+        # Find best hit homology groups for this feature
+        best_hit_by_species: dict[str, list[BestHitOut]] = {}
+        for fh in f.feat_homology:
+            hg = fh.homology_group
+            if hg and hg.homology_group_type == best_hit_type and hg.method == 'BLAST':
+                # Get all other features in this homology group
+                for other_fh in hg.feat_homology:
+                    other_feat = other_fh.feature
+                    if other_feat and other_feat.feature_no != f.feature_no:
+                        other_org_name, _ = _get_organism_info(other_feat)
+                        display_name = other_feat.feature_name
+                        if other_feat.gene_name and other_feat.gene_name != other_feat.feature_name:
+                            display_name = f"{other_feat.gene_name}/{other_feat.feature_name}"
+
+                        if other_org_name not in best_hit_by_species:
+                            best_hit_by_species[other_org_name] = []
+
+                        best_hit_by_species[other_org_name].append(BestHitOut(
+                            feature_name=other_feat.feature_name,
+                            gene_name=other_feat.gene_name,
+                            display_name=display_name,
+                            organism_name=other_org_name,
+                            url=f"/locus/{other_feat.feature_name}",
+                        ))
+
+        if best_hit_by_species:
+            best_hits_cgd = BestHitsInCGDOut(by_species=best_hit_by_species)
+
+        # --- External orthologs and best hits (via dbxref_feat) ---
+        # Source to species mapping
+        source_to_species = {
+            'SGD': 'S. cerevisiae',
+            'SGD_BEST_HIT': 'S. cerevisiae',
+            'POMBASE': 'S. pombe',
+            'POMBASE_BEST_HIT': 'S. pombe',
+            'AspGD': 'A. nidulans',
+            'AspGD_BEST_HIT': 'A. nidulans',
+            'BROAD_NEUROSPORA': 'N. crassa',
+            'BROAD_NEUROSPORA_BEST_HIT': 'N. crassa',
+            'dictyBase': 'D. discoideum',
+            'MGD': 'M. musculus',
+            'RGD': 'R. norvegicus',
+        }
+
+        # Source to URL template mapping
+        source_to_url = {
+            'SGD': 'https://www.yeastgenome.org/locus/{id}',
+            'SGD_BEST_HIT': 'https://www.yeastgenome.org/locus/{id}',
+            'POMBASE': 'https://www.pombase.org/gene/{id}',
+            'POMBASE_BEST_HIT': 'https://www.pombase.org/gene/{id}',
+            'AspGD': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
+            'AspGD_BEST_HIT': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
+            'BROAD_NEUROSPORA': 'https://fungidb.org/fungidb/app/record/gene/{id}',
+            'BROAD_NEUROSPORA_BEST_HIT': 'https://fungidb.org/fungidb/app/record/gene/{id}',
+            'dictyBase': 'http://dictybase.org/gene/{id}',
+            'MGD': 'http://www.informatics.jax.org/marker/{id}',
+            'RGD': 'https://rgd.mcw.edu/rgdweb/report/gene/main.html?id={id}',
+        }
+
+        # Fungal sources (for Orthologs/Best hits in fungal species)
+        fungal_sources = {'SGD', 'SGD_BEST_HIT', 'POMBASE', 'POMBASE_BEST_HIT',
+                         'AspGD', 'AspGD_BEST_HIT', 'BROAD_NEUROSPORA', 'BROAD_NEUROSPORA_BEST_HIT'}
+        # Other species sources (for Reciprocal best hits)
+        other_sources = {'dictyBase', 'MGD', 'RGD'}
+
+        # Query external homologs via dbxref_feat
+        external_dbxrefs = (
+            db.query(Dbxref)
+            .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+            .filter(DbxrefFeat.feature_no == f.feature_no)
+            .filter(Dbxref.source.in_(list(source_to_species.keys())))
+            .all()
+        )
+
+        orthologs_fungal_by_source: dict[str, list[ExternalHomologOut]] = {}
+        best_hits_fungal_by_source: dict[str, list[ExternalHomologOut]] = {}
+        reciprocal_by_source: dict[str, list[ExternalHomologOut]] = {}
+
+        for dbx in external_dbxrefs:
+            source = dbx.source
+            if not source:
+                continue
+
+            species_name = source_to_species.get(source, source)
+            url_template = source_to_url.get(source)
+            url = url_template.format(id=dbx.dbxref_id) if url_template else None
+
+            # Use description as display name if available, otherwise dbxref_id
+            display_name = dbx.description or dbx.dbxref_id
+
+            homolog = ExternalHomologOut(
+                dbxref_id=dbx.dbxref_id,
+                display_name=display_name,
+                organism_name=species_name,
+                source=source.replace('_BEST_HIT', ''),  # Normalize source name
+                url=url,
+            )
+
+            # Categorize based on source
+            if source in other_sources:
+                # Reciprocal best hits in other species
+                norm_source = source
+                if norm_source not in reciprocal_by_source:
+                    reciprocal_by_source[norm_source] = []
+                reciprocal_by_source[norm_source].append(homolog)
+            elif source in fungal_sources:
+                if 'BEST_HIT' in source:
+                    # Best hits in fungal species
+                    norm_source = source.replace('_BEST_HIT', '')
+                    if norm_source not in best_hits_fungal_by_source:
+                        best_hits_fungal_by_source[norm_source] = []
+                    best_hits_fungal_by_source[norm_source].append(homolog)
+                else:
+                    # Orthologs in fungal species
+                    if source not in orthologs_fungal_by_source:
+                        orthologs_fungal_by_source[source] = []
+                    orthologs_fungal_by_source[source].append(homolog)
+
+        orthologs_fungal = ExternalHomologsSectionOut(by_source=orthologs_fungal_by_source) if orthologs_fungal_by_source else None
+        best_hits_fungal = ExternalHomologsSectionOut(by_source=best_hits_fungal_by_source) if best_hits_fungal_by_source else None
+        reciprocal_best_hits = ExternalHomologsSectionOut(by_source=reciprocal_by_source) if reciprocal_by_source else None
+
+        # Load phylogenetic tree if available
+        # Use dbxref_id (Stanford ID like CAL0126527) as the dbid for tree files
+        phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
+
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             homology_groups=homology_groups,
             ortholog_cluster=ortholog_cluster,
+            phylogenetic_tree=phylogenetic_tree,
+            best_hits_cgd=best_hits_cgd,
+            orthologs_fungal=orthologs_fungal,
+            best_hits_fungal=best_hits_fungal,
+            reciprocal_best_hits=reciprocal_best_hits,
         )
 
     return HomologyDetailsResponse(results=out)

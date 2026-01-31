@@ -11,12 +11,16 @@ class Settings(BaseSettings):
 
     Optional:
       - DB_SCHEMA: used for prefixing table names in raw SQL: "{schema}.{table}"
+      - CGD_DATA_DIR: path to CGD data files (homology alignments, trees, etc.)
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
     db_schema: Optional[str] = None
+
+    # Path to CGD data files (default matches typical production setup)
+    cgd_data_dir: str = "/data"
 
     # Back-compat toggle for CGI-style dispatch endpoint
     allow_search_dispatch: bool = True
