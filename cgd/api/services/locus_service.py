@@ -2580,7 +2580,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     db.query(FeatProperty.property_value)
                     .filter(
                         FeatProperty.feature_no == f.feature_no,
-                        FeatProperty.property_type == 'Qualifier',
+                        FeatProperty.property_type == 'feature_qualifier',
                     )
                     .first()
                 )
@@ -2607,7 +2607,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             db.query(FeatProperty.property_value)
                             .filter(
                                 FeatProperty.feature_no == other_feat.feature_no,
-                                FeatProperty.property_type == 'Qualifier',
+                                FeatProperty.property_type == 'feature_qualifier',
                             )
                             .first()
                         )
@@ -2624,31 +2624,37 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                         ))
 
                 # Add SGD and EnsemblFungi orthologs to the cluster table
-                for dh in hg.dbxref_homology:
-                    dbxref = dh.dbxref
-                    if dbxref:
-                        ext_source = dbxref.source or ''
-                        ext_url = None
-                        ext_org = dbxref.description or ext_source
+                # Explicitly query for external orthologs linked to this homology group
+                external_orthologs = (
+                    db.query(DbxrefHomology, Dbxref)
+                    .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+                    .filter(DbxrefHomology.homology_group_no == hg.homology_group_no)
+                    .all()
+                )
 
-                        if ext_source == 'SGD':
-                            ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
-                            ext_org = 'Saccharomyces cerevisiae S288C'
-                        elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
-                            ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
-                        else:
-                            # Skip other sources - they're shown in separate sections
-                            continue
+                for dh, dbxref in external_orthologs:
+                    ext_source = dbxref.source or ''
+                    ext_url = None
+                    ext_org = dbxref.description or ext_source
 
-                        orthologs.append(OrthologOut(
-                            sequence_id=dbxref.dbxref_id,
-                            feature_name=dbxref.dbxref_id,
-                            organism_name=ext_org,
-                            source=ext_source,
-                            status=None,
-                            is_query=False,
-                            url=ext_url,
-                        ))
+                    if ext_source == 'SGD':
+                        ext_url = f"https://www.yeastgenome.org/locus/{dbxref.dbxref_id}"
+                        ext_org = 'Saccharomyces cerevisiae S288C'
+                    elif ext_source == 'EnsemblFungi' or 'Ensembl' in ext_source:
+                        ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
+                    else:
+                        # Skip other sources - they're shown in separate sections
+                        continue
+
+                    orthologs.append(OrthologOut(
+                        sequence_id=dbxref.dbxref_id,
+                        feature_name=dbxref.dbxref_id,
+                        organism_name=ext_org,
+                        source=ext_source,
+                        status=None,
+                        is_query=False,
+                        url=ext_url,
+                    ))
 
                 # Build CGOB cluster URL using orf19 identifier
                 cluster_url = f"http://cgob3.ucd.ie/cgob.pl?gene={orf19_id}"
