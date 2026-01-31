@@ -3046,7 +3046,8 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
 
         # Get other genes for all references in one query
         # Query: Find all features associated with these references via refprop_feat
-        # Filter to same organism and exclude alleles (matching Perl check_multi_feature_list)
+        # Filter to same organism, exclude alleles, and only include features with current location
+        # (matching Perl check_multi_feature_list behavior)
         other_genes_map: dict[int, list[str]] = {}  # reference_no -> list of gene names
 
         if ref_nos:
@@ -3054,10 +3055,12 @@ def get_locus_references(db: Session, name: str) -> LocusReferencesResponse:
                 db.query(RefProperty.reference_no, Feature.gene_name, Feature.feature_name)
                 .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
                 .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+                .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
                 .filter(RefProperty.reference_no.in_(ref_nos))
                 .filter(Feature.feature_no != f.feature_no)  # Exclude current feature
                 .filter(Feature.organism_no == f.organism_no)  # Same organism only
                 .filter(func.lower(Feature.feature_type) != 'allele')  # Exclude alleles
+                .filter(FeatLocation.is_loc_current == 'Y')  # Only features with current location
                 .distinct()
                 .all()
             )
