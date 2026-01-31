@@ -2402,17 +2402,19 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 if si.info_type:
                     domain_types_present.add(si.info_type)
 
-            # Build tracks string: always include Sequence and Protein
-            tracks = ['Sequence', 'Protein']
+            # Build tracks string: start with Protein, then add domain types present
+            tracks = ['Protein']
             for trk in domain_order + motif_order + strux_order:
                 if trk in domain_types_present:
                     tracks.append(trk)
 
             tracks_str = '%2C'.join(tracks)  # URL-encoded comma
+            # Use full CGD URL for JBrowse iframe
             pbrowse_url = (
-                f"/jbrowse/index.html?data=cgd_data/{strain_abbrev}_prot"
-                f"&loc={f.feature_name}:1..{protein_length}"
-                f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
+                f"http://www.candidagenome.org/jbrowse/index.html"
+                f"?data=cgd_data%2F{strain_abbrev}_prot"
+                f"&loc={f.feature_name}%3A1..{protein_length}"
+                f"&tracklist=1&nav=1&overview=1&tracks={tracks_str}&highlight="
             )
 
         out[organism_name] = ProteinDetailsForOrganism(
