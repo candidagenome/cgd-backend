@@ -2322,22 +2322,29 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
 
         # AlphaFold structure lookup
         # Look for UniProt ID in dbxref_feat and construct AlphaFold URL
+        # Perl query: source = 'EBI' and dbxref_type in ('SwissProt', 'TrEMBL')
         alphafold_info = None
         uniprot_id = None
 
-        # Query for UniProt/SwissProt dbxref
+        # Query for UniProt/SwissProt dbxref (matching Perl get_uniprot_dbxref)
         uniprot_dbxref = (
-            db.query(Dbxref.dbxref_id)
+            db.query(Dbxref.dbxref_id, Dbxref.dbxref_type)
             .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
             .filter(
                 DbxrefFeat.feature_no == f.feature_no,
-                Dbxref.source.in_(['UniProtKB/Swiss-Prot', 'UniProt', 'SwissProt', 'UniProtKB']),
+                Dbxref.source == 'EBI',
+                Dbxref.dbxref_type.in_(['SwissProt', 'TrEMBL']),
             )
-            .first()
+            .all()
         )
 
-        if uniprot_dbxref:
-            uniprot_id = uniprot_dbxref[0]
+        # Prefer SwissProt over TrEMBL (like Perl does)
+        for dbxref_id, dbxref_type in uniprot_dbxref:
+            uniprot_id = dbxref_id
+            if dbxref_type == 'SwissProt':
+                break  # SwissProt is preferred
+
+        if uniprot_id:
             alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{uniprot_id}"
             alphafold_info = AlphaFoldInfo(
                 uniprot_id=uniprot_id,
