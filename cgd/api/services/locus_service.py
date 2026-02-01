@@ -92,6 +92,21 @@ from cgd.schemas.protein_schema import (
     ReferenceForProtein,
     CitationLinkForProtein,
     AlphaFoldInfo,
+    ProteinPropertiesResponse,
+    ProteinPropertiesForOrganism,
+    AminoAcidComposition,
+    BulkPropertyItem,
+    ExtinctionCoefficient,
+    AtomicCompositionItem,
+    CodonUsageItem,
+    ProteinDomainResponse,
+    ProteinDomainForOrganism,
+    InterProDomain,
+    DomainEntry,
+    DomainHit,
+    TransmembraneDomain,
+    SignalPeptide,
+    DomainExternalLink,
 )
 from cgd.schemas.homology_schema import (
     HomologyDetailsResponse,
@@ -4257,3 +4272,466 @@ def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
         )
 
     return LocusHistoryResponse(results=out)
+
+
+# Amino acid abbreviations mapping (3-letter to 1-letter)
+AA_ABBREV = {
+    'ala': ('A', 'Ala'), 'arg': ('R', 'Arg'), 'asn': ('N', 'Asn'), 'asp': ('D', 'Asp'),
+    'cys': ('C', 'Cys'), 'gln': ('Q', 'Gln'), 'glu': ('E', 'Glu'), 'gly': ('G', 'Gly'),
+    'his': ('H', 'His'), 'ile': ('I', 'Ile'), 'leu': ('L', 'Leu'), 'lys': ('K', 'Lys'),
+    'met': ('M', 'Met'), 'phe': ('F', 'Phe'), 'pro': ('P', 'Pro'), 'ser': ('S', 'Ser'),
+    'thr': ('T', 'Thr'), 'trp': ('W', 'Trp'), 'tyr': ('Y', 'Tyr'), 'val': ('V', 'Val'),
+}
+
+# Instability index cutoff
+STABLE_INDEX_CUTOFF = 40
+
+
+def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesResponse:
+    """
+    Get physico-chemical properties for a protein.
+
+    This includes:
+    - Amino acid composition
+    - Bulk protein properties (pI, GRAVY, aromaticity, aliphatic index, instability index)
+    - Extinction coefficients
+    - Codon usage statistics
+    - Atomic composition
+    """
+    features = get_features_for_locus_name(db, name)
+    if not features:
+        return ProteinPropertiesResponse(results={})
+
+    # Eager load protein_info and protein_detail
+    feature_nos = [f.feature_no for f in features]
+    features_with_protein = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.protein_info).joinedload(ProteinInfo.protein_detail),
+            joinedload(Feature.organism),
+        )
+        .filter(Feature.feature_no.in_(feature_nos))
+        .all()
+    )
+
+    # Build one entry per organism
+    seen_organisms = set()
+    out: dict[str, ProteinPropertiesForOrganism] = {}
+
+    for f in features_with_protein:
+        organism_name, taxon_id = _get_organism_info(f)
+        if organism_name in seen_organisms:
+            continue
+        seen_organisms.add(organism_name)
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Build protein name (e.g., "Act1p/C1_13700wp_a")
+        protein_name = ""
+        if f.gene_name:
+            protein_name = _gene_name_to_protein_name(f.gene_name) + "/"
+        protein_name += _systematic_name_to_protein_name(f.feature_name)
+
+        pi = f.protein_info[0] if f.protein_info else None
+        if not pi:
+            out[organism_name] = ProteinPropertiesForOrganism(
+                locus_display_name=locus_display_name,
+                protein_name=protein_name,
+                taxon_id=taxon_id,
+                organism_name=organism_name,
+                has_ambiguous_residues=True,
+            )
+            continue
+
+        protein_length = pi.protein_length or 0
+
+        # Section 1: Amino Acid Composition
+        aa_composition = []
+        for aa_col, (one_letter, three_letter) in sorted(AA_ABBREV.items(), key=lambda x: x[1][0]):
+            count = getattr(pi, aa_col, 0) or 0
+            percentage = round((count * 100 / protein_length), 1) if protein_length > 0 else 0.0
+            aa_composition.append(AminoAcidComposition(
+                amino_acid=f"{one_letter} ({three_letter})",
+                count=count,
+                percentage=percentage,
+            ))
+
+        # Section 2: Bulk Protein Properties
+        bulk_properties = []
+        if pi.pi is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Isoelectric Point (pI)",
+                value=f"{float(pi.pi):.2f}",
+            ))
+        if pi.gravy_score is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Average Hydropathy (GRAVY)",
+                value=f"{float(pi.gravy_score):.2f}",
+            ))
+        if pi.aromaticity_score is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Aromaticity Score",
+                value=f"{float(pi.aromaticity_score):.2f}",
+            ))
+
+        # Get aliphatic index and instability index from protein_detail
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and pd.protein_detail_group.upper() == 'ALIPHATIC INDEX':
+                bulk_properties.append(BulkPropertyItem(
+                    label="Aliphatic Index",
+                    value=pd.protein_detail_value,
+                ))
+            elif pd.protein_detail_group and pd.protein_detail_group.upper() == 'INSTABILITY INDEX':
+                try:
+                    ii_value = float(pd.protein_detail_value)
+                    stability = "(stable)" if ii_value < STABLE_INDEX_CUTOFF else "(unstable)"
+                    bulk_properties.append(BulkPropertyItem(
+                        label="Instability Index",
+                        value=f"{ii_value:.2f}",
+                        note=stability,
+                    ))
+                except (ValueError, TypeError):
+                    bulk_properties.append(BulkPropertyItem(
+                        label="Instability Index",
+                        value=pd.protein_detail_value,
+                    ))
+
+        # Section 3: Extinction Coefficients
+        extinction_coefficients = []
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and 'EXTINCTION' in pd.protein_detail_group.upper():
+                pd_type = pd.protein_detail_type or ""
+                if 'all' in pd_type.lower():
+                    condition = "Assuming all Cys residues exist as cysteine (-C-SH)"
+                else:
+                    condition = "Assuming all Cys residues exist as half-cystines (-C-S-S-C-)"
+                try:
+                    value = float(pd.protein_detail_value)
+                    extinction_coefficients.append(ExtinctionCoefficient(
+                        condition=condition,
+                        value=value,
+                        unit="M⁻¹ cm⁻¹",
+                    ))
+                except (ValueError, TypeError):
+                    pass
+
+        # Section 4: Codon Usage Statistics
+        codon_usage = []
+        if pi.codon_bias is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Codon Bias Index",
+                value=round(float(pi.codon_bias), 3),
+            ))
+        if pi.cai is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Codon Adaptation Index (CAI)",
+                value=round(float(pi.cai), 3),
+            ))
+        if pi.fop_score is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Frequency of Optimal Codons (FOP)",
+                value=round(float(pi.fop_score), 3),
+            ))
+
+        # Section 5: Atomic Composition
+        atomic_composition = []
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and 'ATOMIC' in pd.protein_detail_group.upper():
+                try:
+                    count = int(float(pd.protein_detail_value))
+                    atom_name = pd.protein_detail_type or "Unknown"
+                    atom_name = atom_name.title()
+                    atomic_composition.append(AtomicCompositionItem(
+                        atom=atom_name,
+                        count=count,
+                    ))
+                except (ValueError, TypeError):
+                    pass
+
+        # Sort atomic composition alphabetically
+        atomic_composition.sort(key=lambda x: x.atom)
+
+        out[organism_name] = ProteinPropertiesForOrganism(
+            locus_display_name=locus_display_name,
+            protein_name=protein_name,
+            taxon_id=taxon_id,
+            organism_name=organism_name,
+            amino_acid_composition=aa_composition,
+            protein_length=protein_length,
+            bulk_properties=bulk_properties,
+            extinction_coefficients=extinction_coefficients,
+            codon_usage=codon_usage,
+            atomic_composition=atomic_composition,
+            has_ambiguous_residues=False,
+            protein_page_url=f"/locus/{locus_display_name}#protein",
+        )
+
+    return ProteinPropertiesResponse(results=out)
+
+
+# External domain database URLs
+DOMAIN_DB_URLS = {
+    'InterPro': 'https://www.ebi.ac.uk/interpro/entry/InterPro/',
+    'Pfam': 'https://www.ebi.ac.uk/interpro/entry/pfam/',
+    'SMART': 'http://smart.embl-heidelberg.de/smart/do_annotation.pl?ACC=',
+    'ProSiteProfiles': 'https://prosite.expasy.org/',
+    'ProSitePatterns': 'https://prosite.expasy.org/',
+    'PRINTS': 'http://umber.sbs.man.ac.uk/cgi-bin/dbbrowser/sprint/searchprintss.cgi?display_opts=Prints&queryform=false&prints_accn=',
+    'TIGRFAMs': 'https://www.ncbi.nlm.nih.gov/genome/annotation_prok/tigrfams/',
+    'SUPERFAMILY': 'https://supfam.org/SUPERFAMILY/cgi-bin/scop.cgi?sunid=',
+    'Gene3D': 'http://www.cathdb.info/version/latest/superfamily/',
+    'PANTHER': 'http://www.pantherdb.org/panther/family.do?clsAccession=',
+    'CDD': 'https://www.ncbi.nlm.nih.gov/Structure/cdd/cddsrv.cgi?uid=',
+    'PIRSF': 'https://proteininformationresource.org/cgi-bin/ipcSF?id=',
+    'Coils': None,
+    'MobiDBLite': None,
+    'SignalP': None,
+    'TMHMM': None,
+}
+
+
+def _infer_domain_db_from_accession(accession: str) -> tuple[str, str]:
+    """
+    Infer the member database name from the accession prefix.
+    Returns (database_name, url) tuple.
+    """
+    acc_upper = accession.upper()
+
+    if acc_upper.startswith('PF'):
+        return 'Pfam', f'https://www.ebi.ac.uk/interpro/entry/pfam/{accession}'
+    elif acc_upper.startswith('PTHR'):
+        return 'PANTHER', f'http://www.pantherdb.org/panther/family.do?clsAccession={accession}'
+    elif acc_upper.startswith('SM'):
+        return 'SMART', f'http://smart.embl-heidelberg.de/smart/do_annotation.pl?ACC={accession}'
+    elif acc_upper.startswith('SSF'):
+        return 'SUPERFAMILY', f'https://supfam.org/SUPERFAMILY/cgi-bin/scop.cgi?sunid={accession.replace("SSF", "")}'
+    elif acc_upper.startswith('G3DSA:'):
+        return 'Gene3D', f'http://www.cathdb.info/version/latest/superfamily/{accession.replace("G3DSA:", "")}'
+    elif acc_upper.startswith('CD'):
+        return 'CDD', f'https://www.ncbi.nlm.nih.gov/Structure/cdd/cddsrv.cgi?uid={accession}'
+    elif acc_upper.startswith('PS'):
+        return 'ProSite', f'https://prosite.expasy.org/{accession}'
+    elif acc_upper.startswith('PR'):
+        return 'PRINTS', f'http://umber.sbs.man.ac.uk/cgi-bin/dbbrowser/sprint/searchprintss.cgi?display_opts=Prints&queryform=false&prints_accn={accession}'
+    elif acc_upper.startswith('TIGR'):
+        return 'TIGRFAMs', f'https://www.ncbi.nlm.nih.gov/genome/annotation_prok/tigrfams/{accession}'
+    elif acc_upper.startswith('PIRSF'):
+        return 'PIRSF', f'https://proteininformationresource.org/cgi-bin/ipcSF?id={accession}'
+    elif acc_upper.startswith('IPR'):
+        return 'InterPro', f'https://www.ebi.ac.uk/interpro/entry/InterPro/{accession}'
+    else:
+        return 'Unknown', None
+
+EXTERNAL_DOMAIN_LINKS = [
+    {
+        'name': 'NCBI DART',
+        'url_template': 'https://www.ncbi.nlm.nih.gov/Structure/lexington/lexington.cgi?cmd=rps&query={sequence}',
+        'description': 'NCBI Domain Architecture Retrieval Tool',
+    },
+    {
+        'name': 'SMART',
+        'url_template': 'http://smart.embl.de/smart/show_motifs.pl?SEQUENCE={sequence}',
+        'description': 'Simple Modular Architecture Research Tool',
+    },
+    {
+        'name': 'Pfam',
+        'url_template': 'https://www.ebi.ac.uk/Tools/hmmer/search/hmmscan',
+        'description': 'Protein families database',
+    },
+    {
+        'name': 'Prosite',
+        'url_template': 'https://prosite.expasy.org/scanprosite/',
+        'description': 'Protein domain and family database',
+    },
+]
+
+
+def get_locus_domain_details(db: Session, name: str) -> ProteinDomainResponse:
+    """
+    Get domain/motif information for a protein, grouped by organism.
+
+    Returns conserved domains (grouped by InterPro), transmembrane domains,
+    signal peptides, and external links.
+    """
+    from cgd.models.models import Feature, ProteinInfo, ProteinDetail, Seq
+
+    # Get features matching the name
+    features = get_features_for_locus_name(db, name)
+    if not features:
+        return ProteinDomainResponse(results={})
+
+    feature_nos = [f.feature_no for f in features]
+
+    # Fetch features with protein_info and protein_detail
+    features_with_protein = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.protein_info).joinedload(ProteinInfo.protein_detail),
+            joinedload(Feature.organism),
+            joinedload(Feature.seq),
+        )
+        .filter(Feature.feature_no.in_(feature_nos))
+        .all()
+    )
+
+    # Build one entry per organism
+    seen_organisms = set()
+    out: dict[str, ProteinDomainForOrganism] = {}
+
+    for f in features_with_protein:
+        organism_name, taxon_id = _get_organism_info(f)
+        if organism_name in seen_organisms:
+            continue
+        seen_organisms.add(organism_name)
+
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Build protein name (e.g., "Act1p/C1_13700wp_a")
+        protein_name = ""
+        if f.gene_name:
+            protein_name = _gene_name_to_protein_name(f.gene_name) + "/"
+        protein_name += _systematic_name_to_protein_name(f.feature_name)
+
+        pi = f.protein_info[0] if f.protein_info else None
+        protein_length = pi.protein_length if pi else None
+
+        # Get protein sequence for external links
+        protein_sequence = None
+        for seq in f.seq:
+            if seq.is_seq_current == 'Y' and (seq.seq_type or '').upper() == 'PROTEIN':
+                protein_sequence = seq.residues
+                break
+
+        # Organize domains by InterPro ID
+        interpro_groups: dict[str, dict] = {}  # interpro_id -> {desc, members}
+        transmembrane_domains = []
+        signal_peptides = []
+
+        if pi:
+            for pd in pi.protein_detail:
+                group = (pd.protein_detail_group or '').lower()
+                detail_type = pd.protein_detail_type or ''
+
+                # Check for TMHMM (transmembrane)
+                if 'tmhmm' in group.lower() or detail_type.upper() == 'TMHMM':
+                    if pd.start_coord is not None:
+                        transmembrane_domains.append(TransmembraneDomain(
+                            type=pd.protein_detail_value or 'transmembrane helix',
+                            start_coord=pd.start_coord,
+                            stop_coord=pd.stop_coord or pd.start_coord,
+                        ))
+                    continue
+
+                # Check for SignalP (signal peptide)
+                if 'signalp' in group.lower() or detail_type.upper() == 'SIGNALP':
+                    if pd.start_coord is not None:
+                        signal_peptides.append(SignalPeptide(
+                            type=pd.protein_detail_value or 'signal peptide',
+                            start_coord=pd.start_coord,
+                            stop_coord=pd.stop_coord,
+                        ))
+                    continue
+
+                # Skip non-domain entries
+                if 'domain' not in group and group not in ('pfam', 'smart', 'interpro', 'prosite', 'prints', 'tigrfams', 'superfamily', 'gene3d', 'panther', 'cdd', 'pirsf', 'prositeprofiles', 'prositepatterns'):
+                    continue
+
+                # The actual accession (like PF00022, PTHR11937) is in protein_detail_value
+                member_accession = pd.protein_detail_value or ''
+                if not member_accession:
+                    continue
+
+                # Infer database name and URL from accession prefix
+                member_db, member_url = _infer_domain_db_from_accession(member_accession)
+
+                # Get InterPro ID (or use 'unintegrated' if none)
+                # interpro_dbxref_id might be internal ID - group domains by it
+                interpro_id = pd.interpro_dbxref_id or 'unintegrated'
+
+                # Initialize InterPro group if needed
+                if interpro_id not in interpro_groups:
+                    interpro_groups[interpro_id] = {
+                        'desc': None,  # We don't have the InterPro description
+                        'members': {},
+                    }
+
+                # Key for this member domain
+                member_key = f"{member_db}:{member_accession}"
+
+                if member_key not in interpro_groups[interpro_id]['members']:
+                    interpro_groups[interpro_id]['members'][member_key] = {
+                        'db': member_db,
+                        'id': member_accession,
+                        'desc': pd.protein_detail_type or '',  # Type might have description
+                        'url': member_url,
+                        'hits': [],
+                    }
+
+                # Add hit coordinates
+                if pd.start_coord is not None:
+                    interpro_groups[interpro_id]['members'][member_key]['hits'].append({
+                        'start': pd.start_coord,
+                        'stop': pd.stop_coord,
+                        'evalue': None,  # Not stored in protein_detail
+                    })
+
+        # Build InterPro domain list
+        interpro_domains = []
+        for ipr_id, ipr_data in sorted(interpro_groups.items()):
+            member_domains = []
+            for member_key, member_data in sorted(ipr_data['members'].items()):
+                hits = [
+                    DomainHit(
+                        start_coord=h['start'],
+                        stop_coord=h['stop'],
+                        evalue=h['evalue'],
+                    )
+                    for h in member_data['hits']
+                ]
+                member_domains.append(DomainEntry(
+                    member_db=member_data['db'],
+                    member_id=member_data['id'],
+                    description=member_data['desc'],
+                    hits=hits,
+                    member_url=member_data['url'],
+                ))
+
+            # InterPro URL
+            interpro_url = None
+            if ipr_id != 'unintegrated' and ipr_id:
+                interpro_url = DOMAIN_DB_URLS.get('InterPro', '') + ipr_id
+
+            interpro_domains.append(InterProDomain(
+                interpro_id=ipr_id if ipr_id != 'unintegrated' else None,
+                interpro_description=ipr_data['desc'],
+                interpro_url=interpro_url,
+                member_domains=member_domains,
+            ))
+
+        # Build external links
+        external_links = []
+        for link_info in EXTERNAL_DOMAIN_LINKS:
+            url = link_info['url_template']
+            if '{sequence}' in url and protein_sequence:
+                # Remove stop codon if present
+                seq = protein_sequence.rstrip('*')
+                url = url.format(sequence=seq)
+            external_links.append(DomainExternalLink(
+                name=link_info['name'],
+                url=url,
+                description=link_info.get('description'),
+            ))
+
+        out[organism_name] = ProteinDomainForOrganism(
+            locus_display_name=locus_display_name,
+            protein_name=protein_name,
+            taxon_id=taxon_id,
+            organism_name=organism_name,
+            protein_length=protein_length,
+            interpro_domains=interpro_domains,
+            transmembrane_domains=transmembrane_domains,
+            signal_peptides=signal_peptides,
+            external_links=external_links,
+            protein_page_url=f"/locus/{locus_display_name}#protein",
+        )
+
+    return ProteinDomainResponse(results=out)

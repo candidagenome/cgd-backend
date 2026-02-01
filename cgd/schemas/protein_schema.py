@@ -187,3 +187,161 @@ class ProteinDetailsResponse(BaseModel):
     }
     """
     results: dict[str, ProteinDetailsForOrganism]
+
+
+# =====================================================
+# Protein Physico-chemical Properties Page Schemas
+# =====================================================
+
+class AminoAcidComposition(BaseModel):
+    """Amino acid composition with counts and percentages."""
+    amino_acid: str  # e.g., "A (Ala)"
+    count: int
+    percentage: float  # e.g., 5.2
+
+
+class BulkPropertyItem(BaseModel):
+    """A single bulk property with label and value."""
+    label: str  # e.g., "Isoelectric Point (pI)"
+    value: str  # Formatted value with unit if applicable
+    note: typing.Optional[str] = None  # e.g., "(stable)" or "(unstable)"
+
+
+class ExtinctionCoefficient(BaseModel):
+    """Extinction coefficient value."""
+    condition: str  # e.g., "Assuming all Cys residues exist as cysteine"
+    value: float
+    unit: str  # e.g., "M⁻¹ cm⁻¹"
+
+
+class AtomicCompositionItem(BaseModel):
+    """Atomic composition entry."""
+    atom: str  # e.g., "Carbon"
+    count: int
+
+
+class CodonUsageItem(BaseModel):
+    """Codon usage statistics."""
+    label: str  # e.g., "Codon Bias Index"
+    value: float
+
+
+class ProteinPropertiesForOrganism(BaseModel):
+    """Full protein properties for a single organism."""
+    # Identification
+    locus_display_name: str
+    protein_name: str  # e.g., "Act1p/C1_13700wp_a"
+    taxon_id: int
+    organism_name: str
+
+    # Section 1: Amino Acid Composition
+    amino_acid_composition: list[AminoAcidComposition] = []
+    protein_length: int = 0
+
+    # Section 2: Bulk Protein Properties
+    bulk_properties: list[BulkPropertyItem] = []
+
+    # Section 3: Extinction Coefficients
+    extinction_coefficients: list[ExtinctionCoefficient] = []
+
+    # Section 4: Codon Usage Statistics
+    codon_usage: list[CodonUsageItem] = []
+
+    # Section 5: Atomic Composition
+    atomic_composition: list[AtomicCompositionItem] = []
+
+    # Has ambiguous residues (if true, properties couldn't be calculated)
+    has_ambiguous_residues: bool = False
+
+    # Link back to protein page
+    protein_page_url: typing.Optional[str] = None
+
+
+class ProteinPropertiesResponse(BaseModel):
+    """Response for protein properties endpoint."""
+    results: dict[str, ProteinPropertiesForOrganism]
+
+
+# =====================================================
+# Protein Domain/Motif Page Schemas
+# =====================================================
+
+class DomainHit(BaseModel):
+    """A single domain hit with coordinates."""
+    start_coord: typing.Optional[int] = None
+    stop_coord: typing.Optional[int] = None
+    evalue: typing.Optional[str] = None
+
+
+class DomainEntry(BaseModel):
+    """A domain entry with member database info."""
+    member_db: str  # e.g., "Pfam", "SMART"
+    member_id: str  # e.g., "PF00022"
+    description: str  # Domain description
+    hits: list[DomainHit] = []  # Can have multiple hits per domain
+    member_url: typing.Optional[str] = None  # URL to member database
+
+
+class InterProDomain(BaseModel):
+    """An InterPro domain grouping member domains."""
+    interpro_id: typing.Optional[str] = None  # e.g., "IPR001023" or None if unintegrated
+    interpro_description: typing.Optional[str] = None
+    interpro_url: typing.Optional[str] = None
+    member_domains: list[DomainEntry] = []
+
+
+class TransmembraneDomain(BaseModel):
+    """Transmembrane domain prediction (TMHMM)."""
+    type: str  # e.g., "transmembrane helix", "inside", "outside"
+    start_coord: int
+    stop_coord: int
+
+
+class SignalPeptide(BaseModel):
+    """Signal peptide prediction (SignalP)."""
+    type: str  # e.g., "signal peptide"
+    start_coord: int
+    stop_coord: typing.Optional[int] = None
+
+
+class DomainExternalLink(BaseModel):
+    """External link to domain search databases."""
+    name: str  # e.g., "NCBI DART", "SMART", "Pfam"
+    url: str
+    description: typing.Optional[str] = None
+
+
+class ProteinDomainForOrganism(BaseModel):
+    """Full domain/motif information for a single organism."""
+    # Identification
+    locus_display_name: str
+    protein_name: str  # e.g., "Act1p/C1_13700wp_a"
+    taxon_id: int
+    organism_name: str
+    protein_length: typing.Optional[int] = None
+
+    # Section 1: Conserved Domains (grouped by InterPro)
+    interpro_domains: list[InterProDomain] = []
+
+    # Section 2: Transmembrane Domains (TMHMM)
+    transmembrane_domains: list[TransmembraneDomain] = []
+
+    # Section 3: Signal Peptides (SignalP)
+    signal_peptides: list[SignalPeptide] = []
+
+    # Section 4: External Links
+    external_links: list[DomainExternalLink] = []
+
+    # PBrowse URL for visualization
+    pbrowse_url: typing.Optional[str] = None
+
+    # Link back to protein page
+    protein_page_url: typing.Optional[str] = None
+
+    # Last update date (if available)
+    last_update: typing.Optional[str] = None
+
+
+class ProteinDomainResponse(BaseModel):
+    """Response for protein domain endpoint."""
+    results: dict[str, ProteinDomainForOrganism]
