@@ -575,6 +575,7 @@ def search_references_by_author(db: Session, author_name: str) -> AuthorSearchRe
             Reference.citation,
             Reference.year,
             Reference.pubmed,
+            Reference.dbxref_id,
         )
         .distinct()
         .join(AuthorEditor, Reference.reference_no == AuthorEditor.reference_no)
@@ -595,7 +596,7 @@ def search_references_by_author(db: Session, author_name: str) -> AuthorSearchRe
     # Build response with full reference info
     references = []
     for row in results:
-        ref_no, citation, year, pubmed = row
+        ref_no, citation, year, pubmed, dbxref_id = row
 
         # Get author list for this reference
         author_editors = (
@@ -606,15 +607,6 @@ def search_references_by_author(db: Session, author_name: str) -> AuthorSearchRe
             .all()
         )
         author_list = ', '.join([ae[0] for ae in author_editors])
-
-        # Get dbxref_id for the reference
-        ref = db.query(Reference).filter(Reference.reference_no == ref_no).first()
-        dbxref_id = ''
-        if ref and ref.ref_links:
-            for link in ref.ref_links:
-                if link.dbxref and link.dbxref.source == 'CGD':
-                    dbxref_id = link.dbxref.dbxref_id
-                    break
 
         # Build citation links
         links = []
@@ -633,7 +625,7 @@ def search_references_by_author(db: Session, author_name: str) -> AuthorSearchRe
 
         references.append(ReferenceSearchResult(
             reference_no=ref_no,
-            dbxref_id=dbxref_id,
+            dbxref_id=dbxref_id or '',
             pubmed=pubmed,
             citation=citation or '',
             year=year or 0,
