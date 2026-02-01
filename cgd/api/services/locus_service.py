@@ -4311,12 +4311,10 @@ def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesRes
     out: dict[str, ProteinPropertiesForOrganism] = {}
 
     for f in features_with_protein:
-        organism_name = f.organism.genus_species if f.organism else "Unknown"
+        organism_name, taxon_id = _get_organism_info(f)
         if organism_name in seen_organisms:
             continue
         seen_organisms.add(organism_name)
-
-        taxon_id = f.organism.taxon_id if f.organism else 0
         locus_display_name = f.gene_name or f.feature_name
 
         # Build protein name (e.g., "Act1p/C1_13700wp_a")
