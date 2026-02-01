@@ -99,6 +99,14 @@ from cgd.schemas.protein_schema import (
     ExtinctionCoefficient,
     AtomicCompositionItem,
     CodonUsageItem,
+    ProteinDomainResponse,
+    ProteinDomainForOrganism,
+    InterProDomain,
+    DomainEntry,
+    DomainHit,
+    TransmembraneDomain,
+    SignalPeptide,
+    DomainExternalLink,
 )
 from cgd.schemas.homology_schema import (
     HomologyDetailsResponse,
@@ -4458,3 +4466,236 @@ def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesRes
         )
 
     return ProteinPropertiesResponse(results=out)
+
+
+# External domain database URLs
+DOMAIN_DB_URLS = {
+    'InterPro': 'https://www.ebi.ac.uk/interpro/entry/InterPro/',
+    'Pfam': 'https://www.ebi.ac.uk/interpro/entry/pfam/',
+    'SMART': 'http://smart.embl-heidelberg.de/smart/do_annotation.pl?ACC=',
+    'ProSiteProfiles': 'https://prosite.expasy.org/',
+    'ProSitePatterns': 'https://prosite.expasy.org/',
+    'PRINTS': 'http://umber.sbs.man.ac.uk/cgi-bin/dbbrowser/sprint/searchprintss.cgi?display_opts=Prints&queryform=false&prints_accn=',
+    'TIGRFAMs': 'https://www.ncbi.nlm.nih.gov/genome/annotation_prok/tigrfams/',
+    'SUPERFAMILY': 'https://supfam.org/SUPERFAMILY/cgi-bin/scop.cgi?sunid=',
+    'Gene3D': 'http://www.cathdb.info/version/latest/superfamily/',
+    'PANTHER': 'http://www.pantherdb.org/panther/family.do?clsAccession=',
+    'CDD': 'https://www.ncbi.nlm.nih.gov/Structure/cdd/cddsrv.cgi?uid=',
+    'PIRSF': 'https://proteininformationresource.org/cgi-bin/ipcSF?id=',
+    'Coils': None,
+    'MobiDBLite': None,
+    'SignalP': None,
+    'TMHMM': None,
+}
+
+EXTERNAL_DOMAIN_LINKS = [
+    {
+        'name': 'NCBI DART',
+        'url_template': 'https://www.ncbi.nlm.nih.gov/Structure/lexington/lexington.cgi?cmd=rps&query={sequence}',
+        'description': 'NCBI Domain Architecture Retrieval Tool',
+    },
+    {
+        'name': 'SMART',
+        'url_template': 'http://smart.embl.de/smart/show_motifs.pl?SEQUENCE={sequence}',
+        'description': 'Simple Modular Architecture Research Tool',
+    },
+    {
+        'name': 'Pfam',
+        'url_template': 'https://www.ebi.ac.uk/Tools/hmmer/search/hmmscan',
+        'description': 'Protein families database',
+    },
+    {
+        'name': 'Prosite',
+        'url_template': 'https://prosite.expasy.org/scanprosite/',
+        'description': 'Protein domain and family database',
+    },
+]
+
+
+def get_locus_domain_details(db: Session, name: str) -> ProteinDomainResponse:
+    """
+    Get domain/motif information for a protein, grouped by organism.
+
+    Returns conserved domains (grouped by InterPro), transmembrane domains,
+    signal peptides, and external links.
+    """
+    from cgd.models.models import Feature, ProteinInfo, ProteinDetail, Seq
+
+    # Get features matching the name
+    feature_nos = get_features_for_locus_name(db, name)
+    if not feature_nos:
+        return ProteinDomainResponse(results={})
+
+    # Fetch features with protein_info and protein_detail
+    features_with_protein = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.protein_info).joinedload(ProteinInfo.protein_detail),
+            joinedload(Feature.organism),
+            joinedload(Feature.seq),
+        )
+        .filter(Feature.feature_no.in_(feature_nos))
+        .all()
+    )
+
+    # Build one entry per organism
+    seen_organisms = set()
+    out: dict[str, ProteinDomainForOrganism] = {}
+
+    for f in features_with_protein:
+        organism_name, taxon_id = _get_organism_info(f)
+        if organism_name in seen_organisms:
+            continue
+        seen_organisms.add(organism_name)
+
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Build protein name (e.g., "Act1p/C1_13700wp_a")
+        protein_name = ""
+        if f.gene_name:
+            protein_name = _gene_name_to_protein_name(f.gene_name) + "/"
+        protein_name += _systematic_name_to_protein_name(f.feature_name)
+
+        pi = f.protein_info[0] if f.protein_info else None
+        protein_length = pi.protein_length if pi else None
+
+        # Get protein sequence for external links
+        protein_sequence = None
+        for seq in f.seq:
+            if seq.is_seq_current == 'Y' and (seq.seq_type or '').upper() == 'PROTEIN':
+                protein_sequence = seq.residues
+                break
+
+        # Organize domains by InterPro ID
+        interpro_groups: dict[str, dict] = {}  # interpro_id -> {desc, members}
+        transmembrane_domains = []
+        signal_peptides = []
+
+        if pi:
+            for pd in pi.protein_detail:
+                group = (pd.protein_detail_group or '').lower()
+                detail_type = pd.protein_detail_type or ''
+
+                # Check for TMHMM (transmembrane)
+                if 'tmhmm' in group.lower() or detail_type.upper() == 'TMHMM':
+                    if pd.start_coord is not None:
+                        transmembrane_domains.append(TransmembraneDomain(
+                            type=pd.protein_detail_value or 'transmembrane helix',
+                            start_coord=pd.start_coord,
+                            stop_coord=pd.stop_coord or pd.start_coord,
+                        ))
+                    continue
+
+                # Check for SignalP (signal peptide)
+                if 'signalp' in group.lower() or detail_type.upper() == 'SIGNALP':
+                    if pd.start_coord is not None:
+                        signal_peptides.append(SignalPeptide(
+                            type=pd.protein_detail_value or 'signal peptide',
+                            start_coord=pd.start_coord,
+                            stop_coord=pd.stop_coord,
+                        ))
+                    continue
+
+                # Skip non-domain entries
+                if 'domain' not in group and group not in ('pfam', 'smart', 'interpro', 'prosite', 'prints', 'tigrfams', 'superfamily', 'gene3d', 'panther', 'cdd', 'pirsf', 'prositeprofiles', 'prositepatterns'):
+                    continue
+
+                # Get InterPro ID (or use 'unintegrated' if none)
+                interpro_id = pd.interpro_dbxref_id or 'unintegrated'
+                member_db = pd.protein_detail_group or 'Unknown'
+                member_id = pd.member_dbxref_id or pd.protein_detail_type or ''
+
+                # Initialize InterPro group if needed
+                if interpro_id not in interpro_groups:
+                    interpro_groups[interpro_id] = {
+                        'desc': pd.protein_detail_value if interpro_id != 'unintegrated' else None,
+                        'members': {},
+                    }
+
+                # Key for this member domain
+                member_key = f"{member_db}:{member_id}"
+
+                if member_key not in interpro_groups[interpro_id]['members']:
+                    # Determine URL for member database
+                    member_url = None
+                    db_name = member_db.replace(' ', '')
+                    if db_name in DOMAIN_DB_URLS and DOMAIN_DB_URLS[db_name]:
+                        member_url = DOMAIN_DB_URLS[db_name] + member_id
+
+                    interpro_groups[interpro_id]['members'][member_key] = {
+                        'db': member_db,
+                        'id': member_id,
+                        'desc': pd.protein_detail_value or '',
+                        'url': member_url,
+                        'hits': [],
+                    }
+
+                # Add hit coordinates
+                if pd.start_coord is not None:
+                    interpro_groups[interpro_id]['members'][member_key]['hits'].append({
+                        'start': pd.start_coord,
+                        'stop': pd.stop_coord,
+                        'evalue': None,  # Not stored in protein_detail
+                    })
+
+        # Build InterPro domain list
+        interpro_domains = []
+        for ipr_id, ipr_data in sorted(interpro_groups.items()):
+            member_domains = []
+            for member_key, member_data in sorted(ipr_data['members'].items()):
+                hits = [
+                    DomainHit(
+                        start_coord=h['start'],
+                        stop_coord=h['stop'],
+                        evalue=h['evalue'],
+                    )
+                    for h in member_data['hits']
+                ]
+                member_domains.append(DomainEntry(
+                    member_db=member_data['db'],
+                    member_id=member_data['id'],
+                    description=member_data['desc'],
+                    hits=hits,
+                    member_url=member_data['url'],
+                ))
+
+            # InterPro URL
+            interpro_url = None
+            if ipr_id != 'unintegrated' and ipr_id:
+                interpro_url = DOMAIN_DB_URLS.get('InterPro', '') + ipr_id
+
+            interpro_domains.append(InterProDomain(
+                interpro_id=ipr_id if ipr_id != 'unintegrated' else None,
+                interpro_description=ipr_data['desc'],
+                interpro_url=interpro_url,
+                member_domains=member_domains,
+            ))
+
+        # Build external links
+        external_links = []
+        for link_info in EXTERNAL_DOMAIN_LINKS:
+            url = link_info['url_template']
+            if '{sequence}' in url and protein_sequence:
+                # Remove stop codon if present
+                seq = protein_sequence.rstrip('*')
+                url = url.format(sequence=seq)
+            external_links.append(DomainExternalLink(
+                name=link_info['name'],
+                url=url,
+                description=link_info.get('description'),
+            ))
+
+        out[organism_name] = ProteinDomainForOrganism(
+            locus_display_name=locus_display_name,
+            protein_name=protein_name,
+            taxon_id=taxon_id,
+            organism_name=organism_name,
+            protein_length=protein_length,
+            interpro_domains=interpro_domains,
+            transmembrane_domains=transmembrane_domains,
+            signal_peptides=signal_peptides,
+            external_links=external_links,
+            protein_page_url=f"/locus/{locus_display_name}#protein",
+        )
+
+    return ProteinDomainResponse(results=out)

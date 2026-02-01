@@ -16,7 +16,7 @@ from cgd.schemas.locus_schema import (
 from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
 from cgd.schemas.go_schema import GODetailsResponse
 from cgd.schemas.interaction_schema import InteractionDetailsResponse
-from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse
+from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse, ProteinDomainResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 
 logger = logging.getLogger(__name__)
@@ -152,6 +152,25 @@ def protein_properties(name: str, db: Session = Depends(get_db)):
         return locus_service.get_locus_protein_properties(db, name)
     except Exception as e:
         logger.error(f"Error in protein_properties for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/domain_details", response_model=ProteinDomainResponse)
+def domain_details(name: str, db: Session = Depends(get_db)):
+    """
+    Get domain/motif information for this protein, grouped by organism.
+
+    Returns:
+    - Conserved domains (grouped by InterPro ID)
+    - Transmembrane domains (TMHMM predictions)
+    - Signal peptides (SignalP predictions)
+    - External links to domain databases
+    """
+    try:
+        return locus_service.get_locus_domain_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in domain_details for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

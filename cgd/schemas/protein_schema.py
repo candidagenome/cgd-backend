@@ -260,3 +260,88 @@ class ProteinPropertiesForOrganism(BaseModel):
 class ProteinPropertiesResponse(BaseModel):
     """Response for protein properties endpoint."""
     results: dict[str, ProteinPropertiesForOrganism]
+
+
+# =====================================================
+# Protein Domain/Motif Page Schemas
+# =====================================================
+
+class DomainHit(BaseModel):
+    """A single domain hit with coordinates."""
+    start_coord: typing.Optional[int] = None
+    stop_coord: typing.Optional[int] = None
+    evalue: typing.Optional[str] = None
+
+
+class DomainEntry(BaseModel):
+    """A domain entry with member database info."""
+    member_db: str  # e.g., "Pfam", "SMART"
+    member_id: str  # e.g., "PF00022"
+    description: str  # Domain description
+    hits: list[DomainHit] = []  # Can have multiple hits per domain
+    member_url: typing.Optional[str] = None  # URL to member database
+
+
+class InterProDomain(BaseModel):
+    """An InterPro domain grouping member domains."""
+    interpro_id: typing.Optional[str] = None  # e.g., "IPR001023" or None if unintegrated
+    interpro_description: typing.Optional[str] = None
+    interpro_url: typing.Optional[str] = None
+    member_domains: list[DomainEntry] = []
+
+
+class TransmembraneDomain(BaseModel):
+    """Transmembrane domain prediction (TMHMM)."""
+    type: str  # e.g., "transmembrane helix", "inside", "outside"
+    start_coord: int
+    stop_coord: int
+
+
+class SignalPeptide(BaseModel):
+    """Signal peptide prediction (SignalP)."""
+    type: str  # e.g., "signal peptide"
+    start_coord: int
+    stop_coord: typing.Optional[int] = None
+
+
+class DomainExternalLink(BaseModel):
+    """External link to domain search databases."""
+    name: str  # e.g., "NCBI DART", "SMART", "Pfam"
+    url: str
+    description: typing.Optional[str] = None
+
+
+class ProteinDomainForOrganism(BaseModel):
+    """Full domain/motif information for a single organism."""
+    # Identification
+    locus_display_name: str
+    protein_name: str  # e.g., "Act1p/C1_13700wp_a"
+    taxon_id: int
+    organism_name: str
+    protein_length: typing.Optional[int] = None
+
+    # Section 1: Conserved Domains (grouped by InterPro)
+    interpro_domains: list[InterProDomain] = []
+
+    # Section 2: Transmembrane Domains (TMHMM)
+    transmembrane_domains: list[TransmembraneDomain] = []
+
+    # Section 3: Signal Peptides (SignalP)
+    signal_peptides: list[SignalPeptide] = []
+
+    # Section 4: External Links
+    external_links: list[DomainExternalLink] = []
+
+    # PBrowse URL for visualization
+    pbrowse_url: typing.Optional[str] = None
+
+    # Link back to protein page
+    protein_page_url: typing.Optional[str] = None
+
+    # Last update date (if available)
+    last_update: typing.Optional[str] = None
+
+
+class ProteinDomainResponse(BaseModel):
+    """Response for protein domain endpoint."""
+    results: dict[str, ProteinDomainForOrganism]
