@@ -4323,7 +4323,7 @@ def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesRes
             protein_name = _gene_name_to_protein_name(f.gene_name) + "/"
         protein_name += _systematic_name_to_protein_name(f.feature_name)
 
-        pi = f.protein_info
+        pi = f.protein_info[0] if f.protein_info else None
         if not pi:
             out[organism_name] = ProteinPropertiesForOrganism(
                 locus_display_name=locus_display_name,
