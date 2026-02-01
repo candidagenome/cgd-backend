@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Optional
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from fastapi import HTTPException
 
 from cgd.schemas.go_schema import (
@@ -21,6 +21,9 @@ from cgd.schemas.go_schema import (
     SpeciesCount,
     GoEvidenceCode,
     GoEvidenceResponse,
+    GoHierarchyNode,
+    GoHierarchyEdge,
+    GoHierarchyResponse,
 )
 from cgd.models.models import (
     Go,
@@ -28,6 +31,7 @@ from cgd.models.models import (
     GoGosyn,
     GoRef,
     GoQualifier,
+    GoPath,
     Feature,
     RefUrl,
     Code,
@@ -502,3 +506,177 @@ def get_go_evidence_codes(db: Session) -> GoEvidenceResponse:
         ))
 
     return GoEvidenceResponse(evidence_codes=evidence_codes)
+
+
+def get_go_hierarchy(
+    db: Session,
+    goid_str: str,
+    max_nodes: int = 30,
+    ancestor_levels: int = 5,
+) -> GoHierarchyResponse:
+    """
+    Get GO term hierarchy (ancestors) for diagram visualization.
+
+    Args:
+        db: Database session
+        goid_str: GO identifier (e.g., "GO:0005634" or "5634")
+        max_nodes: Maximum number of nodes to return (default 30)
+        ancestor_levels: Maximum ancestor generations to traverse (default 5)
+
+    Returns:
+        GoHierarchyResponse with nodes and edges for the hierarchy diagram
+    """
+    # Parse GOID
+    try:
+        goid_int = _parse_goid(goid_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid GO identifier format: {goid_str}"
+        )
+
+    # Query focus GO term
+    focus_go = db.query(Go).filter(Go.goid == goid_int).first()
+    if not focus_go:
+        raise HTTPException(
+            status_code=404,
+            detail=f"GO term not found: {_format_goid(goid_int)}"
+        )
+
+    # Collect all go_no values we need to include (focus + ancestors)
+    # Map go_no -> level (0 = focus, negative = ancestor)
+    go_no_to_level: dict[int, int] = {focus_go.go_no: 0}
+
+    # Query ancestors via GoPath table (where child_go_no = focus term's go_no)
+    ancestor_paths = (
+        db.query(GoPath)
+        .filter(GoPath.child_go_no == focus_go.go_no)
+        .filter(GoPath.generation <= ancestor_levels)
+        .order_by(GoPath.generation)
+        .all()
+    )
+
+    # Build set of ancestor go_no values with their levels
+    for path in ancestor_paths:
+        ancestor_go_no = path.ancestor_go_no
+        level = -path.generation  # Negative for ancestors
+        # Keep the closest level (smallest absolute value) if seen multiple times
+        if ancestor_go_no not in go_no_to_level:
+            go_no_to_level[ancestor_go_no] = level
+        elif abs(level) < abs(go_no_to_level[ancestor_go_no]):
+            go_no_to_level[ancestor_go_no] = level
+
+    # Limit to max_nodes if we have too many
+    all_go_nos = list(go_no_to_level.keys())
+    if len(all_go_nos) > max_nodes:
+        # Keep focus term and closest ancestors
+        sorted_items = sorted(go_no_to_level.items(), key=lambda x: abs(x[1]))
+        all_go_nos = [item[0] for item in sorted_items[:max_nodes]]
+        go_no_to_level = {k: v for k, v in go_no_to_level.items() if k in all_go_nos}
+
+    # Query Go records for all nodes
+    go_records = db.query(Go).filter(Go.go_no.in_(all_go_nos)).all()
+    go_no_to_go: dict[int, Go] = {go.go_no: go for go in go_records}
+
+    # Query annotation counts for all nodes (direct annotations)
+    # Count distinct feature_no for each go_no
+    annotation_counts = (
+        db.query(
+            GoAnnotation.go_no,
+            func.count(func.distinct(GoAnnotation.feature_no)).label('gene_count')
+        )
+        .filter(GoAnnotation.go_no.in_(all_go_nos))
+        .group_by(GoAnnotation.go_no)
+        .all()
+    )
+    go_no_to_gene_count: dict[int, int] = {row.go_no: row.gene_count for row in annotation_counts}
+
+    # Build nodes list
+    nodes = []
+    focus_node = None
+    for go_no in all_go_nos:
+        go = go_no_to_go.get(go_no)
+        if not go:
+            continue
+
+        level = go_no_to_level[go_no]
+        direct_count = go_no_to_gene_count.get(go_no, 0)
+        aspect_code = go.go_aspect[0].upper() if go.go_aspect else "P"
+
+        node = GoHierarchyNode(
+            goid=_format_goid(go.goid),
+            go_term=go.go_term,
+            go_aspect=aspect_code,
+            direct_gene_count=direct_count,
+            inherited_gene_count=0,  # Could be computed but expensive
+            has_annotations=direct_count > 0,
+            is_focus=(go_no == focus_go.go_no),
+            level=level,
+        )
+        nodes.append(node)
+
+        if go_no == focus_go.go_no:
+            focus_node = node
+
+    # Build edges - query GoPath for direct parent-child relationships (generation=1)
+    # between nodes we're displaying
+    edges = []
+    edge_set = set()  # Track unique edges
+
+    # For each node, find its direct parents that are also in our display set
+    for path in ancestor_paths:
+        if path.generation == 1:  # Direct parent-child relationship
+            if path.ancestor_go_no in all_go_nos and path.child_go_no in all_go_nos:
+                parent_go = go_no_to_go.get(path.ancestor_go_no)
+                child_go = go_no_to_go.get(path.child_go_no)
+                if parent_go and child_go:
+                    edge_key = (parent_go.goid, child_go.goid)
+                    if edge_key not in edge_set:
+                        edge_set.add(edge_key)
+                        rel_type = "is_a"
+                        if path.relationship_type:
+                            rel_type = path.relationship_type.replace(" ", "_")
+                        edges.append(GoHierarchyEdge(
+                            source=_format_goid(parent_go.goid),
+                            target=_format_goid(child_go.goid),
+                            relationship_type=rel_type,
+                        ))
+
+    # Also query edges between ancestors (not just to focus term)
+    # Find paths where both ancestor and child are in our display set
+    if len(all_go_nos) > 1:
+        # Get all generation=1 paths between our nodes
+        ancestor_go_nos = [gn for gn in all_go_nos if gn != focus_go.go_no]
+        if ancestor_go_nos:
+            inter_ancestor_paths = (
+                db.query(GoPath)
+                .filter(GoPath.generation == 1)
+                .filter(GoPath.child_go_no.in_(ancestor_go_nos))
+                .filter(GoPath.ancestor_go_no.in_(all_go_nos))
+                .all()
+            )
+            for path in inter_ancestor_paths:
+                parent_go = go_no_to_go.get(path.ancestor_go_no)
+                child_go = go_no_to_go.get(path.child_go_no)
+                if parent_go and child_go:
+                    edge_key = (parent_go.goid, child_go.goid)
+                    if edge_key not in edge_set:
+                        edge_set.add(edge_key)
+                        rel_type = "is_a"
+                        if path.relationship_type:
+                            rel_type = path.relationship_type.replace(" ", "_")
+                        edges.append(GoHierarchyEdge(
+                            source=_format_goid(parent_go.goid),
+                            target=_format_goid(child_go.goid),
+                            relationship_type=rel_type,
+                        ))
+
+    # Determine if focus term has parents (can_go_up)
+    can_go_up = any(path.generation == 1 for path in ancestor_paths)
+
+    return GoHierarchyResponse(
+        focus_term=focus_node,
+        nodes=nodes,
+        edges=edges,
+        can_go_up=can_go_up,
+    )
