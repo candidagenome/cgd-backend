@@ -4522,9 +4522,11 @@ def get_locus_domain_details(db: Session, name: str) -> ProteinDomainResponse:
     from cgd.models.models import Feature, ProteinInfo, ProteinDetail, Seq
 
     # Get features matching the name
-    feature_nos = get_features_for_locus_name(db, name)
-    if not feature_nos:
+    features = get_features_for_locus_name(db, name)
+    if not features:
         return ProteinDomainResponse(results={})
+
+    feature_nos = [f.feature_no for f in features]
 
     # Fetch features with protein_info and protein_detail
     features_with_protein = (
