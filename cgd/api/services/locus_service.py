@@ -92,6 +92,13 @@ from cgd.schemas.protein_schema import (
     ReferenceForProtein,
     CitationLinkForProtein,
     AlphaFoldInfo,
+    ProteinPropertiesResponse,
+    ProteinPropertiesForOrganism,
+    AminoAcidComposition,
+    BulkPropertyItem,
+    ExtinctionCoefficient,
+    AtomicCompositionItem,
+    CodonUsageItem,
 )
 from cgd.schemas.homology_schema import (
     HomologyDetailsResponse,
@@ -4257,3 +4264,199 @@ def get_locus_history(db: Session, name: str) -> LocusHistoryResponse:
         )
 
     return LocusHistoryResponse(results=out)
+
+
+# Amino acid abbreviations mapping (3-letter to 1-letter)
+AA_ABBREV = {
+    'ala': ('A', 'Ala'), 'arg': ('R', 'Arg'), 'asn': ('N', 'Asn'), 'asp': ('D', 'Asp'),
+    'cys': ('C', 'Cys'), 'gln': ('Q', 'Gln'), 'glu': ('E', 'Glu'), 'gly': ('G', 'Gly'),
+    'his': ('H', 'His'), 'ile': ('I', 'Ile'), 'leu': ('L', 'Leu'), 'lys': ('K', 'Lys'),
+    'met': ('M', 'Met'), 'phe': ('F', 'Phe'), 'pro': ('P', 'Pro'), 'ser': ('S', 'Ser'),
+    'thr': ('T', 'Thr'), 'trp': ('W', 'Trp'), 'tyr': ('Y', 'Tyr'), 'val': ('V', 'Val'),
+}
+
+# Instability index cutoff
+STABLE_INDEX_CUTOFF = 40
+
+
+def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesResponse:
+    """
+    Get physico-chemical properties for a protein.
+
+    This includes:
+    - Amino acid composition
+    - Bulk protein properties (pI, GRAVY, aromaticity, aliphatic index, instability index)
+    - Extinction coefficients
+    - Codon usage statistics
+    - Atomic composition
+    """
+    features = get_features_for_locus_name(db, name)
+    if not features:
+        return ProteinPropertiesResponse(results={})
+
+    # Eager load protein_info and protein_detail
+    feature_nos = [f.feature_no for f in features]
+    features_with_protein = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.protein_info).joinedload(ProteinInfo.protein_detail),
+            joinedload(Feature.organism),
+        )
+        .filter(Feature.feature_no.in_(feature_nos))
+        .all()
+    )
+
+    # Build one entry per organism
+    seen_organisms = set()
+    out: dict[str, ProteinPropertiesForOrganism] = {}
+
+    for f in features_with_protein:
+        organism_name = f.organism.genus_species if f.organism else "Unknown"
+        if organism_name in seen_organisms:
+            continue
+        seen_organisms.add(organism_name)
+
+        taxon_id = f.organism.taxon_id if f.organism else 0
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Build protein name (e.g., "Act1p/C1_13700wp_a")
+        protein_name = ""
+        if f.gene_name:
+            protein_name = _gene_name_to_protein_name(f.gene_name) + "/"
+        protein_name += _systematic_name_to_protein_name(f.feature_name)
+
+        pi = f.protein_info
+        if not pi:
+            out[organism_name] = ProteinPropertiesForOrganism(
+                locus_display_name=locus_display_name,
+                protein_name=protein_name,
+                taxon_id=taxon_id,
+                organism_name=organism_name,
+                has_ambiguous_residues=True,
+            )
+            continue
+
+        protein_length = pi.protein_length or 0
+
+        # Section 1: Amino Acid Composition
+        aa_composition = []
+        for aa_col, (one_letter, three_letter) in sorted(AA_ABBREV.items(), key=lambda x: x[1][0]):
+            count = getattr(pi, aa_col, 0) or 0
+            percentage = round((count * 100 / protein_length), 1) if protein_length > 0 else 0.0
+            aa_composition.append(AminoAcidComposition(
+                amino_acid=f"{one_letter} ({three_letter})",
+                count=count,
+                percentage=percentage,
+            ))
+
+        # Section 2: Bulk Protein Properties
+        bulk_properties = []
+        if pi.pi is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Isoelectric Point (pI)",
+                value=f"{float(pi.pi):.2f}",
+            ))
+        if pi.gravy_score is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Average Hydropathy (GRAVY)",
+                value=f"{float(pi.gravy_score):.2f}",
+            ))
+        if pi.aromaticity_score is not None:
+            bulk_properties.append(BulkPropertyItem(
+                label="Aromaticity Score",
+                value=f"{float(pi.aromaticity_score):.2f}",
+            ))
+
+        # Get aliphatic index and instability index from protein_detail
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and pd.protein_detail_group.upper() == 'ALIPHATIC INDEX':
+                bulk_properties.append(BulkPropertyItem(
+                    label="Aliphatic Index",
+                    value=pd.protein_detail_value,
+                ))
+            elif pd.protein_detail_group and pd.protein_detail_group.upper() == 'INSTABILITY INDEX':
+                try:
+                    ii_value = float(pd.protein_detail_value)
+                    stability = "(stable)" if ii_value < STABLE_INDEX_CUTOFF else "(unstable)"
+                    bulk_properties.append(BulkPropertyItem(
+                        label="Instability Index",
+                        value=f"{ii_value:.2f}",
+                        note=stability,
+                    ))
+                except (ValueError, TypeError):
+                    bulk_properties.append(BulkPropertyItem(
+                        label="Instability Index",
+                        value=pd.protein_detail_value,
+                    ))
+
+        # Section 3: Extinction Coefficients
+        extinction_coefficients = []
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and 'EXTINCTION' in pd.protein_detail_group.upper():
+                pd_type = pd.protein_detail_type or ""
+                if 'all' in pd_type.lower():
+                    condition = "Assuming all Cys residues exist as cysteine (-C-SH)"
+                else:
+                    condition = "Assuming all Cys residues exist as half-cystines (-C-S-S-C-)"
+                try:
+                    value = float(pd.protein_detail_value)
+                    extinction_coefficients.append(ExtinctionCoefficient(
+                        condition=condition,
+                        value=value,
+                        unit="M⁻¹ cm⁻¹",
+                    ))
+                except (ValueError, TypeError):
+                    pass
+
+        # Section 4: Codon Usage Statistics
+        codon_usage = []
+        if pi.codon_bias is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Codon Bias Index",
+                value=round(float(pi.codon_bias), 3),
+            ))
+        if pi.cai is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Codon Adaptation Index (CAI)",
+                value=round(float(pi.cai), 3),
+            ))
+        if pi.fop_score is not None:
+            codon_usage.append(CodonUsageItem(
+                label="Frequency of Optimal Codons (FOP)",
+                value=round(float(pi.fop_score), 3),
+            ))
+
+        # Section 5: Atomic Composition
+        atomic_composition = []
+        for pd in pi.protein_detail:
+            if pd.protein_detail_group and 'ATOMIC' in pd.protein_detail_group.upper():
+                try:
+                    count = int(float(pd.protein_detail_value))
+                    atom_name = pd.protein_detail_type or "Unknown"
+                    atom_name = atom_name.title()
+                    atomic_composition.append(AtomicCompositionItem(
+                        atom=atom_name,
+                        count=count,
+                    ))
+                except (ValueError, TypeError):
+                    pass
+
+        # Sort atomic composition alphabetically
+        atomic_composition.sort(key=lambda x: x.atom)
+
+        out[organism_name] = ProteinPropertiesForOrganism(
+            locus_display_name=locus_display_name,
+            protein_name=protein_name,
+            taxon_id=taxon_id,
+            organism_name=organism_name,
+            amino_acid_composition=aa_composition,
+            protein_length=protein_length,
+            bulk_properties=bulk_properties,
+            extinction_coefficients=extinction_coefficients,
+            codon_usage=codon_usage,
+            atomic_composition=atomic_composition,
+            has_ambiguous_residues=False,
+            protein_page_url=f"/locus/{locus_display_name}#protein",
+        )
+
+    return ProteinPropertiesResponse(results=out)

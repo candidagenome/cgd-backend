@@ -16,7 +16,7 @@ from cgd.schemas.locus_schema import (
 from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
 from cgd.schemas.go_schema import GODetailsResponse
 from cgd.schemas.interaction_schema import InteractionDetailsResponse
-from cgd.schemas.protein_schema import ProteinDetailsResponse
+from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 
 logger = logging.getLogger(__name__)
@@ -134,5 +134,25 @@ def history(name: str, db: Session = Depends(get_db)):
     Get change history for this locus, grouped by organism.
     """
     return locus_service.get_locus_history(db, name)
+
+
+@router.get("/{name}/protein_properties", response_model=ProteinPropertiesResponse)
+def protein_properties(name: str, db: Session = Depends(get_db)):
+    """
+    Get physico-chemical properties for this protein, grouped by organism.
+
+    Returns:
+    - Amino acid composition
+    - Bulk protein properties (pI, GRAVY, aromaticity, aliphatic index, instability index)
+    - Extinction coefficients
+    - Codon usage statistics
+    - Atomic composition
+    """
+    try:
+        return locus_service.get_locus_protein_properties(db, name)
+    except Exception as e:
+        logger.error(f"Error in protein_properties for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 

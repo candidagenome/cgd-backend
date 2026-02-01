@@ -187,3 +187,76 @@ class ProteinDetailsResponse(BaseModel):
     }
     """
     results: dict[str, ProteinDetailsForOrganism]
+
+
+# =====================================================
+# Protein Physico-chemical Properties Page Schemas
+# =====================================================
+
+class AminoAcidComposition(BaseModel):
+    """Amino acid composition with counts and percentages."""
+    amino_acid: str  # e.g., "A (Ala)"
+    count: int
+    percentage: float  # e.g., 5.2
+
+
+class BulkPropertyItem(BaseModel):
+    """A single bulk property with label and value."""
+    label: str  # e.g., "Isoelectric Point (pI)"
+    value: str  # Formatted value with unit if applicable
+    note: typing.Optional[str] = None  # e.g., "(stable)" or "(unstable)"
+
+
+class ExtinctionCoefficient(BaseModel):
+    """Extinction coefficient value."""
+    condition: str  # e.g., "Assuming all Cys residues exist as cysteine"
+    value: float
+    unit: str  # e.g., "M⁻¹ cm⁻¹"
+
+
+class AtomicCompositionItem(BaseModel):
+    """Atomic composition entry."""
+    atom: str  # e.g., "Carbon"
+    count: int
+
+
+class CodonUsageItem(BaseModel):
+    """Codon usage statistics."""
+    label: str  # e.g., "Codon Bias Index"
+    value: float
+
+
+class ProteinPropertiesForOrganism(BaseModel):
+    """Full protein properties for a single organism."""
+    # Identification
+    locus_display_name: str
+    protein_name: str  # e.g., "Act1p/C1_13700wp_a"
+    taxon_id: int
+    organism_name: str
+
+    # Section 1: Amino Acid Composition
+    amino_acid_composition: list[AminoAcidComposition] = []
+    protein_length: int = 0
+
+    # Section 2: Bulk Protein Properties
+    bulk_properties: list[BulkPropertyItem] = []
+
+    # Section 3: Extinction Coefficients
+    extinction_coefficients: list[ExtinctionCoefficient] = []
+
+    # Section 4: Codon Usage Statistics
+    codon_usage: list[CodonUsageItem] = []
+
+    # Section 5: Atomic Composition
+    atomic_composition: list[AtomicCompositionItem] = []
+
+    # Has ambiguous residues (if true, properties couldn't be calculated)
+    has_ambiguous_residues: bool = False
+
+    # Link back to protein page
+    protein_page_url: typing.Optional[str] = None
+
+
+class ProteinPropertiesResponse(BaseModel):
+    """Response for protein properties endpoint."""
+    results: dict[str, ProteinPropertiesForOrganism]
