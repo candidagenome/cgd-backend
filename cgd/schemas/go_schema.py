@@ -125,3 +125,19 @@ class GoTermResponse(BaseModel):
     term: GoTermOut
     total_genes: int
     annotations: list[AnnotationSummary] = []
+
+
+# ============================================================
+# GO Evidence Page Schemas (for /api/go/evidence endpoint)
+# ============================================================
+
+class GoEvidenceCode(BaseModel):
+    """GO evidence code with definition and examples"""
+    code: str  # e.g., "IDA", "IMP", "ISS"
+    definition: str  # e.g., "Inferred from Direct Assay"
+    examples: list[str] = []  # List of example descriptions
+
+
+class GoEvidenceResponse(BaseModel):
+    """Response for /api/go/evidence endpoint"""
+    evidence_codes: list[GoEvidenceCode] = []

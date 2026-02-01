@@ -19,6 +19,8 @@ from cgd.schemas.go_schema import (
     CitationLinkForGO,
     QualifierGroup,
     SpeciesCount,
+    GoEvidenceCode,
+    GoEvidenceResponse,
 )
 from cgd.models.models import (
     Go,
@@ -28,6 +30,7 @@ from cgd.models.models import (
     GoQualifier,
     Feature,
     RefUrl,
+    Code,
 )
 
 
@@ -435,3 +438,67 @@ def get_go_term_info(
         total_genes=total_genes,
         annotations=annotation_summaries,
     )
+
+
+def _uppercase_first_letters(sentence: str) -> str:
+    """
+    Uppercase the first letter of each word (except common words).
+    Matches Perl _uppercase_words logic.
+    """
+    if not sentence:
+        return sentence
+
+    skip_words = {'from', 'on', 'in', 'of', 'or', 'structural'}
+    words = sentence.split(' ')
+    result = []
+
+    for word in words:
+        if word.lower() in skip_words:
+            result.append(word)
+        else:
+            # Capitalize first letter
+            result.append(word.capitalize())
+
+    return ' '.join(result)
+
+
+def get_go_evidence_codes(db: Session) -> GoEvidenceResponse:
+    """
+    Get all GO evidence codes with their definitions and examples.
+
+    Returns:
+        GoEvidenceResponse with list of evidence codes
+    """
+    # Query Code table for GO evidence codes
+    # Evidence codes are stored where tab_name='go_annotation' and col_name='go_evidence'
+    codes = (
+        db.query(Code)
+        .filter(Code.tab_name == 'go_annotation')
+        .filter(Code.col_name == 'go_evidence')
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    evidence_codes = []
+
+    for code in codes:
+        code_value = code.code_value
+        description = code.description or ''
+
+        # Parse description - format is "definition: example1; example2; example3"
+        if ': ' in description:
+            parts = description.split(': ', 1)
+            definition = _uppercase_first_letters(parts[0])
+            examples_str = parts[1] if len(parts) > 1 else ''
+            examples = [ex.strip() for ex in examples_str.split('; ') if ex.strip()]
+        else:
+            definition = _uppercase_first_letters(description)
+            examples = []
+
+        evidence_codes.append(GoEvidenceCode(
+            code=code_value,
+            definition=definition,
+            examples=examples,
+        ))
+
+    return GoEvidenceResponse(evidence_codes=evidence_codes)
