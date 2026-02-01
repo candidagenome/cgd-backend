@@ -141,3 +141,35 @@ class GoEvidenceCode(BaseModel):
 class GoEvidenceResponse(BaseModel):
     """Response for /api/go/evidence endpoint"""
     evidence_codes: list[GoEvidenceCode] = []
+
+
+# ============================================================
+# GO Hierarchy Diagram Schemas (for /api/go/{goid}/hierarchy endpoint)
+# ============================================================
+
+class GoHierarchyNode(BaseModel):
+    """A node in the GO hierarchy diagram"""
+    goid: str  # Formatted as GO:XXXXXXX
+    go_term: str
+    go_aspect: str  # C, F, or P
+    direct_gene_count: int
+    inherited_gene_count: int
+    has_annotations: bool  # True if direct_gene_count > 0
+    is_focus: bool  # True if this is the term being viewed
+    level: int  # negative=ancestor, 0=focus, positive=descendant
+
+
+class GoHierarchyEdge(BaseModel):
+    """An edge (relationship) between GO terms"""
+    source: str  # parent GOID (GO:XXXXXXX format)
+    target: str  # child GOID (GO:XXXXXXX format)
+    relationship_type: str  # "is_a" or "part_of"
+
+
+class GoHierarchyResponse(BaseModel):
+    """Response for /api/go/{goid}/hierarchy endpoint"""
+    focus_term: GoHierarchyNode
+    nodes: list[GoHierarchyNode]
+    edges: list[GoHierarchyEdge]
+    can_go_up: bool  # True if focus term has parents (not a root term)
+    can_go_down: bool  # True if focus term has children (not a leaf term)
