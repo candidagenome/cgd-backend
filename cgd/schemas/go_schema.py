@@ -65,3 +65,79 @@ class GODetailsResponse(BaseModel):
     }
     """
     results: dict[str, GODetailsForOrganism]
+
+
+# ============================================================
+# GO Term Page Schemas (for /api/go/{goid} endpoint)
+# ============================================================
+
+class GoTermOut(BaseModel):
+    """GO term basic information"""
+    goid: str  # Formatted as GO:XXXXXXX
+    go_term: str
+    go_definition: typing.Optional[str] = None
+    go_aspect: str  # C, F, or P
+    aspect_name: str  # Cellular Component, Molecular Function, Biological Process
+    synonyms: list[str] = []
+
+
+class ReferenceEvidence(BaseModel):
+    """Reference with evidence codes for GO term page"""
+    citation: typing.Optional[str] = None
+    pubmed: typing.Optional[int] = None
+    dbxref_id: typing.Optional[str] = None  # CGD reference ID for internal links
+    evidence_codes: list[str] = []
+    qualifiers: list[str] = []
+    links: list[CitationLinkForGO] = []  # Citation links (CGD Paper, PubMed, Full Text, etc.)
+
+
+class AnnotatedGene(BaseModel):
+    """Gene annotated to a GO term"""
+    locus_name: typing.Optional[str] = None  # gene_name if available
+    systematic_name: str  # feature_name
+    species: str  # organism name
+    references: list[ReferenceEvidence] = []
+
+
+class SpeciesCount(BaseModel):
+    """Count of genes for a species within a qualifier group"""
+    species: str  # e.g., "C. albicans"
+    count: int
+
+
+class QualifierGroup(BaseModel):
+    """Genes grouped by qualifier (e.g., direct, contributes_to, NOT)"""
+    qualifier: typing.Optional[str] = None  # None for direct annotations
+    display_name: str  # e.g., "histone H4 acetyltransferase activity" or "contributes_to histone H4 acetyltransferase activity"
+    species_counts: list[SpeciesCount] = []
+    genes: list[AnnotatedGene] = []
+
+
+class AnnotationSummary(BaseModel):
+    """Annotations grouped by type"""
+    annotation_type: str  # manually_curated, high_throughput, computational
+    gene_count: int
+    qualifier_groups: list[QualifierGroup] = []  # Genes grouped by qualifier
+
+
+class GoTermResponse(BaseModel):
+    """Response for /api/go/{goid} endpoint"""
+    term: GoTermOut
+    total_genes: int
+    annotations: list[AnnotationSummary] = []
+
+
+# ============================================================
+# GO Evidence Page Schemas (for /api/go/evidence endpoint)
+# ============================================================
+
+class GoEvidenceCode(BaseModel):
+    """GO evidence code with definition and examples"""
+    code: str  # e.g., "IDA", "IMP", "ISS"
+    definition: str  # e.g., "Inferred from Direct Assay"
+    examples: list[str] = []  # List of example descriptions
+
+
+class GoEvidenceResponse(BaseModel):
+    """Response for /api/go/evidence endpoint"""
+    evidence_codes: list[GoEvidenceCode] = []
