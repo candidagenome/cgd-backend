@@ -65,3 +65,47 @@ class GODetailsResponse(BaseModel):
     }
     """
     results: dict[str, GODetailsForOrganism]
+
+
+# ============================================================
+# GO Term Page Schemas (for /api/go/{goid} endpoint)
+# ============================================================
+
+class GoTermOut(BaseModel):
+    """GO term basic information"""
+    goid: str  # Formatted as GO:XXXXXXX
+    go_term: str
+    go_definition: typing.Optional[str] = None
+    go_aspect: str  # C, F, or P
+    aspect_name: str  # Cellular Component, Molecular Function, Biological Process
+    synonyms: list[str] = []
+
+
+class ReferenceEvidence(BaseModel):
+    """Reference with evidence codes for GO term page"""
+    citation: typing.Optional[str] = None
+    pmid: typing.Optional[str] = None
+    evidence_codes: list[str] = []
+    qualifiers: list[str] = []
+
+
+class AnnotatedGene(BaseModel):
+    """Gene annotated to a GO term"""
+    locus_name: typing.Optional[str] = None  # gene_name if available
+    systematic_name: str  # feature_name
+    species: str  # organism name
+    references: list[ReferenceEvidence] = []
+
+
+class AnnotationSummary(BaseModel):
+    """Annotations grouped by type"""
+    annotation_type: str  # manually_curated, high_throughput, computational
+    gene_count: int
+    genes: list[AnnotatedGene] = []
+
+
+class GoTermResponse(BaseModel):
+    """Response for /api/go/{goid} endpoint"""
+    term: GoTermOut
+    total_genes: int
+    annotations: list[AnnotationSummary] = []
