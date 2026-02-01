@@ -17,6 +17,8 @@ from cgd.schemas.go_schema import (
     AnnotatedGene,
     ReferenceEvidence,
     CitationLinkForGO,
+    QualifierGroup,
+    SpeciesCount,
 )
 from cgd.models.models import (
     Go,
@@ -92,6 +94,19 @@ def _normalize_annotation_type(db_type: str) -> str:
     if not db_type:
         return "manually_curated"
     return ANNOTATION_TYPE_MAP.get(db_type, db_type.replace(" ", "_").replace("-", "_"))
+
+
+def _abbreviate_species(species_name: str) -> str:
+    """
+    Abbreviate species name for display.
+    e.g., "Candida albicans SC5314" -> "C. albicans"
+    """
+    if not species_name:
+        return species_name
+    parts = species_name.split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {parts[1]}"
+    return species_name
 
 
 def _build_citation_links(ref, ref_urls=None) -> list[CitationLinkForGO]:
@@ -324,9 +339,10 @@ def get_go_term_info(
                     links=links,
                 ))
 
-    # Build annotation summaries with proper grouping
+    # Build annotation summaries with qualifier groups
     annotation_summaries = []
     total_genes = 0
+    go_term_name = go_term.go_term
 
     for annotation_type in ANNOTATION_TYPE_ORDER:
         type_data = annotations_by_type.get(annotation_type)
@@ -338,42 +354,81 @@ def get_go_term_info(
         # Genes with qualifiers (NOT, contributes_to, etc.)
         with_qual = type_data["with_qualifier"]
 
-        # Combine all genes for this annotation type
-        all_genes: dict[int, AnnotatedGene] = {}
+        qualifier_groups = []
+        type_gene_count = 0
 
-        # Add genes without qualifiers first
-        for feature_no, gene in without_qual.items():
-            if feature_no not in all_genes:
-                all_genes[feature_no] = gene
-            else:
-                # Merge references
-                for ref in gene.references:
-                    all_genes[feature_no].references.append(ref)
+        # Track all unique genes for this annotation type (to avoid double counting)
+        seen_feature_nos = set()
 
-        # Add genes with qualifiers
-        for qualifier_key, genes_dict in with_qual.items():
-            for feature_no, gene in genes_dict.items():
-                if feature_no not in all_genes:
-                    all_genes[feature_no] = gene
-                else:
-                    # Merge references
-                    for ref in gene.references:
-                        all_genes[feature_no].references.append(ref)
-
-        if all_genes:
-            genes_list = list(all_genes.values())
-            # Sort genes by species, then by locus_name or systematic_name
+        # First, add direct annotations (no qualifier)
+        if without_qual:
+            genes_list = list(without_qual.values())
             genes_list.sort(key=lambda g: (
                 g.species.lower(),
                 (g.locus_name or g.systematic_name).lower()
             ))
 
-            annotation_summaries.append(AnnotationSummary(
-                annotation_type=annotation_type,
-                gene_count=len(genes_list),
+            # Calculate species counts
+            species_counts_dict: dict[str, int] = defaultdict(int)
+            for gene in genes_list:
+                abbrev_species = _abbreviate_species(gene.species)
+                species_counts_dict[abbrev_species] += 1
+                seen_feature_nos.add(gene.systematic_name)
+
+            species_counts = [
+                SpeciesCount(species=sp, count=cnt)
+                for sp, cnt in sorted(species_counts_dict.items())
+            ]
+
+            qualifier_groups.append(QualifierGroup(
+                qualifier=None,
+                display_name=go_term_name,
+                species_counts=species_counts,
                 genes=genes_list,
             ))
-            total_genes += len(genes_list)
+            type_gene_count += len(genes_list)
+
+        # Then add each qualifier group
+        for qualifier_key in sorted(with_qual.keys()):
+            genes_dict = with_qual[qualifier_key]
+            genes_list = list(genes_dict.values())
+            genes_list.sort(key=lambda g: (
+                g.species.lower(),
+                (g.locus_name or g.systematic_name).lower()
+            ))
+
+            # Calculate species counts
+            species_counts_dict: dict[str, int] = defaultdict(int)
+            for gene in genes_list:
+                abbrev_species = _abbreviate_species(gene.species)
+                species_counts_dict[abbrev_species] += 1
+                # Only count gene if not already counted in direct annotations
+                if gene.systematic_name not in seen_feature_nos:
+                    seen_feature_nos.add(gene.systematic_name)
+
+            species_counts = [
+                SpeciesCount(species=sp, count=cnt)
+                for sp, cnt in sorted(species_counts_dict.items())
+            ]
+
+            # Build display name with qualifier prefix
+            display_name = f"{qualifier_key} {go_term_name}"
+
+            qualifier_groups.append(QualifierGroup(
+                qualifier=qualifier_key,
+                display_name=display_name,
+                species_counts=species_counts,
+                genes=genes_list,
+            ))
+            type_gene_count += len(genes_list)
+
+        if qualifier_groups:
+            annotation_summaries.append(AnnotationSummary(
+                annotation_type=annotation_type,
+                gene_count=type_gene_count,
+                qualifier_groups=qualifier_groups,
+            ))
+            total_genes += type_gene_count
 
     return GoTermResponse(
         term=term_out,

@@ -99,11 +99,25 @@ class AnnotatedGene(BaseModel):
     references: list[ReferenceEvidence] = []
 
 
+class SpeciesCount(BaseModel):
+    """Count of genes for a species within a qualifier group"""
+    species: str  # e.g., "C. albicans"
+    count: int
+
+
+class QualifierGroup(BaseModel):
+    """Genes grouped by qualifier (e.g., direct, contributes_to, NOT)"""
+    qualifier: typing.Optional[str] = None  # None for direct annotations
+    display_name: str  # e.g., "histone H4 acetyltransferase activity" or "contributes_to histone H4 acetyltransferase activity"
+    species_counts: list[SpeciesCount] = []
+    genes: list[AnnotatedGene] = []
+
+
 class AnnotationSummary(BaseModel):
     """Annotations grouped by type"""
     annotation_type: str  # manually_curated, high_throughput, computational
     gene_count: int
-    genes: list[AnnotatedGene] = []
+    qualifier_groups: list[QualifierGroup] = []  # Genes grouped by qualifier
 
 
 class GoTermResponse(BaseModel):
