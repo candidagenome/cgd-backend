@@ -4488,6 +4488,39 @@ DOMAIN_DB_URLS = {
     'TMHMM': None,
 }
 
+
+def _infer_domain_db_from_accession(accession: str) -> tuple[str, str]:
+    """
+    Infer the member database name from the accession prefix.
+    Returns (database_name, url) tuple.
+    """
+    acc_upper = accession.upper()
+
+    if acc_upper.startswith('PF'):
+        return 'Pfam', f'https://www.ebi.ac.uk/interpro/entry/pfam/{accession}'
+    elif acc_upper.startswith('PTHR'):
+        return 'PANTHER', f'http://www.pantherdb.org/panther/family.do?clsAccession={accession}'
+    elif acc_upper.startswith('SM'):
+        return 'SMART', f'http://smart.embl-heidelberg.de/smart/do_annotation.pl?ACC={accession}'
+    elif acc_upper.startswith('SSF'):
+        return 'SUPERFAMILY', f'https://supfam.org/SUPERFAMILY/cgi-bin/scop.cgi?sunid={accession.replace("SSF", "")}'
+    elif acc_upper.startswith('G3DSA:'):
+        return 'Gene3D', f'http://www.cathdb.info/version/latest/superfamily/{accession.replace("G3DSA:", "")}'
+    elif acc_upper.startswith('CD'):
+        return 'CDD', f'https://www.ncbi.nlm.nih.gov/Structure/cdd/cddsrv.cgi?uid={accession}'
+    elif acc_upper.startswith('PS'):
+        return 'ProSite', f'https://prosite.expasy.org/{accession}'
+    elif acc_upper.startswith('PR'):
+        return 'PRINTS', f'http://umber.sbs.man.ac.uk/cgi-bin/dbbrowser/sprint/searchprintss.cgi?display_opts=Prints&queryform=false&prints_accn={accession}'
+    elif acc_upper.startswith('TIGR'):
+        return 'TIGRFAMs', f'https://www.ncbi.nlm.nih.gov/genome/annotation_prok/tigrfams/{accession}'
+    elif acc_upper.startswith('PIRSF'):
+        return 'PIRSF', f'https://proteininformationresource.org/cgi-bin/ipcSF?id={accession}'
+    elif acc_upper.startswith('IPR'):
+        return 'InterPro', f'https://www.ebi.ac.uk/interpro/entry/InterPro/{accession}'
+    else:
+        return 'Unknown', None
+
 EXTERNAL_DOMAIN_LINKS = [
     {
         'name': 'NCBI DART',
@@ -4602,32 +4635,33 @@ def get_locus_domain_details(db: Session, name: str) -> ProteinDomainResponse:
                 if 'domain' not in group and group not in ('pfam', 'smart', 'interpro', 'prosite', 'prints', 'tigrfams', 'superfamily', 'gene3d', 'panther', 'cdd', 'pirsf', 'prositeprofiles', 'prositepatterns'):
                     continue
 
+                # The actual accession (like PF00022, PTHR11937) is in protein_detail_value
+                member_accession = pd.protein_detail_value or ''
+                if not member_accession:
+                    continue
+
+                # Infer database name and URL from accession prefix
+                member_db, member_url = _infer_domain_db_from_accession(member_accession)
+
                 # Get InterPro ID (or use 'unintegrated' if none)
+                # interpro_dbxref_id might be internal ID - group domains by it
                 interpro_id = pd.interpro_dbxref_id or 'unintegrated'
-                member_db = pd.protein_detail_group or 'Unknown'
-                member_id = pd.member_dbxref_id or pd.protein_detail_type or ''
 
                 # Initialize InterPro group if needed
                 if interpro_id not in interpro_groups:
                     interpro_groups[interpro_id] = {
-                        'desc': pd.protein_detail_value if interpro_id != 'unintegrated' else None,
+                        'desc': None,  # We don't have the InterPro description
                         'members': {},
                     }
 
                 # Key for this member domain
-                member_key = f"{member_db}:{member_id}"
+                member_key = f"{member_db}:{member_accession}"
 
                 if member_key not in interpro_groups[interpro_id]['members']:
-                    # Determine URL for member database
-                    member_url = None
-                    db_name = member_db.replace(' ', '')
-                    if db_name in DOMAIN_DB_URLS and DOMAIN_DB_URLS[db_name]:
-                        member_url = DOMAIN_DB_URLS[db_name] + member_id
-
                     interpro_groups[interpro_id]['members'][member_key] = {
                         'db': member_db,
-                        'id': member_id,
-                        'desc': pd.protein_detail_value or '',
+                        'id': member_accession,
+                        'desc': pd.protein_detail_type or '',  # Type might have description
                         'url': member_url,
                         'hits': [],
                     }
