@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
@@ -10,9 +10,26 @@ from cgd.schemas.reference_schema import (
     ReferencePhenotypeResponse,
     ReferenceInteractionResponse,
     ReferenceLiteratureTopicsResponse,
+    AuthorSearchResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
+
+
+@router.get("/search/author", response_model=AuthorSearchResponse)
+def search_references_by_author(
+    author: str = Query(..., description="Author name to search for"),
+    db: Session = Depends(get_db),
+):
+    """
+    Search for references by author name.
+
+    Args:
+        author: Author name to search for (case-insensitive, wildcards supported)
+
+    Returns list of references with matching authors, along with author counts.
+    """
+    return reference_service.search_references_by_author(db, author)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)

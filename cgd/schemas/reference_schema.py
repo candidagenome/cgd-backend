@@ -145,3 +145,24 @@ class ReferenceLiteratureTopicsResponse(BaseModel):
     reference_no: int
     topics: list[LiteratureTopic]
     all_features: list[FeatureForTopic]  # All unique features for building the matrix
+
+
+# --- Author Search Results ---
+
+class ReferenceSearchResult(BaseModel):
+    """A reference found in author search."""
+    reference_no: int
+    dbxref_id: str
+    pubmed: typing.Optional[int] = None
+    citation: str
+    year: int
+    author_list: str
+    links: list[CitationLink] = []
+
+
+class AuthorSearchResponse(BaseModel):
+    """Response for author search."""
+    author_query: str
+    author_count: int
+    reference_count: int
+    references: list[ReferenceSearchResult]

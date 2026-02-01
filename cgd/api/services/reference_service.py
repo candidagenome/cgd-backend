@@ -18,6 +18,8 @@ from cgd.schemas.reference_schema import (
     ReferenceLiteratureTopicsResponse,
     LiteratureTopic,
     FeatureForTopic,
+    AuthorSearchResponse,
+    ReferenceSearchResult,
 )
 from cgd.models.models import (
     Reference,
@@ -26,6 +28,7 @@ from cgd.models.models import (
     RefProperty,
     RefUrl,
     Url,
+    Author,
     AuthorEditor,
     Interaction,
     FeatInteract,
@@ -540,4 +543,107 @@ def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLi
         reference_no=ref.reference_no,
         topics=topics,
         all_features=all_features,
+    )
+
+
+def search_references_by_author(db: Session, author_name: str) -> AuthorSearchResponse:
+    """
+    Search for references by author name.
+
+    Searches the author table for authors matching the given name pattern
+    and returns all references associated with those authors.
+
+    Args:
+        db: Database session
+        author_name: Author name to search for (case-insensitive, supports wildcards)
+
+    Returns:
+        AuthorSearchResponse with matching references
+    """
+    # Normalize the search pattern - uppercase and add wildcard if not present
+    search_pattern = author_name.upper()
+    if '*' in search_pattern:
+        search_pattern = search_pattern.replace('*', '%')
+    if not search_pattern.endswith('%'):
+        search_pattern = search_pattern + '%'
+
+    # Query for matching authors and their references
+    # This mirrors the Perl query: author -> author_editor -> reference
+    results = (
+        db.query(
+            Reference.reference_no,
+            Reference.citation,
+            Reference.year,
+            Reference.pubmed,
+        )
+        .distinct()
+        .join(AuthorEditor, Reference.reference_no == AuthorEditor.reference_no)
+        .join(Author, AuthorEditor.author_no == Author.author_no)
+        .filter(Author.author_name.ilike(search_pattern))
+        .order_by(Reference.year.desc())
+        .all()
+    )
+
+    # Count unique authors matching the pattern
+    author_count = (
+        db.query(Author.author_no)
+        .filter(Author.author_name.ilike(search_pattern))
+        .distinct()
+        .count()
+    )
+
+    # Build response with full reference info
+    references = []
+    for row in results:
+        ref_no, citation, year, pubmed = row
+
+        # Get author list for this reference
+        author_editors = (
+            db.query(Author.author_name)
+            .join(AuthorEditor, Author.author_no == AuthorEditor.author_no)
+            .filter(AuthorEditor.reference_no == ref_no)
+            .order_by(AuthorEditor.author_order)
+            .all()
+        )
+        author_list = ', '.join([ae[0] for ae in author_editors])
+
+        # Get dbxref_id for the reference
+        ref = db.query(Reference).filter(Reference.reference_no == ref_no).first()
+        dbxref_id = ''
+        if ref and ref.ref_links:
+            for link in ref.ref_links:
+                if link.dbxref and link.dbxref.source == 'CGD':
+                    dbxref_id = link.dbxref.dbxref_id
+                    break
+
+        # Build citation links
+        links = []
+        if dbxref_id:
+            links.append(CitationLink(
+                name='CGD Paper',
+                url=f'/reference/{dbxref_id}',
+                link_type='internal',
+            ))
+        if pubmed:
+            links.append(CitationLink(
+                name='PubMed',
+                url=f'https://pubmed.ncbi.nlm.nih.gov/{pubmed}',
+                link_type='external',
+            ))
+
+        references.append(ReferenceSearchResult(
+            reference_no=ref_no,
+            dbxref_id=dbxref_id,
+            pubmed=pubmed,
+            citation=citation or '',
+            year=year or 0,
+            author_list=author_list,
+            links=links,
+        ))
+
+    return AuthorSearchResponse(
+        author_query=author_name,
+        author_count=author_count,
+        reference_count=len(references),
+        references=references,
     )
