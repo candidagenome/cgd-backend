@@ -67,3 +67,58 @@ class PhenotypeDetailsResponse(BaseModel):
     }
     """
     results: dict[str, PhenotypeDetailsForOrganism]
+
+
+# =============================================================================
+# PHENOTYPE SEARCH SCHEMAS
+# =============================================================================
+
+class PhenotypeSearchResult(BaseModel):
+    """Single result from phenotype search"""
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+    organism: str
+    observable: str
+    qualifier: typing.Optional[str] = None
+    experiment_type: typing.Optional[str] = None
+    mutant_type: typing.Optional[str] = None
+    experiment_comment: typing.Optional[str] = None
+    strain: typing.Optional[str] = None
+    references: list[ReferenceForAnnotation] = []
+
+
+class PhenotypeSearchQuery(BaseModel):
+    """Search parameters used in the query"""
+    observable: typing.Optional[str] = None
+    qualifier: typing.Optional[str] = None
+    experiment_type: typing.Optional[str] = None
+    mutant_type: typing.Optional[str] = None
+
+
+class PhenotypeSearchResponse(BaseModel):
+    """Response from phenotype search endpoint"""
+    query: PhenotypeSearchQuery
+    total_results: int
+    page: int
+    limit: int
+    results: list[PhenotypeSearchResult]
+
+
+# =============================================================================
+# OBSERVABLE TERMS TREE SCHEMAS
+# =============================================================================
+
+class ObservableTerm(BaseModel):
+    """Single node in the observable terms tree"""
+    term: str
+    count: int = 0  # Number of annotations with this observable
+    children: list["ObservableTerm"] = []
+
+
+class ObservableTreeResponse(BaseModel):
+    """Response from observable tree endpoint"""
+    tree: list[ObservableTerm]
+
+
+# Forward reference resolution for recursive model
+ObservableTerm.model_rebuild()
