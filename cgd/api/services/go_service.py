@@ -513,15 +513,17 @@ def get_go_hierarchy(
     goid_str: str,
     max_nodes: int = 30,
     ancestor_levels: int = 5,
+    descendant_levels: int = 2,
 ) -> GoHierarchyResponse:
     """
-    Get GO term hierarchy (ancestors) for diagram visualization.
+    Get GO term hierarchy (ancestors and descendants) for diagram visualization.
 
     Args:
         db: Database session
         goid_str: GO identifier (e.g., "GO:0005634" or "5634")
         max_nodes: Maximum number of nodes to return (default 30)
         ancestor_levels: Maximum ancestor generations to traverse (default 5)
+        descendant_levels: Maximum descendant generations to traverse (default 2)
 
     Returns:
         GoHierarchyResponse with nodes and edges for the hierarchy diagram
@@ -543,8 +545,8 @@ def get_go_hierarchy(
             detail=f"GO term not found: {_format_goid(goid_int)}"
         )
 
-    # Collect all go_no values we need to include (focus + ancestors)
-    # Map go_no -> level (0 = focus, negative = ancestor)
+    # Collect all go_no values we need to include (focus + ancestors + descendants)
+    # Map go_no -> level (0 = focus, negative = ancestor, positive = descendant)
     go_no_to_level: dict[int, int] = {focus_go.go_no: 0}
 
     # Query ancestors via GoPath table (where child_go_no = focus term's go_no)
@@ -566,10 +568,29 @@ def get_go_hierarchy(
         elif abs(level) < abs(go_no_to_level[ancestor_go_no]):
             go_no_to_level[ancestor_go_no] = level
 
+    # Query descendants via GoPath table (where ancestor_go_no = focus term's go_no)
+    descendant_paths = (
+        db.query(GoPath)
+        .filter(GoPath.ancestor_go_no == focus_go.go_no)
+        .filter(GoPath.generation <= descendant_levels)
+        .order_by(GoPath.generation)
+        .all()
+    )
+
+    # Build set of descendant go_no values with their levels
+    for path in descendant_paths:
+        descendant_go_no = path.child_go_no
+        level = path.generation  # Positive for descendants
+        # Keep the closest level (smallest absolute value) if seen multiple times
+        if descendant_go_no not in go_no_to_level:
+            go_no_to_level[descendant_go_no] = level
+        elif abs(level) < abs(go_no_to_level[descendant_go_no]):
+            go_no_to_level[descendant_go_no] = level
+
     # Limit to max_nodes if we have too many
     all_go_nos = list(go_no_to_level.keys())
     if len(all_go_nos) > max_nodes:
-        # Keep focus term and closest ancestors
+        # Keep focus term and closest nodes (both ancestors and descendants)
         sorted_items = sorted(go_no_to_level.items(), key=lambda x: abs(x[1]))
         all_go_nos = [item[0] for item in sorted_items[:max_nodes]]
         go_no_to_level = {k: v for k, v in go_no_to_level.items() if k in all_go_nos}
@@ -623,60 +644,63 @@ def get_go_hierarchy(
     edges = []
     edge_set = set()  # Track unique edges
 
-    # For each node, find its direct parents that are also in our display set
+    # Helper function to add edge if not already present
+    def add_edge(parent_go, child_go, relationship_type):
+        edge_key = (parent_go.goid, child_go.goid)
+        if edge_key not in edge_set:
+            edge_set.add(edge_key)
+            rel_type = "is_a"
+            if relationship_type:
+                rel_type = relationship_type.replace(" ", "_")
+            edges.append(GoHierarchyEdge(
+                source=_format_goid(parent_go.goid),
+                target=_format_goid(child_go.goid),
+                relationship_type=rel_type,
+            ))
+
+    # Add edges from ancestor paths (parent -> focus and between ancestors)
     for path in ancestor_paths:
         if path.generation == 1:  # Direct parent-child relationship
             if path.ancestor_go_no in all_go_nos and path.child_go_no in all_go_nos:
                 parent_go = go_no_to_go.get(path.ancestor_go_no)
                 child_go = go_no_to_go.get(path.child_go_no)
                 if parent_go and child_go:
-                    edge_key = (parent_go.goid, child_go.goid)
-                    if edge_key not in edge_set:
-                        edge_set.add(edge_key)
-                        rel_type = "is_a"
-                        if path.relationship_type:
-                            rel_type = path.relationship_type.replace(" ", "_")
-                        edges.append(GoHierarchyEdge(
-                            source=_format_goid(parent_go.goid),
-                            target=_format_goid(child_go.goid),
-                            relationship_type=rel_type,
-                        ))
+                    add_edge(parent_go, child_go, path.relationship_type)
 
-    # Also query edges between ancestors (not just to focus term)
-    # Find paths where both ancestor and child are in our display set
-    if len(all_go_nos) > 1:
-        # Get all generation=1 paths between our nodes
-        ancestor_go_nos = [gn for gn in all_go_nos if gn != focus_go.go_no]
-        if ancestor_go_nos:
-            inter_ancestor_paths = (
-                db.query(GoPath)
-                .filter(GoPath.generation == 1)
-                .filter(GoPath.child_go_no.in_(ancestor_go_nos))
-                .filter(GoPath.ancestor_go_no.in_(all_go_nos))
-                .all()
-            )
-            for path in inter_ancestor_paths:
+    # Add edges from descendant paths (focus -> children and between descendants)
+    for path in descendant_paths:
+        if path.generation == 1:  # Direct parent-child relationship
+            if path.ancestor_go_no in all_go_nos and path.child_go_no in all_go_nos:
                 parent_go = go_no_to_go.get(path.ancestor_go_no)
                 child_go = go_no_to_go.get(path.child_go_no)
                 if parent_go and child_go:
-                    edge_key = (parent_go.goid, child_go.goid)
-                    if edge_key not in edge_set:
-                        edge_set.add(edge_key)
-                        rel_type = "is_a"
-                        if path.relationship_type:
-                            rel_type = path.relationship_type.replace(" ", "_")
-                        edges.append(GoHierarchyEdge(
-                            source=_format_goid(parent_go.goid),
-                            target=_format_goid(child_go.goid),
-                            relationship_type=rel_type,
-                        ))
+                    add_edge(parent_go, child_go, path.relationship_type)
 
-    # Determine if focus term has parents (can_go_up)
+    # Query additional edges between non-focus nodes (ancestors and descendants)
+    if len(all_go_nos) > 1:
+        non_focus_go_nos = [gn for gn in all_go_nos if gn != focus_go.go_no]
+        if non_focus_go_nos:
+            inter_node_paths = (
+                db.query(GoPath)
+                .filter(GoPath.generation == 1)
+                .filter(GoPath.child_go_no.in_(non_focus_go_nos))
+                .filter(GoPath.ancestor_go_no.in_(all_go_nos))
+                .all()
+            )
+            for path in inter_node_paths:
+                parent_go = go_no_to_go.get(path.ancestor_go_no)
+                child_go = go_no_to_go.get(path.child_go_no)
+                if parent_go and child_go:
+                    add_edge(parent_go, child_go, path.relationship_type)
+
+    # Determine navigation flags
     can_go_up = any(path.generation == 1 for path in ancestor_paths)
+    can_go_down = any(path.generation == 1 for path in descendant_paths)
 
     return GoHierarchyResponse(
         focus_term=focus_node,
         nodes=nodes,
         edges=edges,
         can_go_up=can_go_up,
+        can_go_down=can_go_down,
     )

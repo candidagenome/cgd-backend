@@ -172,3 +172,4 @@ class GoHierarchyResponse(BaseModel):
     nodes: list[GoHierarchyNode]
     edges: list[GoHierarchyEdge]
     can_go_up: bool  # True if focus term has parents (not a root term)
+    can_go_down: bool  # True if focus term has children (not a leaf term)
