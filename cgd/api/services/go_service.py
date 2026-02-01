@@ -227,6 +227,7 @@ def get_go_term_info(
                 gene_entry.references.append(ReferenceEvidence(
                     citation=ref.citation,
                     pmid=str(ref.pubmed) if ref.pubmed else None,
+                    dbxref_id=ref.dbxref_id,
                     evidence_codes=[ann.go_evidence] if ann.go_evidence else [],
                     qualifiers=qualifiers,
                 ))
