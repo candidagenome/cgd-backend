@@ -84,10 +84,11 @@ class GoTermOut(BaseModel):
 class ReferenceEvidence(BaseModel):
     """Reference with evidence codes for GO term page"""
     citation: typing.Optional[str] = None
-    pmid: typing.Optional[str] = None
+    pubmed: typing.Optional[int] = None
     dbxref_id: typing.Optional[str] = None  # CGD reference ID for internal links
     evidence_codes: list[str] = []
     qualifiers: list[str] = []
+    links: list[CitationLinkForGO] = []  # Citation links (CGD Paper, PubMed, Full Text, etc.)
 
 
 class AnnotatedGene(BaseModel):

@@ -16,6 +16,7 @@ from cgd.schemas.go_schema import (
     AnnotationSummary,
     AnnotatedGene,
     ReferenceEvidence,
+    CitationLinkForGO,
 )
 from cgd.models.models import (
     Go,
@@ -24,6 +25,7 @@ from cgd.models.models import (
     GoRef,
     GoQualifier,
     Feature,
+    RefUrl,
 )
 
 
@@ -90,6 +92,70 @@ def _normalize_annotation_type(db_type: str) -> str:
     if not db_type:
         return "manually_curated"
     return ANNOTATION_TYPE_MAP.get(db_type, db_type.replace(" ", "_").replace("-", "_"))
+
+
+def _build_citation_links(ref, ref_urls=None) -> list[CitationLinkForGO]:
+    """
+    Build citation links for a reference in GO term page context.
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: Optional list of RefUrl objects for additional links
+
+    Returns:
+        List of CitationLinkForGO objects
+    """
+    links = []
+
+    # CGD Paper link (always present) - always use dbxref_id (CGDID)
+    links.append(CitationLinkForGO(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(CitationLinkForGO(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url table (if provided)
+    # Match Perl behavior: show all URLs except 'Reference supplement' and 'Reference Data'
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Skip Reference supplement (displayed separately)
+                if "supplement" in url_type:
+                    links.append(CitationLinkForGO(
+                        name="Reference Supplement",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # Skip Reference Data (not shown as full text)
+                elif "reference data" in url_type:
+                    continue
+                # Download Datasets
+                elif any(kw in url_type for kw in ["download", "dataset"]):
+                    links.append(CitationLinkForGO(
+                        name="Download Datasets",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                # All other URL types are shown as Full Text (matching Perl default behavior)
+                else:
+                    links.append(CitationLinkForGO(
+                        name="Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+
+    return links
 
 
 def get_go_term_info(
@@ -162,6 +228,27 @@ def get_go_term_info(
         .all()
     )
 
+    # Collect all unique reference_no values to query RefUrl
+    ref_nos = set()
+    for ann in annotations:
+        for go_ref in ann.go_ref:
+            if go_ref.reference:
+                ref_nos.add(go_ref.reference.reference_no)
+
+    # Query RefUrl for all references (Full Text links, supplements, etc.)
+    ref_url_map: dict[int, list] = {}  # reference_no -> list of RefUrl objects
+    if ref_nos:
+        ref_url_query = (
+            db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
+            .filter(RefUrl.reference_no.in_(ref_nos))
+            .all()
+        )
+        for ref_url in ref_url_query:
+            if ref_url.reference_no not in ref_url_map:
+                ref_url_map[ref_url.reference_no] = []
+            ref_url_map[ref_url.reference_no].append(ref_url)
+
     # Group annotations by type and qualifier status
     # Structure: {annotation_type: {"with_qualifier": {qualifier_key: {feature_no: gene_data}},
     #                               "without_qualifier": {feature_no: gene_data}}}
@@ -209,7 +296,7 @@ def get_go_term_info(
             ref_key = str(ref.pubmed) if ref.pubmed else ref.citation
             existing_ref = None
             for r in gene_entry.references:
-                r_key = r.pmid if r.pmid else r.citation
+                r_key = str(r.pubmed) if r.pubmed else r.citation
                 if r_key == ref_key:
                     existing_ref = r
                     break
@@ -223,13 +310,18 @@ def get_go_term_info(
                     if q not in existing_ref.qualifiers:
                         existing_ref.qualifiers.append(q)
             else:
+                # Build citation links (CGD Paper, PubMed, Full Text, etc.)
+                ref_urls = ref_url_map.get(ref.reference_no, [])
+                links = _build_citation_links(ref, ref_urls)
+
                 # Create new reference entry
                 gene_entry.references.append(ReferenceEvidence(
                     citation=ref.citation,
-                    pmid=str(ref.pubmed) if ref.pubmed else None,
+                    pubmed=ref.pubmed,
                     dbxref_id=ref.dbxref_id,
                     evidence_codes=[ann.go_evidence] if ann.go_evidence else [],
                     qualifiers=qualifiers,
+                    links=links,
                 ))
 
     # Build annotation summaries with proper grouping
