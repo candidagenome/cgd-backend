@@ -4,8 +4,10 @@ GO Service - handles GO term page data retrieval.
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Optional
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_
 from fastapi import HTTPException
 
 from cgd.schemas.go_schema import (
@@ -19,11 +21,9 @@ from cgd.models.models import (
     Go,
     GoAnnotation,
     GoGosyn,
-    GoSynonym,
     GoRef,
     GoQualifier,
     Feature,
-    Reference,
 )
 
 
@@ -34,14 +34,30 @@ ASPECT_NAMES = {
     "P": "Biological Process",
 }
 
+# Map annotation_type values from database to display labels
+# Database values: 'manually curated', 'high-throughput', 'computational'
+ANNOTATION_TYPE_MAP = {
+    "manually curated": "manually_curated",
+    "high-throughput": "high_throughput",
+    "computational": "computational",
+}
+
+# Reverse map for display
+ANNOTATION_TYPE_LABELS = {
+    "manually_curated": "Manually Curated",
+    "high_throughput": "High-Throughput",
+    "computational": "Computational",
+}
+
+# Order for displaying annotation types
+ANNOTATION_TYPE_ORDER = ["manually_curated", "high_throughput", "computational"]
+
 
 def _format_goid(goid: int | str) -> str:
     """Format GOID as GO:XXXXXXX (7-digit padded)."""
     if isinstance(goid, str):
-        # If already formatted, return as is
         if goid.startswith("GO:"):
             return goid
-        # Otherwise parse the numeric part
         goid = int(goid)
     return f"GO:{goid:07d}"
 
@@ -69,13 +85,27 @@ def _get_organism_name(feature: Feature) -> str:
     return str(feature.organism_no)
 
 
-def get_go_term_info(db: Session, goid_str: str) -> GoTermResponse:
+def _normalize_annotation_type(db_type: str) -> str:
+    """Normalize database annotation type to API format."""
+    if not db_type:
+        return "manually_curated"
+    return ANNOTATION_TYPE_MAP.get(db_type, db_type.replace(" ", "_").replace("-", "_"))
+
+
+def get_go_term_info(
+    db: Session,
+    goid_str: str,
+    page: int = 1,
+    limit: int = 20,
+) -> GoTermResponse:
     """
     Get GO term info and all genes annotated to it.
 
     Args:
         db: Database session
         goid_str: GO identifier (e.g., "GO:0005634" or "5634")
+        page: Page number (1-indexed)
+        limit: Number of genes per page (default 20)
 
     Returns:
         GoTermResponse with term info and annotated genes
@@ -120,7 +150,7 @@ def get_go_term_info(db: Session, goid_str: str) -> GoTermResponse:
         synonyms=synonyms,
     )
 
-    # Query all annotations for this GO term
+    # Query all annotations for this GO term with eager loading
     annotations = (
         db.query(GoAnnotation)
         .options(
@@ -132,43 +162,55 @@ def get_go_term_info(db: Session, goid_str: str) -> GoTermResponse:
         .all()
     )
 
-    # Group annotations by type, then by gene
-    # Structure: {annotation_type: {feature_no: gene_data}}
-    annotations_by_type: dict[str, dict[int, AnnotatedGene]] = defaultdict(dict)
+    # Group annotations by type and qualifier status
+    # Structure: {annotation_type: {"with_qualifier": {qualifier_key: {feature_no: gene_data}},
+    #                               "without_qualifier": {feature_no: gene_data}}}
+    annotations_by_type: dict[str, dict[str, dict]] = defaultdict(
+        lambda: {"with_qualifier": defaultdict(dict), "without_qualifier": {}}
+    )
 
     for ann in annotations:
         feature = ann.feature
         if not feature:
             continue
 
-        annotation_type = ann.annotation_type or "manually_curated"
+        annotation_type = _normalize_annotation_type(ann.annotation_type)
         feature_no = feature.feature_no
 
-        # Create or get gene entry
-        if feature_no not in annotations_by_type[annotation_type]:
-            annotations_by_type[annotation_type][feature_no] = AnnotatedGene(
-                locus_name=feature.gene_name,
-                systematic_name=feature.feature_name,
-                species=_get_organism_name(feature),
-                references=[],
-            )
-
-        gene_entry = annotations_by_type[annotation_type][feature_no]
-
-        # Add references with evidence codes
+        # Process each go_ref to determine if it has qualifiers
         for go_ref in ann.go_ref:
             ref = go_ref.reference
             if not ref:
                 continue
 
             # Get qualifiers for this go_ref
-            qualifiers = [gq.qualifier for gq in go_ref.go_qualifier if gq.qualifier]
+            qualifiers = sorted([gq.qualifier for gq in go_ref.go_qualifier if gq.qualifier])
+            has_qualifier = go_ref.has_qualifier == 'Y' and len(qualifiers) > 0
 
-            # Check if we already have this reference for this gene
-            # If so, add evidence code to existing entry
+            if has_qualifier:
+                # Group by qualifier combination (e.g., "NOT" or "contributes to")
+                qualifier_key = ",".join(qualifiers)
+                gene_dict = annotations_by_type[annotation_type]["with_qualifier"][qualifier_key]
+            else:
+                gene_dict = annotations_by_type[annotation_type]["without_qualifier"]
+
+            # Create or get gene entry
+            if feature_no not in gene_dict:
+                gene_dict[feature_no] = AnnotatedGene(
+                    locus_name=feature.gene_name,
+                    systematic_name=feature.feature_name,
+                    species=_get_organism_name(feature),
+                    references=[],
+                )
+
+            gene_entry = gene_dict[feature_no]
+
+            # Check if we already have this reference
+            ref_key = str(ref.pubmed) if ref.pubmed else ref.citation
             existing_ref = None
             for r in gene_entry.references:
-                if r.pmid == str(ref.pubmed) if ref.pubmed else r.citation == ref.citation:
+                r_key = r.pmid if r.pmid else r.citation
+                if r_key == ref_key:
                     existing_ref = r
                     break
 
@@ -189,16 +231,50 @@ def get_go_term_info(db: Session, goid_str: str) -> GoTermResponse:
                     qualifiers=qualifiers,
                 ))
 
-    # Build annotation summaries
+    # Build annotation summaries with proper grouping
     annotation_summaries = []
     total_genes = 0
 
-    for annotation_type in ["manually_curated", "high_throughput", "computational"]:
-        genes_dict = annotations_by_type.get(annotation_type, {})
-        if genes_dict:
-            genes_list = list(genes_dict.values())
-            # Sort genes by locus_name or systematic_name
-            genes_list.sort(key=lambda g: (g.locus_name or g.systematic_name).lower())
+    for annotation_type in ANNOTATION_TYPE_ORDER:
+        type_data = annotations_by_type.get(annotation_type)
+        if not type_data:
+            continue
+
+        # Genes without qualifiers (direct annotations)
+        without_qual = type_data["without_qualifier"]
+        # Genes with qualifiers (NOT, contributes_to, etc.)
+        with_qual = type_data["with_qualifier"]
+
+        # Combine all genes for this annotation type
+        all_genes: dict[int, AnnotatedGene] = {}
+
+        # Add genes without qualifiers first
+        for feature_no, gene in without_qual.items():
+            if feature_no not in all_genes:
+                all_genes[feature_no] = gene
+            else:
+                # Merge references
+                for ref in gene.references:
+                    all_genes[feature_no].references.append(ref)
+
+        # Add genes with qualifiers
+        for qualifier_key, genes_dict in with_qual.items():
+            for feature_no, gene in genes_dict.items():
+                if feature_no not in all_genes:
+                    all_genes[feature_no] = gene
+                else:
+                    # Merge references
+                    for ref in gene.references:
+                        all_genes[feature_no].references.append(ref)
+
+        if all_genes:
+            genes_list = list(all_genes.values())
+            # Sort genes by species, then by locus_name or systematic_name
+            genes_list.sort(key=lambda g: (
+                g.species.lower(),
+                (g.locus_name or g.systematic_name).lower()
+            ))
+
             annotation_summaries.append(AnnotationSummary(
                 annotation_type=annotation_type,
                 gene_count=len(genes_list),
