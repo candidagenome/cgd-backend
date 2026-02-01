@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
@@ -9,9 +9,27 @@ from cgd.schemas.reference_schema import (
     ReferenceGOResponse,
     ReferencePhenotypeResponse,
     ReferenceInteractionResponse,
+    ReferenceLiteratureTopicsResponse,
+    AuthorSearchResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
+
+
+@router.get("/search/author", response_model=AuthorSearchResponse)
+def search_references_by_author(
+    author: str = Query(..., description="Author name to search for"),
+    db: Session = Depends(get_db),
+):
+    """
+    Search for references by author name.
+
+    Args:
+        author: Author name to search for (case-insensitive, wildcards supported)
+
+    Returns list of references with matching authors, along with author counts.
+    """
+    return reference_service.search_references_by_author(db, author)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)
@@ -77,3 +95,18 @@ def get_reference_interaction_details(identifier: str, db: Session = Depends(get
     Returns list of interactions linked to this reference.
     """
     return reference_service.get_reference_interaction_details(db, identifier)
+
+
+@router.get("/{identifier}/literature_topics", response_model=ReferenceLiteratureTopicsResponse)
+def get_reference_literature_topics(identifier: str, db: Session = Depends(get_db)):
+    """
+    Get literature/curation topics for this reference.
+
+    Args:
+        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
+
+    Returns topics addressed in this paper, with associated genes/features for each topic.
+    This data is used to build the topic matrix showing which topics are addressed
+    for which genes.
+    """
+    return reference_service.get_reference_literature_topics(db, identifier)

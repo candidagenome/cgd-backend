@@ -15,6 +15,11 @@ from cgd.schemas.reference_schema import (
     ReferenceInteractionResponse,
     InteractionForReference,
     InteractorForReference,
+    ReferenceLiteratureTopicsResponse,
+    LiteratureTopic,
+    FeatureForTopic,
+    AuthorSearchResponse,
+    ReferenceSearchResult,
 )
 from cgd.models.models import (
     Reference,
@@ -23,6 +28,7 @@ from cgd.models.models import (
     RefProperty,
     RefUrl,
     Url,
+    Author,
     AuthorEditor,
     Interaction,
     FeatInteract,
@@ -31,6 +37,8 @@ from cgd.models.models import (
     RefpropFeat,
     PhenoAnnotation,
     Feature,
+    Cv,
+    CvTerm,
 )
 
 
@@ -298,10 +306,17 @@ def get_reference_go_details(db: Session, identifier: str) -> ReferenceGORespons
     )
 
     annotations = []
+    seen_annotation_nos = set()  # Track go_annotation_no to deduplicate
+
     for gr in go_refs:
         ga = gr.go_annotation
         if ga is None:
             continue
+
+        # Deduplicate by go_annotation_no (primary key)
+        if ga.go_annotation_no in seen_annotation_nos:
+            continue
+        seen_annotation_nos.add(ga.go_annotation_no)
 
         feature = ga.feature
         go = ga.go
@@ -435,4 +450,192 @@ def get_reference_interaction_details(db: Session, identifier: str) -> Reference
     return ReferenceInteractionResponse(
         reference_no=ref.reference_no,
         interactions=interactions,
+    )
+
+
+def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLiteratureTopicsResponse:
+    """
+    Get literature topics (curation topics) for this reference.
+
+    Literature topics are stored in ref_property table. Only topics that exist in
+    cv_term table with cv_name='literature_topic' are included (filtering out
+    internal curation states like "Basic, lit guide, GO, Pheno curation done").
+
+    Returns topics grouped by topic name, with lists of features for each topic,
+    plus a list of all unique features for building the topic matrix.
+    """
+    ref = _get_reference_by_identifier(db, identifier)
+
+    # Get valid literature topics from cv_term table
+    # This filters out curation status values like "Basic, lit guide, GO, Pheno curation done"
+    valid_topics_query = (
+        db.query(CvTerm.term_name)
+        .join(Cv, CvTerm.cv_no == Cv.cv_no)
+        .filter(Cv.cv_name == 'literature_topic')
+        .all()
+    )
+    valid_topics = {row[0] for row in valid_topics_query}
+
+    # Query RefProperty for this reference
+    ref_properties = (
+        db.query(RefProperty)
+        .options(
+            joinedload(RefProperty.refprop_feat)
+            .joinedload(RefpropFeat.feature)
+            .joinedload(Feature.organism),
+        )
+        .filter(RefProperty.reference_no == ref.reference_no)
+        .all()
+    )
+
+    # Build a mapping of topic -> features
+    topic_features: dict[str, list[FeatureForTopic]] = {}
+    all_features_dict: dict[int, FeatureForTopic] = {}  # feature_no -> FeatureForTopic
+
+    for ref_prop in ref_properties:
+        topic = ref_prop.property_value
+        if not topic:
+            continue
+
+        # Only include topics that are valid literature topics (not curation states)
+        if topic not in valid_topics:
+            continue
+
+        if topic not in topic_features:
+            topic_features[topic] = []
+
+        # Get features linked to this topic via refprop_feat
+        for rpf in ref_prop.refprop_feat:
+            feature = rpf.feature
+            if feature:
+                organism_name, taxon_id = _get_organism_info(feature)
+                feat_obj = FeatureForTopic(
+                    feature_no=feature.feature_no,
+                    feature_name=feature.feature_name,
+                    gene_name=feature.gene_name,
+                    organism_name=organism_name,
+                    taxon_id=taxon_id,
+                )
+                # Add to topic's features if not already present
+                if not any(f.feature_no == feature.feature_no for f in topic_features[topic]):
+                    topic_features[topic].append(feat_obj)
+
+                # Add to all_features dict
+                if feature.feature_no not in all_features_dict:
+                    all_features_dict[feature.feature_no] = feat_obj
+
+    # Build the response
+    topics = []
+    for topic_name in sorted(topic_features.keys()):
+        features = sorted(topic_features[topic_name], key=lambda f: f.gene_name or f.feature_name)
+        topics.append(LiteratureTopic(
+            topic=topic_name,
+            features=features,
+        ))
+
+    # Sort all_features by gene_name/feature_name
+    all_features = sorted(
+        all_features_dict.values(),
+        key=lambda f: f.gene_name or f.feature_name
+    )
+
+    return ReferenceLiteratureTopicsResponse(
+        reference_no=ref.reference_no,
+        topics=topics,
+        all_features=all_features,
+    )
+
+
+def search_references_by_author(db: Session, author_name: str) -> AuthorSearchResponse:
+    """
+    Search for references by author name.
+
+    Searches the author table for authors matching the given name pattern
+    and returns all references associated with those authors.
+
+    Args:
+        db: Database session
+        author_name: Author name to search for (case-insensitive, supports wildcards)
+
+    Returns:
+        AuthorSearchResponse with matching references
+    """
+    # Normalize the search pattern - uppercase and add wildcard if not present
+    search_pattern = author_name.upper()
+    if '*' in search_pattern:
+        search_pattern = search_pattern.replace('*', '%')
+    if not search_pattern.endswith('%'):
+        search_pattern = search_pattern + '%'
+
+    # Query for matching authors and their references
+    # This mirrors the Perl query: author -> author_editor -> reference
+    results = (
+        db.query(
+            Reference.reference_no,
+            Reference.citation,
+            Reference.year,
+            Reference.pubmed,
+            Reference.dbxref_id,
+        )
+        .distinct()
+        .join(AuthorEditor, Reference.reference_no == AuthorEditor.reference_no)
+        .join(Author, AuthorEditor.author_no == Author.author_no)
+        .filter(Author.author_name.ilike(search_pattern))
+        .order_by(Reference.year.desc())
+        .all()
+    )
+
+    # Count unique authors matching the pattern
+    author_count = (
+        db.query(Author.author_no)
+        .filter(Author.author_name.ilike(search_pattern))
+        .distinct()
+        .count()
+    )
+
+    # Build response with full reference info
+    references = []
+    for row in results:
+        ref_no, citation, year, pubmed, dbxref_id = row
+
+        # Get author list for this reference
+        author_editors = (
+            db.query(Author.author_name)
+            .join(AuthorEditor, Author.author_no == AuthorEditor.author_no)
+            .filter(AuthorEditor.reference_no == ref_no)
+            .order_by(AuthorEditor.author_order)
+            .all()
+        )
+        author_list = ', '.join([ae[0] for ae in author_editors])
+
+        # Build citation links
+        links = []
+        if dbxref_id:
+            links.append(CitationLink(
+                name='CGD Paper',
+                url=f'/reference/{dbxref_id}',
+                link_type='internal',
+            ))
+        if pubmed:
+            links.append(CitationLink(
+                name='PubMed',
+                url=f'https://pubmed.ncbi.nlm.nih.gov/{pubmed}',
+                link_type='external',
+            ))
+
+        references.append(ReferenceSearchResult(
+            reference_no=ref_no,
+            dbxref_id=dbxref_id or '',
+            pubmed=pubmed,
+            citation=citation or '',
+            year=year or 0,
+            author_list=author_list,
+            links=links,
+        ))
+
+    return AuthorSearchResponse(
+        author_query=author_name,
+        author_count=author_count,
+        reference_count=len(references),
+        references=references,
     )
