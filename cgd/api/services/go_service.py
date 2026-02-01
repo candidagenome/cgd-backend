@@ -470,11 +470,11 @@ def get_go_evidence_codes(db: Session) -> GoEvidenceResponse:
         GoEvidenceResponse with list of evidence codes
     """
     # Query Code table for GO evidence codes
-    # Evidence codes are stored where tab_name='go_annotation' and col_name='go_evidence'
+    # Evidence codes are stored where tab_name='GO_ANNOTATION' and col_name='GO_EVIDENCE'
     codes = (
         db.query(Code)
-        .filter(Code.tab_name == 'go_annotation')
-        .filter(Code.col_name == 'go_evidence')
+        .filter(Code.tab_name == 'GO_ANNOTATION')
+        .filter(Code.col_name == 'GO_EVIDENCE')
         .order_by(Code.code_value)
         .all()
     )
