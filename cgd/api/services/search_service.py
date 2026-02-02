@@ -355,7 +355,7 @@ def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[SearchRe
             id=observable,
             name=observable,
             description=None,
-            link=f"/phenotype?observable={observable}",
+            link=f"/phenotype/search?observable={observable}",
             organism=None,
         ))
 
