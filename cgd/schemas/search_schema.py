@@ -5,6 +5,13 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class SearchResultLink(BaseModel):
+    """Link for a search result (used for references)."""
+    name: str
+    url: str
+    link_type: str  # "internal" or "external"
+
+
 class SearchResult(BaseModel):
     """Single search result item."""
     category: str  # "gene", "go_term", "phenotype", "reference"
@@ -13,6 +20,7 @@ class SearchResult(BaseModel):
     description: Optional[str] = None
     link: str
     organism: Optional[str] = None
+    links: Optional[list[SearchResultLink]] = None  # Citation links for references
 
 
 class SearchResponse(BaseModel):

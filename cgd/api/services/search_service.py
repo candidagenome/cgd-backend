@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
-from cgd.schemas.search_schema import SearchResult, SearchResponse, ResolveResponse
+from cgd.schemas.search_schema import SearchResult, SearchResponse, ResolveResponse, SearchResultLink
 from cgd.models.models import (
     Feature,
     Go,
@@ -16,6 +16,8 @@ from cgd.models.models import (
     Alias,
     FeatAlias,
     Organism,
+    RefUrl,
+    Url,
 )
 
 
@@ -50,6 +52,66 @@ def _get_organism_name(organism: Optional[Organism]) -> Optional[str]:
     if organism:
         return organism.organism_name
     return None
+
+
+def _build_reference_links(db: Session, ref: Reference) -> list[SearchResultLink]:
+    """
+    Build citation links for a reference.
+
+    Returns links for CGD Paper, PubMed, Full Text, Reference Supplement, etc.
+    """
+    links = []
+
+    # CGD Paper link (always present)
+    links.append(SearchResultLink(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(SearchResultLink(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Get URLs from ref_url table
+    ref_urls = (
+        db.query(RefUrl)
+        .filter(RefUrl.reference_no == ref.reference_no)
+        .all()
+    )
+
+    for ref_url in ref_urls:
+        url_obj = ref_url.url
+        if url_obj and url_obj.url:
+            url_type = (url_obj.url_type or "").lower()
+
+            if "supplement" in url_type:
+                links.append(SearchResultLink(
+                    name="Reference Supplement",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+            elif "reference data" in url_type:
+                continue  # Skip Reference Data
+            elif any(kw in url_type for kw in ["download", "dataset"]):
+                links.append(SearchResultLink(
+                    name="Download Datasets",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+            else:
+                # All other URL types shown as Full Text
+                links.append(SearchResultLink(
+                    name="Full Text",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+
+    return links
 
 
 def resolve_identifier(db: Session, query: str) -> ResolveResponse:
@@ -325,9 +387,10 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                 category="reference",
                 id=ref_exact.dbxref_id,
                 name=f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id,
-                description=ref_exact.citation[:200] + "..." if len(ref_exact.citation) > 200 else ref_exact.citation,
+                description=ref_exact.citation,
                 link=f"/reference/{ref_exact.dbxref_id}",
                 organism=None,
+                links=_build_reference_links(db, ref_exact),
             ))
 
     # Check if query matches a dbxref_id (CGDID like CAL0080639)
@@ -338,9 +401,10 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                 category="reference",
                 id=ref_by_dbxref.dbxref_id,
                 name=f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id,
-                description=ref_by_dbxref.citation[:200] + "..." if len(ref_by_dbxref.citation) > 200 else ref_by_dbxref.citation,
+                description=ref_by_dbxref.citation,
                 link=f"/reference/{ref_by_dbxref.dbxref_id}",
                 organism=None,
+                links=_build_reference_links(db, ref_by_dbxref),
             ))
 
     # Search by citation text
@@ -363,8 +427,9 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                     category="reference",
                     id=ref.dbxref_id,
                     name=f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id,
-                    description=ref.citation[:200] + "..." if len(ref.citation) > 200 else ref.citation,
+                    description=ref.citation,
                     link=f"/reference/{ref.dbxref_id}",
+                    links=_build_reference_links(db, ref),
                     organism=None,
                 ))
                 if len(results) >= limit:
