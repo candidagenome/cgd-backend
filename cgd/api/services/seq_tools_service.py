@@ -141,7 +141,14 @@ def _build_jbrowse_link(
 
 def _build_blast_link(sequence: str) -> str:
     """Build BLAST link for a sequence."""
-    return f"/cgi-bin/compute/blast_clade.pl?seq={quote(sequence)}"
+    params = {"seq": sequence[:5000]}  # Limit sequence length for URL
+    return f"/blast?{urlencode(params)}"
+
+
+def _build_blast_link_for_locus(locus: str) -> str:
+    """Build BLAST link for a locus name."""
+    params = {"locus": locus, "qtype": "locus"}
+    return f"/blast?{urlencode(params)}"
 
 
 def _build_pattern_match_link(sequence: str) -> str:
@@ -323,7 +330,7 @@ def get_tools_for_gene(
         if seq_len > 15:
             analysis_tools.append(ToolLink(
                 name="BLAST",
-                url=f"/cgi-bin/compute/blast_clade.pl?locus={feature.feature_name}",
+                url=_build_blast_link_for_locus(feature.feature_name),
                 description="Search for similar sequences using BLAST",
             ))
 
