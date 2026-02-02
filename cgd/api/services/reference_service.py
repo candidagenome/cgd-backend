@@ -728,6 +728,25 @@ GENOME_WIDE_TOPICS = [
     "Other large-scale proteomic analysis",
 ]
 
+# Species literature topics for genome-wide analysis papers
+SPECIES_TOPICS = [
+    "Candida albicans",
+    "Candida auris",
+    "Candida dubliniensis",
+    "Candida glabrata",
+    "Candida glabrata (Torulopsis glabrata)",
+    "Candida guilliermondii",
+    "Candida guilliermondii (Pichia guilliermondii)",
+    "Candida krusei",
+    "Candida krusei (Issatchenkia orientalis)",
+    "Candida lusitaniae",
+    "Candida lusitaniae (Clavispora lusitaniae)",
+    "Candida parapsilosis",
+    "Candida tropicalis",
+    "Debaryomyces hansenii (Candida famata)",
+    "Other Candida",
+]
+
 
 def get_genome_wide_analysis_papers(
     db: Session,
@@ -808,7 +827,7 @@ def get_genome_wide_analysis_papers(
             db.query(RefProperty.property_value)
             .filter(
                 RefProperty.reference_no == ref.reference_no,
-                RefProperty.property_value.like("Candida%"),
+                RefProperty.property_value.in_(SPECIES_TOPICS),
             )
             .distinct()
             .all()
