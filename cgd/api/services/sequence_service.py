@@ -189,6 +189,9 @@ def get_sequence_by_feature(
     if reverse_complement and seq_type != SeqType.PROTEIN:
         sequence = _reverse_complement(sequence)
 
+    # Convert to uppercase for display
+    sequence = sequence.upper()
+
     organism_name = feature.organism.organism_name if feature.organism else None
 
     info = SequenceInfo(
@@ -337,6 +340,9 @@ def get_sequence_by_coordinates(
     # Handle strand
     if strand == "C" or reverse_complement:
         sequence = _reverse_complement(sequence)
+
+    # Convert to uppercase for display
+    sequence = sequence.upper()
 
     chr_name = chr_seq.feature.feature_name if chr_seq.feature else chromosome
 
