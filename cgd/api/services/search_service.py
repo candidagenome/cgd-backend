@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
-from cgd.schemas.search_schema import SearchResult, SearchResponse
+from cgd.schemas.search_schema import SearchResult, SearchResponse, ResolveResponse
 from cgd.models.models import (
     Feature,
     Go,
@@ -52,6 +52,88 @@ def _get_organism_name(organism: Optional[Organism]) -> Optional[str]:
     return None
 
 
+def resolve_identifier(db: Session, query: str) -> ResolveResponse:
+    """
+    Check if query is an exact identifier match for a locus or reference.
+
+    Checks in order:
+    1. Feature gene_name (exact, case-insensitive)
+    2. Feature feature_name (exact, case-insensitive)
+    3. Feature dbxref_id (exact, case-insensitive) - e.g., CAL0001571
+    4. Reference dbxref_id (exact, case-insensitive) - e.g., CAL0080639
+
+    Returns ResolveResponse with redirect_url if found.
+    """
+    normalized = query.strip()
+    upper_query = normalized.upper()
+
+    # 1. Check Feature by gene_name (exact match)
+    feature = (
+        db.query(Feature)
+        .filter(func.upper(Feature.gene_name) == upper_query)
+        .first()
+    )
+    if feature:
+        return ResolveResponse(
+            query=query,
+            resolved=True,
+            redirect_url=f"/locus/{feature.feature_name}",
+            entity_type="locus",
+            entity_name=feature.gene_name or feature.feature_name,
+        )
+
+    # 2. Check Feature by feature_name (exact match)
+    feature = (
+        db.query(Feature)
+        .filter(func.upper(Feature.feature_name) == upper_query)
+        .first()
+    )
+    if feature:
+        return ResolveResponse(
+            query=query,
+            resolved=True,
+            redirect_url=f"/locus/{feature.feature_name}",
+            entity_type="locus",
+            entity_name=feature.gene_name or feature.feature_name,
+        )
+
+    # 3. Check Feature by dbxref_id (exact match) - e.g., CAL0001571
+    feature = (
+        db.query(Feature)
+        .filter(func.upper(Feature.dbxref_id) == upper_query)
+        .first()
+    )
+    if feature:
+        return ResolveResponse(
+            query=query,
+            resolved=True,
+            redirect_url=f"/locus/{feature.feature_name}",
+            entity_type="locus",
+            entity_name=feature.gene_name or feature.feature_name,
+        )
+
+    # 4. Check Reference by dbxref_id (exact match) - e.g., CAL0080639
+    reference = (
+        db.query(Reference)
+        .filter(func.upper(Reference.dbxref_id) == upper_query)
+        .first()
+    )
+    if reference:
+        return ResolveResponse(
+            query=query,
+            resolved=True,
+            redirect_url=f"/reference/{reference.dbxref_id}",
+            entity_type="reference",
+            entity_name=f"PMID:{reference.pubmed}" if reference.pubmed else reference.dbxref_id,
+        )
+
+    # No exact match found
+    return ResolveResponse(
+        query=query,
+        resolved=False,
+    )
+
+
 def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
     """
     Search genes/loci by gene_name, feature_name, or aliases.
@@ -62,7 +144,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Search in Feature table: gene_name, feature_name
+    # Search in Feature table: gene_name, feature_name, dbxref_id
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
@@ -70,6 +152,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
         .limit(limit)
@@ -218,12 +301,13 @@ def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
 def search_references(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
     """
-    Search references by PubMed ID or citation.
+    Search references by PubMed ID, dbxref_id (CGDID), or citation.
 
     Returns SearchResult list with category="reference".
     """
     results = []
     normalized = _normalize_query(query)
+    upper_query = normalized.upper()
 
     # Check if query is a numeric PubMed ID
     pubmed_id = None
@@ -242,6 +326,19 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                 name=f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id,
                 description=ref_exact.citation[:200] + "..." if len(ref_exact.citation) > 200 else ref_exact.citation,
                 link=f"/reference/{ref_exact.dbxref_id}",
+                organism=None,
+            ))
+
+    # Check if query matches a dbxref_id (CGDID like CAL0080639)
+    if not results:
+        ref_by_dbxref = db.query(Reference).filter(func.upper(Reference.dbxref_id) == upper_query).first()
+        if ref_by_dbxref:
+            results.append(SearchResult(
+                category="reference",
+                id=ref_by_dbxref.dbxref_id,
+                name=f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id,
+                description=ref_by_dbxref.citation[:200] + "..." if len(ref_by_dbxref.citation) > 200 else ref_by_dbxref.citation,
+                link=f"/reference/{ref_by_dbxref.dbxref_id}",
                 organism=None,
             ))
 

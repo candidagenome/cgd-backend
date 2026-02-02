@@ -21,3 +21,12 @@ class SearchResponse(BaseModel):
     total_results: int
     results_by_category: dict[str, list[SearchResult]]
     # e.g., {"genes": [...], "go_terms": [...], "phenotypes": [...], "references": [...]}
+
+
+class ResolveResponse(BaseModel):
+    """Response for /api/search/resolve endpoint - checks for exact identifier matches."""
+    query: str
+    resolved: bool  # True if exact match found
+    redirect_url: Optional[str] = None  # URL to redirect to if resolved
+    entity_type: Optional[str] = None  # "locus", "reference", "go_term"
+    entity_name: Optional[str] = None  # Display name of the matched entity

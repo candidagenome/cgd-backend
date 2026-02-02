@@ -6,7 +6,7 @@ from cgd.core.settings import settings
 from cgd.db.deps import get_db
 from cgd.api.crud.search_crud import dispatch
 from cgd.api.services import search_service
-from cgd.schemas.search_schema import SearchResponse
+from cgd.schemas.search_schema import SearchResponse, ResolveResponse
 
 
 # Schema for legacy dispatch endpoint
@@ -21,6 +21,25 @@ class SearchDispatchResponse(BaseModel):
 
 
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+
+@router.get("/resolve", response_model=ResolveResponse)
+def resolve_identifier(
+    query: str = Query(..., min_length=1, description="Identifier to resolve"),
+    db: Session = Depends(get_db),
+):
+    """
+    Resolve an exact identifier to a direct URL.
+
+    Checks if query matches exactly:
+    - Gene/locus name (gene_name or feature_name)
+    - Gene/locus CGDID (dbxref_id like CAL0001571)
+    - Reference CGDID (dbxref_id like CAL0080639)
+
+    If resolved, returns redirect_url for direct navigation.
+    If not resolved, returns resolved=False and frontend should show search results.
+    """
+    return search_service.resolve_identifier(db, query)
 
 
 @router.get("/quick", response_model=SearchResponse)
