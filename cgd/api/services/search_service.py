@@ -16,6 +16,8 @@ from cgd.schemas.search_schema import (
     SearchResultLink,
     AutocompleteSuggestion,
     AutocompleteResponse,
+    CategorySearchResponse,
+    PaginationInfo,
 )
 from cgd.models.models import (
     Feature,
@@ -711,3 +713,458 @@ def get_autocomplete_suggestions(
             pass
 
     return AutocompleteResponse(query=query, suggestions=suggestions)
+
+
+def _count_genes(db: Session, query: str) -> int:
+    """Count total genes matching the query."""
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Count features matching directly
+    feature_count = (
+        db.query(func.count(Feature.feature_no))
+        .filter(
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
+            )
+        )
+        .scalar()
+    )
+
+    # Count features matching via aliases (excluding already counted)
+    alias_subq = (
+        db.query(FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .distinct()
+        .subquery()
+    )
+
+    alias_count = (
+        db.query(func.count(Feature.feature_no))
+        .filter(
+            Feature.feature_no.in_(db.query(alias_subq.c.feature_no)),
+            ~or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
+            )
+        )
+        .scalar()
+    )
+
+    return feature_count + alias_count
+
+
+def _count_go_terms(db: Session, query: str) -> int:
+    """Count total GO terms matching the query."""
+    normalized = _normalize_query(query)
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    count = (
+        db.query(func.count(Go.go_no))
+        .filter(func.upper(Go.go_term).like(upper_pattern))
+        .scalar()
+    )
+
+    # Check if query is a GO ID
+    goid_numeric = None
+    if normalized.upper().startswith('GO:'):
+        try:
+            goid_numeric = int(normalized[3:])
+        except ValueError:
+            pass
+    else:
+        try:
+            goid_numeric = int(normalized)
+        except ValueError:
+            pass
+
+    if goid_numeric is not None:
+        exact_exists = db.query(Go).filter(Go.goid == goid_numeric).first()
+        if exact_exists:
+            # Check if not already in the term search
+            term_match = db.query(Go).filter(
+                Go.goid == goid_numeric,
+                func.upper(Go.go_term).like(upper_pattern)
+            ).first()
+            if not term_match:
+                count += 1
+
+    return count
+
+
+def _count_phenotypes(db: Session, query: str) -> int:
+    """Count total distinct phenotype observables matching the query."""
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    count = (
+        db.query(func.count(func.distinct(Phenotype.observable)))
+        .filter(func.upper(Phenotype.observable).like(upper_pattern))
+        .scalar()
+    )
+    return count
+
+
+def _count_references(db: Session, query: str) -> int:
+    """Count total references matching the query."""
+    normalized = _normalize_query(query)
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Count by citation
+    count = (
+        db.query(func.count(Reference.reference_no))
+        .filter(func.upper(Reference.citation).like(upper_pattern))
+        .scalar()
+    )
+
+    # Check for PubMed ID match
+    try:
+        pubmed_id = int(normalized)
+        pubmed_match = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
+        if pubmed_match:
+            # Check if not already in citation search
+            citation_match = db.query(Reference).filter(
+                Reference.pubmed == pubmed_id,
+                func.upper(Reference.citation).like(upper_pattern)
+            ).first()
+            if not citation_match:
+                count += 1
+    except ValueError:
+        pass
+
+    # Check for dbxref_id match
+    dbxref_match = db.query(Reference).filter(
+        func.upper(Reference.dbxref_id) == normalized.upper()
+    ).first()
+    if dbxref_match:
+        citation_match = db.query(Reference).filter(
+            Reference.dbxref_id == dbxref_match.dbxref_id,
+            func.upper(Reference.citation).like(upper_pattern)
+        ).first()
+        if not citation_match:
+            count += 1
+
+    return count
+
+
+def search_category_paginated(
+    db: Session,
+    query: str,
+    category: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> CategorySearchResponse:
+    """
+    Search within a specific category with pagination.
+
+    Args:
+        db: Database session
+        query: Search query string
+        category: Category to search (genes, go_terms, phenotypes, references)
+        page: Page number (1-indexed)
+        page_size: Number of results per page
+
+    Returns:
+        CategorySearchResponse with paginated results and metadata
+    """
+    offset = (page - 1) * page_size
+
+    # Get total count and results based on category
+    if category == "genes":
+        total_count = _count_genes(db, query)
+        results = _search_genes_paginated(db, query, offset, page_size)
+    elif category == "go_terms":
+        total_count = _count_go_terms(db, query)
+        results = _search_go_terms_paginated(db, query, offset, page_size)
+    elif category == "phenotypes":
+        total_count = _count_phenotypes(db, query)
+        results = _search_phenotypes_paginated(db, query, offset, page_size)
+    elif category == "references":
+        total_count = _count_references(db, query)
+        results = _search_references_paginated(db, query, offset, page_size)
+    else:
+        total_count = 0
+        results = []
+
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+
+    pagination = PaginationInfo(
+        page=page,
+        page_size=page_size,
+        total_items=total_count,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+    )
+
+    return CategorySearchResponse(
+        query=query,
+        category=category,
+        results=results,
+        pagination=pagination,
+    )
+
+
+def _search_genes_paginated(
+    db: Session, query: str, offset: int, limit: int
+) -> list[SearchResult]:
+    """Search genes with pagination."""
+    results = []
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Get features matching directly
+    feature_query = (
+        db.query(Feature)
+        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
+            )
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+
+    for feat in feature_query:
+        display_name = feat.gene_name or feat.feature_name
+        results.append(SearchResult(
+            category="gene",
+            id=feat.dbxref_id,
+            name=display_name,
+            description=feat.headline,
+            link=f"/locus/{feat.feature_name}",
+            organism=_get_organism_name(feat.organism),
+            highlighted_name=_highlight_text(display_name, query),
+            highlighted_description=_highlight_text(feat.headline, query),
+        ))
+
+    # If we need more results, search aliases
+    remaining = limit - len(results)
+    if remaining > 0 and len(results) < limit:
+        found_feature_nos = {feat.feature_no for feat in feature_query}
+
+        # Adjust offset for alias search
+        alias_offset = max(0, offset - len(found_feature_nos)) if offset > 0 else 0
+
+        alias_query = (
+            db.query(Feature, Alias)
+            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(
+                func.upper(Alias.alias_name).like(upper_pattern),
+                ~Feature.feature_no.in_(found_feature_nos) if found_feature_nos else True
+            )
+            .offset(alias_offset)
+            .limit(remaining)
+        )
+
+        for feat, alias in alias_query:
+            display_name = feat.gene_name or feat.feature_name
+            description = f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}"
+            results.append(SearchResult(
+                category="gene",
+                id=feat.dbxref_id,
+                name=display_name,
+                description=description,
+                link=f"/locus/{feat.feature_name}",
+                organism=_get_organism_name(feat.organism),
+                highlighted_name=_highlight_text(display_name, query),
+                highlighted_description=_highlight_text(description, query),
+            ))
+
+    return results
+
+
+def _search_go_terms_paginated(
+    db: Session, query: str, offset: int, limit: int
+) -> list[SearchResult]:
+    """Search GO terms with pagination."""
+    results = []
+    normalized = _normalize_query(query)
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Check for GO ID exact match first (only on first page)
+    goid_numeric = None
+    if normalized.upper().startswith('GO:'):
+        try:
+            goid_numeric = int(normalized[3:])
+        except ValueError:
+            pass
+    else:
+        try:
+            goid_numeric = int(normalized)
+        except ValueError:
+            pass
+
+    if goid_numeric is not None and offset == 0:
+        go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
+        if go_exact:
+            description = go_exact.go_definition[:200] + "..." if go_exact.go_definition and len(go_exact.go_definition) > 200 else go_exact.go_definition
+            results.append(SearchResult(
+                category="go_term",
+                id=_format_goid(go_exact.goid),
+                name=go_exact.go_term,
+                description=description,
+                link=f"/go/{_format_goid(go_exact.goid)}",
+                organism=None,
+                highlighted_name=_highlight_text(go_exact.go_term, query),
+                highlighted_description=_highlight_text(description, query),
+            ))
+
+    # Search by term name
+    remaining = limit - len(results)
+    adjusted_offset = offset if offset == 0 else offset - (1 if goid_numeric else 0)
+
+    if remaining > 0:
+        found_goids = {r.id for r in results}
+
+        go_query = (
+            db.query(Go)
+            .filter(func.upper(Go.go_term).like(upper_pattern))
+            .offset(max(0, adjusted_offset))
+            .limit(remaining + len(found_goids))
+        )
+
+        for go in go_query:
+            formatted_goid = _format_goid(go.goid)
+            if formatted_goid not in found_goids:
+                description = go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition
+                results.append(SearchResult(
+                    category="go_term",
+                    id=formatted_goid,
+                    name=go.go_term,
+                    description=description,
+                    link=f"/go/{formatted_goid}",
+                    organism=None,
+                    highlighted_name=_highlight_text(go.go_term, query),
+                    highlighted_description=_highlight_text(description, query),
+                ))
+                if len(results) >= limit:
+                    break
+
+    return results[:limit]
+
+
+def _search_phenotypes_paginated(
+    db: Session, query: str, offset: int, limit: int
+) -> list[SearchResult]:
+    """Search phenotypes with pagination."""
+    results = []
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    pheno_query = (
+        db.query(Phenotype.observable)
+        .filter(func.upper(Phenotype.observable).like(upper_pattern))
+        .distinct()
+        .offset(offset)
+        .limit(limit)
+    )
+
+    for (observable,) in pheno_query:
+        results.append(SearchResult(
+            category="phenotype",
+            id=observable,
+            name=observable,
+            description=None,
+            link=f"/phenotype/search?observable={observable}",
+            organism=None,
+            highlighted_name=_highlight_text(observable, query),
+            highlighted_description=None,
+        ))
+
+    return results
+
+
+def _search_references_paginated(
+    db: Session, query: str, offset: int, limit: int
+) -> list[SearchResult]:
+    """Search references with pagination."""
+    results = []
+    normalized = _normalize_query(query)
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Check for PubMed ID or dbxref exact match first (only on first page)
+    if offset == 0:
+        # PubMed ID match
+        try:
+            pubmed_id = int(normalized)
+            ref_exact = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
+            if ref_exact:
+                name = f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id
+                results.append(SearchResult(
+                    category="reference",
+                    id=ref_exact.dbxref_id,
+                    name=name,
+                    description=ref_exact.citation,
+                    link=f"/reference/{ref_exact.dbxref_id}",
+                    organism=None,
+                    links=_build_reference_links(db, ref_exact),
+                    highlighted_name=_highlight_text(name, query),
+                    highlighted_description=_highlight_text(ref_exact.citation, query),
+                ))
+        except ValueError:
+            pass
+
+        # dbxref_id match
+        if not results:
+            ref_by_dbxref = db.query(Reference).filter(
+                func.upper(Reference.dbxref_id) == normalized.upper()
+            ).first()
+            if ref_by_dbxref:
+                name = f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id
+                results.append(SearchResult(
+                    category="reference",
+                    id=ref_by_dbxref.dbxref_id,
+                    name=name,
+                    description=ref_by_dbxref.citation,
+                    link=f"/reference/{ref_by_dbxref.dbxref_id}",
+                    organism=None,
+                    links=_build_reference_links(db, ref_by_dbxref),
+                    highlighted_name=_highlight_text(name, query),
+                    highlighted_description=_highlight_text(ref_by_dbxref.citation, query),
+                ))
+
+    # Search by citation
+    remaining = limit - len(results)
+    found_ref_ids = {r.id for r in results}
+    adjusted_offset = offset if offset == 0 else offset - len(found_ref_ids)
+
+    if remaining > 0:
+        ref_query = (
+            db.query(Reference)
+            .filter(func.upper(Reference.citation).like(upper_pattern))
+            .offset(max(0, adjusted_offset))
+            .limit(remaining + len(found_ref_ids))
+        )
+
+        for ref in ref_query:
+            if ref.dbxref_id not in found_ref_ids:
+                name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+                results.append(SearchResult(
+                    category="reference",
+                    id=ref.dbxref_id,
+                    name=name,
+                    description=ref.citation,
+                    link=f"/reference/{ref.dbxref_id}",
+                    links=_build_reference_links(db, ref),
+                    organism=None,
+                    highlighted_name=_highlight_text(name, query),
+                    highlighted_description=_highlight_text(ref.citation, query),
+                ))
+                if len(results) >= limit:
+                    break
+
+    return results[:limit]

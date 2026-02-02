@@ -6,7 +6,12 @@ from cgd.core.settings import settings
 from cgd.db.deps import get_db
 from cgd.api.crud.search_crud import dispatch
 from cgd.api.services import search_service
-from cgd.schemas.search_schema import SearchResponse, ResolveResponse, AutocompleteResponse
+from cgd.schemas.search_schema import (
+    SearchResponse,
+    ResolveResponse,
+    AutocompleteResponse,
+    CategorySearchResponse,
+)
 
 
 # Schema for legacy dispatch endpoint
@@ -70,6 +75,27 @@ def autocomplete(
     Uses prefix matching for fast results.
     """
     return search_service.get_autocomplete_suggestions(db, query, limit)
+
+
+@router.get("/category", response_model=CategorySearchResponse)
+def search_category(
+    query: str = Query(..., min_length=1, description="Search query string"),
+    category: str = Query(
+        ...,
+        description="Category to search",
+        pattern="^(genes|go_terms|phenotypes|references)$"
+    ),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Search within a specific category with pagination.
+
+    Returns paginated results for a single category with pagination metadata.
+    Use this endpoint for navigating through large result sets.
+    """
+    return search_service.search_category_paginated(db, query, category, page, page_size)
 
 
 @router.get("", response_model=SearchDispatchResponse)

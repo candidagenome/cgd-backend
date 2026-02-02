@@ -26,12 +26,30 @@ class SearchResult(BaseModel):
     highlighted_description: Optional[str] = None
 
 
+class PaginationInfo(BaseModel):
+    """Pagination metadata."""
+    page: int  # Current page (1-indexed)
+    page_size: int  # Items per page
+    total_items: int  # Total number of items
+    total_pages: int  # Total number of pages
+    has_next: bool  # Whether there's a next page
+    has_prev: bool  # Whether there's a previous page
+
+
 class SearchResponse(BaseModel):
     """Response for /api/search/quick endpoint."""
     query: str
     total_results: int
     results_by_category: dict[str, list[SearchResult]]
     # e.g., {"genes": [...], "go_terms": [...], "phenotypes": [...], "references": [...]}
+
+
+class CategorySearchResponse(BaseModel):
+    """Response for paginated category-specific search."""
+    query: str
+    category: str
+    results: list[SearchResult]
+    pagination: PaginationInfo
 
 
 class ResolveResponse(BaseModel):
