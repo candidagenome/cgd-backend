@@ -711,7 +711,7 @@ def get_new_papers_this_week(db: Session, days: int = 7) -> NewPapersThisWeekRes
 
 def get_genome_wide_analysis_papers(db: Session) -> GenomeWideAnalysisPapersResponse:
     """
-    Get references tagged with the "Large-scale Survey" literature topic.
+    Get references tagged with genome-wide analysis literature topics.
 
     These are genome-wide analysis papers that involve large-scale surveys,
     high-throughput experiments, or systematic studies.
@@ -722,12 +722,29 @@ def get_genome_wide_analysis_papers(db: Session) -> GenomeWideAnalysisPapersResp
     Returns:
         GenomeWideAnalysisPapersResponse with list of genome-wide analysis papers
     """
-    # Query references that have the "Large-scale Survey" topic in ref_property
+    # Query references that have genome-wide analysis topics in ref_property
     # The topic is stored as property_value in ref_property table
+    genome_wide_topics = [
+        "Genome-wide Analysis",
+        "Proteome-wide Analysis",
+        "Comparative genomic hybridization",
+        "Computational analysis",
+        "Genomic co-immunoprecipitation study",
+        "Genomic expression study",
+        "Large-scale genetic interaction",
+        "Large-scale phenotype analysis",
+        "Other genomic analysis",
+        "Large-scale protein detection",
+        "Large-scale protein interaction",
+        "Large-scale protein localization",
+        "Large-scale protein modification",
+        "Other large-scale proteomic analysis",
+    ]
+
     refs = (
         db.query(Reference)
         .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-        .filter(RefProperty.property_value == "Large-scale Survey")
+        .filter(RefProperty.property_value.in_(genome_wide_topics))
         .distinct()
         .order_by(Reference.year.desc(), Reference.citation)
         .all()
@@ -766,7 +783,7 @@ def get_genome_wide_analysis_papers(db: Session) -> GenomeWideAnalysisPapersResp
         ))
 
     return GenomeWideAnalysisPapersResponse(
-        topic="Large-scale Survey",
+        topic="Genome-wide Analysis",
         total_count=len(references),
         references=references,
     )
