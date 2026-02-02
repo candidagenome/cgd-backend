@@ -38,3 +38,19 @@ class ResolveResponse(BaseModel):
     redirect_url: Optional[str] = None  # URL to redirect to if resolved
     entity_type: Optional[str] = None  # "locus", "reference", "go_term"
     entity_name: Optional[str] = None  # Display name of the matched entity
+
+
+# --- Autocomplete/Suggestions ---
+
+class AutocompleteSuggestion(BaseModel):
+    """Single autocomplete suggestion item."""
+    text: str  # Display text for the suggestion
+    category: str  # "gene", "go_term", "phenotype", "reference"
+    link: str  # URL to navigate to
+    description: Optional[str] = None  # Optional additional context
+
+
+class AutocompleteResponse(BaseModel):
+    """Response for /api/search/autocomplete endpoint."""
+    query: str
+    suggestions: list[AutocompleteSuggestion]
