@@ -3394,24 +3394,61 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             ))
 
         # Get sequences - also capture seq_version for the location
+        # Deduplicate: only keep the most recent sequence per type (for both current and archived)
         sequences = []
         seq_version_for_location = None
+        seen_current_types = {}  # Track best current sequence per type
+        seen_archived_types = {}  # Track best archived sequence per type
+
         for seq in f.seq:
-            # Truncate residues for API response (full sequence available via separate endpoint)
+            is_current = (seq.is_seq_current == 'Y')
+            seq_type_lower = (seq.seq_type or '').lower()
+
+            if is_current:
+                # For current sequences, only keep the one with highest seq_no per type
+                existing = seen_current_types.get(seq_type_lower)
+                if existing is None or seq.seq_no > existing.seq_no:
+                    seen_current_types[seq_type_lower] = seq
+                    if seq_version_for_location is None:
+                        seq_version_for_location = seq.seq_version
+            else:
+                # For archived sequences, only keep the one with highest seq_no per type
+                existing = seen_archived_types.get(seq_type_lower)
+                if existing is None or seq.seq_no > existing.seq_no:
+                    seen_archived_types[seq_type_lower] = seq
+
+        # Add the best current sequence for each type
+        for seq in seen_current_types.values():
             residues = seq.residues
             if residues and len(residues) > 1000:
                 residues = residues[:1000] + "..."
-
-            # Store current sequence version for display
-            if seq.is_seq_current == 'Y' and seq_version_for_location is None:
-                seq_version_for_location = seq.seq_version
 
             sequences.append(SequenceOut(
                 seq_type=seq.seq_type,
                 seq_length=seq.seq_length,
                 source=seq.source,
                 seq_version=seq.seq_version,
-                is_current=(seq.is_seq_current == 'Y'),
+                is_current=True,
+                residues=residues,
+            ))
+
+        # Add archived sequences only if they differ from current (different source/length)
+        for seq_type_lower, seq in seen_archived_types.items():
+            current_seq = seen_current_types.get(seq_type_lower)
+            # Skip archived if current exists with same length (likely same content)
+            if current_seq and current_seq.seq_length == seq.seq_length:
+                continue
+
+            residues = seq.residues
+            if residues and len(residues) > 1000:
+                residues = residues[:1000] + "..."
+
+            sequences.append(SequenceOut(
+                seq_type=seq.seq_type,
+                seq_length=seq.seq_length,
+                source=seq.source,
+                seq_version=seq.seq_version,
+                is_current=False,
                 residues=residues,
             ))
 
