@@ -6,7 +6,7 @@ from cgd.core.settings import settings
 from cgd.db.deps import get_db
 from cgd.api.crud.search_crud import dispatch
 from cgd.api.services import search_service
-from cgd.schemas.search_schema import SearchResponse, ResolveResponse
+from cgd.schemas.search_schema import SearchResponse, ResolveResponse, AutocompleteResponse
 
 
 # Schema for legacy dispatch endpoint
@@ -54,6 +54,22 @@ def quick_search(
     Returns results grouped by category.
     """
     return search_service.quick_search(db, query, limit)
+
+
+@router.get("/autocomplete", response_model=AutocompleteResponse)
+def autocomplete(
+    query: str = Query(..., min_length=1, description="Search query for suggestions"),
+    limit: int = Query(10, ge=1, le=20, description="Max suggestions to return"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get autocomplete suggestions for search input.
+
+    Returns a flat list of suggestions optimized for dropdown display.
+    Prioritizes genes, then GO terms, phenotypes, and references.
+    Uses prefix matching for fast results.
+    """
+    return search_service.get_autocomplete_suggestions(db, query, limit)
 
 
 @router.get("", response_model=SearchDispatchResponse)

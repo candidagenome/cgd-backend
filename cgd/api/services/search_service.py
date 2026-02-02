@@ -7,7 +7,14 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
-from cgd.schemas.search_schema import SearchResult, SearchResponse, ResolveResponse, SearchResultLink
+from cgd.schemas.search_schema import (
+    SearchResult,
+    SearchResponse,
+    ResolveResponse,
+    SearchResultLink,
+    AutocompleteSuggestion,
+    AutocompleteResponse,
+)
 from cgd.models.models import (
     Feature,
     Go,
@@ -468,3 +475,167 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
         total_results=total,
         results_by_category=results_by_category,
     )
+
+
+def get_autocomplete_suggestions(
+    db: Session,
+    query: str,
+    limit: int = 10,
+) -> AutocompleteResponse:
+    """
+    Get autocomplete suggestions for a search query.
+
+    Optimized for speed with prefix matching. Returns suggestions
+    prioritized by category: genes > GO terms > phenotypes > references.
+
+    Args:
+        db: Database session
+        query: Search query (minimum 2 characters recommended)
+        limit: Maximum total suggestions to return
+
+    Returns:
+        AutocompleteResponse with flat list of suggestions
+    """
+    suggestions: list[AutocompleteSuggestion] = []
+    normalized = query.strip()
+
+    if len(normalized) < 1:
+        return AutocompleteResponse(query=query, suggestions=[])
+
+    # Use prefix matching for speed (starts with)
+    prefix_pattern = f"{normalized.upper()}%"
+    # Also prepare contains pattern as fallback
+    contains_pattern = f"%{normalized.upper()}%"
+
+    # Track how many slots remain
+    remaining = limit
+
+    # 1. Search genes (highest priority) - prefix match on gene_name and feature_name
+    if remaining > 0:
+        gene_limit = min(remaining, 5)  # Cap genes at 5 to leave room for others
+
+        # Prefix match on gene_name (most relevant)
+        gene_prefix_query = (
+            db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
+            .filter(
+                Feature.gene_name.isnot(None),
+                func.upper(Feature.gene_name).like(prefix_pattern)
+            )
+            .distinct()
+            .limit(gene_limit)
+            .all()
+        )
+
+        seen_genes = set()
+        for gene_name, feature_name, headline in gene_prefix_query:
+            if gene_name and gene_name not in seen_genes:
+                suggestions.append(AutocompleteSuggestion(
+                    text=gene_name,
+                    category="gene",
+                    link=f"/locus/{feature_name}",
+                    description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
+                ))
+                seen_genes.add(gene_name)
+
+        # If we need more genes, try feature_name prefix
+        if len(suggestions) < gene_limit:
+            extra_needed = gene_limit - len(suggestions)
+            feat_prefix_query = (
+                db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
+                .filter(func.upper(Feature.feature_name).like(prefix_pattern))
+                .distinct()
+                .limit(extra_needed + len(seen_genes))
+                .all()
+            )
+
+            for gene_name, feature_name, headline in feat_prefix_query:
+                display = gene_name or feature_name
+                if display not in seen_genes and len(suggestions) < gene_limit:
+                    suggestions.append(AutocompleteSuggestion(
+                        text=display,
+                        category="gene",
+                        link=f"/locus/{feature_name}",
+                        description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
+                    ))
+                    seen_genes.add(display)
+
+        remaining = limit - len(suggestions)
+
+    # 2. Search GO terms - prefix match on go_term
+    if remaining > 0:
+        go_limit = min(remaining, 3)
+
+        # Check if it looks like a GO ID
+        if normalized.upper().startswith('GO:'):
+            try:
+                goid_numeric = int(normalized[3:])
+                go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
+                if go_exact:
+                    suggestions.append(AutocompleteSuggestion(
+                        text=f"{_format_goid(go_exact.goid)} - {go_exact.go_term}",
+                        category="go_term",
+                        link=f"/go/{_format_goid(go_exact.goid)}",
+                        description=go_exact.go_aspect,
+                    ))
+                    go_limit -= 1
+            except ValueError:
+                pass
+
+        if go_limit > 0:
+            go_query = (
+                db.query(Go.goid, Go.go_term, Go.go_aspect)
+                .filter(func.upper(Go.go_term).like(prefix_pattern))
+                .limit(go_limit)
+                .all()
+            )
+
+            for goid, go_term, go_aspect in go_query:
+                formatted_goid = _format_goid(goid)
+                suggestions.append(AutocompleteSuggestion(
+                    text=f"{formatted_goid} - {go_term}",
+                    category="go_term",
+                    link=f"/go/{formatted_goid}",
+                    description=go_aspect,
+                ))
+
+        remaining = limit - len(suggestions)
+
+    # 3. Search phenotypes - prefix match on observable
+    if remaining > 0:
+        pheno_limit = min(remaining, 2)
+
+        pheno_query = (
+            db.query(Phenotype.observable)
+            .filter(func.upper(Phenotype.observable).like(prefix_pattern))
+            .distinct()
+            .limit(pheno_limit)
+            .all()
+        )
+
+        for (observable,) in pheno_query:
+            suggestions.append(AutocompleteSuggestion(
+                text=observable,
+                category="phenotype",
+                link=f"/phenotype/search?observable={observable}",
+                description="Phenotype",
+            ))
+
+        remaining = limit - len(suggestions)
+
+    # 4. Search references - only if query is numeric (PubMed ID)
+    if remaining > 0:
+        try:
+            pubmed_id = int(normalized)
+            ref = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
+            if ref:
+                suggestions.append(AutocompleteSuggestion(
+                    text=f"PMID:{ref.pubmed}",
+                    category="reference",
+                    link=f"/reference/{ref.dbxref_id}",
+                    description=ref.citation[:80] + "..." if len(ref.citation) > 80 else ref.citation,
+                ))
+        except ValueError:
+            # Not a numeric query, skip reference search for autocomplete
+            pass
+
+    return AutocompleteResponse(query=query, suggestions=suggestions)
