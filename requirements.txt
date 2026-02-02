@@ -8,3 +8,6 @@ pydantic-settings>=2.2
 oracledb>=2.0
 psycopg[binary]>=3.1
 pymysql>=1.1
+
+# Elasticsearch
+elasticsearch>=8.0.0

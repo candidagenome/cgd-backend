@@ -1,12 +1,16 @@
 """
-Search Service - handles quick search across multiple entity types.
+Search Service - handles quick search across multiple entity types using Elasticsearch.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
 
+from elasticsearch import Elasticsearch
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
+from cgd.core.elasticsearch import get_es_client, INDEX_NAME
 from cgd.schemas.search_schema import (
     SearchResult,
     SearchResponse,
@@ -17,36 +21,12 @@ from cgd.schemas.search_schema import (
 )
 from cgd.models.models import (
     Feature,
-    Go,
-    Phenotype,
     Reference,
-    Alias,
-    FeatAlias,
     Organism,
     RefUrl,
-    Url,
 )
 
-
-def _normalize_query(query: str) -> str:
-    """
-    Normalize search query:
-    - Strip whitespace
-    - Convert wildcards (* to %)
-    """
-    normalized = query.strip()
-    # Convert user wildcards to SQL wildcards
-    normalized = normalized.replace('*', '%')
-    return normalized
-
-
-def _get_like_pattern(query: str) -> str:
-    """Get pattern for LIKE search (case-insensitive)."""
-    normalized = _normalize_query(query)
-    # If no wildcards provided, wrap in % for contains search
-    if '%' not in normalized:
-        return f'%{normalized}%'
-    return normalized
+logger = logging.getLogger(__name__)
 
 
 def _format_goid(goid: int) -> str:
@@ -124,6 +104,8 @@ def _build_reference_links(db: Session, ref: Reference) -> list[SearchResultLink
 def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     """
     Check if query is an exact identifier match for a locus or reference.
+
+    This function uses SQL for exact ID lookups (not Elasticsearch).
 
     Checks in order:
     1. Feature gene_name (exact, case-insensitive)
@@ -204,258 +186,223 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     )
 
 
-def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
+def _es_search(
+    es: Elasticsearch,
+    query: str,
+    entity_type: Optional[str] = None,
+    limit: int = 20
+) -> list[dict]:
     """
-    Search genes/loci by gene_name, feature_name, or aliases.
+    Execute Elasticsearch search query.
 
-    Returns SearchResult list with category="gene".
+    Args:
+        es: Elasticsearch client
+        query: Search query string
+        entity_type: Optional filter by type (gene, go_term, phenotype, reference)
+        limit: Maximum results to return
+
+    Returns:
+        List of hit source documents
     """
-    results = []
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+    # Build query
+    must_clauses = []
+    should_clauses = []
 
-    # Search in Feature table: gene_name, feature_name, dbxref_id
-    feature_query = (
-        db.query(Feature)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(
-            or_(
-                func.upper(Feature.gene_name).like(upper_pattern),
-                func.upper(Feature.feature_name).like(upper_pattern),
-                func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
-        )
-        .limit(limit)
+    # Filter by type if specified
+    if entity_type:
+        must_clauses.append({"term": {"type": entity_type}})
+
+    # Exact matches (highest boost)
+    should_clauses.extend([
+        {"term": {"gene_name.keyword": {"value": query, "boost": 10}}},
+        {"term": {"feature_name": {"value": query.lower(), "boost": 10}}},
+        {"term": {"goid": {"value": query.upper(), "boost": 10}}},
+        {"term": {"dbxref_id": {"value": query.upper(), "boost": 10}}},
+    ])
+
+    # Try numeric match for pubmed
+    try:
+        pubmed_id = int(query)
+        should_clauses.append({"term": {"pubmed": {"value": pubmed_id, "boost": 10}}})
+    except ValueError:
+        pass
+
+    # Prefix matches (high boost)
+    should_clauses.extend([
+        {"prefix": {"gene_name.keyword": {"value": query.upper(), "boost": 5}}},
+        {"prefix": {"feature_name": {"value": query.lower(), "boost": 5}}},
+        {"prefix": {"go_term.keyword": {"value": query.lower(), "boost": 5}}},
+        {"prefix": {"observable.keyword": {"value": query.lower(), "boost": 4}}},
+    ])
+
+    # Full-text matches with fuzziness
+    should_clauses.append({
+        "multi_match": {
+            "query": query,
+            "fields": [
+                "name^3",
+                "gene_name^3",
+                "go_term^2",
+                "headline",
+                "aliases",
+                "go_definition",
+                "citation",
+                "observable"
+            ],
+            "type": "best_fields",
+            "fuzziness": "AUTO"
+        }
+    })
+
+    body = {
+        "size": limit,
+        "query": {
+            "bool": {
+                "must": must_clauses if must_clauses else [{"match_all": {}}],
+                "should": should_clauses,
+                "minimum_should_match": 1 if not must_clauses else 0
+            }
+        },
+        "sort": ["_score", {"type": {"order": "asc"}}]
+    }
+
+    try:
+        response = es.search(index=INDEX_NAME, body=body)
+        return [hit["_source"] for hit in response["hits"]["hits"]]
+    except Exception as e:
+        logger.error(f"Elasticsearch search error: {e}")
+        return []
+
+
+def _hit_to_search_result(hit: dict, db: Optional[Session] = None) -> SearchResult:
+    """Convert Elasticsearch hit to SearchResult."""
+    entity_type = hit.get("type", "")
+
+    # Build description
+    description = None
+    if entity_type == "gene":
+        description = hit.get("headline")
+        if hit.get("aliases"):
+            alias_text = f"Aliases: {hit['aliases']}"
+            if description:
+                description = f"{description} ({alias_text})"
+            else:
+                description = alias_text
+    elif entity_type == "go_term":
+        go_def = hit.get("go_definition")
+        if go_def:
+            description = go_def[:200] + "..." if len(go_def) > 200 else go_def
+    elif entity_type == "reference":
+        description = hit.get("citation")
+    elif entity_type == "phenotype":
+        description = "Phenotype"
+
+    # Map type to category
+    category_map = {
+        "gene": "gene",
+        "go_term": "go_term",
+        "phenotype": "phenotype",
+        "reference": "reference"
+    }
+
+    return SearchResult(
+        category=category_map.get(entity_type, entity_type),
+        id=hit.get("id", ""),
+        name=hit.get("name", ""),
+        description=description,
+        link=hit.get("link", ""),
+        organism=hit.get("organism"),
     )
 
-    for feat in feature_query:
-        display_name = feat.gene_name or feat.feature_name
-        results.append(SearchResult(
-            category="gene",
-            id=feat.dbxref_id,
-            name=display_name,
-            description=feat.headline,
-            link=f"/locus/{feat.feature_name}",
-            organism=_get_organism_name(feat.organism),
-        ))
 
-    # If we have room, also search aliases
-    remaining = limit - len(results)
-    if remaining > 0:
-        # Get feature_nos already in results to avoid duplicates
-        found_feature_nos = {feat.feature_no for feat in feature_query}
+def search_genes(query: str, limit: int = 20, es: Optional[Elasticsearch] = None) -> list[SearchResult]:
+    """Search genes using Elasticsearch."""
+    if es is None:
+        es = get_es_client()
 
-        alias_query = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-            .filter(func.upper(Alias.alias_name).like(upper_pattern))
-            .limit(remaining + len(found_feature_nos))  # Extra to account for potential duplicates
-        )
-
-        for feat, alias in alias_query:
-            if feat.feature_no not in found_feature_nos:
-                display_name = feat.gene_name or feat.feature_name
-                results.append(SearchResult(
-                    category="gene",
-                    id=feat.dbxref_id,
-                    name=display_name,
-                    description=f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}",
-                    link=f"/locus/{feat.feature_name}",
-                    organism=_get_organism_name(feat.organism),
-                ))
-                found_feature_nos.add(feat.feature_no)
-                if len(results) >= limit:
-                    break
-
-    return results[:limit]
+    hits = _es_search(es, query, entity_type="gene", limit=limit)
+    return [_hit_to_search_result(hit) for hit in hits]
 
 
-def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
-    """
-    Search GO terms by go_term or goid.
+def search_go_terms(query: str, limit: int = 20, es: Optional[Elasticsearch] = None) -> list[SearchResult]:
+    """Search GO terms using Elasticsearch."""
+    if es is None:
+        es = get_es_client()
 
-    Returns SearchResult list with category="go_term".
-    """
+    hits = _es_search(es, query, entity_type="go_term", limit=limit)
+    return [_hit_to_search_result(hit) for hit in hits]
+
+
+def search_phenotypes(query: str, limit: int = 20, es: Optional[Elasticsearch] = None) -> list[SearchResult]:
+    """Search phenotypes using Elasticsearch."""
+    if es is None:
+        es = get_es_client()
+
+    hits = _es_search(es, query, entity_type="phenotype", limit=limit)
+    return [_hit_to_search_result(hit) for hit in hits]
+
+
+def search_references(
+    query: str,
+    limit: int = 20,
+    db: Optional[Session] = None,
+    es: Optional[Elasticsearch] = None
+) -> list[SearchResult]:
+    """Search references using Elasticsearch."""
+    if es is None:
+        es = get_es_client()
+
+    hits = _es_search(es, query, entity_type="reference", limit=limit)
     results = []
-    normalized = _normalize_query(query)
 
-    # Check if query looks like a GO ID (GO:XXXXXXX or just numeric)
-    goid_numeric = None
-    if normalized.upper().startswith('GO:'):
-        try:
-            goid_numeric = int(normalized[3:])
-        except ValueError:
-            pass
-    else:
-        try:
-            goid_numeric = int(normalized)
-        except ValueError:
-            pass
+    for hit in hits:
+        result = _hit_to_search_result(hit)
 
-    # If it's a valid GO ID, search exact match first
-    if goid_numeric is not None:
-        go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
-        if go_exact:
-            results.append(SearchResult(
-                category="go_term",
-                id=_format_goid(go_exact.goid),
-                name=go_exact.go_term,
-                description=go_exact.go_definition[:200] + "..." if go_exact.go_definition and len(go_exact.go_definition) > 200 else go_exact.go_definition,
-                link=f"/go/{_format_goid(go_exact.goid)}",
-                organism=None,
-            ))
+        # Add reference links if db session provided
+        if db and hit.get("id"):
+            ref = db.query(Reference).filter(Reference.dbxref_id == hit["id"]).first()
+            if ref:
+                result.links = _build_reference_links(db, ref)
 
-    # Search by term name
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
-
-    remaining = limit - len(results)
-    if remaining > 0:
-        found_goids = {r.id for r in results}
-
-        go_query = (
-            db.query(Go)
-            .filter(func.upper(Go.go_term).like(upper_pattern))
-            .limit(remaining + len(found_goids))
-        )
-
-        for go in go_query:
-            formatted_goid = _format_goid(go.goid)
-            if formatted_goid not in found_goids:
-                results.append(SearchResult(
-                    category="go_term",
-                    id=formatted_goid,
-                    name=go.go_term,
-                    description=go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition,
-                    link=f"/go/{formatted_goid}",
-                    organism=None,
-                ))
-                if len(results) >= limit:
-                    break
-
-    return results[:limit]
-
-
-def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
-    """
-    Search phenotypes by observable.
-
-    Returns SearchResult list with category="phenotype".
-    """
-    results = []
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
-
-    # Search distinct observables
-    pheno_query = (
-        db.query(Phenotype.observable)
-        .filter(func.upper(Phenotype.observable).like(upper_pattern))
-        .distinct()
-        .limit(limit)
-    )
-
-    for (observable,) in pheno_query:
-        results.append(SearchResult(
-            category="phenotype",
-            id=observable,
-            name=observable,
-            description=None,
-            link=f"/phenotype/search?observable={observable}",
-            organism=None,
-        ))
+        results.append(result)
 
     return results
 
 
-def search_references(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
-    """
-    Search references by PubMed ID, dbxref_id (CGDID), or citation.
-
-    Returns SearchResult list with category="reference".
-    """
-    results = []
-    normalized = _normalize_query(query)
-    upper_query = normalized.upper()
-
-    # Check if query is a numeric PubMed ID
-    pubmed_id = None
-    try:
-        pubmed_id = int(normalized)
-    except ValueError:
-        pass
-
-    # If it's a valid PubMed ID, search exact match first
-    if pubmed_id is not None:
-        ref_exact = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
-        if ref_exact:
-            results.append(SearchResult(
-                category="reference",
-                id=ref_exact.dbxref_id,
-                name=f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id,
-                description=ref_exact.citation,
-                link=f"/reference/{ref_exact.dbxref_id}",
-                organism=None,
-                links=_build_reference_links(db, ref_exact),
-            ))
-
-    # Check if query matches a dbxref_id (CGDID like CAL0080639)
-    if not results:
-        ref_by_dbxref = db.query(Reference).filter(func.upper(Reference.dbxref_id) == upper_query).first()
-        if ref_by_dbxref:
-            results.append(SearchResult(
-                category="reference",
-                id=ref_by_dbxref.dbxref_id,
-                name=f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id,
-                description=ref_by_dbxref.citation,
-                link=f"/reference/{ref_by_dbxref.dbxref_id}",
-                organism=None,
-                links=_build_reference_links(db, ref_by_dbxref),
-            ))
-
-    # Search by citation text
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
-
-    remaining = limit - len(results)
-    if remaining > 0:
-        found_ref_nos = {r.id for r in results}
-
-        ref_query = (
-            db.query(Reference)
-            .filter(func.upper(Reference.citation).like(upper_pattern))
-            .limit(remaining + len(found_ref_nos))
-        )
-
-        for ref in ref_query:
-            if ref.dbxref_id not in found_ref_nos:
-                results.append(SearchResult(
-                    category="reference",
-                    id=ref.dbxref_id,
-                    name=f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id,
-                    description=ref.citation,
-                    link=f"/reference/{ref.dbxref_id}",
-                    links=_build_reference_links(db, ref),
-                    organism=None,
-                ))
-                if len(results) >= limit:
-                    break
-
-    return results[:limit]
-
-
 def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     """
-    Search all categories (genes, GO terms, phenotypes, references).
+    Search all categories using Elasticsearch.
 
     Returns results grouped by category.
     """
-    # Search all categories with the same limit per category
-    genes = search_genes(db, query, limit)
-    go_terms = search_go_terms(db, query, limit)
-    phenotypes = search_phenotypes(db, query, limit)
-    references = search_references(db, query, limit)
+    es = get_es_client()
+
+    # Search all types at once, get more results to properly group
+    all_hits = _es_search(es, query, entity_type=None, limit=limit * 4)
+
+    # Group by type
+    genes = []
+    go_terms = []
+    phenotypes = []
+    references = []
+
+    for hit in all_hits:
+        entity_type = hit.get("type", "")
+        result = _hit_to_search_result(hit)
+
+        if entity_type == "gene" and len(genes) < limit:
+            genes.append(result)
+        elif entity_type == "go_term" and len(go_terms) < limit:
+            go_terms.append(result)
+        elif entity_type == "phenotype" and len(phenotypes) < limit:
+            phenotypes.append(result)
+        elif entity_type == "reference" and len(references) < limit:
+            # Add reference links
+            if hit.get("id"):
+                ref = db.query(Reference).filter(Reference.dbxref_id == hit["id"]).first()
+                if ref:
+                    result.links = _build_reference_links(db, ref)
+            references.append(result)
 
     # Build response
     results_by_category = {}
@@ -483,159 +430,116 @@ def get_autocomplete_suggestions(
     limit: int = 10,
 ) -> AutocompleteResponse:
     """
-    Get autocomplete suggestions for a search query.
+    Get autocomplete suggestions using Elasticsearch prefix matching.
 
     Optimized for speed with prefix matching. Returns suggestions
     prioritized by category: genes > GO terms > phenotypes > references.
 
     Args:
-        db: Database session
-        query: Search query (minimum 2 characters recommended)
+        db: Database session (kept for interface compatibility)
+        query: Search query (minimum 1 character)
         limit: Maximum total suggestions to return
 
     Returns:
         AutocompleteResponse with flat list of suggestions
     """
-    suggestions: list[AutocompleteSuggestion] = []
     normalized = query.strip()
 
     if len(normalized) < 1:
         return AutocompleteResponse(query=query, suggestions=[])
 
-    # Use prefix matching for speed (starts with)
-    prefix_pattern = f"{normalized.upper()}%"
-    # Also prepare contains pattern as fallback
-    contains_pattern = f"%{normalized.upper()}%"
+    es = get_es_client()
 
-    # Track how many slots remain
-    remaining = limit
+    # Build prefix-focused query for autocomplete
+    should_clauses = [
+        # Exact matches
+        {"term": {"gene_name.keyword": {"value": normalized, "boost": 10}}},
+        {"term": {"gene_name.keyword": {"value": normalized.upper(), "boost": 10}}},
 
-    # 1. Search genes (highest priority) - prefix match on gene_name and feature_name
-    if remaining > 0:
-        gene_limit = min(remaining, 5)  # Cap genes at 5 to leave room for others
+        # Prefix matches (primary for autocomplete)
+        {"prefix": {"gene_name.keyword": {"value": normalized.upper(), "boost": 8}}},
+        {"prefix": {"feature_name": {"value": normalized.lower(), "boost": 7}}},
+        {"prefix": {"go_term.keyword": {"value": normalized.lower(), "boost": 6}}},
+        {"prefix": {"observable.keyword": {"value": normalized.lower(), "boost": 5}}},
 
-        # Prefix match on gene_name (most relevant)
-        gene_prefix_query = (
-            db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
-            .filter(
-                Feature.gene_name.isnot(None),
-                func.upper(Feature.gene_name).like(prefix_pattern)
-            )
-            .distinct()
-            .limit(gene_limit)
-            .all()
-        )
+        # Match phrase prefix for partial word matching
+        {"match_phrase_prefix": {"name": {"query": normalized, "boost": 3}}},
+        {"match_phrase_prefix": {"aliases": {"query": normalized, "boost": 2}}},
+    ]
 
-        seen_genes = set()
-        for gene_name, feature_name, headline in gene_prefix_query:
-            if gene_name and gene_name not in seen_genes:
-                suggestions.append(AutocompleteSuggestion(
-                    text=gene_name,
-                    category="gene",
-                    link=f"/locus/{feature_name}",
-                    description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
-                ))
-                seen_genes.add(gene_name)
+    # Add pubmed exact match if numeric
+    try:
+        pubmed_id = int(normalized)
+        should_clauses.append({"term": {"pubmed": {"value": pubmed_id, "boost": 10}}})
+    except ValueError:
+        pass
 
-        # If we need more genes, try feature_name prefix
-        if len(suggestions) < gene_limit:
-            extra_needed = gene_limit - len(suggestions)
-            feat_prefix_query = (
-                db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
-                .filter(func.upper(Feature.feature_name).like(prefix_pattern))
-                .distinct()
-                .limit(extra_needed + len(seen_genes))
-                .all()
-            )
+    body = {
+        "size": limit * 2,  # Get extra to deduplicate
+        "query": {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1
+            }
+        },
+        "sort": ["_score", {"type": {"order": "asc"}}]  # Genes first
+    }
 
-            for gene_name, feature_name, headline in feat_prefix_query:
-                display = gene_name or feature_name
-                if display not in seen_genes and len(suggestions) < gene_limit:
-                    suggestions.append(AutocompleteSuggestion(
-                        text=display,
-                        category="gene",
-                        link=f"/locus/{feature_name}",
-                        description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
-                    ))
-                    seen_genes.add(display)
+    try:
+        response = es.search(index=INDEX_NAME, body=body)
+        hits = response["hits"]["hits"]
+    except Exception as e:
+        logger.error(f"Elasticsearch autocomplete error: {e}")
+        return AutocompleteResponse(query=query, suggestions=[])
 
-        remaining = limit - len(suggestions)
+    # Convert hits to suggestions, avoiding duplicates
+    suggestions: list[AutocompleteSuggestion] = []
+    seen_texts = set()
 
-    # 2. Search GO terms - prefix match on go_term
-    if remaining > 0:
-        go_limit = min(remaining, 3)
+    for hit in hits:
+        if len(suggestions) >= limit:
+            break
 
-        # Check if it looks like a GO ID
-        if normalized.upper().startswith('GO:'):
-            try:
-                goid_numeric = int(normalized[3:])
-                go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
-                if go_exact:
-                    suggestions.append(AutocompleteSuggestion(
-                        text=f"{_format_goid(go_exact.goid)} - {go_exact.go_term}",
-                        category="go_term",
-                        link=f"/go/{_format_goid(go_exact.goid)}",
-                        description=go_exact.go_aspect,
-                    ))
-                    go_limit -= 1
-            except ValueError:
-                pass
+        source = hit["_source"]
+        entity_type = source.get("type", "")
 
-        if go_limit > 0:
-            go_query = (
-                db.query(Go.goid, Go.go_term, Go.go_aspect)
-                .filter(func.upper(Go.go_term).like(prefix_pattern))
-                .limit(go_limit)
-                .all()
-            )
+        # Determine display text and description based on type
+        if entity_type == "gene":
+            text = source.get("gene_name") or source.get("feature_name") or source.get("name", "")
+            description = source.get("headline")
+            if description and len(description) > 80:
+                description = description[:80] + "..."
+            category = "gene"
+        elif entity_type == "go_term":
+            goid = source.get("goid", "")
+            go_term = source.get("go_term", source.get("name", ""))
+            text = f"{goid} - {go_term}"
+            description = source.get("go_aspect")
+            category = "go_term"
+        elif entity_type == "phenotype":
+            text = source.get("observable") or source.get("name", "")
+            description = "Phenotype"
+            category = "phenotype"
+        elif entity_type == "reference":
+            pubmed = source.get("pubmed")
+            text = f"PMID:{pubmed}" if pubmed else source.get("id", "")
+            description = source.get("citation")
+            if description and len(description) > 80:
+                description = description[:80] + "..."
+            category = "reference"
+        else:
+            continue
 
-            for goid, go_term, go_aspect in go_query:
-                formatted_goid = _format_goid(goid)
-                suggestions.append(AutocompleteSuggestion(
-                    text=f"{formatted_goid} - {go_term}",
-                    category="go_term",
-                    link=f"/go/{formatted_goid}",
-                    description=go_aspect,
-                ))
+        # Skip duplicates
+        if text.lower() in seen_texts:
+            continue
+        seen_texts.add(text.lower())
 
-        remaining = limit - len(suggestions)
-
-    # 3. Search phenotypes - prefix match on observable
-    if remaining > 0:
-        pheno_limit = min(remaining, 2)
-
-        pheno_query = (
-            db.query(Phenotype.observable)
-            .filter(func.upper(Phenotype.observable).like(prefix_pattern))
-            .distinct()
-            .limit(pheno_limit)
-            .all()
-        )
-
-        for (observable,) in pheno_query:
-            suggestions.append(AutocompleteSuggestion(
-                text=observable,
-                category="phenotype",
-                link=f"/phenotype/search?observable={observable}",
-                description="Phenotype",
-            ))
-
-        remaining = limit - len(suggestions)
-
-    # 4. Search references - only if query is numeric (PubMed ID)
-    if remaining > 0:
-        try:
-            pubmed_id = int(normalized)
-            ref = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
-            if ref:
-                suggestions.append(AutocompleteSuggestion(
-                    text=f"PMID:{ref.pubmed}",
-                    category="reference",
-                    link=f"/reference/{ref.dbxref_id}",
-                    description=ref.citation[:80] + "..." if len(ref.citation) > 80 else ref.citation,
-                ))
-        except ValueError:
-            # Not a numeric query, skip reference search for autocomplete
-            pass
+        suggestions.append(AutocompleteSuggestion(
+            text=text,
+            category=category,
+            link=source.get("link", ""),
+            description=description,
+        ))
 
     return AutocompleteResponse(query=query, suggestions=suggestions)
