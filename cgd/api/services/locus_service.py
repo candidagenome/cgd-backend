@@ -3394,24 +3394,37 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
             ))
 
         # Get sequences - also capture seq_version for the location
+        # Only show the most recent current sequence per type (skip archived)
         sequences = []
         seq_version_for_location = None
+        seen_current_types = {}  # Track best current sequence per type
+
         for seq in f.seq:
-            # Truncate residues for API response (full sequence available via separate endpoint)
+            is_current = (seq.is_seq_current == 'Y')
+            if not is_current:
+                continue  # Skip archived sequences
+
+            seq_type_lower = (seq.seq_type or '').lower()
+
+            # For current sequences, only keep the one with highest seq_no per type
+            existing = seen_current_types.get(seq_type_lower)
+            if existing is None or seq.seq_no > existing.seq_no:
+                seen_current_types[seq_type_lower] = seq
+                if seq_version_for_location is None:
+                    seq_version_for_location = seq.seq_version
+
+        # Add the best current sequence for each type
+        for seq in seen_current_types.values():
             residues = seq.residues
             if residues and len(residues) > 1000:
                 residues = residues[:1000] + "..."
-
-            # Store current sequence version for display
-            if seq.is_seq_current == 'Y' and seq_version_for_location is None:
-                seq_version_for_location = seq.seq_version
 
             sequences.append(SequenceOut(
                 seq_type=seq.seq_type,
                 seq_length=seq.seq_length,
                 source=seq.source,
                 seq_version=seq.seq_version,
-                is_current=(seq.is_seq_current == 'Y'),
+                is_current=True,
                 residues=residues,
             ))
 

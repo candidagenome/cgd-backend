@@ -21,6 +21,19 @@ class SearchResult(BaseModel):
     link: str
     organism: Optional[str] = None
     links: Optional[list[SearchResultLink]] = None  # Citation links for references
+    # Highlighted versions with <mark> tags around matching text
+    highlighted_name: Optional[str] = None
+    highlighted_description: Optional[str] = None
+
+
+class PaginationInfo(BaseModel):
+    """Pagination metadata."""
+    page: int  # Current page (1-indexed)
+    page_size: int  # Items per page
+    total_items: int  # Total number of items
+    total_pages: int  # Total number of pages
+    has_next: bool  # Whether there's a next page
+    has_prev: bool  # Whether there's a previous page
 
 
 class SearchResponse(BaseModel):
@@ -29,6 +42,14 @@ class SearchResponse(BaseModel):
     total_results: int
     results_by_category: dict[str, list[SearchResult]]
     # e.g., {"genes": [...], "go_terms": [...], "phenotypes": [...], "references": [...]}
+
+
+class CategorySearchResponse(BaseModel):
+    """Response for paginated category-specific search."""
+    query: str
+    category: str
+    results: list[SearchResult]
+    pagination: PaginationInfo
 
 
 class ResolveResponse(BaseModel):
@@ -48,6 +69,9 @@ class AutocompleteSuggestion(BaseModel):
     category: str  # "gene", "go_term", "phenotype", "reference"
     link: str  # URL to navigate to
     description: Optional[str] = None  # Optional additional context
+    # Highlighted versions with <mark> tags around matching text
+    highlighted_text: Optional[str] = None
+    highlighted_description: Optional[str] = None
 
 
 class AutocompleteResponse(BaseModel):

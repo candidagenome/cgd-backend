@@ -28,5 +28,9 @@ class Settings(BaseSettings):
     # API prefix (kept constant for reverse-proxy routing)
     api_prefix: str = "/api"
 
+    # Elasticsearch configuration
+    elasticsearch_url: str = "http://localhost:9200"
+    elasticsearch_index: str = "cgd"
+
 
 settings = Settings()
