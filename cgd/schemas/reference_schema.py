@@ -192,8 +192,31 @@ class NewPapersThisWeekResponse(BaseModel):
 
 # --- Genome-wide Analysis Papers ---
 
+class GeneForPaper(BaseModel):
+    """A gene addressed in a genome-wide analysis paper."""
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+
+
+class GenomeWideAnalysisPaper(BaseModel):
+    """A genome-wide analysis paper with detailed info."""
+    reference_no: int
+    dbxref_id: str
+    pubmed: typing.Optional[int] = None
+    citation: str
+    year: int
+    topics: list[str] = []  # Literature topics for this paper
+    species: list[str] = []  # Species studied
+    genes: list[GeneForPaper] = []  # Genes addressed
+    links: list[CitationLink] = []
+
+
 class GenomeWideAnalysisPapersResponse(BaseModel):
     """Response for genome-wide analysis papers."""
-    topic: str
+    available_topics: list[str]  # All genome-wide topics for filtering
+    selected_topic: typing.Optional[str] = None  # Currently selected topic filter
     total_count: int
-    references: list[NewPaperItem]
+    page: int
+    page_size: int
+    total_pages: int
+    references: list[GenomeWideAnalysisPaper]

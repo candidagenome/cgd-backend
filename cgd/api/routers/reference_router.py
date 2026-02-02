@@ -51,14 +51,20 @@ def get_new_papers_this_week(
 
 
 @router.get("/genome-wide-analysis", response_model=GenomeWideAnalysisPapersResponse)
-def get_genome_wide_analysis_papers(db: Session = Depends(get_db)):
+def get_genome_wide_analysis_papers(
+    topic: str = Query(None, description="Filter by specific genome-wide topic"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
+    db: Session = Depends(get_db),
+):
     """
     Get references tagged as genome-wide analysis papers.
 
-    Returns papers with the "Large-scale Survey" literature topic,
-    which includes high-throughput experiments and systematic studies.
+    Returns papers with genome-wide analysis topics including high-throughput
+    experiments and systematic studies. Supports filtering by specific topic
+    and pagination.
     """
-    return reference_service.get_genome_wide_analysis_papers(db)
+    return reference_service.get_genome_wide_analysis_papers(db, topic, page, page_size)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)
