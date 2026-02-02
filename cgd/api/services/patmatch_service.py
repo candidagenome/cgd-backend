@@ -7,9 +7,9 @@ import re
 import logging
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func
 
-from cgd.models.models import Feature, Seq, FeatLocation
+from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion
 from cgd.schemas.patmatch_schema import (
     PatternType,
     StrandOption,
@@ -56,48 +56,153 @@ IUPAC_PROTEIN = {
     '*': '\\*',       # Stop codon
 }
 
-# Dataset configurations
+# Dataset configurations - maps dataset enum to display info and query parameters
+# Organism name patterns and genome versions for filtering
+ORGANISM_FILTERS = {
+    "ca": "albicans",  # C. albicans
+    "cg": "glabrata",  # C. glabrata
+}
+
+ASSEMBLY_VERSIONS = {
+    "22": "22",
+    "21": "21",
+}
+
 DATASET_INFO: dict[SequenceDataset, DatasetInfo] = {
-    SequenceDataset.CHROMOSOMES: DatasetInfo(
-        name="chromosomes",
-        display_name="Chromosomes/Contigs",
-        description="Complete chromosome and contig sequences",
+    # C. albicans Assembly 22
+    SequenceDataset.CA22_CHROMOSOMES: DatasetInfo(
+        name="ca22_chromosomes",
+        display_name="C. albicans A22 - Chromosomes/Contigs",
+        description="Complete chromosome sequences (Assembly 22)",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.ORF_GENOMIC: DatasetInfo(
-        name="orf_genomic",
-        display_name="ORF Genomic DNA",
+    SequenceDataset.CA22_ORF_GENOMIC: DatasetInfo(
+        name="ca22_orf_genomic",
+        display_name="C. albicans A22 - ORF Genomic DNA",
+        description="ORF sequences including introns (Assembly 22)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA22_ORF_CODING: DatasetInfo(
+        name="ca22_orf_coding",
+        display_name="C. albicans A22 - ORF Coding DNA",
+        description="ORF coding sequences, exons only (Assembly 22)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA22_ORF_GENOMIC_1KB: DatasetInfo(
+        name="ca22_orf_genomic_1kb",
+        display_name="C. albicans A22 - ORF Genomic +/- 1kb",
+        description="ORF sequences with 1kb flanking regions (Assembly 22)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA22_INTERGENIC: DatasetInfo(
+        name="ca22_intergenic",
+        display_name="C. albicans A22 - Intergenic Regions",
+        description="Sequences between genes (Assembly 22)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA22_NONCODING: DatasetInfo(
+        name="ca22_noncoding",
+        display_name="C. albicans A22 - Non-coding Features",
+        description="ncRNA, tRNA, rRNA, etc. (Assembly 22)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA22_ORF_PROTEIN: DatasetInfo(
+        name="ca22_orf_protein",
+        display_name="C. albicans A22 - Protein Sequences",
+        description="Translated ORF proteins (Assembly 22)",
+        pattern_type=PatternType.PROTEIN,
+    ),
+    # C. albicans Assembly 21
+    SequenceDataset.CA21_CHROMOSOMES: DatasetInfo(
+        name="ca21_chromosomes",
+        display_name="C. albicans A21 - Chromosomes/Contigs",
+        description="Complete chromosome sequences (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_ORF_GENOMIC: DatasetInfo(
+        name="ca21_orf_genomic",
+        display_name="C. albicans A21 - ORF Genomic DNA",
+        description="ORF sequences including introns (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_ORF_CODING: DatasetInfo(
+        name="ca21_orf_coding",
+        display_name="C. albicans A21 - ORF Coding DNA",
+        description="ORF coding sequences, exons only (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_ORF_GENOMIC_1KB: DatasetInfo(
+        name="ca21_orf_genomic_1kb",
+        display_name="C. albicans A21 - ORF Genomic +/- 1kb",
+        description="ORF sequences with 1kb flanking regions (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_INTERGENIC: DatasetInfo(
+        name="ca21_intergenic",
+        display_name="C. albicans A21 - Intergenic Regions",
+        description="Sequences between genes (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_NONCODING: DatasetInfo(
+        name="ca21_noncoding",
+        display_name="C. albicans A21 - Non-coding Features",
+        description="ncRNA, tRNA, rRNA, etc. (Assembly 21)",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CA21_ORF_PROTEIN: DatasetInfo(
+        name="ca21_orf_protein",
+        display_name="C. albicans A21 - Protein Sequences",
+        description="Translated ORF proteins (Assembly 21)",
+        pattern_type=PatternType.PROTEIN,
+    ),
+    # C. glabrata
+    SequenceDataset.CG_CHROMOSOMES: DatasetInfo(
+        name="cg_chromosomes",
+        display_name="C. glabrata - Chromosomes/Contigs",
+        description="Complete chromosome sequences",
+        pattern_type=PatternType.DNA,
+    ),
+    SequenceDataset.CG_ORF_GENOMIC: DatasetInfo(
+        name="cg_orf_genomic",
+        display_name="C. glabrata - ORF Genomic DNA",
         description="ORF sequences including introns",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.ORF_CODING: DatasetInfo(
-        name="orf_coding",
-        display_name="ORF Coding DNA",
-        description="ORF coding sequences (exons only)",
+    SequenceDataset.CG_ORF_CODING: DatasetInfo(
+        name="cg_orf_coding",
+        display_name="C. glabrata - ORF Coding DNA",
+        description="ORF coding sequences, exons only",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.ORF_GENOMIC_1KB: DatasetInfo(
-        name="orf_genomic_1kb",
-        display_name="ORF Genomic +/- 1kb",
-        description="ORF sequences with 1kb flanking regions",
+    SequenceDataset.CG_ORF_PROTEIN: DatasetInfo(
+        name="cg_orf_protein",
+        display_name="C. glabrata - Protein Sequences",
+        description="Translated ORF proteins",
+        pattern_type=PatternType.PROTEIN,
+    ),
+    # All organisms combined
+    SequenceDataset.ALL_CHROMOSOMES: DatasetInfo(
+        name="all_chromosomes",
+        display_name="All Organisms - Chromosomes/Contigs",
+        description="Complete chromosome sequences from all organisms",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.INTERGENIC: DatasetInfo(
-        name="intergenic",
-        display_name="Intergenic Regions",
-        description="Sequences between genes",
+    SequenceDataset.ALL_ORF_GENOMIC: DatasetInfo(
+        name="all_orf_genomic",
+        display_name="All Organisms - ORF Genomic DNA",
+        description="ORF sequences including introns from all organisms",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.NONCODING: DatasetInfo(
-        name="noncoding",
-        display_name="Non-coding Features",
-        description="Non-coding RNA and other features",
+    SequenceDataset.ALL_ORF_CODING: DatasetInfo(
+        name="all_orf_coding",
+        display_name="All Organisms - ORF Coding DNA",
+        description="ORF coding sequences from all organisms",
         pattern_type=PatternType.DNA,
     ),
-    SequenceDataset.ORF_PROTEIN: DatasetInfo(
-        name="orf_protein",
-        display_name="Protein Sequences",
-        description="Translated ORF protein sequences",
+    SequenceDataset.ALL_ORF_PROTEIN: DatasetInfo(
+        name="all_orf_protein",
+        display_name="All Organisms - Protein Sequences",
+        description="Translated ORF proteins from all organisms",
         pattern_type=PatternType.PROTEIN,
     ),
 }
@@ -168,6 +273,78 @@ def _reverse_complement(seq: str) -> str:
     return seq.translate(complement)[::-1]
 
 
+def _parse_dataset_params(dataset: SequenceDataset) -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Parse dataset enum to extract organism filter, genome version, and sequence type.
+
+    Returns: (organism_filter, genome_version, seq_category)
+    - organism_filter: 'albicans', 'glabrata', or None for all
+    - genome_version: '22', '21', or None for any
+    - seq_category: 'chromosomes', 'orf_genomic', 'orf_coding', 'orf_protein', etc.
+    """
+    name = dataset.value  # e.g., "ca22_chromosomes", "cg_orf_protein", "all_chromosomes"
+
+    organism_filter = None
+    genome_version = None
+
+    if name.startswith("ca22_"):
+        organism_filter = "albicans"
+        genome_version = "22"
+        seq_category = name[5:]  # Remove "ca22_"
+    elif name.startswith("ca21_"):
+        organism_filter = "albicans"
+        genome_version = "21"
+        seq_category = name[5:]  # Remove "ca21_"
+    elif name.startswith("cg_"):
+        organism_filter = "glabrata"
+        genome_version = None  # C. glabrata doesn't have multiple assemblies
+        seq_category = name[3:]  # Remove "cg_"
+    elif name.startswith("all_"):
+        organism_filter = None  # All organisms
+        genome_version = None
+        seq_category = name[4:]  # Remove "all_"
+    else:
+        # Fallback for old-style dataset names
+        seq_category = name
+
+    return organism_filter, genome_version, seq_category
+
+
+def _build_base_query(
+    db: Session,
+    organism_filter: Optional[str],
+    genome_version: Optional[str],
+    feature_types: List[str],
+    seq_type: str,
+):
+    """Build base query with organism and genome version filters."""
+    query = (
+        db.query(Feature, Seq, Organism)
+        .join(Seq, Feature.feature_no == Seq.feature_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Feature.feature_type.in_(feature_types),
+            Seq.seq_type == seq_type,
+            Seq.is_seq_current == "Y",
+        )
+    )
+
+    # Filter by organism if specified
+    if organism_filter:
+        query = query.filter(
+            func.lower(Organism.organism_name).contains(organism_filter.lower())
+        )
+
+    # Filter by genome version if specified
+    if genome_version:
+        query = query.filter(
+            GenomeVersion.genome_version == genome_version
+        )
+
+    return query
+
+
 def _get_sequences_for_dataset(
     db: Session,
     dataset: SequenceDataset,
@@ -179,41 +356,34 @@ def _get_sequences_for_dataset(
     """
     sequences = []
 
-    if dataset == SequenceDataset.CHROMOSOMES:
+    # Parse dataset parameters
+    organism_filter, genome_version, seq_category = _parse_dataset_params(dataset)
+
+    if seq_category == "chromosomes":
         # Get chromosome sequences
-        results = (
-            db.query(Feature, Seq)
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .filter(
-                Feature.feature_type == "chromosome",
-                Seq.seq_type == "genomic",
-                Seq.is_seq_current == "Y",
-            )
-            .all()
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["chromosome"], "genomic"
         )
-        for feature, seq in results:
+        results = query.all()
+        for feature, seq, organism in results:
             if seq.residues:
+                org_short = _get_organism_short_name(organism.organism_name)
                 sequences.append((
                     feature.feature_name,
-                    f"Chromosome {feature.feature_name}",
+                    f"{org_short} Chromosome {feature.feature_name}",
                     seq.residues.upper(),
                     feature.feature_name,
                 ))
 
-    elif dataset == SequenceDataset.ORF_GENOMIC:
+    elif seq_category == "orf_genomic":
         # Get ORF genomic sequences
-        results = (
-            db.query(Feature, Seq)
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .filter(
-                Feature.feature_type == "ORF",
-                Seq.seq_type == "genomic",
-                Seq.is_seq_current == "Y",
-            )
-            .limit(10000)  # Limit for performance
-            .all()
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["ORF"], "genomic"
         )
-        for feature, seq in results:
+        results = query.limit(10000).all()
+        for feature, seq, organism in results:
             if seq.residues:
                 desc = feature.gene_name or feature.feature_name
                 sequences.append((
@@ -223,20 +393,14 @@ def _get_sequences_for_dataset(
                     None,
                 ))
 
-    elif dataset == SequenceDataset.ORF_CODING:
+    elif seq_category == "orf_coding":
         # Get ORF coding sequences
-        results = (
-            db.query(Feature, Seq)
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .filter(
-                Feature.feature_type == "ORF",
-                Seq.seq_type == "coding",
-                Seq.is_seq_current == "Y",
-            )
-            .limit(10000)
-            .all()
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["ORF"], "coding"
         )
-        for feature, seq in results:
+        results = query.limit(10000).all()
+        for feature, seq, organism in results:
             if seq.residues:
                 desc = feature.gene_name or feature.feature_name
                 sequences.append((
@@ -246,20 +410,14 @@ def _get_sequences_for_dataset(
                     None,
                 ))
 
-    elif dataset == SequenceDataset.ORF_PROTEIN:
+    elif seq_category == "orf_protein":
         # Get protein sequences
-        results = (
-            db.query(Feature, Seq)
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .filter(
-                Feature.feature_type == "ORF",
-                Seq.seq_type == "protein",
-                Seq.is_seq_current == "Y",
-            )
-            .limit(10000)
-            .all()
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["ORF"], "protein"
         )
-        for feature, seq in results:
+        results = query.limit(10000).all()
+        for feature, seq, organism in results:
             if seq.residues:
                 desc = feature.gene_name or feature.feature_name
                 sequences.append((
@@ -269,20 +427,52 @@ def _get_sequences_for_dataset(
                     None,
                 ))
 
-    elif dataset == SequenceDataset.NONCODING:
-        # Get non-coding feature sequences
-        results = (
-            db.query(Feature, Seq)
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .filter(
-                Feature.feature_type.in_(["ncRNA", "tRNA", "rRNA", "snRNA", "snoRNA"]),
-                Seq.seq_type == "genomic",
-                Seq.is_seq_current == "Y",
-            )
-            .limit(5000)
-            .all()
+    elif seq_category == "orf_genomic_1kb":
+        # Get ORF genomic sequences with 1kb flanking
+        # This requires additional processing to add flanking regions
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["ORF"], "genomic"
         )
-        for feature, seq in results:
+        results = query.limit(5000).all()
+        for feature, seq, organism in results:
+            if seq.residues:
+                # For 1kb flanking, we'd need to get chromosome sequence
+                # For now, just return the ORF sequence as placeholder
+                desc = feature.gene_name or feature.feature_name
+                sequences.append((
+                    feature.feature_name,
+                    f"{desc} (+/- 1kb)",
+                    seq.residues.upper(),
+                    None,
+                ))
+
+    elif seq_category == "intergenic":
+        # Get intergenic region sequences
+        # These are typically stored as separate features or need to be computed
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["intergenic_region", "intergenic"], "genomic"
+        )
+        results = query.limit(10000).all()
+        for feature, seq, organism in results:
+            if seq.residues:
+                sequences.append((
+                    feature.feature_name,
+                    f"Intergenic: {feature.feature_name}",
+                    seq.residues.upper(),
+                    None,
+                ))
+
+    elif seq_category == "noncoding":
+        # Get non-coding feature sequences
+        query = _build_base_query(
+            db, organism_filter, genome_version,
+            ["ncRNA", "tRNA", "rRNA", "snRNA", "snoRNA", "misc_RNA"],
+            "genomic"
+        )
+        results = query.limit(5000).all()
+        for feature, seq, organism in results:
             if seq.residues:
                 desc = f"{feature.feature_type}: {feature.gene_name or feature.feature_name}"
                 sequences.append((
@@ -293,6 +483,16 @@ def _get_sequences_for_dataset(
                 ))
 
     return sequences
+
+
+def _get_organism_short_name(organism_name: str) -> str:
+    """Get short organism name for display."""
+    if "albicans" in organism_name.lower():
+        return "C. albicans"
+    elif "glabrata" in organism_name.lower():
+        return "C. glabrata"
+    else:
+        return organism_name[:20]
 
 
 def _search_sequence(

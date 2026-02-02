@@ -84,7 +84,7 @@ def search(
 def search_get(
     pattern: str = Query(..., description="Pattern to search for"),
     pattern_type: PatternType = Query(PatternType.DNA, alias="type"),
-    dataset: str = Query("chromosomes", alias="ds"),
+    dataset: str = Query("ca22_chromosomes", alias="ds"),
     strand: str = Query("both"),
     max_mismatches: int = Query(0, alias="mm", ge=0, le=3),
     max_insertions: int = Query(0, alias="ins", ge=0, le=3),
@@ -103,7 +103,7 @@ def search_get(
     try:
         dataset_enum = SequenceDataset(dataset)
     except ValueError:
-        dataset_enum = SequenceDataset.CHROMOSOMES
+        dataset_enum = SequenceDataset.CA22_CHROMOSOMES
 
     try:
         strand_enum = StrandOption(strand)

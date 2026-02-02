@@ -23,15 +23,32 @@ class StrandOption(str, Enum):
 
 class SequenceDataset(str, Enum):
     """Available sequence datasets to search."""
-    # DNA datasets
-    CHROMOSOMES = "chromosomes"
-    ORF_GENOMIC = "orf_genomic"
-    ORF_CODING = "orf_coding"
-    ORF_GENOMIC_1KB = "orf_genomic_1kb"
-    INTERGENIC = "intergenic"
-    NONCODING = "noncoding"
-    # Protein datasets
-    ORF_PROTEIN = "orf_protein"
+    # DNA datasets - C. albicans Assembly 22
+    CA22_CHROMOSOMES = "ca22_chromosomes"
+    CA22_ORF_GENOMIC = "ca22_orf_genomic"
+    CA22_ORF_CODING = "ca22_orf_coding"
+    CA22_ORF_GENOMIC_1KB = "ca22_orf_genomic_1kb"
+    CA22_INTERGENIC = "ca22_intergenic"
+    CA22_NONCODING = "ca22_noncoding"
+    CA22_ORF_PROTEIN = "ca22_orf_protein"
+    # DNA datasets - C. albicans Assembly 21
+    CA21_CHROMOSOMES = "ca21_chromosomes"
+    CA21_ORF_GENOMIC = "ca21_orf_genomic"
+    CA21_ORF_CODING = "ca21_orf_coding"
+    CA21_ORF_GENOMIC_1KB = "ca21_orf_genomic_1kb"
+    CA21_INTERGENIC = "ca21_intergenic"
+    CA21_NONCODING = "ca21_noncoding"
+    CA21_ORF_PROTEIN = "ca21_orf_protein"
+    # C. glabrata
+    CG_CHROMOSOMES = "cg_chromosomes"
+    CG_ORF_GENOMIC = "cg_orf_genomic"
+    CG_ORF_CODING = "cg_orf_coding"
+    CG_ORF_PROTEIN = "cg_orf_protein"
+    # All organisms combined
+    ALL_CHROMOSOMES = "all_chromosomes"
+    ALL_ORF_GENOMIC = "all_orf_genomic"
+    ALL_ORF_CODING = "all_orf_coding"
+    ALL_ORF_PROTEIN = "all_orf_protein"
 
 
 class PatmatchSearchRequest(BaseModel):
@@ -47,7 +64,7 @@ class PatmatchSearchRequest(BaseModel):
         description="Type of pattern (DNA or protein)"
     )
     dataset: SequenceDataset = Field(
-        SequenceDataset.CHROMOSOMES,
+        SequenceDataset.CA22_CHROMOSOMES,
         description="Sequence dataset to search"
     )
     strand: StrandOption = Field(
