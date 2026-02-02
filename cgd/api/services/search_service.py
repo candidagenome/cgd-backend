@@ -589,7 +589,7 @@ def get_autocomplete_suggestions(
                 suggestions.append(AutocompleteSuggestion(
                     text=gene_name,
                     category="gene",
-                    link=f"/locus/{feature_name}",
+                    link=f"/locus/{gene_name}",
                     description=description,
                     highlighted_text=_highlight_text(gene_name, query),
                     highlighted_description=_highlight_text(description, query),
@@ -611,10 +611,12 @@ def get_autocomplete_suggestions(
                 display = gene_name or feature_name
                 if display not in seen_genes and len(suggestions) < gene_limit:
                     description = headline[:80] + "..." if headline and len(headline) > 80 else headline
+                    # Use gene_name in URL when available for cleaner URLs
+                    link_name = gene_name or feature_name
                     suggestions.append(AutocompleteSuggestion(
                         text=display,
                         category="gene",
-                        link=f"/locus/{feature_name}",
+                        link=f"/locus/{link_name}",
                         description=description,
                         highlighted_text=_highlight_text(display, query),
                         highlighted_description=_highlight_text(description, query),
