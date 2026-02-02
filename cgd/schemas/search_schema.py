@@ -21,6 +21,9 @@ class SearchResult(BaseModel):
     link: str
     organism: Optional[str] = None
     links: Optional[list[SearchResultLink]] = None  # Citation links for references
+    # Highlighted versions with <mark> tags around matching text
+    highlighted_name: Optional[str] = None
+    highlighted_description: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -48,6 +51,9 @@ class AutocompleteSuggestion(BaseModel):
     category: str  # "gene", "go_term", "phenotype", "reference"
     link: str  # URL to navigate to
     description: Optional[str] = None  # Optional additional context
+    # Highlighted versions with <mark> tags around matching text
+    highlighted_text: Optional[str] = None
+    highlighted_description: Optional[str] = None
 
 
 class AutocompleteResponse(BaseModel):

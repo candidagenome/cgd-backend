@@ -3,7 +3,9 @@ Search Service - handles quick search across multiple entity types.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
+
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
@@ -59,6 +61,36 @@ def _get_organism_name(organism: Optional[Organism]) -> Optional[str]:
     if organism:
         return organism.organism_name
     return None
+
+
+def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
+    """
+    Highlight matching query text with <mark> tags.
+
+    Case-insensitive matching that preserves original case.
+
+    Args:
+        text: The text to highlight
+        query: The search query to highlight
+
+    Returns:
+        Text with <mark> tags around matching portions, or None if text is None
+    """
+    if not text or not query:
+        return text
+
+    # Remove wildcards from query for highlighting
+    clean_query = query.strip().replace('*', '').replace('%', '')
+    if not clean_query:
+        return text
+
+    # Case-insensitive search and replace while preserving original case
+    pattern = re.compile(re.escape(clean_query), re.IGNORECASE)
+
+    def replacer(match):
+        return f"<mark>{match.group(0)}</mark>"
+
+    return pattern.sub(replacer, text)
 
 
 def _build_reference_links(db: Session, ref: Reference) -> list[SearchResultLink]:
@@ -237,6 +269,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
             description=feat.headline,
             link=f"/locus/{feat.feature_name}",
             organism=_get_organism_name(feat.organism),
+            highlighted_name=_highlight_text(display_name, query),
+            highlighted_description=_highlight_text(feat.headline, query),
         ))
 
     # If we have room, also search aliases
@@ -257,13 +291,16 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
         for feat, alias in alias_query:
             if feat.feature_no not in found_feature_nos:
                 display_name = feat.gene_name or feat.feature_name
+                description = f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}"
                 results.append(SearchResult(
                     category="gene",
                     id=feat.dbxref_id,
                     name=display_name,
-                    description=f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}",
+                    description=description,
                     link=f"/locus/{feat.feature_name}",
                     organism=_get_organism_name(feat.organism),
+                    highlighted_name=_highlight_text(display_name, query),
+                    highlighted_description=_highlight_text(description, query),
                 ))
                 found_feature_nos.add(feat.feature_no)
                 if len(results) >= limit:
@@ -298,13 +335,16 @@ def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResu
     if goid_numeric is not None:
         go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
         if go_exact:
+            description = go_exact.go_definition[:200] + "..." if go_exact.go_definition and len(go_exact.go_definition) > 200 else go_exact.go_definition
             results.append(SearchResult(
                 category="go_term",
                 id=_format_goid(go_exact.goid),
                 name=go_exact.go_term,
-                description=go_exact.go_definition[:200] + "..." if go_exact.go_definition and len(go_exact.go_definition) > 200 else go_exact.go_definition,
+                description=description,
                 link=f"/go/{_format_goid(go_exact.goid)}",
                 organism=None,
+                highlighted_name=_highlight_text(go_exact.go_term, query),
+                highlighted_description=_highlight_text(description, query),
             ))
 
     # Search by term name
@@ -324,13 +364,16 @@ def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResu
         for go in go_query:
             formatted_goid = _format_goid(go.goid)
             if formatted_goid not in found_goids:
+                description = go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition
                 results.append(SearchResult(
                     category="go_term",
                     id=formatted_goid,
                     name=go.go_term,
-                    description=go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition,
+                    description=description,
                     link=f"/go/{formatted_goid}",
                     organism=None,
+                    highlighted_name=_highlight_text(go.go_term, query),
+                    highlighted_description=_highlight_text(description, query),
                 ))
                 if len(results) >= limit:
                     break
@@ -364,6 +407,8 @@ def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[SearchRe
             description=None,
             link=f"/phenotype/search?observable={observable}",
             organism=None,
+            highlighted_name=_highlight_text(observable, query),
+            highlighted_description=None,
         ))
 
     return results
@@ -390,28 +435,34 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
     if pubmed_id is not None:
         ref_exact = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
         if ref_exact:
+            name = f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id
             results.append(SearchResult(
                 category="reference",
                 id=ref_exact.dbxref_id,
-                name=f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id,
+                name=name,
                 description=ref_exact.citation,
                 link=f"/reference/{ref_exact.dbxref_id}",
                 organism=None,
                 links=_build_reference_links(db, ref_exact),
+                highlighted_name=_highlight_text(name, query),
+                highlighted_description=_highlight_text(ref_exact.citation, query),
             ))
 
     # Check if query matches a dbxref_id (CGDID like CAL0080639)
     if not results:
         ref_by_dbxref = db.query(Reference).filter(func.upper(Reference.dbxref_id) == upper_query).first()
         if ref_by_dbxref:
+            name = f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id
             results.append(SearchResult(
                 category="reference",
                 id=ref_by_dbxref.dbxref_id,
-                name=f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id,
+                name=name,
                 description=ref_by_dbxref.citation,
                 link=f"/reference/{ref_by_dbxref.dbxref_id}",
                 organism=None,
                 links=_build_reference_links(db, ref_by_dbxref),
+                highlighted_name=_highlight_text(name, query),
+                highlighted_description=_highlight_text(ref_by_dbxref.citation, query),
             ))
 
     # Search by citation text
@@ -430,14 +481,17 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
         for ref in ref_query:
             if ref.dbxref_id not in found_ref_nos:
+                name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
                 results.append(SearchResult(
                     category="reference",
                     id=ref.dbxref_id,
-                    name=f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id,
+                    name=name,
                     description=ref.citation,
                     link=f"/reference/{ref.dbxref_id}",
                     links=_build_reference_links(db, ref),
                     organism=None,
+                    highlighted_name=_highlight_text(name, query),
+                    highlighted_description=_highlight_text(ref.citation, query),
                 ))
                 if len(results) >= limit:
                     break
@@ -529,11 +583,14 @@ def get_autocomplete_suggestions(
         seen_genes = set()
         for gene_name, feature_name, headline in gene_prefix_query:
             if gene_name and gene_name not in seen_genes:
+                description = headline[:80] + "..." if headline and len(headline) > 80 else headline
                 suggestions.append(AutocompleteSuggestion(
                     text=gene_name,
                     category="gene",
                     link=f"/locus/{feature_name}",
-                    description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
+                    description=description,
+                    highlighted_text=_highlight_text(gene_name, query),
+                    highlighted_description=_highlight_text(description, query),
                 ))
                 seen_genes.add(gene_name)
 
@@ -551,11 +608,14 @@ def get_autocomplete_suggestions(
             for gene_name, feature_name, headline in feat_prefix_query:
                 display = gene_name or feature_name
                 if display not in seen_genes and len(suggestions) < gene_limit:
+                    description = headline[:80] + "..." if headline and len(headline) > 80 else headline
                     suggestions.append(AutocompleteSuggestion(
                         text=display,
                         category="gene",
                         link=f"/locus/{feature_name}",
-                        description=headline[:80] + "..." if headline and len(headline) > 80 else headline,
+                        description=description,
+                        highlighted_text=_highlight_text(display, query),
+                        highlighted_description=_highlight_text(description, query),
                     ))
                     seen_genes.add(display)
 
@@ -571,11 +631,14 @@ def get_autocomplete_suggestions(
                 goid_numeric = int(normalized[3:])
                 go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
                 if go_exact:
+                    text = f"{_format_goid(go_exact.goid)} - {go_exact.go_term}"
                     suggestions.append(AutocompleteSuggestion(
-                        text=f"{_format_goid(go_exact.goid)} - {go_exact.go_term}",
+                        text=text,
                         category="go_term",
                         link=f"/go/{_format_goid(go_exact.goid)}",
                         description=go_exact.go_aspect,
+                        highlighted_text=_highlight_text(text, query),
+                        highlighted_description=_highlight_text(go_exact.go_aspect, query),
                     ))
                     go_limit -= 1
             except ValueError:
@@ -591,11 +654,14 @@ def get_autocomplete_suggestions(
 
             for goid, go_term, go_aspect in go_query:
                 formatted_goid = _format_goid(goid)
+                text = f"{formatted_goid} - {go_term}"
                 suggestions.append(AutocompleteSuggestion(
-                    text=f"{formatted_goid} - {go_term}",
+                    text=text,
                     category="go_term",
                     link=f"/go/{formatted_goid}",
                     description=go_aspect,
+                    highlighted_text=_highlight_text(text, query),
+                    highlighted_description=_highlight_text(go_aspect, query),
                 ))
 
         remaining = limit - len(suggestions)
@@ -618,6 +684,8 @@ def get_autocomplete_suggestions(
                 category="phenotype",
                 link=f"/phenotype/search?observable={observable}",
                 description="Phenotype",
+                highlighted_text=_highlight_text(observable, query),
+                highlighted_description=None,
             ))
 
         remaining = limit - len(suggestions)
@@ -628,11 +696,15 @@ def get_autocomplete_suggestions(
             pubmed_id = int(normalized)
             ref = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
             if ref:
+                text = f"PMID:{ref.pubmed}"
+                description = ref.citation[:80] + "..." if len(ref.citation) > 80 else ref.citation
                 suggestions.append(AutocompleteSuggestion(
-                    text=f"PMID:{ref.pubmed}",
+                    text=text,
                     category="reference",
                     link=f"/reference/{ref.dbxref_id}",
-                    description=ref.citation[:80] + "..." if len(ref.citation) > 80 else ref.citation,
+                    description=description,
+                    highlighted_text=_highlight_text(text, query),
+                    highlighted_description=_highlight_text(description, query),
                 ))
         except ValueError:
             # Not a numeric query, skip reference search for autocomplete
