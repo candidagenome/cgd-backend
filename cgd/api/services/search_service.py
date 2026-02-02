@@ -68,6 +68,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     upper_query = normalized.upper()
 
     # 1. Check Feature by gene_name (exact match)
+    # Use the gene_name in URL so locus page shows all organisms with this gene
     feature = (
         db.query(Feature)
         .filter(func.upper(Feature.gene_name) == upper_query)
@@ -77,9 +78,9 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
         return ResolveResponse(
             query=query,
             resolved=True,
-            redirect_url=f"/locus/{feature.feature_name}",
+            redirect_url=f"/locus/{feature.gene_name}",
             entity_type="locus",
-            entity_name=feature.gene_name or feature.feature_name,
+            entity_name=feature.gene_name,
         )
 
     # 2. Check Feature by feature_name (exact match)
