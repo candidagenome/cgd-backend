@@ -153,7 +153,8 @@ def _build_blast_link_for_locus(locus: str) -> str:
 
 def _build_pattern_match_link(sequence: str) -> str:
     """Build pattern match link for a short sequence."""
-    return f"/cgi-bin/PATMATCH/nph-patmatch?dnaPat={quote(sequence)}"
+    params = {"pattern": sequence[:100]}
+    return f"/patmatch?{urlencode(params)}"
 
 
 def _build_restriction_map_link(sequence: str) -> str:
