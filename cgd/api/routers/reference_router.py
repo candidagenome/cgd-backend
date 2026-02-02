@@ -11,6 +11,7 @@ from cgd.schemas.reference_schema import (
     ReferenceInteractionResponse,
     ReferenceLiteratureTopicsResponse,
     AuthorSearchResponse,
+    NewPapersThisWeekResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
@@ -30,6 +31,22 @@ def search_references_by_author(
     Returns list of references with matching authors, along with author counts.
     """
     return reference_service.search_references_by_author(db, author)
+
+
+@router.get("/new-papers-this-week", response_model=NewPapersThisWeekResponse)
+def get_new_papers_this_week(
+    days: int = Query(7, ge=1, le=90, description="Number of days to look back"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get references added to CGD within the last N days.
+
+    Args:
+        days: Number of days to look back (default 7, max 90)
+
+    Returns list of new papers with citation info and links.
+    """
+    return reference_service.get_new_papers_this_week(db, days)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)

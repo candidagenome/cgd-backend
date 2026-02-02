@@ -166,3 +166,25 @@ class AuthorSearchResponse(BaseModel):
     author_count: int
     reference_count: int
     references: list[ReferenceSearchResult]
+
+
+# --- New Papers This Week ---
+
+class NewPaperItem(BaseModel):
+    """A reference item for new papers list."""
+    reference_no: int
+    dbxref_id: str
+    pubmed: typing.Optional[int] = None
+    citation: str
+    title: typing.Optional[str] = None
+    year: int
+    date_created: str  # ISO format date string
+    links: list[CitationLink] = []
+
+
+class NewPapersThisWeekResponse(BaseModel):
+    """Response for new papers added this week."""
+    start_date: str  # ISO format date
+    end_date: str    # ISO format date
+    total_count: int
+    references: list[NewPaperItem]

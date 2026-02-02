@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
@@ -20,6 +22,8 @@ from cgd.schemas.reference_schema import (
     FeatureForTopic,
     AuthorSearchResponse,
     ReferenceSearchResult,
+    NewPapersThisWeekResponse,
+    NewPaperItem,
 )
 from cgd.models.models import (
     Reference,
@@ -637,5 +641,68 @@ def search_references_by_author(db: Session, author_name: str) -> AuthorSearchRe
         author_query=author_name,
         author_count=author_count,
         reference_count=len(references),
+        references=references,
+    )
+
+
+def get_new_papers_this_week(db: Session, days: int = 7) -> NewPapersThisWeekResponse:
+    """
+    Get references added to CGD within the last N days (default 7).
+
+    Args:
+        db: Database session
+        days: Number of days to look back (default 7)
+
+    Returns:
+        NewPapersThisWeekResponse with list of new papers
+    """
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+
+    # Query references created within the date range
+    refs = (
+        db.query(Reference)
+        .filter(Reference.date_created >= start_date)
+        .filter(Reference.date_created <= end_date)
+        .order_by(Reference.date_created.desc())
+        .all()
+    )
+
+    # Build response
+    references = []
+    for ref in refs:
+        # Get URLs for citation links
+        ref_url_records = (
+            db.query(RefUrl, Url)
+            .join(Url, RefUrl.url_no == Url.url_no)
+            .filter(RefUrl.reference_no == ref.reference_no)
+            .all()
+        )
+
+        # Build ref_url list for citation links
+        ref_url_list = []
+        for ref_url_obj, url_obj in ref_url_records:
+            if url_obj and url_obj.url:
+                ref_url_obj.url = url_obj
+                ref_url_list.append(ref_url_obj)
+
+        # Build citation links
+        links = _build_citation_links(ref, ref_url_list)
+
+        references.append(NewPaperItem(
+            reference_no=ref.reference_no,
+            dbxref_id=ref.dbxref_id,
+            pubmed=ref.pubmed,
+            citation=ref.citation,
+            title=ref.title,
+            year=ref.year,
+            date_created=ref.date_created.isoformat() if ref.date_created else "",
+            links=links,
+        ))
+
+    return NewPapersThisWeekResponse(
+        start_date=start_date.date().isoformat(),
+        end_date=end_date.date().isoformat(),
+        total_count=len(references),
         references=references,
     )
