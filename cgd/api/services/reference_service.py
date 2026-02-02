@@ -44,6 +44,7 @@ from cgd.models.models import (
     RefpropFeat,
     PhenoAnnotation,
     Feature,
+    Organism,
     Cv,
     CvTerm,
 )
@@ -728,25 +729,6 @@ GENOME_WIDE_TOPICS = [
     "Other large-scale proteomic analysis",
 ]
 
-# Species literature topics for genome-wide analysis papers
-SPECIES_TOPICS = [
-    "Candida albicans",
-    "Candida auris",
-    "Candida dubliniensis",
-    "Candida glabrata",
-    "Candida glabrata (Torulopsis glabrata)",
-    "Candida guilliermondii",
-    "Candida guilliermondii (Pichia guilliermondii)",
-    "Candida krusei",
-    "Candida krusei (Issatchenkia orientalis)",
-    "Candida lusitaniae",
-    "Candida lusitaniae (Clavispora lusitaniae)",
-    "Candida parapsilosis",
-    "Candida tropicalis",
-    "Debaryomyces hansenii (Candida famata)",
-    "Other Candida",
-]
-
 
 def get_genome_wide_analysis_papers(
     db: Session,
@@ -822,17 +804,17 @@ def get_genome_wide_analysis_papers(
         )
         paper_topics = [t[0] for t in ref_topics]
 
-        # Get species for this reference
-        species_props = (
-            db.query(RefProperty.property_value)
-            .filter(
-                RefProperty.reference_no == ref.reference_no,
-                RefProperty.property_value.in_(SPECIES_TOPICS),
-            )
+        # Get species from organisms of features linked to this reference
+        species_query = (
+            db.query(Organism.organism_name)
+            .join(Feature, Organism.organism_no == Feature.organism_no)
+            .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
+            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .filter(RefProperty.reference_no == ref.reference_no)
             .distinct()
             .all()
         )
-        species = [s[0] for s in species_props]
+        species = [s[0] for s in species_query]
 
         # Get genes addressed via refprop_feat
         genes_query = (
