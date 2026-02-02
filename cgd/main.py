@@ -12,6 +12,7 @@ from cgd.api.routers.chromosome_router import router as chromosome_router
 from cgd.api.routers.go_router import router as go_router
 from cgd.api.routers.phenotype_router import router as phenotype_router
 from cgd.api.routers.search_router import router as search_router
+from cgd.api.routers.sequence_router import router as sequence_router
 
 
 def create_app() -> FastAPI:
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(go_router)
     app.include_router(phenotype_router)
     app.include_router(search_router)
+    app.include_router(sequence_router)
 
     return app
 
