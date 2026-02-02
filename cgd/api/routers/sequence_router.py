@@ -8,17 +8,19 @@ from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
 from cgd.api.services import sequence_service
-from cgd.schemas.sequence_schema import (
-    SeqType,
-    SeqFormat,
-    SequenceResponse,
-    CoordinateSequenceResponse,
-)
+from cgd.schemas.sequence_schema import SeqType, SeqFormat
 
 router = APIRouter(prefix="/api/sequence", tags=["sequence"])
 
 
-@router.get("", response_model=SequenceResponse)
+def _get_filename(gene_name: str, feature_name: str, seq_type: SeqType) -> str:
+    """Generate filename like ACT1_protein.fsa or orf19.5007_dna.fsa"""
+    name = gene_name or feature_name or "sequence"
+    type_suffix = "protein" if seq_type == SeqType.PROTEIN else "coding" if seq_type == SeqType.CODING else "dna"
+    return f"{name}_{type_suffix}.fsa"
+
+
+@router.get("")
 def get_sequence(
     # Query by identifier
     query: str = Query(
@@ -95,11 +97,12 @@ def get_sequence(
             result.fasta_header,
             result.sequence
         )
+        filename = _get_filename(result.info.gene_name, result.info.feature_name, seq_type)
         return Response(
             content=fasta_content,
             media_type="text/plain",
             headers={
-                "Content-Disposition": f"inline; filename={identifier}.fasta"
+                "Content-Disposition": f"attachment; filename={filename}"
             }
         )
     elif format == SeqFormat.RAW:
@@ -112,7 +115,7 @@ def get_sequence(
         return result
 
 
-@router.get("/region", response_model=CoordinateSequenceResponse)
+@router.get("/region")
 def get_sequence_by_region(
     chr: str = Query(..., description="Chromosome name"),
     beg: int = Query(..., alias="start", description="Start coordinate (1-based)"),
@@ -169,7 +172,7 @@ def get_sequence_by_region(
             content=fasta_content,
             media_type="text/plain",
             headers={
-                "Content-Disposition": f"inline; filename={chr}_{beg}_{end}.fasta"
+                "Content-Disposition": f"attachment; filename={chr}_{beg}_{end}.fsa"
             }
         )
     elif format == SeqFormat.RAW:
@@ -215,11 +218,12 @@ def get_fasta(
         result.fasta_header,
         result.sequence
     )
+    filename = _get_filename(result.info.gene_name, result.info.feature_name, seq_type)
 
     return Response(
         content=fasta_content,
         media_type="text/plain",
         headers={
-            "Content-Disposition": f"inline; filename={identifier}.fasta"
+            "Content-Disposition": f"attachment; filename={filename}"
         }
     )
