@@ -188,3 +188,12 @@ class NewPapersThisWeekResponse(BaseModel):
     end_date: str    # ISO format date
     total_count: int
     references: list[NewPaperItem]
+
+
+# --- Genome-wide Analysis Papers ---
+
+class GenomeWideAnalysisPapersResponse(BaseModel):
+    """Response for genome-wide analysis papers."""
+    topic: str
+    total_count: int
+    references: list[NewPaperItem]

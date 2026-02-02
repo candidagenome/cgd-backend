@@ -24,6 +24,7 @@ from cgd.schemas.reference_schema import (
     ReferenceSearchResult,
     NewPapersThisWeekResponse,
     NewPaperItem,
+    GenomeWideAnalysisPapersResponse,
 )
 from cgd.models.models import (
     Reference,
@@ -703,6 +704,69 @@ def get_new_papers_this_week(db: Session, days: int = 7) -> NewPapersThisWeekRes
     return NewPapersThisWeekResponse(
         start_date=start_date.date().isoformat(),
         end_date=end_date.date().isoformat(),
+        total_count=len(references),
+        references=references,
+    )
+
+
+def get_genome_wide_analysis_papers(db: Session) -> GenomeWideAnalysisPapersResponse:
+    """
+    Get references tagged with the "Large-scale Survey" literature topic.
+
+    These are genome-wide analysis papers that involve large-scale surveys,
+    high-throughput experiments, or systematic studies.
+
+    Args:
+        db: Database session
+
+    Returns:
+        GenomeWideAnalysisPapersResponse with list of genome-wide analysis papers
+    """
+    # Query references that have the "Large-scale Survey" topic in ref_property
+    # The topic is stored as property_value in ref_property table
+    refs = (
+        db.query(Reference)
+        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+        .filter(RefProperty.property_value == "Large-scale Survey")
+        .distinct()
+        .order_by(Reference.year.desc(), Reference.citation)
+        .all()
+    )
+
+    # Build response
+    references = []
+    for ref in refs:
+        # Get URLs for citation links
+        ref_url_records = (
+            db.query(RefUrl, Url)
+            .join(Url, RefUrl.url_no == Url.url_no)
+            .filter(RefUrl.reference_no == ref.reference_no)
+            .all()
+        )
+
+        # Build ref_url list for citation links
+        ref_url_list = []
+        for ref_url_obj, url_obj in ref_url_records:
+            if url_obj and url_obj.url:
+                ref_url_obj.url = url_obj
+                ref_url_list.append(ref_url_obj)
+
+        # Build citation links
+        links = _build_citation_links(ref, ref_url_list)
+
+        references.append(NewPaperItem(
+            reference_no=ref.reference_no,
+            dbxref_id=ref.dbxref_id,
+            pubmed=ref.pubmed,
+            citation=ref.citation,
+            title=ref.title,
+            year=ref.year,
+            date_created=ref.date_created.isoformat() if ref.date_created else "",
+            links=links,
+        ))
+
+    return GenomeWideAnalysisPapersResponse(
+        topic="Large-scale Survey",
         total_count=len(references),
         references=references,
     )

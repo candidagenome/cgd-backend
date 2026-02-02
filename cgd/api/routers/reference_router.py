@@ -12,6 +12,7 @@ from cgd.schemas.reference_schema import (
     ReferenceLiteratureTopicsResponse,
     AuthorSearchResponse,
     NewPapersThisWeekResponse,
+    GenomeWideAnalysisPapersResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
@@ -47,6 +48,17 @@ def get_new_papers_this_week(
     Returns list of new papers with citation info and links.
     """
     return reference_service.get_new_papers_this_week(db, days)
+
+
+@router.get("/genome-wide-analysis", response_model=GenomeWideAnalysisPapersResponse)
+def get_genome_wide_analysis_papers(db: Session = Depends(get_db)):
+    """
+    Get references tagged as genome-wide analysis papers.
+
+    Returns papers with the "Large-scale Survey" literature topic,
+    which includes high-throughput experiments and systematic studies.
+    """
+    return reference_service.get_genome_wide_analysis_papers(db)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)
