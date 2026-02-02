@@ -221,7 +221,7 @@ def _build_coordinate_sequence_link(
     """Build sequence retrieval link for coordinates."""
     params = {
         "chr": chromosome,
-        "beg": max(1, start - flank_left),
+        "start": max(1, start - flank_left),
         "end": end + flank_right,
         "format": "fasta",
     }
