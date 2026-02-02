@@ -127,10 +127,11 @@ def get_sequence_by_feature(
         return None
 
     # Determine which sequence type to retrieve from DB
+    # Note: Database stores lowercase values ("genomic", "protein")
     if seq_type == SeqType.PROTEIN:
-        db_seq_type = "Protein"
+        db_seq_type = "protein"
     else:
-        db_seq_type = "Genomic"
+        db_seq_type = "genomic"
 
     # Get current sequence for this feature
     seq_record = (
@@ -302,7 +303,7 @@ def get_sequence_by_coordinates(
         db.query(Seq)
         .join(Feature, Seq.feature_no == Feature.feature_no)
         .filter(
-            Seq.seq_type == "Genomic",
+            Seq.seq_type == "genomic",
             Seq.is_seq_current == "Y",
             func.upper(Feature.feature_name).like(f"%{chr_upper}%")
         )
@@ -315,7 +316,7 @@ def get_sequence_by_coordinates(
             db.query(Seq)
             .join(Feature, Seq.feature_no == Feature.feature_no)
             .filter(
-                Seq.seq_type == "Genomic",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
                 Feature.feature_type == "chromosome",
                 func.upper(Feature.feature_name).contains(chr_upper)
