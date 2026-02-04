@@ -17,6 +17,7 @@ from cgd.api.routers.seq_tools_router import router as seq_tools_router
 from cgd.api.routers.blast_router import router as blast_router
 from cgd.api.routers.patmatch_router import router as patmatch_router
 from cgd.api.routers.batch_download_router import router as batch_download_router
+from cgd.api.routers.restriction_mapper_router import router as restriction_mapper_router
 
 
 def create_app() -> FastAPI:
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(blast_router)
     app.include_router(patmatch_router)
     app.include_router(batch_download_router)
+    app.include_router(restriction_mapper_router)
 
     return app
 
