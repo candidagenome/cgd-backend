@@ -274,7 +274,7 @@ def _get_organisms(db: Session) -> List[OrganismInfo]:
     """Get all available organisms/strains."""
     organisms = (
         db.query(Organism)
-        .filter(Organism.taxonomic_rank == "strain")
+        .filter(Organism.taxonomic_rank == "Strain")
         .order_by(Organism.organism_order)
         .all()
     )
