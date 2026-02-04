@@ -1,8 +1,10 @@
 """
 Feature Search (Advanced Search) API Router.
 """
+import logging
+import traceback
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,8 @@ from cgd.api.services.feature_search_service import (
     generate_download_tsv,
     _get_chromosomes_for_organism,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/feature-search", tags=["feature-search"])
 
@@ -62,7 +66,12 @@ def search(
 
     Returns paginated results with optional position and GO term information.
     """
-    return search_features(db, request)
+    try:
+        return search_features(db, request)
+    except Exception as e:
+        logger.error(f"Feature search error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/chromosomes/{organism}", response_model=List[str])
