@@ -11,10 +11,13 @@ Handles complex feature searching with multiple filter criteria including:
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Optional, List, Dict, Set, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, text
+
+logger = logging.getLogger(__name__)
 
 from cgd.models.models import (
     Feature, Organism, FeatProperty, FeatLocation, Seq,
@@ -171,20 +174,28 @@ def search_features(
 
     # Chromosome filter
     if request.chromosomes:
-        feature_nos, count = _filter_by_chromosomes(db, feature_nos, request.chromosomes)
-        filter_counts.append(FilterCount(
-            description=f"Located on chromosome {', '.join(request.chromosomes)}",
-            count=count
-        ))
+        try:
+            feature_nos, count = _filter_by_chromosomes(db, feature_nos, request.chromosomes)
+            filter_counts.append(FilterCount(
+                description=f"Located on chromosome {', '.join(request.chromosomes)}",
+                count=count
+            ))
+        except Exception as e:
+            logger.error(f"Chromosome filter error: {e}")
+            raise Exception(f"Chromosome filter failed: {e}")
 
     # Intron filter
     if request.has_introns is not None:
-        feature_nos, count = _filter_by_introns(db, feature_nos, request.has_introns)
-        intron_desc = "Has introns" if request.has_introns else "Does not have introns"
-        filter_counts.append(FilterCount(
-            description=intron_desc,
-            count=count
-        ))
+        try:
+            feature_nos, count = _filter_by_introns(db, feature_nos, request.has_introns)
+            intron_desc = "Has introns" if request.has_introns else "Does not have introns"
+            filter_counts.append(FilterCount(
+                description=intron_desc,
+                count=count
+            ))
+        except Exception as e:
+            logger.error(f"Intron filter error: {e}")
+            raise Exception(f"Intron filter failed: {e}")
 
     # GO term filter
     go_annotations: Dict[int, Dict[str, List[GoTermBrief]]] = {}
@@ -235,7 +246,11 @@ def search_features(
         )
 
     # Build final query with sorting
-    sorted_feature_nos = _sort_features(db, feature_nos, request.sort_by)
+    try:
+        sorted_feature_nos = _sort_features(db, feature_nos, request.sort_by)
+    except Exception as e:
+        logger.error(f"Sort features error: {e}")
+        raise Exception(f"Sort features failed: {e}")
 
     # Paginate
     total_pages = math.ceil(total_results / request.page_size)
@@ -244,9 +259,13 @@ def search_features(
     page_feature_nos = sorted_feature_nos[start_idx:end_idx]
 
     # Get feature details
-    results = _get_feature_details(
-        db, page_feature_nos, show_position, do_go_search, go_annotations
-    )
+    try:
+        results = _get_feature_details(
+            db, page_feature_nos, show_position, do_go_search, go_annotations
+        )
+    except Exception as e:
+        logger.error(f"Get feature details error: {e}")
+        raise Exception(f"Get feature details failed: {e}")
 
     return FeatureSearchResponse(
         success=True,
