@@ -542,13 +542,15 @@ def _filter_by_introns(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    # Find features with intron subfeatures
+    # Find features with intron subfeatures (rank=2 for subfeature relationship)
+    # Feature types containing 'intron' (case-insensitive): intron, Intron, five_prime_UTR_intron, etc.
     features_with_introns = (
         db.query(FeatRelationship.parent_feature_no)
         .join(Feature, FeatRelationship.child_feature_no == Feature.feature_no)
         .filter(
             FeatRelationship.parent_feature_no.in_(feature_nos_list),
-            Feature.feature_type.like("%intron%")
+            FeatRelationship.rank == 2,
+            func.lower(Feature.feature_type).like("%intron%")
         )
         .distinct()
         .all()
