@@ -256,7 +256,9 @@ def search_features(
             filter_counts=filter_counts,
             total_results=total_results,
         ),
-        results=results,
+        features=results,
+        total_count=total_results,
+        total_pages=total_pages,
         pagination=PaginationInfo(
             page=request.page,
             page_size=request.page_size,
@@ -803,12 +805,12 @@ def _get_feature_details(
         go_terms = go_annotations.get(fno, {"P": [], "F": [], "C": []}) if show_go_terms else {"P": [], "F": [], "C": []}
 
         results.append(FeatureSearchResult(
-            feature_name=feature.feature_name,
-            dbxref_id=feature.dbxref_id,
-            gene_name=feature.gene_name,
+            feature_id=feature.feature_no,
+            orf=feature.feature_name,
+            gene=feature.gene_name,
             feature_type=feature.feature_type,
             qualifier=qualifier_str,
-            headline=feature.headline,
+            description=feature.headline,
             chromosome=pos.get("chromosome"),
             strand=pos.get("strand"),
             start_coord=pos.get("start"),
@@ -832,14 +834,14 @@ def generate_download_tsv(
 
     response = search_features(db, request)
 
-    if not response.success or not response.results:
+    if not response.success or not response.features:
         return "# No results found\n"
 
     # Build TSV
     lines = []
 
     # Header
-    headers = ["Systematic_Name", "CGDID", "Gene_Name", "Feature_Type", "Qualifier", "Description"]
+    headers = ["Systematic_Name", "Gene_Name", "Feature_Type", "Qualifier", "Description"]
     if response.show_position:
         headers.extend(["Chromosome", "Strand", "Start", "Stop"])
     if response.show_go_terms:
@@ -848,14 +850,13 @@ def generate_download_tsv(
     lines.append("\t".join(headers))
 
     # Data rows
-    for result in response.results:
+    for result in response.features:
         row = [
-            result.feature_name,
-            result.dbxref_id,
-            result.gene_name or "",
+            result.orf,
+            result.gene or "",
             result.feature_type,
             result.qualifier or "",
-            result.headline or "",
+            result.description or "",
         ]
         if response.show_position:
             row.extend([

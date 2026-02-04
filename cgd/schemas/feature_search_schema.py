@@ -82,12 +82,12 @@ class GoTermBrief(BaseModel):
 
 class FeatureSearchResult(BaseModel):
     """Single feature search result."""
-    feature_name: str = Field(..., description="Systematic name")
-    dbxref_id: str = Field(..., description="CGD ID")
-    gene_name: Optional[str] = Field(None, description="Gene name if available")
+    feature_id: int = Field(..., description="Feature ID")
+    orf: str = Field(..., description="Systematic name (ORF)")
+    gene: Optional[str] = Field(None, description="Gene name if available")
     feature_type: str = Field(..., description="Feature type (ORF, tRNA, etc.)")
     qualifier: Optional[str] = Field(None, description="Qualifier (Verified, etc.)")
-    headline: Optional[str] = Field(None, description="Brief description")
+    description: Optional[str] = Field(None, description="Brief description")
     # Position info (shown when position-related filters used)
     chromosome: Optional[str] = Field(None, description="Chromosome name")
     strand: Optional[str] = Field(None, description="Strand (W or C)")
@@ -130,10 +130,16 @@ class FeatureSearchResponse(BaseModel):
     """Response for feature search."""
     success: bool
     query_summary: Optional[QuerySummary] = None
-    results: List[FeatureSearchResult] = Field(default_factory=list)
+    features: List[FeatureSearchResult] = Field(default_factory=list)
     pagination: Optional[PaginationInfo] = None
+    total_count: int = Field(0, description="Total number of matching features")
+    total_pages: int = Field(0, description="Total number of pages")
     show_position: bool = Field(False, description="Whether to show position columns")
     show_go_terms: bool = Field(False, description="Whether to show GO term columns")
+    filter_counts: Optional[Dict[str, Dict[str, int]]] = Field(
+        None,
+        description="Counts grouped by feature_type, qualifier, chromosome"
+    )
     error: Optional[str] = None
 
 
