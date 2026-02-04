@@ -434,10 +434,13 @@ def _filter_by_qualifiers(
     if not feature_nos:
         return set(), 0
 
+    # Convert set to list for .in_() query
+    feature_nos_list = list(feature_nos)
+
     matching = (
         db.query(FeatProperty.feature_no)
         .filter(
-            FeatProperty.feature_no.in_(feature_nos),
+            FeatProperty.feature_no.in_(feature_nos_list),
             FeatProperty.property_type == "qualifier",
             FeatProperty.property_value.in_(qualifiers)
         )
@@ -457,10 +460,13 @@ def _exclude_deleted_features(
     if not feature_nos:
         return set(), 0
 
+    # Convert set to list for .in_() query
+    feature_nos_list = list(feature_nos)
+
     deleted = (
         db.query(FeatProperty.feature_no)
         .filter(
-            FeatProperty.feature_no.in_(feature_nos),
+            FeatProperty.feature_no.in_(feature_nos_list),
             FeatProperty.property_type == "qualifier",
             FeatProperty.property_value.like("%Deleted%")
         )
@@ -488,22 +494,30 @@ def _filter_by_chromosomes(
         .filter(Feature.feature_name.in_(chromosomes))
         .all()
     )
-    chr_feature_no_set = set(f[0] for f in chr_feature_nos)
+    chr_feature_no_list = [f[0] for f in chr_feature_nos]
+
+    if not chr_feature_no_list:
+        return set(), 0
 
     # Get seq_no for chromosomes
     chr_seq_nos = (
         db.query(Seq.seq_no)
-        .filter(Seq.feature_no.in_(chr_feature_no_set))
+        .filter(Seq.feature_no.in_(chr_feature_no_list))
         .all()
     )
-    chr_seq_no_set = set(s[0] for s in chr_seq_nos)
+    chr_seq_no_list = [s[0] for s in chr_seq_nos]
+
+    if not chr_seq_no_list:
+        return set(), 0
 
     # Get features located on these chromosomes
+    # Convert set to list for .in_() query
+    feature_nos_list = list(feature_nos)
     matching = (
         db.query(FeatLocation.feature_no)
         .filter(
-            FeatLocation.feature_no.in_(feature_nos),
-            FeatLocation.root_seq_no.in_(chr_seq_no_set),
+            FeatLocation.feature_no.in_(feature_nos_list),
+            FeatLocation.root_seq_no.in_(chr_seq_no_list),
             FeatLocation.is_loc_current == "Y"
         )
         .distinct()
@@ -523,12 +537,15 @@ def _filter_by_introns(
     if not feature_nos:
         return set(), 0
 
+    # Convert set to list for .in_() query
+    feature_nos_list = list(feature_nos)
+
     # Find features with intron subfeatures
     features_with_introns = (
         db.query(FeatRelationship.parent_feature_no)
         .join(Feature, FeatRelationship.child_feature_no == Feature.feature_no)
         .filter(
-            FeatRelationship.parent_feature_no.in_(feature_nos),
+            FeatRelationship.parent_feature_no.in_(feature_nos_list),
             Feature.feature_type.like("%intron%")
         )
         .distinct()
@@ -574,12 +591,16 @@ def _filter_by_go_terms(
     go_nos_to_search = set(go_no_mapping.values())
 
     # Build annotation query
+    # Convert sets to lists for .in_() query
+    feature_nos_list = list(feature_nos)
+    go_nos_list = list(go_nos_to_search)
+
     ann_query = (
         db.query(GoAnnotation.feature_no, GoAnnotation.go_no, Go.goid, Go.go_term, Go.go_aspect)
         .join(Go, GoAnnotation.go_no == Go.go_no)
         .filter(
-            GoAnnotation.feature_no.in_(feature_nos),
-            GoAnnotation.go_no.in_(go_nos_to_search)
+            GoAnnotation.feature_no.in_(feature_nos_list),
+            GoAnnotation.go_no.in_(go_nos_list)
         )
     )
 
@@ -662,11 +683,14 @@ def _sort_features(
     if not feature_nos:
         return []
 
+    # Convert set to list for .in_() query
+    feature_nos_list = list(feature_nos)
+
     if sort_by == "gene":
         # Sort by gene name (nulls last), then feature name
         sorted_features = (
             db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos))
+            .filter(Feature.feature_no.in_(feature_nos_list))
             .order_by(
                 func.coalesce(Feature.gene_name, "ZZZZZ"),
                 Feature.feature_name
@@ -677,7 +701,7 @@ def _sort_features(
         # Sort by feature type, then feature name
         sorted_features = (
             db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos))
+            .filter(Feature.feature_no.in_(feature_nos_list))
             .order_by(Feature.feature_type, Feature.feature_name)
             .all()
         )
@@ -685,7 +709,7 @@ def _sort_features(
         # Default: sort by feature name (ORF)
         sorted_features = (
             db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos))
+            .filter(Feature.feature_no.in_(feature_nos_list))
             .order_by(Feature.feature_name)
             .all()
         )
