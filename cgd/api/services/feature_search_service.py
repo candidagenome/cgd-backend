@@ -561,21 +561,53 @@ def _filter_by_introns(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    # Find features with intron subfeatures (rank=2 for subfeature relationship)
-    # Feature types containing 'intron' (case-insensitive): intron, Intron, five_prime_UTR_intron, etc.
-    features_with_introns = (
-        db.query(FeatRelationship.parent_feature_no)
-        .join(Feature, FeatRelationship.child_feature_no == Feature.feature_no)
+    # Find features with intron subfeatures using raw SQL-style query
+    # to avoid potential relationship issues
+    # First get child feature_nos from feat_relationship
+    child_relationships = (
+        db.query(
+            FeatRelationship.parent_feature_no,
+            FeatRelationship.child_feature_no
+        )
         .filter(
             FeatRelationship.parent_feature_no.in_(feature_nos_list),
-            FeatRelationship.rank == 2,
-            func.lower(Feature.feature_type).like("%intron%")
         )
-        .distinct()
         .all()
     )
 
-    intron_nos = set(f[0] for f in features_with_introns)
+    # Get child feature_nos
+    child_feature_nos = [r[1] for r in child_relationships]
+    parent_child_map = {}
+    for parent_no, child_no in child_relationships:
+        if parent_no not in parent_child_map:
+            parent_child_map[parent_no] = []
+        parent_child_map[parent_no].append(child_no)
+
+    if not child_feature_nos:
+        # No subfeatures found
+        if has_introns:
+            return set(), 0
+        else:
+            return feature_nos, len(feature_nos)
+
+    # Get feature types for child features
+    child_types = (
+        db.query(Feature.feature_no, Feature.feature_type)
+        .filter(Feature.feature_no.in_(child_feature_nos))
+        .all()
+    )
+
+    # Find which children are introns
+    intron_child_nos = set(
+        fno for fno, ftype in child_types
+        if ftype and 'intron' in ftype.lower()
+    )
+
+    # Find parents that have intron children
+    intron_nos = set()
+    for parent_no, children in parent_child_map.items():
+        if any(child in intron_child_nos for child in children):
+            intron_nos.add(parent_no)
 
     if has_introns:
         result = feature_nos & intron_nos
