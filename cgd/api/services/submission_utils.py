@@ -21,7 +21,7 @@ def _get_submission_dir() -> str:
     # Check environment variable first
     env_dir = os.environ.get('CGD_SUBMISSION_DIR')
     if env_dir:
-        logger.info(f"Using CGD_SUBMISSION_DIR from environment: {env_dir}")
+        logger.info(f"CGD_SUBMISSION_DIR env var set to: {env_dir}")
         return env_dir
 
     # Default: use /tmp which should always be writable
@@ -31,22 +31,39 @@ def _get_submission_dir() -> str:
 
 
 def _ensure_submission_dir() -> Path:
-    """Ensure submission directory exists."""
+    """Ensure submission directory exists and is writable."""
+    # Try configured directory first
     submission_dir = _get_submission_dir()
     path = Path(submission_dir)
-    logger.info(f"Ensuring submission directory exists: {path}")
+    logger.info(f"Trying submission directory: {path}")
+
     try:
         path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Submission directory ready: {path}")
         # Test write permission
         test_file = path / '.write_test'
         test_file.touch()
         test_file.unlink()
-        logger.info(f"Write permission confirmed for: {path}")
+        logger.info(f"Submission directory ready: {path}")
+        return path
+    except PermissionError as e:
+        logger.warning(f"Permission denied for {path}: {e}")
     except Exception as e:
-        logger.error(f"Failed to create/write submission directory {path}: {e}")
+        logger.warning(f"Failed to use {path}: {e}")
+
+    # Fallback to /tmp
+    fallback_path = Path('/tmp/cgd_submissions/colleague')
+    logger.info(f"Falling back to: {fallback_path}")
+    try:
+        fallback_path.mkdir(parents=True, exist_ok=True)
+        # Test write permission
+        test_file = fallback_path / '.write_test'
+        test_file.touch()
+        test_file.unlink()
+        logger.info(f"Fallback directory ready: {fallback_path}")
+        return fallback_path
+    except Exception as e:
+        logger.error(f"Failed to create fallback directory {fallback_path}: {e}")
         raise
-    return path
 
 
 def _generate_filename(prefix: str, pid: Optional[int] = None) -> str:
