@@ -70,7 +70,7 @@ class FeatureSearchRequest(BaseModel):
     )
     # Pagination and sorting
     page: int = Field(1, ge=1, description="Page number (1-indexed)")
-    page_size: int = Field(30, ge=1, le=100, description="Results per page")
+    page_size: int = Field(30, ge=1, le=50000, description="Results per page (max 50000 for downloads)")
     sort_by: str = Field("orf", description="Sort field (orf, gene, feature_type)")
 
 
