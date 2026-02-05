@@ -77,12 +77,11 @@ def get_go_term_finder_config(db: Session) -> GoTermFinderConfigResponse:
 
     Returns organisms, evidence codes, annotation types, and default settings.
     """
-    # Get organisms with GO annotations (species level)
+    # Get organisms with GO annotations
     organisms_with_go = (
         db.query(Organism)
         .join(Feature, Feature.organism_no == Organism.organism_no)
         .join(GoAnnotation, GoAnnotation.feature_no == Feature.feature_no)
-        .filter(Organism.taxonomic_rank == "Species")
         .distinct()
         .order_by(Organism.organism_order)
         .all()
