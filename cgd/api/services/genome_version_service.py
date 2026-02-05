@@ -6,8 +6,10 @@ Provides genome version history information for different strains/assemblies.
 from __future__ import annotations
 
 import logging
+import math
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from cgd.models.models import Organism, GenomeVersion
 from cgd.schemas.genome_version_schema import (
@@ -105,6 +107,8 @@ def get_genome_version_config(db: Session) -> GenomeVersionConfigResponse:
 def get_genome_version_history(
     db: Session,
     seq_source: str,
+    page: int = 1,
+    page_size: int = 20,
 ) -> GenomeVersionHistoryResponse:
     """
     Get genome version history for a specific strain/assembly.
@@ -112,9 +116,11 @@ def get_genome_version_history(
     Args:
         db: Database session
         seq_source: Organism abbreviation (strain identifier)
+        page: Page number (1-indexed)
+        page_size: Number of items per page
 
     Returns:
-        Genome version history with all versions
+        Genome version history with pagination
     """
     # Get organism
     organism = (
@@ -129,14 +135,30 @@ def get_genome_version_history(
             seq_source=seq_source,
             strain_display_name="",
             versions=[],
+            total_count=0,
+            page=page,
+            page_size=page_size,
+            total_pages=0,
             error=f"Strain '{seq_source}' not found",
         )
 
-    # Get genome versions for this organism
+    # Get total count
+    total_count = (
+        db.query(func.count(GenomeVersion.genome_version_no))
+        .filter(GenomeVersion.organism_no == organism.organism_no)
+        .scalar()
+    )
+
+    total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
+
+    # Get paginated genome versions for this organism
+    offset = (page - 1) * page_size
     genome_versions = (
         db.query(GenomeVersion)
         .filter(GenomeVersion.organism_no == organism.organism_no)
         .order_by(GenomeVersion.date_created.desc())
+        .offset(offset)
+        .limit(page_size)
         .all()
     )
 
@@ -159,4 +181,8 @@ def get_genome_version_history(
         seq_source=seq_source,
         strain_display_name=_get_strain_display_name(organism),
         versions=versions,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
     )

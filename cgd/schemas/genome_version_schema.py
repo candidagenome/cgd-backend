@@ -48,6 +48,8 @@ class GenomeVersionConfigResponse(BaseModel):
 class GenomeVersionHistoryRequest(BaseModel):
     """Request for genome version history."""
     seq_source: str = Field(..., description="Sequence source to get history for")
+    page: int = Field(1, ge=1, description="Page number (1-indexed)")
+    page_size: int = Field(20, ge=1, le=100, description="Results per page")
 
 
 class GenomeVersionHistoryResponse(BaseModel):
@@ -59,4 +61,8 @@ class GenomeVersionHistoryResponse(BaseModel):
         default_factory=list,
         description="List of genome versions"
     )
+    total_count: int = Field(0, description="Total number of versions")
+    page: int = Field(1, description="Current page")
+    page_size: int = Field(20, description="Items per page")
+    total_pages: int = Field(0, description="Total number of pages")
     error: Optional[str] = Field(None, description="Error message if any")

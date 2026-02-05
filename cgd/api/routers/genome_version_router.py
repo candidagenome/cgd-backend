@@ -41,6 +41,8 @@ def get_config(
 @router.get("/history/{seq_source}", response_model=GenomeVersionHistoryResponse)
 def get_history(
     seq_source: str,
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
@@ -48,12 +50,14 @@ def get_history(
 
     Args:
         seq_source: Organism abbreviation (e.g., C_albicans_SC5314)
+        page: Page number (1-indexed)
+        page_size: Results per page (max 100)
 
     Returns:
-        List of genome versions with dates and descriptions.
+        Paginated list of genome versions with dates and descriptions.
     """
     try:
-        return get_genome_version_history(db, seq_source)
+        return get_genome_version_history(db, seq_source, page, page_size)
     except Exception as e:
         logger.error(f"Error getting genome version history for {seq_source}: {e}")
         logger.error(traceback.format_exc())
@@ -63,6 +67,8 @@ def get_history(
 @router.get("/history", response_model=GenomeVersionHistoryResponse)
 def get_history_query(
     seq_source: str = Query(..., description="Organism abbreviation"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
@@ -71,7 +77,7 @@ def get_history_query(
     Alternative endpoint using query parameter instead of path parameter.
     """
     try:
-        return get_genome_version_history(db, seq_source)
+        return get_genome_version_history(db, seq_source, page, page_size)
     except Exception as e:
         logger.error(f"Error getting genome version history for {seq_source}: {e}")
         logger.error(traceback.format_exc())
