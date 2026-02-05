@@ -6,7 +6,7 @@ and GO Slim Mapper service tests.
 """
 import pytest
 from unittest.mock import MagicMock, PropertyMock
-from typing import Any
+from typing import Any, List, Optional
 
 
 class MockFeature:
@@ -16,7 +16,7 @@ class MockFeature:
         self,
         feature_no: int,
         feature_name: str,
-        gene_name: str | None = None,
+        gene_name: Optional[str] = None,
         organism_no: int = 1,
     ):
         self.feature_no = feature_no
@@ -34,7 +34,7 @@ class MockGo:
         goid: int,
         go_term: str,
         go_aspect: str,
-        go_definition: str | None = None,
+        go_definition: Optional[str] = None,
     ):
         self.go_no = go_no
         self.goid = goid
@@ -124,7 +124,7 @@ class MockCode:
         tab_name: str,
         col_name: str,
         code_value: str,
-        description: str | None = None,
+        description: Optional[str] = None,
     ):
         self.code_no = code_no
         self.tab_name = tab_name
@@ -136,7 +136,7 @@ class MockCode:
 class MockQuery:
     """Mock SQLAlchemy query object for testing."""
 
-    def __init__(self, results: list[Any] | None = None):
+    def __init__(self, results: Optional[List[Any]] = None):
         self._results = results or []
         self._filters = []
 
