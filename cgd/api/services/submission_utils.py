@@ -21,33 +21,31 @@ def _get_submission_dir() -> str:
     # Check environment variable first
     env_dir = os.environ.get('CGD_SUBMISSION_DIR')
     if env_dir:
+        logger.info(f"Using CGD_SUBMISSION_DIR from environment: {env_dir}")
         return env_dir
 
-    # Default: create 'submissions' folder in project root or /tmp
-    # Try to find project root (where cgd package is)
-    try:
-        import cgd
-        project_root = Path(cgd.__file__).parent.parent
-        default_dir = project_root / 'submissions' / 'colleague'
-        return str(default_dir)
-    except Exception:
-        # Fallback to /tmp
-        return '/tmp/cgd_submissions/colleague'
+    # Default: use /tmp which should always be writable
+    default_dir = '/tmp/cgd_submissions/colleague'
+    logger.info(f"Using default submission directory: {default_dir}")
+    return default_dir
 
 
 def _ensure_submission_dir() -> Path:
     """Ensure submission directory exists."""
     submission_dir = _get_submission_dir()
     path = Path(submission_dir)
+    logger.info(f"Ensuring submission directory exists: {path}")
     try:
         path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Submission directory: {path}")
+        logger.info(f"Submission directory ready: {path}")
+        # Test write permission
+        test_file = path / '.write_test'
+        test_file.touch()
+        test_file.unlink()
+        logger.info(f"Write permission confirmed for: {path}")
     except Exception as e:
-        logger.error(f"Failed to create submission directory {path}: {e}")
-        # Fallback to /tmp
-        path = Path('/tmp/cgd_submissions/colleague')
-        path.mkdir(parents=True, exist_ok=True)
-        logger.warning(f"Using fallback directory: {path}")
+        logger.error(f"Failed to create/write submission directory {path}: {e}")
+        raise
     return path
 
 

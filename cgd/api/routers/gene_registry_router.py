@@ -87,9 +87,43 @@ def submit(
     new colleague details (last_name, first_name, email, institution).
     """
     try:
+        logger.info(f"Gene registry submission received: {request.data}")
         result = submit_gene_registry(db, request.data.model_dump())
+        logger.info(f"Gene registry submission result: {result}")
         return GeneRegistrySubmissionResponse(**result)
     except Exception as e:
         logger.error(f"Gene registry submission error: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/test-submission-dir")
+def test_submission_dir():
+    """
+    Test endpoint to verify submission directory is working.
+    """
+    try:
+        from cgd.api.services.submission_utils import _ensure_submission_dir, _get_submission_dir
+        import os
+
+        submission_dir = _get_submission_dir()
+        path = _ensure_submission_dir()
+
+        # List files in directory
+        files = list(path.glob('*.json')) if path.exists() else []
+
+        return {
+            "success": True,
+            "submission_dir": str(path),
+            "exists": path.exists(),
+            "is_writable": os.access(path, os.W_OK),
+            "files_count": len(files),
+            "recent_files": [f.name for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)[:5]],
+        }
+    except Exception as e:
+        logger.error(f"Test submission dir error: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            "success": False,
+            "error": str(e),
+        }
