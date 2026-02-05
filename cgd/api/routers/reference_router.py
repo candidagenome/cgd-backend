@@ -8,7 +8,6 @@ from cgd.schemas.reference_schema import (
     ReferenceLocusResponse,
     ReferenceGOResponse,
     ReferencePhenotypeResponse,
-    ReferenceInteractionResponse,
     ReferenceLiteratureTopicsResponse,
     AuthorSearchResponse,
     NewPapersThisWeekResponse,
@@ -117,19 +116,6 @@ def get_reference_phenotype_details(identifier: str, db: Session = Depends(get_d
     Returns list of phenotype annotations linked to this reference.
     """
     return reference_service.get_reference_phenotype_details(db, identifier)
-
-
-@router.get("/{identifier}/interaction_details", response_model=ReferenceInteractionResponse)
-def get_reference_interaction_details(identifier: str, db: Session = Depends(get_db)):
-    """
-    Get interactions citing this reference.
-
-    Args:
-        identifier: Either a PubMed ID (numeric) or a DBXREF_ID (string like 'CGD_REF:xxx')
-
-    Returns list of interactions linked to this reference.
-    """
-    return reference_service.get_reference_interaction_details(db, identifier)
 
 
 @router.get("/{identifier}/literature_topics", response_model=ReferenceLiteratureTopicsResponse)
