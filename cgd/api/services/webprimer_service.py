@@ -168,14 +168,17 @@ def _has_gc_clamp(seq: str) -> bool:
 
 def _calculate_tm(seq: str, dna_conc: float = 50, salt_conc: float = 50) -> float:
     """
-    Calculate melting temperature using nearest-neighbor method.
+    Calculate melting temperature for primer.
 
-    Uses SantaLucia (1998) unified parameters.
+    Uses the Wallace rule which is simple and practical for primer design.
+    Tm = 2*(A+T) + 4*(G+C)
+
+    For primers 14-20bp, this gives Tm in the 50-60°C range which is typical.
 
     Args:
         seq: Primer sequence
-        dna_conc: DNA concentration in nM
-        salt_conc: Salt concentration in mM
+        dna_conc: DNA concentration in nM (not used in simple formula)
+        salt_conc: Salt concentration in mM (used for salt correction)
 
     Returns:
         Melting temperature in Celsius
@@ -184,24 +187,19 @@ def _calculate_tm(seq: str, dna_conc: float = 50, salt_conc: float = 50) -> floa
     if len(seq) < 2:
         return 0.0
 
-    # Use simple formula for reliability
-    # Basic formula: Tm = 64.9 + 41 * (nG + nC - 16.4) / length
-    # Or Wallace rule for shorter primers: Tm = 2*(A+T) + 4*(G+C)
-
     gc_count = seq.count('G') + seq.count('C')
     at_count = seq.count('A') + seq.count('T')
     length = len(seq)
 
-    if length < 14:
-        # Wallace rule for short primers
-        tm = 2 * at_count + 4 * gc_count
-    else:
-        # More accurate formula for longer primers
-        # Tm = 81.5 + 16.6*log10([Na+]) + 41*(GC/length) - 675/length
-        gc_percent = (gc_count / length) * 100
-        na_conc = salt_conc / 1000  # Convert mM to M
+    # Wallace rule: Tm = 2*(A+T) + 4*(G+C)
+    # This gives reasonable values for typical primers
+    tm = 2 * at_count + 4 * gc_count
 
-        tm = 81.5 + 16.6 * math.log10(na_conc) + 0.41 * gc_percent - 675 / length
+    # Salt correction (optional, small adjustment)
+    # Higher salt = higher Tm
+    if salt_conc != 50:
+        salt_correction = 7.21 * math.log10(salt_conc / 1000)
+        tm += salt_correction
 
     return round(tm, 1)
 
