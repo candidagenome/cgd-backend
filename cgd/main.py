@@ -21,6 +21,7 @@ from cgd.api.routers.restriction_mapper_router import router as restriction_mapp
 from cgd.api.routers.feature_search_router import router as feature_search_router
 from cgd.api.routers.genome_version_router import router as genome_version_router
 from cgd.api.routers.colleague_router import router as colleague_router
+from cgd.api.routers.gene_registry_router import router as gene_registry_router
 
 
 def create_app() -> FastAPI:
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(feature_search_router)
     app.include_router(genome_version_router)
     app.include_router(colleague_router)
+    app.include_router(gene_registry_router)
 
     return app
 
