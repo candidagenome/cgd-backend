@@ -280,6 +280,11 @@ def _build_annotation_filters(
     return filters
 
 
+def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
+    """Split a list into chunks of specified size (default 900 for Oracle's 1000 limit)."""
+    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
+
 def _get_go_annotations_with_ancestors(
     db: Session,
     feature_nos: list[int],
@@ -300,27 +305,31 @@ def _get_go_annotations_with_ancestors(
     # Build annotation filters
     ann_filters = _build_annotation_filters(evidence_codes, annotation_types)
 
-    # Query direct annotations
-    query = (
-        db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
-        .join(Go, Go.go_no == GoAnnotation.go_no)
-        .filter(GoAnnotation.feature_no.in_(feature_nos))
-    )
+    # Aspect map for ontology filter
+    aspect_map = {
+        GoOntology.PROCESS: "Biological Process",
+        GoOntology.FUNCTION: "Molecular Function",
+        GoOntology.COMPONENT: "Cellular Component",
+    }
 
-    # Apply ontology filter
-    if ontology != GoOntology.ALL:
-        aspect_map = {
-            GoOntology.PROCESS: "Biological Process",
-            GoOntology.FUNCTION: "Molecular Function",
-            GoOntology.COMPONENT: "Cellular Component",
-        }
-        query = query.filter(Go.go_aspect == aspect_map.get(ontology, ontology.value))
+    # Query direct annotations in batches (Oracle IN clause limit is 1000)
+    direct_annotations = []
+    for chunk in _chunk_list(feature_nos):
+        query = (
+            db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
+            .join(Go, Go.go_no == GoAnnotation.go_no)
+            .filter(GoAnnotation.feature_no.in_(chunk))
+        )
 
-    # Apply annotation filters
-    for f in ann_filters:
-        query = query.filter(f)
+        # Apply ontology filter
+        if ontology != GoOntology.ALL:
+            query = query.filter(Go.go_aspect == aspect_map.get(ontology, ontology.value))
 
-    direct_annotations = query.all()
+        # Apply annotation filters
+        for f in ann_filters:
+            query = query.filter(f)
+
+        direct_annotations.extend(query.all())
 
     # Build feature -> go_no set mapping
     feature_to_go_nos: dict[int, set[int]] = defaultdict(set)
@@ -333,21 +342,23 @@ def _get_go_annotations_with_ancestors(
     if not all_go_nos:
         return feature_to_go_nos
 
-    # Query ancestors for all direct annotations
-    ancestor_query = (
-        db.query(GoPath.child_go_no, GoPath.ancestor_go_no)
-        .filter(GoPath.child_go_no.in_(all_go_nos))
-    )
-
-    # Filter ancestors by ontology if needed
-    if ontology != GoOntology.ALL:
+    # Query ancestors for all direct annotations (also in batches)
+    ancestor_paths = []
+    for chunk in _chunk_list(list(all_go_nos)):
         ancestor_query = (
-            ancestor_query
-            .join(Go, Go.go_no == GoPath.ancestor_go_no)
-            .filter(Go.go_aspect == aspect_map.get(ontology, ontology.value))
+            db.query(GoPath.child_go_no, GoPath.ancestor_go_no)
+            .filter(GoPath.child_go_no.in_(chunk))
         )
 
-    ancestor_paths = ancestor_query.all()
+        # Filter ancestors by ontology if needed
+        if ontology != GoOntology.ALL:
+            ancestor_query = (
+                ancestor_query
+                .join(Go, Go.go_no == GoPath.ancestor_go_no)
+                .filter(Go.go_aspect == aspect_map.get(ontology, ontology.value))
+            )
+
+        ancestor_paths.extend(ancestor_query.all())
 
     # Build child_go_no -> set of ancestor_go_no mapping
     child_to_ancestors: dict[int, set[int]] = defaultdict(set)
