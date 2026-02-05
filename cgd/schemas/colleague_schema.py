@@ -122,3 +122,83 @@ class ColleagueDetailResponse(BaseModel):
         description="Colleague details"
     )
     error: Optional[str] = Field(None, description="Error message if any")
+
+
+# ==================== Form Configuration ====================
+
+class ColleagueFormConfigResponse(BaseModel):
+    """Configuration for colleague registration/update form."""
+    countries: List[str] = Field(..., description="List of countries")
+    us_states: List[str] = Field(..., description="List of US states")
+    canadian_provinces: List[str] = Field(..., description="List of Canadian provinces")
+    professions: List[str] = Field(..., description="List of professions")
+    positions: List[str] = Field(..., description="List of job positions")
+
+
+# ==================== Registration/Update ====================
+
+class ColleagueUrlInput(BaseModel):
+    """URL input for colleague form."""
+    url: str = Field(..., description="URL")
+    url_type: Optional[str] = Field(None, description="URL type/description")
+
+
+class ColleagueSubmission(BaseModel):
+    """Colleague registration/update submission."""
+    # Required fields
+    last_name: str = Field(..., min_length=1, max_length=40, description="Last name")
+    first_name: str = Field(..., min_length=1, max_length=40, description="First name")
+    email: str = Field(..., description="Email address")
+    institution: str = Field(..., min_length=1, max_length=100, description="Organization")
+
+    # Optional personal info
+    other_last_name: Optional[str] = Field(None, max_length=40, description="Other last name")
+    suffix: Optional[str] = Field(None, max_length=40, description="Suffix (Jr., Sr., etc.)")
+    profession: Optional[str] = Field(None, max_length=100, description="Profession")
+    job_title: Optional[str] = Field(None, max_length=100, description="Position/Job title")
+
+    # Address
+    address1: Optional[str] = Field(None, max_length=60, description="Address line 1")
+    address2: Optional[str] = Field(None, max_length=60, description="Address line 2")
+    address3: Optional[str] = Field(None, max_length=60, description="Address line 3")
+    city: Optional[str] = Field(None, max_length=100, description="City")
+    state: Optional[str] = Field(None, max_length=40, description="US State or Canadian Province")
+    region: Optional[str] = Field(None, max_length=40, description="Region (non-US/Canada)")
+    country: Optional[str] = Field(None, max_length=40, description="Country")
+    postal_code: Optional[str] = Field(None, max_length=40, description="Postal code")
+
+    # Contact
+    work_phone: Optional[str] = Field(None, max_length=40, description="Work phone")
+    other_phone: Optional[str] = Field(None, max_length=40, description="Other phone")
+    fax: Optional[str] = Field(None, max_length=40, description="Fax")
+
+    # URLs
+    urls: List[ColleagueUrlInput] = Field(default_factory=list, description="Web URLs")
+
+    # Research
+    research_interests: Optional[str] = Field(None, max_length=1500, description="Research interests")
+    keywords: Optional[str] = Field(None, description="Keywords (comma-separated)")
+
+    # Relationships (colleague IDs)
+    lab_head_id: Optional[int] = Field(None, description="PI/Lab head colleague ID")
+    associate_ids: List[int] = Field(default_factory=list, description="Associate colleague IDs")
+
+    # Associated genes (feature names)
+    associated_genes: List[str] = Field(default_factory=list, description="Associated gene names")
+
+
+class ColleagueSubmissionRequest(BaseModel):
+    """Request for colleague registration or update."""
+    colleague_no: Optional[int] = Field(
+        None,
+        description="Colleague ID (for updates, None for new registration)"
+    )
+    data: ColleagueSubmission = Field(..., description="Colleague data")
+
+
+class ColleagueSubmissionResponse(BaseModel):
+    """Response for colleague submission."""
+    success: bool = Field(True, description="Whether submission was successful")
+    message: Optional[str] = Field(None, description="Success/info message")
+    colleague_no: Optional[int] = Field(None, description="Colleague ID (for new registrations)")
+    errors: List[str] = Field(default_factory=list, description="Validation errors")

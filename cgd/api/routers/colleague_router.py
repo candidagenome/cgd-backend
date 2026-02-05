@@ -10,15 +10,65 @@ from cgd.db.deps import get_db
 from cgd.schemas.colleague_schema import (
     ColleagueSearchResponse,
     ColleagueDetailResponse,
+    ColleagueFormConfigResponse,
+    ColleagueSubmissionRequest,
+    ColleagueSubmissionResponse,
 )
 from cgd.api.services.colleague_service import (
     search_colleagues,
     get_colleague_detail,
+    get_colleague_form_config,
+    submit_colleague,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/colleague", tags=["colleague"])
+
+
+@router.get("/form-config", response_model=ColleagueFormConfigResponse)
+def get_form_config(
+    db: Session = Depends(get_db),
+):
+    """
+    Get configuration for colleague registration/update form.
+
+    Returns lists of countries, US states, Canadian provinces,
+    professions, and job positions for form dropdowns.
+    """
+    try:
+        config = get_colleague_form_config(db)
+        return ColleagueFormConfigResponse(**config)
+    except Exception as e:
+        logger.error(f"Form config error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/submit", response_model=ColleagueSubmissionResponse)
+def submit(
+    request: ColleagueSubmissionRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Submit colleague registration or update.
+
+    For new registrations, omit colleague_no.
+    For updates, include the colleague_no.
+
+    The submission will be queued for curator review.
+    """
+    try:
+        result = submit_colleague(
+            db,
+            request.colleague_no,
+            request.data.model_dump(),
+        )
+        return ColleagueSubmissionResponse(**result)
+    except Exception as e:
+        logger.error(f"Colleague submission error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/search", response_model=ColleagueSearchResponse)

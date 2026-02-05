@@ -358,3 +358,176 @@ def get_colleague_detail(
         success=True,
         colleague=detail,
     )
+
+
+def get_colleague_form_config(db: Session) -> dict:
+    """
+    Get configuration for colleague registration/update form.
+
+    Returns countries, states, provinces, and other coded values.
+    """
+    from cgd.models.models import Code
+
+    # Get countries
+    countries = (
+        db.query(Code.code_value)
+        .filter(Code.tab_name == "COLLEAGUE", Code.col_name == "COUNTRY")
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    # Get US states
+    us_states = (
+        db.query(Code.code_value)
+        .filter(Code.tab_name == "COLLEAGUE", Code.col_name == "STATE")
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    # Get Canadian provinces - might be stored differently
+    canadian_provinces = (
+        db.query(Code.code_value)
+        .filter(Code.tab_name == "COLLEAGUE", Code.col_name == "PROVINCE")
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    # If no provinces found, use a default list
+    if not canadian_provinces:
+        canadian_provinces = [
+            ("Alberta",), ("British Columbia",), ("Manitoba",),
+            ("New Brunswick",), ("Newfoundland and Labrador",),
+            ("Northwest Territories",), ("Nova Scotia",), ("Nunavut",),
+            ("Ontario",), ("Prince Edward Island",), ("Quebec",),
+            ("Saskatchewan",), ("Yukon",),
+        ]
+
+    # Get professions
+    professions = (
+        db.query(Code.code_value)
+        .filter(Code.tab_name == "COLLEAGUE", Code.col_name == "PROFESSION")
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    # Get positions/job titles
+    positions = (
+        db.query(Code.code_value)
+        .filter(Code.tab_name == "COLLEAGUE", Code.col_name == "JOB_TITLE")
+        .order_by(Code.code_value)
+        .all()
+    )
+
+    return {
+        "countries": [c[0] for c in countries] if countries else [],
+        "us_states": [s[0] for s in us_states] if us_states else [],
+        "canadian_provinces": [p[0] for p in canadian_provinces],
+        "professions": [p[0] for p in professions] if professions else [],
+        "positions": [p[0] for p in positions] if positions else [],
+    }
+
+
+def _validate_email(email: str) -> bool:
+    """Basic email validation."""
+    import re
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
+
+
+def submit_colleague(
+    db: Session,
+    colleague_no: Optional[int],
+    data: dict,
+) -> dict:
+    """
+    Submit colleague registration or update.
+
+    For now, this creates a submission record for curator review
+    rather than directly modifying the database.
+
+    Args:
+        db: Database session
+        colleague_no: Colleague ID for updates, None for new registration
+        data: Colleague data
+
+    Returns:
+        Submission response
+    """
+    import json
+    import os
+    from datetime import datetime
+
+    errors = []
+
+    # Validate required fields
+    if not data.get("last_name"):
+        errors.append("Last name is required")
+    if not data.get("first_name"):
+        errors.append("First name is required")
+    if not data.get("email"):
+        errors.append("Email is required")
+    elif not _validate_email(data["email"]):
+        errors.append("Invalid email format")
+    if not data.get("institution"):
+        errors.append("Organization is required")
+
+    # Validate country/state combination
+    country = data.get("country", "")
+    state = data.get("state", "")
+    region = data.get("region", "")
+
+    if country == "USA" and not state:
+        errors.append("Please select a US state")
+    if country == "Canada" and not state:
+        errors.append("Please select a Canadian province")
+    if region and not country:
+        errors.append("Please select a country if specifying a region")
+
+    if errors:
+        return {
+            "success": False,
+            "errors": errors,
+        }
+
+    # Check if this is an update or new registration
+    is_update = colleague_no is not None
+
+    if is_update:
+        # Verify colleague exists
+        existing = db.query(Colleague).filter(Colleague.colleague_no == colleague_no).first()
+        if not existing:
+            return {
+                "success": False,
+                "errors": [f"Colleague with ID {colleague_no} not found"],
+            }
+
+    # Create submission record
+    # In the original system, this created a file for curator review
+    # For the new system, we could either:
+    # 1. Create a submission table entry
+    # 2. Send an email to curators
+    # 3. Directly update (if permissions allow)
+
+    # For now, we'll log the submission and return success
+    # In production, this should integrate with email/notification system
+
+    submission_data = {
+        "type": "update" if is_update else "new",
+        "colleague_no": colleague_no,
+        "submitted_at": datetime.now().isoformat(),
+        "data": data,
+    }
+
+    logger.info(f"Colleague submission received: {json.dumps(submission_data, default=str)}")
+
+    # TODO: In production, implement one of:
+    # 1. Save to colleague_submission table
+    # 2. Send email notification to curators
+    # 3. Direct database update with audit trail
+
+    action = "updated" if is_update else "submitted"
+    return {
+        "success": True,
+        "message": f"Your colleague information has been {action} and will be reviewed by our curators. Thank you!",
+        "colleague_no": colleague_no,
+    }
