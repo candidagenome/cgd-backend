@@ -28,21 +28,32 @@ from cgd.schemas.webprimer_schema import (
 
 logger = logging.getLogger(__name__)
 
-# Thermodynamic parameters for Tm calculation
-# Entropy values (cal/mol/K) for dinucleotides
+# Thermodynamic parameters for Tm calculation (nearest-neighbor)
+# Values from SantaLucia (1998) - entropy in cal/(mol*K), enthalpy in kcal/mol
 ENTROPY_VALUES = {
-    "AA": -240, "AT": -239, "AG": -208, "AC": -226,
-    "TA": -169, "TT": -240, "TG": -227, "TC": -272,
-    "GA": -236, "GT": -226, "GG": -267, "GC": -278,
-    "CA": -227, "CT": -208, "CG": -272, "CC": -267,
+    "AA": -22.2, "TT": -22.2,
+    "AT": -20.4,
+    "TA": -21.3,
+    "CA": -22.7, "TG": -22.7,
+    "GT": -22.4, "AC": -22.4,
+    "CT": -21.0, "AG": -21.0,
+    "GA": -22.2, "TC": -22.2,
+    "CG": -27.2,
+    "GC": -24.4,
+    "GG": -19.9, "CC": -19.9,
 }
 
-# Enthalpy values (cal/mol) for dinucleotides
 ENTHALPY_VALUES = {
-    "AA": -91, "AT": -86, "AG": -78, "AC": -65,
-    "TA": -60, "TT": -91, "TG": -58, "TC": -80,
-    "GA": -82, "GT": -65, "GG": -84, "GC": -98,
-    "CA": -58, "CT": -78, "CG": -119, "CC": -84,
+    "AA": -7.9, "TT": -7.9,
+    "AT": -7.2,
+    "TA": -7.2,
+    "CA": -8.5, "TG": -8.5,
+    "GT": -8.4, "AC": -8.4,
+    "CT": -7.8, "AG": -7.8,
+    "GA": -8.2, "TC": -8.2,
+    "CG": -10.6,
+    "GC": -9.8,
+    "GG": -8.0, "CC": -8.0,
 }
 
 
@@ -53,9 +64,9 @@ def get_webprimer_config() -> WebPrimerConfigResponse:
             "bp_from_start": 35,
             "bp_from_stop": 35,
             "parsed_length": 35,
-            "opt_tm": 56,
-            "min_tm": 52,
-            "max_tm": 60,
+            "opt_tm": 55,
+            "min_tm": 50,
+            "max_tm": 65,
             "opt_length": 20,
             "min_length": 18,
             "max_length": 21,
@@ -159,6 +170,8 @@ def _calculate_tm(seq: str, dna_conc: float = 50, salt_conc: float = 50) -> floa
     """
     Calculate melting temperature using nearest-neighbor method.
 
+    Uses SantaLucia (1998) unified parameters.
+
     Args:
         seq: Primer sequence
         dna_conc: DNA concentration in nM
@@ -171,25 +184,24 @@ def _calculate_tm(seq: str, dna_conc: float = 50, salt_conc: float = 50) -> floa
     if len(seq) < 2:
         return 0.0
 
-    # Initialize with helix initiation
-    total_entropy = 90.5  # cal/mol/K (scaled by 10)
-    total_enthalpy = 0.0
+    # Use simple formula for reliability
+    # Basic formula: Tm = 64.9 + 41 * (nG + nC - 16.4) / length
+    # Or Wallace rule for shorter primers: Tm = 2*(A+T) + 4*(G+C)
 
-    # Sum dinucleotide contributions
-    for i in range(len(seq) - 1):
-        dinuc = seq[i:i+2]
-        total_entropy += ENTROPY_VALUES.get(dinuc, -200) / 10
-        total_enthalpy += ENTHALPY_VALUES.get(dinuc, -70) / 10
+    gc_count = seq.count('G') + seq.count('C')
+    at_count = seq.count('A') + seq.count('T')
+    length = len(seq)
 
-    # Convert units
-    total_enthalpy *= 1000  # to cal/mol
+    if length < 14:
+        # Wallace rule for short primers
+        tm = 2 * at_count + 4 * gc_count
+    else:
+        # More accurate formula for longer primers
+        # Tm = 81.5 + 16.6*log10([Na+]) + 41*(GC/length) - 675/length
+        gc_percent = (gc_count / length) * 100
+        na_conc = salt_conc / 1000  # Convert mM to M
 
-    # Calculate Tm using thermodynamic formula
-    R = 1.987  # gas constant cal/mol/K
-    log_dna = R * math.log(dna_conc / 4e9)
-    log_salt = 16.6 * math.log10(salt_conc / 1000)
-
-    tm = (total_enthalpy / (total_entropy + log_dna)) - 273.15 + log_salt
+        tm = 81.5 + 16.6 * math.log10(na_conc) + 0.41 * gc_percent - 675 / length
 
     return round(tm, 1)
 

@@ -64,9 +64,9 @@ class WebPrimerRequest(BaseModel):
     seq_spacing: int = Field(default=250, ge=50, le=1000, description="Distance between sequencing primers")
 
     # Melting temperature
-    opt_tm: float = Field(default=56, ge=40, le=80, description="Optimum Tm")
-    min_tm: float = Field(default=52, ge=40, le=80, description="Minimum Tm")
-    max_tm: float = Field(default=60, ge=40, le=80, description="Maximum Tm")
+    opt_tm: float = Field(default=55, ge=40, le=80, description="Optimum Tm")
+    min_tm: float = Field(default=50, ge=40, le=80, description="Minimum Tm")
+    max_tm: float = Field(default=65, ge=40, le=80, description="Maximum Tm")
 
     # Primer length
     opt_length: int = Field(default=20, ge=15, le=35, description="Optimum primer length")
