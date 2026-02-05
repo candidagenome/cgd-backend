@@ -232,7 +232,9 @@ def search_features(
                 filter_counts=filter_counts,
                 total_results=0,
             ),
-            results=[],
+            features=[],
+            total_count=0,
+            total_pages=0,
             pagination=PaginationInfo(
                 page=1,
                 page_size=request.page_size,
