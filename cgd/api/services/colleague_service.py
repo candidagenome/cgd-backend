@@ -501,29 +501,15 @@ def submit_colleague(
                 "errors": [f"Colleague with ID {colleague_no} not found"],
             }
 
-    # Create submission record
-    # In the original system, this created a file for curator review
-    # For the new system, we could either:
-    # 1. Create a submission table entry
-    # 2. Send an email to curators
-    # 3. Directly update (if permissions allow)
+    # Write submission to file for curator review (like original Perl system)
+    from cgd.api.services.submission_utils import write_colleague_submission
 
-    # For now, we'll log the submission and return success
-    # In production, this should integrate with email/notification system
-
-    submission_data = {
-        "type": "update" if is_update else "new",
-        "colleague_no": colleague_no,
-        "submitted_at": datetime.now().isoformat(),
-        "data": data,
-    }
-
-    logger.info(f"Colleague submission received: {json.dumps(submission_data, default=str)}")
-
-    # TODO: In production, implement one of:
-    # 1. Save to colleague_submission table
-    # 2. Send email notification to curators
-    # 3. Direct database update with audit trail
+    try:
+        filepath = write_colleague_submission(colleague_no, data)
+        logger.info(f"Colleague submission written to: {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to write colleague submission file: {e}")
+        # Continue anyway - don't fail the submission if file write fails
 
     action = "updated" if is_update else "submitted"
     return {

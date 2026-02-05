@@ -6,10 +6,8 @@ Provides gene name validation and registration functionality.
 from __future__ import annotations
 
 import re
-import json
 import logging
 from typing import List, Optional
-from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
@@ -407,14 +405,15 @@ def submit_gene_registry(
             'errors': errors,
         }
 
-    # Log the submission (in production, save to database or send email)
-    submission_data = {
-        'type': 'gene_registry',
-        'submitted_at': datetime.now().isoformat(),
-        'data': data,
-    }
+    # Write submission to file for curator review (like original Perl system)
+    from cgd.api.services.submission_utils import write_gene_registry_submission
 
-    logger.info(f"Gene registry submission: {json.dumps(submission_data, default=str)}")
+    try:
+        filepath = write_gene_registry_submission(data)
+        logger.info(f"Gene registry submission written to: {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to write gene registry submission file: {e}")
+        # Continue anyway - don't fail the submission if file write fails
 
     return {
         'success': True,
