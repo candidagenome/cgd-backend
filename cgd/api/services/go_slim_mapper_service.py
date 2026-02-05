@@ -150,20 +150,15 @@ def get_slim_terms_for_set(
     Returns:
         GoSlimSetDetail with the list of terms
     """
-    # Map aspect code to full name for query
-    aspect_map = {
-        "P": "Biological Process",
-        "F": "Molecular Function",
-        "C": "Cellular Component",
-    }
-    aspect_full = aspect_map.get(aspect.upper(), aspect)
+    # Use single-letter aspect code directly (database stores P, F, C)
+    aspect_code = aspect.upper()
 
     # Query terms in the set
     results = (
         db.query(Go.go_no, Go.goid, Go.go_term, Go.go_aspect)
         .join(GoSet, GoSet.go_no == Go.go_no)
         .filter(GoSet.go_set_name == set_name)
-        .filter(Go.go_aspect == aspect_full)
+        .filter(Go.go_aspect == aspect_code)
         .order_by(Go.go_term)
         .all()
     )
@@ -173,14 +168,14 @@ def get_slim_terms_for_set(
             go_no=go_no,
             goid=_format_goid(goid),
             go_term=go_term,
-            go_aspect=go_aspect[0].upper() if go_aspect else aspect,
+            go_aspect=go_aspect if go_aspect else aspect_code,
         )
         for go_no, goid, go_term, go_aspect in results
     ]
 
     return GoSlimSetDetail(
         go_set_name=set_name,
-        go_aspect=aspect,
+        go_aspect=aspect_code,
         terms=terms,
     )
 
@@ -299,19 +294,14 @@ def _get_slim_term_go_nos(
     Returns:
         Set of go_no values
     """
-    # Map aspect code to full name
-    aspect_map = {
-        "P": "Biological Process",
-        "F": "Molecular Function",
-        "C": "Cellular Component",
-    }
-    aspect_full = aspect_map.get(aspect.upper(), aspect)
+    # Use single-letter aspect code directly (database stores P, F, C)
+    aspect_code = aspect.upper()
 
     query = (
         db.query(Go.go_no, Go.goid)
         .join(GoSet, GoSet.go_no == Go.go_no)
         .filter(GoSet.go_set_name == set_name)
-        .filter(Go.go_aspect == aspect_full)
+        .filter(Go.go_aspect == aspect_code)
     )
 
     results = query.all()
@@ -390,13 +380,8 @@ def run_go_slim_mapper(
     feature_nos = list(gene_map.keys())
     ann_filters = _build_annotation_filters(request.annotation_types)
 
-    # Map aspect code to full name
-    aspect_map = {
-        "P": "Biological Process",
-        "F": "Molecular Function",
-        "C": "Cellular Component",
-    }
-    aspect_full = aspect_map.get(request.go_aspect.upper(), request.go_aspect)
+    # Use single-letter aspect code directly (database stores P, F, C)
+    aspect_code = request.go_aspect.upper()
 
     # Query direct annotations (batched)
     feature_to_go_nos: dict[int, set[int]] = defaultdict(set)
@@ -405,7 +390,7 @@ def run_go_slim_mapper(
             db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
             .join(Go, Go.go_no == GoAnnotation.go_no)
             .filter(GoAnnotation.feature_no.in_(chunk))
-            .filter(Go.go_aspect == aspect_full)
+            .filter(Go.go_aspect == aspect_code)
         )
 
         for f in ann_filters:
@@ -485,13 +470,13 @@ def run_go_slim_mapper(
 
         genes = [gene_map[fno] for fno in sorted(gene_feature_nos) if fno in gene_map]
 
-        aspect_code = go.go_aspect[0].upper() if go.go_aspect else request.go_aspect
+        term_aspect = go.go_aspect if go.go_aspect else request.go_aspect.upper()
 
         mapped_terms.append(MappedSlimTerm(
             go_no=slim_go_no,
             goid=_format_goid(go.goid),
             go_term=go.go_term,
-            go_aspect=aspect_code,
+            go_aspect=term_aspect,
             gene_count=gene_count,
             total_genes=total_genes_with_go,
             frequency_percent=round(frequency, 2),
