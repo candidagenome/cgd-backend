@@ -12,3 +12,6 @@ pymysql>=1.1
 
 # Elasticsearch
 elasticsearch>=8.0.0
+
+# Statistics
+scipy>=1.11
