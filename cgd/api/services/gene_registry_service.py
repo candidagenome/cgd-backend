@@ -312,51 +312,52 @@ def get_gene_registry_config(db: Session) -> GeneRegistryConfigResponse:
 
     Returns available species and default species.
     """
-    # Get strains (organisms that are strains, not species)
-    organisms = (
-        db.query(Organism)
-        .filter(Organism.taxonomic_rank == 'Strain')
-        .order_by(Organism.organism_order)
+    species_options = []
+
+    # Get organisms that have features (strains with genomic data)
+    # Query distinct organisms from the feature table
+    organism_nos = (
+        db.query(Feature.organism_no)
+        .distinct()
         .all()
     )
+    organism_no_list = [o[0] for o in organism_nos]
 
-    species_options = []
-    for org in organisms:
-        # Get parent species name
-        if org.parent_organism_no:
-            parent = (
-                db.query(Organism)
-                .filter(Organism.organism_no == org.parent_organism_no)
-                .first()
-            )
-            if parent:
-                species_options.append(SpeciesOption(
-                    abbrev=org.organism_abbrev,
-                    name=parent.organism_name,
-                ))
-        else:
-            species_options.append(SpeciesOption(
-                abbrev=org.organism_abbrev,
-                name=org.organism_name,
-            ))
-
-    # If no strains found, try species directly
-    if not species_options:
+    if organism_no_list:
         organisms = (
             db.query(Organism)
-            .filter(Organism.taxonomic_rank == 'Species')
+            .filter(Organism.organism_no.in_(organism_no_list))
             .order_by(Organism.organism_order)
             .all()
         )
+
         for org in organisms:
+            # Get species name - either from parent or self
+            species_name = org.organism_name
+            if org.parent_organism_no:
+                parent = (
+                    db.query(Organism)
+                    .filter(Organism.organism_no == org.parent_organism_no)
+                    .first()
+                )
+                if parent and 'species' in parent.taxonomic_rank.lower():
+                    species_name = parent.organism_name
+
             species_options.append(SpeciesOption(
                 abbrev=org.organism_abbrev,
-                name=org.organism_name,
+                name=species_name,
             ))
 
-    # Default to first one or C_albicans_SC5314
+    # Fallback to hardcoded defaults if database query fails
+    if not species_options:
+        species_options = [
+            SpeciesOption(abbrev='C_albicans_SC5314', name='Candida albicans'),
+            SpeciesOption(abbrev='C_glabrata_CBS138', name='Candida glabrata'),
+        ]
+
+    # Default to C_albicans_SC5314 or first option
     default_species = 'C_albicans_SC5314'
-    if species_options and not any(s.abbrev == default_species for s in species_options):
+    if not any(s.abbrev == default_species for s in species_options):
         default_species = species_options[0].abbrev if species_options else ''
 
     return GeneRegistryConfigResponse(
