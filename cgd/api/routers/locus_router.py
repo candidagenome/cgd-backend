@@ -15,7 +15,6 @@ from cgd.schemas.locus_schema import (
 )
 from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
 from cgd.schemas.go_schema import GODetailsResponse
-from cgd.schemas.interaction_schema import InteractionDetailsResponse
 from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse, ProteinDomainResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 
@@ -58,14 +57,6 @@ def phenotype_details(name: str, db: Session = Depends(get_db)):
         logger.error(f"Error in phenotype_details for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{name}/interaction_details", response_model=InteractionDetailsResponse)
-def interaction_details(name: str, db: Session = Depends(get_db)):
-    """
-    Get interactions for this locus, grouped by organism.
-    """
-    return locus_service.get_locus_interaction_details(db, name)
 
 
 @router.get("/{name}/protein_details", response_model=ProteinDetailsResponse)
