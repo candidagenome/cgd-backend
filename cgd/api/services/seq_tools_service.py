@@ -159,7 +159,14 @@ def _build_pattern_match_link(sequence: str) -> str:
 
 def _build_restriction_map_link(sequence: str) -> str:
     """Build restriction map link for DNA sequence."""
-    return f"/cgi-bin/PATMATCH/RestrictionMapper?seq={quote(sequence)}"
+    params = {"seq": sequence[:5000], "type": "sequence"}
+    return f"/restriction-mapper?{urlencode(params)}"
+
+
+def _build_restriction_map_link_for_locus(locus: str) -> str:
+    """Build restriction map link for a locus."""
+    params = {"locus": locus, "type": "locus"}
+    return f"/restriction-mapper?{urlencode(params)}"
 
 
 def _build_primer_design_link(sequence: str) -> str:
@@ -346,7 +353,7 @@ def get_tools_for_gene(
         # Restriction Map
         analysis_tools.append(ToolLink(
             name="Restriction Map",
-            url=f"/cgi-bin/PATMATCH/RestrictionMapper?locus={feature.feature_name}",
+            url=_build_restriction_map_link_for_locus(feature.feature_name),
             description="Show restriction enzyme cut sites",
         ))
 
