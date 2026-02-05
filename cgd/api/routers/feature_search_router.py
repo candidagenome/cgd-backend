@@ -97,12 +97,17 @@ def download_results(
 
     Returns a tab-separated file with all matching features.
     """
-    tsv_content = generate_download_tsv(db, request)
+    try:
+        tsv_content = generate_download_tsv(db, request)
 
-    return PlainTextResponse(
-        content=tsv_content,
-        media_type="text/tab-separated-values",
-        headers={
-            "Content-Disposition": "attachment; filename=feature_search_results.tsv"
-        }
-    )
+        return PlainTextResponse(
+            content=tsv_content,
+            media_type="text/tab-separated-values",
+            headers={
+                "Content-Disposition": "attachment; filename=feature_search_results.tsv"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
