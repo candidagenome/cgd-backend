@@ -8,9 +8,20 @@ from cgd.schemas.chromosome_schema import (
     ChromosomeHistoryResponse,
     ChromosomeReferencesResponse,
     ChromosomeSummaryNotesResponse,
+    ChromosomeListResponse,
 )
 
 router = APIRouter(prefix="/api/chromosome", tags=["chromosome"])
+
+
+@router.get("", response_model=ChromosomeListResponse)
+def list_chromosomes(db: Session = Depends(get_db)):
+    """
+    List all chromosomes/contigs grouped by organism.
+
+    Returns organisms with their chromosomes for selection.
+    """
+    return chromosome_service.list_chromosomes(db)
 
 
 @router.get("/{name}", response_model=ChromosomeResponse)
