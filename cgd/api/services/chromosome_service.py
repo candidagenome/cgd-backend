@@ -16,6 +16,9 @@ from cgd.schemas.chromosome_schema import (
     ReferenceForChromosome,
     ChromosomeSummaryNotesResponse,
     SummaryNoteOut,
+    ChromosomeListResponse,
+    OrganismChromosomes,
+    ChromosomeListItem,
 )
 from cgd.models.models import (
     Feature,
@@ -30,6 +33,7 @@ from cgd.models.models import (
     Paragraph,
     RefLink,
     Reference,
+    Organism,
 )
 
 
@@ -432,3 +436,67 @@ def get_chromosome_summary_notes(db: Session, name: str) -> ChromosomeSummaryNot
         feature_name=feature.feature_name,
         summary_notes=summary_notes,
     )
+
+
+def list_chromosomes(db: Session) -> ChromosomeListResponse:
+    """
+    List all chromosomes/contigs grouped by organism.
+    """
+    # Get all chromosome/contig features with their organisms
+    features = (
+        db.query(Feature)
+        .options(joinedload(Feature.organism))
+        .filter(Feature.feature_type.in_(["chromosome", "contig"]))
+        .order_by(Feature.organism_no, Feature.feature_name)
+        .all()
+    )
+
+    # Group by organism
+    organisms_dict = {}
+    for feature in features:
+        org = feature.organism
+        if not org:
+            continue
+
+        org_no = org.organism_no
+        if org_no not in organisms_dict:
+            organisms_dict[org_no] = {
+                "organism_no": org_no,
+                "organism_name": org.organism_name,
+                "organism_abbrev": org.organism_abbrev,
+                "chromosomes": [],
+            }
+
+        # Get length from location
+        loc = (
+            db.query(FeatLocation)
+            .filter(
+                FeatLocation.feature_no == feature.feature_no,
+                FeatLocation.is_loc_current == "Y",
+            )
+            .first()
+        )
+        length = None
+        if loc and loc.stop_coord:
+            length = loc.stop_coord - (loc.start_coord or 0) + 1
+
+        organisms_dict[org_no]["chromosomes"].append(
+            ChromosomeListItem(
+                feature_no=feature.feature_no,
+                feature_name=feature.feature_name,
+                feature_type=feature.feature_type,
+                length=length,
+            )
+        )
+
+    # Convert to list and sort chromosomes within each organism
+    organisms_list = []
+    for org_data in organisms_dict.values():
+        # Sort chromosomes by name
+        org_data["chromosomes"].sort(key=lambda x: x.feature_name)
+        organisms_list.append(OrganismChromosomes(**org_data))
+
+    # Sort organisms by name
+    organisms_list.sort(key=lambda x: x.organism_name)
+
+    return ChromosomeListResponse(organisms=organisms_list)

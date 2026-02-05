@@ -108,3 +108,23 @@ class ChromosomeSummaryNotesResponse(BaseModel):
     reference_no: int
     feature_name: str
     summary_notes: list[SummaryNoteOut]
+
+
+# --- Chromosome List ---
+
+class ChromosomeListItem(BaseModel):
+    feature_no: int
+    feature_name: str
+    feature_type: str
+    length: typing.Optional[int] = None
+
+
+class OrganismChromosomes(BaseModel):
+    organism_no: int
+    organism_name: str
+    organism_abbrev: str
+    chromosomes: list[ChromosomeListItem] = []
+
+
+class ChromosomeListResponse(BaseModel):
+    organisms: list[OrganismChromosomes] = []
