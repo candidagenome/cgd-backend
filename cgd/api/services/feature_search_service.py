@@ -41,6 +41,34 @@ from cgd.schemas.feature_search_schema import (
 # Application name for web_metadata queries
 APPLICATION_NAME = "Chromosomal Feature Search"
 
+# Oracle IN clause limit
+ORACLE_IN_LIMIT = 999
+
+
+def _chunked_in_query(db: Session, query_func, items: List, chunk_size: int = ORACLE_IN_LIMIT):
+    """
+    Execute a query function in chunks to avoid Oracle's 1000 item IN clause limit.
+
+    Args:
+        db: Database session
+        query_func: Function that takes (db, chunk) and returns query results
+        items: List of items to query
+        chunk_size: Maximum items per query (default 999 for Oracle)
+
+    Returns:
+        Combined results from all chunks
+    """
+    if not items:
+        return []
+
+    all_results = []
+    for i in range(0, len(items), chunk_size):
+        chunk = items[i:i + chunk_size]
+        results = query_func(db, chunk)
+        all_results.extend(results)
+
+    return all_results
+
 # Default GO Slim set name
 GO_SLIM_SET_NAME = "CGD_GO_Slim"
 
@@ -460,17 +488,19 @@ def _filter_by_qualifiers(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    matching = (
-        db.query(FeatProperty.feature_no)
-        .filter(
-            FeatProperty.feature_no.in_(feature_nos_list),
-            FeatProperty.property_type == "qualifier",
-            FeatProperty.property_value.in_(qualifiers)
+    def query_qualifiers(db, chunk):
+        return (
+            db.query(FeatProperty.feature_no)
+            .filter(
+                FeatProperty.feature_no.in_(chunk),
+                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_value.in_(qualifiers)
+            )
+            .distinct()
+            .all()
         )
-        .distinct()
-        .all()
-    )
 
+    matching = _chunked_in_query(db, query_qualifiers, feature_nos_list)
     result = set(f[0] for f in matching)
     return result, len(result)
 
@@ -486,17 +516,19 @@ def _exclude_deleted_features(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    deleted = (
-        db.query(FeatProperty.feature_no)
-        .filter(
-            FeatProperty.feature_no.in_(feature_nos_list),
-            FeatProperty.property_type == "qualifier",
-            FeatProperty.property_value.like("%Deleted%")
+    def query_deleted(db, chunk):
+        return (
+            db.query(FeatProperty.feature_no)
+            .filter(
+                FeatProperty.feature_no.in_(chunk),
+                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_value.like("%Deleted%")
+            )
+            .distinct()
+            .all()
         )
-        .distinct()
-        .all()
-    )
 
+    deleted = _chunked_in_query(db, query_deleted, feature_nos_list)
     deleted_nos = set(f[0] for f in deleted)
     result = feature_nos - deleted_nos
     return result, len(result)
@@ -533,20 +565,22 @@ def _filter_by_chromosomes(
     if not chr_seq_no_list:
         return set(), 0
 
-    # Get features located on these chromosomes
-    # Convert set to list for .in_() query
+    # Get features located on these chromosomes using chunked query
     feature_nos_list = list(feature_nos)
-    matching = (
-        db.query(FeatLocation.feature_no)
-        .filter(
-            FeatLocation.feature_no.in_(feature_nos_list),
-            FeatLocation.root_seq_no.in_(chr_seq_no_list),
-            FeatLocation.is_loc_current == "Y"
-        )
-        .distinct()
-        .all()
-    )
 
+    def query_locations(db, chunk):
+        return (
+            db.query(FeatLocation.feature_no)
+            .filter(
+                FeatLocation.feature_no.in_(chunk),
+                FeatLocation.root_seq_no.in_(chr_seq_no_list),
+                FeatLocation.is_loc_current == "Y"
+            )
+            .distinct()
+            .all()
+        )
+
+    matching = _chunked_in_query(db, query_locations, feature_nos_list)
     result = set(f[0] for f in matching)
     return result, len(result)
 
@@ -563,19 +597,20 @@ def _filter_by_introns(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    # Find features with intron subfeatures using raw SQL-style query
-    # to avoid potential relationship issues
-    # First get child feature_nos from feat_relationship
-    child_relationships = (
-        db.query(
-            FeatRelationship.parent_feature_no,
-            FeatRelationship.child_feature_no
+    # Find features with intron subfeatures using chunked queries
+    def query_relationships(db, chunk):
+        return (
+            db.query(
+                FeatRelationship.parent_feature_no,
+                FeatRelationship.child_feature_no
+            )
+            .filter(
+                FeatRelationship.parent_feature_no.in_(chunk),
+            )
+            .all()
         )
-        .filter(
-            FeatRelationship.parent_feature_no.in_(feature_nos_list),
-        )
-        .all()
-    )
+
+    child_relationships = _chunked_in_query(db, query_relationships, feature_nos_list)
 
     # Get child feature_nos
     child_feature_nos = [r[1] for r in child_relationships]
@@ -592,12 +627,15 @@ def _filter_by_introns(
         else:
             return feature_nos, len(feature_nos)
 
-    # Get feature types for child features
-    child_types = (
-        db.query(Feature.feature_no, Feature.feature_type)
-        .filter(Feature.feature_no.in_(child_feature_nos))
-        .all()
-    )
+    # Get feature types for child features using chunked query
+    def query_child_types(db, chunk):
+        return (
+            db.query(Feature.feature_no, Feature.feature_type)
+            .filter(Feature.feature_no.in_(chunk))
+            .all()
+        )
+
+    child_types = _chunked_in_query(db, query_child_types, child_feature_nos)
 
     # Find which children are introns
     intron_child_nos = set(
@@ -647,27 +685,26 @@ def _filter_by_go_terms(
     )
     go_nos_to_search = set(go_no_mapping.values())
 
-    # Build annotation query
-    # Convert sets to lists for .in_() query
+    # Build annotation query using chunked queries
     feature_nos_list = list(feature_nos)
     go_nos_list = list(go_nos_to_search)
 
-    ann_query = (
-        db.query(GoAnnotation.feature_no, GoAnnotation.go_no, Go.goid, Go.go_term, Go.go_aspect)
-        .join(Go, GoAnnotation.go_no == Go.go_no)
-        .filter(
-            GoAnnotation.feature_no.in_(feature_nos_list),
-            GoAnnotation.go_no.in_(go_nos_list)
+    def query_annotations(db, chunk):
+        q = (
+            db.query(GoAnnotation.feature_no, GoAnnotation.go_no, Go.goid, Go.go_term, Go.go_aspect)
+            .join(Go, GoAnnotation.go_no == Go.go_no)
+            .filter(
+                GoAnnotation.feature_no.in_(chunk),
+                GoAnnotation.go_no.in_(go_nos_list)
+            )
         )
-    )
+        if annotation_methods:
+            q = q.filter(GoAnnotation.annotation_type.in_(annotation_methods))
+        if evidence_codes:
+            q = q.filter(GoAnnotation.go_evidence.in_(evidence_codes))
+        return q.all()
 
-    if annotation_methods:
-        ann_query = ann_query.filter(GoAnnotation.annotation_type.in_(annotation_methods))
-
-    if evidence_codes:
-        ann_query = ann_query.filter(GoAnnotation.go_evidence.in_(evidence_codes))
-
-    annotations = ann_query.all()
+    annotations = _chunked_in_query(db, query_annotations, feature_nos_list)
 
     # Group annotations by feature
     feature_go_terms: Dict[int, Dict[str, List[GoTermBrief]]] = {}
@@ -743,35 +780,37 @@ def _sort_features(
     # Convert set to list for .in_() query
     feature_nos_list = list(feature_nos)
 
-    if sort_by == "gene":
-        # Sort by gene name (nulls last), then feature name
-        sorted_features = (
-            db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos_list))
-            .order_by(
-                func.coalesce(Feature.gene_name, "ZZZZZ"),
-                Feature.feature_name
-            )
-            .all()
-        )
-    elif sort_by == "feature_type":
-        # Sort by feature type, then feature name
-        sorted_features = (
-            db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos_list))
-            .order_by(Feature.feature_type, Feature.feature_name)
-            .all()
-        )
-    else:
-        # Default: sort by feature name (ORF)
-        sorted_features = (
-            db.query(Feature.feature_no)
-            .filter(Feature.feature_no.in_(feature_nos_list))
-            .order_by(Feature.feature_name)
+    # Fetch feature info in chunks and sort in memory
+    def query_feature_info(db, chunk):
+        return (
+            db.query(Feature.feature_no, Feature.feature_name, Feature.gene_name, Feature.feature_type)
+            .filter(Feature.feature_no.in_(chunk))
             .all()
         )
 
-    return [f[0] for f in sorted_features]
+    feature_info = _chunked_in_query(db, query_feature_info, feature_nos_list)
+
+    # Sort based on sort_by parameter
+    if sort_by == "gene":
+        # Sort by gene name (nulls last), then feature name
+        sorted_info = sorted(
+            feature_info,
+            key=lambda x: (x[2] or "ZZZZZ", x[1] or "")
+        )
+    elif sort_by == "feature_type":
+        # Sort by feature type, then feature name
+        sorted_info = sorted(
+            feature_info,
+            key=lambda x: (x[3] or "", x[1] or "")
+        )
+    else:
+        # Default: sort by feature name (ORF)
+        sorted_info = sorted(
+            feature_info,
+            key=lambda x: x[1] or ""
+        )
+
+    return [f[0] for f in sorted_info]
 
 
 def _get_feature_details(
@@ -785,25 +824,27 @@ def _get_feature_details(
     if not feature_nos:
         return []
 
-    # Get basic feature info
-    features = (
-        db.query(Feature)
-        .filter(Feature.feature_no.in_(feature_nos))
-        .all()
-    )
+    # Get basic feature info using chunked query
+    def query_features(db, chunk):
+        return db.query(Feature).filter(Feature.feature_no.in_(chunk)).all()
+
+    features = _chunked_in_query(db, query_features, feature_nos)
 
     # Create lookup by feature_no
     feature_lookup = {f.feature_no: f for f in features}
 
-    # Get qualifiers
-    qualifiers = (
-        db.query(FeatProperty.feature_no, FeatProperty.property_value)
-        .filter(
-            FeatProperty.feature_no.in_(feature_nos),
-            FeatProperty.property_type == "qualifier"
+    # Get qualifiers using chunked query
+    def query_qualifiers(db, chunk):
+        return (
+            db.query(FeatProperty.feature_no, FeatProperty.property_value)
+            .filter(
+                FeatProperty.feature_no.in_(chunk),
+                FeatProperty.property_type == "qualifier"
+            )
+            .all()
         )
-        .all()
-    )
+
+    qualifiers = _chunked_in_query(db, query_qualifiers, feature_nos)
     qualifier_lookup = {}
     for fno, qual in qualifiers:
         if fno not in qualifier_lookup:
@@ -813,29 +854,36 @@ def _get_feature_details(
     # Get position info if needed
     position_lookup = {}
     if show_position:
-        locations = (
-            db.query(
-                FeatLocation.feature_no,
-                FeatLocation.strand,
-                FeatLocation.start_coord,
-                FeatLocation.stop_coord,
-                FeatLocation.root_seq_no
+        def query_locations(db, chunk):
+            return (
+                db.query(
+                    FeatLocation.feature_no,
+                    FeatLocation.strand,
+                    FeatLocation.start_coord,
+                    FeatLocation.stop_coord,
+                    FeatLocation.root_seq_no
+                )
+                .filter(
+                    FeatLocation.feature_no.in_(chunk),
+                    FeatLocation.is_loc_current == "Y"
+                )
+                .all()
             )
-            .filter(
-                FeatLocation.feature_no.in_(feature_nos),
-                FeatLocation.is_loc_current == "Y"
-            )
-            .all()
-        )
+
+        locations = _chunked_in_query(db, query_locations, feature_nos)
 
         # Get chromosome names for root_seq_nos
-        root_seq_nos = set(loc[4] for loc in locations)
-        chr_names = (
-            db.query(Seq.seq_no, Feature.feature_name)
-            .join(Feature, Seq.feature_no == Feature.feature_no)
-            .filter(Seq.seq_no.in_(root_seq_nos))
-            .all()
-        )
+        root_seq_nos = list(set(loc[4] for loc in locations))
+
+        def query_chr_names(db, chunk):
+            return (
+                db.query(Seq.seq_no, Feature.feature_name)
+                .join(Feature, Seq.feature_no == Feature.feature_no)
+                .filter(Seq.seq_no.in_(chunk))
+                .all()
+            )
+
+        chr_names = _chunked_in_query(db, query_chr_names, root_seq_nos)
         chr_lookup = {seq_no: name for seq_no, name in chr_names}
 
         for fno, strand, start, stop, root_seq_no in locations:
