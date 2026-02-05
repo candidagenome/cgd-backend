@@ -15,17 +15,39 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Default submission directory - can be overridden via environment variable
-SUBMISSION_DIR = os.environ.get(
-    'CGD_SUBMISSION_DIR',
-    '/data/submission/colleague/'
-)
+
+def _get_submission_dir() -> str:
+    """Get submission directory from environment or use default."""
+    # Check environment variable first
+    env_dir = os.environ.get('CGD_SUBMISSION_DIR')
+    if env_dir:
+        return env_dir
+
+    # Default: create 'submissions' folder in project root or /tmp
+    # Try to find project root (where cgd package is)
+    try:
+        import cgd
+        project_root = Path(cgd.__file__).parent.parent
+        default_dir = project_root / 'submissions' / 'colleague'
+        return str(default_dir)
+    except Exception:
+        # Fallback to /tmp
+        return '/tmp/cgd_submissions/colleague'
 
 
 def _ensure_submission_dir() -> Path:
     """Ensure submission directory exists."""
-    path = Path(SUBMISSION_DIR)
-    path.mkdir(parents=True, exist_ok=True)
+    submission_dir = _get_submission_dir()
+    path = Path(submission_dir)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Submission directory: {path}")
+    except Exception as e:
+        logger.error(f"Failed to create submission directory {path}: {e}")
+        # Fallback to /tmp
+        path = Path('/tmp/cgd_submissions/colleague')
+        path.mkdir(parents=True, exist_ok=True)
+        logger.warning(f"Using fallback directory: {path}")
     return path
 
 

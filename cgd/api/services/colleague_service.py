@@ -503,12 +503,14 @@ def submit_colleague(
 
     # Write submission to file for curator review (like original Perl system)
     from cgd.api.services.submission_utils import write_colleague_submission
+    import traceback
 
     try:
         filepath = write_colleague_submission(colleague_no, data)
         logger.info(f"Colleague submission written to: {filepath}")
     except Exception as e:
         logger.error(f"Failed to write colleague submission file: {e}")
+        logger.error(traceback.format_exc())
         # Continue anyway - don't fail the submission if file write fails
 
     action = "updated" if is_update else "submitted"

@@ -407,12 +407,14 @@ def submit_gene_registry(
 
     # Write submission to file for curator review (like original Perl system)
     from cgd.api.services.submission_utils import write_gene_registry_submission
+    import traceback
 
     try:
         filepath = write_gene_registry_submission(data)
         logger.info(f"Gene registry submission written to: {filepath}")
     except Exception as e:
         logger.error(f"Failed to write gene registry submission file: {e}")
+        logger.error(traceback.format_exc())
         # Continue anyway - don't fail the submission if file write fails
 
     return {
