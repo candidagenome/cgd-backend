@@ -294,15 +294,22 @@ def _generate_jbrowse_url(
     organisms = get_all_blast_organisms(settings.blast_clade_conf)
     config = organisms.get(organism_tag)
 
+    logger.info(f"_generate_jbrowse_url: organism_tag={organism_tag}, "
+                f"config found={config is not None}, "
+                f"available tags={list(organisms.keys())[:5]}...")
+
     if not config:
         # Try partial match
         for tag, cfg in organisms.items():
             if organism_tag in tag or tag in organism_tag:
                 config = cfg
                 organism_tag = tag
+                logger.info(f"Partial match found: {tag}")
                 break
 
     if not config or not config.get("jbrowse_data"):
+        logger.info(f"No jbrowse_data for organism_tag={organism_tag}, "
+                    f"config={config}")
         return None
 
     # Calculate coordinates with flanking region
@@ -670,9 +677,13 @@ def _parse_blast_xml(
         locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
 
         # Extract organism info from database path
-        organism_tag = extract_organism_tag_from_database(os.path.basename(database))
-        organism_config = get_organism_for_database(os.path.basename(database))
+        db_basename = os.path.basename(database)
+        organism_tag = extract_organism_tag_from_database(db_basename)
+        organism_config = get_organism_for_database(db_basename)
         organism_name = organism_config.get("full_name") if organism_config else None
+
+        logger.info(f"JBrowse debug: database={database}, basename={db_basename}, "
+                    f"organism_tag={organism_tag}, organism_config={organism_config is not None}")
 
         # Generate JBrowse URL for genomic hits
         jbrowse_url = None
@@ -686,6 +697,7 @@ def _parse_blast_xml(
                 first_hsp.hit_start,
                 first_hsp.hit_end,
             )
+            logger.info(f"JBrowse URL generated: {jbrowse_url}")
 
         # Map to orf19 ID for Assembly 22 hits
         orf19_id = None
