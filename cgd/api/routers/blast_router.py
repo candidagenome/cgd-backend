@@ -3,25 +3,37 @@ BLAST Search API Router.
 """
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
 from cgd.schemas.blast_schema import (
     BlastProgram,
     BlastDatabase,
+    BlastTask,
+    DownloadFormat,
     BlastSearchRequest,
     BlastSearchResponse,
     BlastConfigResponse,
     BlastDatabaseInfo,
     BlastProgramInfo,
+    BlastOrganismConfig,
+    BlastTaskInfo,
+    GeneticCodeInfo,
+    BlastMultiSearchRequest,
+    BlastDownloadResponse,
 )
 from cgd.api.services.blast_service import (
     get_blast_config,
     get_compatible_databases,
     get_compatible_programs,
+    get_blast_organisms,
+    get_tasks_for_program,
+    get_genetic_codes,
     run_blast_search,
+    run_multi_database_blast,
     format_blast_results_text,
+    generate_download,
 )
 
 router = APIRouter(prefix="/api/blast", tags=["blast"])
@@ -171,3 +183,132 @@ def search_text(
 
     text_output = format_blast_results_text(response.result)
     return PlainTextResponse(content=text_output)
+
+
+@router.post("/search/multi", response_model=BlastSearchResponse)
+def search_multi_database(
+    request: BlastMultiSearchRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Search multiple databases simultaneously.
+
+    This endpoint allows searching across multiple BLAST databases in a single
+    request. Results are merged and sorted by E-value.
+
+    **Parameters**:
+    - `databases`: List of database names to search
+    - All other parameters same as /search endpoint
+
+    **Returns**: Merged results from all databases sorted by E-value.
+    """
+    # Convert multi-search request to standard request
+    search_request = BlastSearchRequest(
+        sequence=request.sequence,
+        locus=request.locus,
+        program=request.program,
+        databases=request.databases,
+        task=request.task,
+        evalue=request.evalue,
+        max_hits=request.max_hits,
+        word_size=request.word_size,
+        gap_open=request.gap_open,
+        gap_extend=request.gap_extend,
+        low_complexity_filter=request.low_complexity_filter,
+        matrix=request.matrix,
+        strand=request.strand,
+        query_gencode=request.query_gencode,
+        db_gencode=request.db_gencode,
+        reward=request.reward,
+        penalty=request.penalty,
+        ungapped=request.ungapped,
+    )
+    return run_multi_database_blast(db, search_request)
+
+
+@router.post("/search/download/{format}")
+def download_search_results(
+    format: DownloadFormat,
+    request: BlastSearchRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Run a BLAST search and download results in the specified format.
+
+    **Formats**:
+    - `fasta`: FASTA sequences of hit sequences
+    - `tab`: Tab-delimited results table
+    - `raw`: Raw BLAST text output
+
+    Returns file as attachment for download.
+    """
+    response = run_blast_search(db, request)
+
+    if not response.success:
+        raise HTTPException(status_code=400, detail=response.error)
+
+    if not response.result:
+        raise HTTPException(status_code=404, detail="No results found")
+
+    download = generate_download(response.result, format)
+
+    return Response(
+        content=download.content,
+        media_type=download.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename={download.filename}"
+        }
+    )
+
+
+@router.get("/organisms", response_model=List[BlastOrganismConfig])
+def list_blast_organisms():
+    """
+    List all available organisms for BLAST searches.
+
+    Returns organism configurations including:
+    - Tag (short identifier)
+    - Full name
+    - Translation table
+    - Available sequence sets
+    - JBrowse data path
+    """
+    return get_blast_organisms()
+
+
+@router.get("/tasks/{program}", response_model=List[BlastTaskInfo])
+def get_tasks(program: BlastProgram):
+    """
+    Get available BLAST tasks for a specific program.
+
+    BLAST tasks are algorithm variants optimized for different use cases:
+    - **megablast**: Highly similar sequences (fast, default for blastn)
+    - **dc-megablast**: Discontiguous megablast for more divergent sequences
+    - **blastn**: Traditional blastn for somewhat similar sequences
+    - **blastn-short**: Optimized for short query sequences (<50 bp)
+    - **blastp-short**: Optimized for short protein queries (<30 aa)
+    """
+    tasks = get_tasks_for_program(program)
+    if not tasks:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No tasks available for program: {program.value}"
+        )
+    return tasks
+
+
+@router.get("/genetic-codes", response_model=List[GeneticCodeInfo])
+def list_genetic_codes():
+    """
+    List available genetic codes for translated searches.
+
+    Genetic codes are used for:
+    - **query_gencode**: Translation of query sequences (BLASTX, TBLASTX)
+    - **db_gencode**: Translation of database sequences (TBLASTN, TBLASTX)
+
+    Common codes:
+    - 1: Standard genetic code
+    - 12: Alternative yeast nuclear code (CTG clade, used by C. albicans)
+    - 3: Yeast mitochondrial code
+    """
+    return get_genetic_codes()

@@ -1,0 +1,374 @@
+"""
+BLAST configuration for organisms.
+
+This module provides configuration for organisms available in the BLAST service,
+including CGD internal organisms and external organisms loaded from configuration files.
+"""
+from __future__ import annotations
+
+import os
+import logging
+from typing import Dict, List, Optional, Any
+
+logger = logging.getLogger(__name__)
+
+# CGD organisms with BLAST configuration
+# Format: tag -> config dict
+BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
+    "C_albicans_SC5314_A22": {
+        "full_name": "Candida albicans SC5314 (Assembly 22)",
+        "trans_table": 12,  # Alternative yeast nuclear code (CTG clade)
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_albicans_SC5314",
+        "is_cgd": True,
+        "assembly": "A22",
+    },
+    "C_albicans_SC5314_A21": {
+        "full_name": "Candida albicans SC5314 (Assembly 21)",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_albicans_SC5314",
+        "is_cgd": True,
+        "assembly": "A21",
+    },
+    "C_glabrata_CBS138": {
+        "full_name": "Candida glabrata CBS138",
+        "trans_table": 1,  # Standard genetic code
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_glabrata_CBS138",
+        "is_cgd": True,
+    },
+    "C_auris": {
+        "full_name": "Candida auris",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_auris",
+        "is_cgd": True,
+    },
+    "C_dubliniensis_CD36": {
+        "full_name": "Candida dubliniensis CD36",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_dubliniensis_CD36",
+        "is_cgd": True,
+    },
+    "C_parapsilosis_CDC317": {
+        "full_name": "Candida parapsilosis CDC317",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_parapsilosis_CDC317",
+        "is_cgd": True,
+    },
+    "C_tropicalis_MYA3404": {
+        "full_name": "Candida tropicalis MYA-3404",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_tropicalis_MYA3404",
+        "is_cgd": True,
+    },
+    "S_cerevisiae_S288C": {
+        "full_name": "Saccharomyces cerevisiae S288C",
+        "trans_table": 1,  # Standard genetic code
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": None,  # External link to SGD
+        "is_cgd": False,
+    },
+}
+
+# Database prefixes for different sequence types (new naming convention)
+# Pattern: {prefix}_{organism_tag} e.g., default_genomic_C_albicans_SC5314_A22
+DATABASE_PREFIXES = {
+    "genomic": "default_genomic_",
+    "coding": "default_coding_",
+    "protein": "default_protein_",
+}
+
+# Legacy database suffixes (old naming convention)
+# Pattern: {organism_tag}_{suffix} e.g., C_albicans_SC5314_A22_genome
+DATABASE_SUFFIXES = {
+    "genomic": "_genome",
+    "gene": "_ORFs",
+    "coding": "_coding",
+    "protein": "_protein",
+}
+
+# Database type mapping
+DATABASE_TYPES = {
+    "genomic": "nucleotide",
+    "gene": "nucleotide",
+    "coding": "nucleotide",
+    "protein": "protein",
+}
+
+
+def load_blast_clade_conf(path: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Parse blast_clade.conf tab-delimited configuration file.
+
+    The Perl blast_clade.conf format has sections like:
+    - TAG_TO_FULL_NAME: organism_tag -> full name
+    - TAG_TO_TRANS_TABLE: organism_tag -> translation table number
+    - TAG_TO_SEQ_SETS: organism_tag -> comma-separated seq sets
+    - TAG_TO_JBROWSE_DATA: organism_tag -> jbrowse data path
+
+    Args:
+        path: Path to the configuration file
+
+    Returns:
+        Dictionary of organism configurations keyed by tag
+    """
+    if not os.path.exists(path):
+        logger.warning(f"BLAST config file not found: {path}")
+        return {}
+
+    organisms: Dict[str, Dict[str, Any]] = {}
+    current_section = None
+
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+
+                # Skip empty lines and comments
+                if not line or line.startswith('#'):
+                    continue
+
+                # Check for section headers
+                if line.startswith('[') and line.endswith(']'):
+                    current_section = line[1:-1]
+                    continue
+
+                # Parse key-value pairs
+                if '\t' in line:
+                    parts = line.split('\t', 1)
+                    if len(parts) == 2:
+                        tag, value = parts[0].strip(), parts[1].strip()
+
+                        # Initialize organism if needed
+                        if tag not in organisms:
+                            organisms[tag] = {
+                                "full_name": tag,
+                                "trans_table": 1,
+                                "seq_sets": ["genomic", "gene", "coding", "protein"],
+                                "jbrowse_data": None,
+                                "is_cgd": False,
+                            }
+
+                        # Set value based on section
+                        if current_section == "TAG_TO_FULL_NAME":
+                            organisms[tag]["full_name"] = value
+                        elif current_section == "TAG_TO_TRANS_TABLE":
+                            try:
+                                organisms[tag]["trans_table"] = int(value)
+                            except ValueError:
+                                pass
+                        elif current_section == "TAG_TO_SEQ_SETS":
+                            organisms[tag]["seq_sets"] = [
+                                s.strip() for s in value.split(',')
+                            ]
+                        elif current_section == "TAG_TO_JBROWSE_DATA":
+                            organisms[tag]["jbrowse_data"] = value
+
+    except Exception as e:
+        logger.error(f"Error parsing BLAST config file {path}: {e}")
+        return {}
+
+    return organisms
+
+
+def get_all_blast_organisms(
+    external_config_path: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Get combined CGD + external organisms configuration.
+
+    Args:
+        external_config_path: Optional path to external blast_clade.conf file
+
+    Returns:
+        Dictionary of all organism configurations
+    """
+    # Start with CGD organisms
+    all_organisms = dict(BLAST_ORGANISMS)
+
+    # Load external organisms if config path provided
+    if external_config_path:
+        external = load_blast_clade_conf(external_config_path)
+        # External organisms can override CGD organisms if needed
+        all_organisms.update(external)
+
+    return all_organisms
+
+
+def get_organism_databases(
+    tag: str,
+    organisms: Optional[Dict[str, Dict[str, Any]]] = None
+) -> List[Dict[str, str]]:
+    """
+    Get available BLAST databases for an organism.
+
+    Args:
+        tag: Organism tag
+        organisms: Optional organisms dict (uses BLAST_ORGANISMS if not provided)
+
+    Returns:
+        List of database info dicts with 'name', 'type', 'display_name'
+    """
+    if organisms is None:
+        organisms = BLAST_ORGANISMS
+
+    config = organisms.get(tag)
+    if not config:
+        return []
+
+    databases = []
+    for seq_set in config.get("seq_sets", []):
+        suffix = DATABASE_SUFFIXES.get(seq_set, f"_{seq_set}")
+        db_type = DATABASE_TYPES.get(seq_set, "nucleotide")
+
+        databases.append({
+            "name": f"{tag}{suffix}",
+            "type": db_type,
+            "display_name": f"{config['full_name']} - {seq_set.capitalize()}",
+            "seq_set": seq_set,
+        })
+
+    return databases
+
+
+def get_organism_for_database(
+    database_name: str,
+    organisms: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Get organism configuration for a database name.
+
+    Args:
+        database_name: Name of the BLAST database
+        organisms: Optional organisms dict (uses BLAST_ORGANISMS if not provided)
+
+    Returns:
+        Organism configuration dict or None if not found
+    """
+    if organisms is None:
+        organisms = BLAST_ORGANISMS
+
+    # Extract organism tag from database name
+    tag = extract_organism_tag_from_database(database_name)
+    if tag and tag in organisms:
+        return {"tag": tag, **organisms[tag]}
+
+    # Also check for exact tag match (for all_candida type databases)
+    if database_name.startswith("all_"):
+        return {
+            "tag": "all_candida",
+            "full_name": "All Candida Species",
+            "trans_table": 12,
+            "seq_sets": ["genomic", "gene", "coding", "protein"],
+            "jbrowse_data": None,
+            "is_cgd": True,
+        }
+
+    return None
+
+
+def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
+    """
+    Extract organism tag from a database name.
+
+    Supports both naming conventions:
+    - New: "default_genomic_C_albicans_SC5314_A22" -> "C_albicans_SC5314_A22"
+    - Old: "C_albicans_SC5314_A22_genome" -> "C_albicans_SC5314_A22"
+    - Also: "genomic_C_albicans_SC5314_A21" -> "C_albicans_SC5314_A21"
+
+    Args:
+        database_name: Name of the BLAST database
+
+    Returns:
+        Organism tag like "C_albicans_SC5314_A22" or None
+    """
+    # New naming convention: prefix_organism_tag
+    for prefix in DATABASE_PREFIXES.values():
+        if database_name.startswith(prefix):
+            return database_name[len(prefix):]
+
+    # Also handle non-default prefix pattern: genomic_C_albicans_SC5314_A21
+    for seq_type in ["genomic_", "coding_", "protein_"]:
+        if database_name.startswith(seq_type):
+            return database_name[len(seq_type):]
+
+    # Legacy naming convention: organism_tag_suffix
+    for suffix in DATABASE_SUFFIXES.values():
+        if database_name.endswith(suffix):
+            return database_name[:-len(suffix)]
+
+    return None
+
+
+# BLAST task information for different programs
+BLAST_TASKS = {
+    "blastn": [
+        {
+            "name": "megablast",
+            "display_name": "megablast",
+            "description": "Highly similar sequences (default)",
+            "default_for_length": 50,  # Use for queries >= 50 bp
+        },
+        {
+            "name": "dc-megablast",
+            "display_name": "dc-megablast",
+            "description": "Discontiguous megablast for more divergent sequences",
+        },
+        {
+            "name": "blastn",
+            "display_name": "blastn",
+            "description": "Traditional blastn (somewhat similar sequences)",
+        },
+        {
+            "name": "blastn-short",
+            "display_name": "blastn-short",
+            "description": "Short query sequences (<50 bp)",
+            "default_for_length": 0,  # Use for queries < 50 bp
+        },
+    ],
+    "blastp": [
+        {
+            "name": "blastp",
+            "display_name": "blastp",
+            "description": "Traditional blastp (default)",
+            "default_for_length": 30,  # Use for queries >= 30 aa
+        },
+        {
+            "name": "blastp-fast",
+            "display_name": "blastp-fast",
+            "description": "Faster, less sensitive search",
+        },
+        {
+            "name": "blastp-short",
+            "display_name": "blastp-short",
+            "description": "Short query sequences (<30 aa)",
+            "default_for_length": 0,  # Use for queries < 30 aa
+        },
+    ],
+}
+
+# Genetic code descriptions
+GENETIC_CODES = {
+    1: {"name": "Standard", "description": "Standard genetic code"},
+    2: {"name": "Vertebrate Mitochondrial", "description": "Vertebrate mitochondrial code"},
+    3: {"name": "Yeast Mitochondrial", "description": "Yeast mitochondrial code"},
+    4: {"name": "Mold Mitochondrial", "description": "Mold, protozoan, and coelenterate mitochondrial code"},
+    5: {"name": "Invertebrate Mitochondrial", "description": "Invertebrate mitochondrial code"},
+    6: {"name": "Ciliate", "description": "Ciliate, dasycladacean, and hexamita nuclear code"},
+    9: {"name": "Echinoderm Mitochondrial", "description": "Echinoderm and flatworm mitochondrial code"},
+    10: {"name": "Euplotid", "description": "Euplotid nuclear code"},
+    11: {"name": "Bacterial", "description": "Bacterial, archaeal, and plant plastid code"},
+    12: {"name": "Yeast Nuclear", "description": "Alternative yeast nuclear code (CTG clade)"},
+    13: {"name": "Ascidian Mitochondrial", "description": "Ascidian mitochondrial code"},
+    14: {"name": "Flatworm Mitochondrial", "description": "Alternative flatworm mitochondrial code"},
+    15: {"name": "Blepharisma", "description": "Blepharisma nuclear code"},
+    16: {"name": "Chlorophycean Mitochondrial", "description": "Chlorophycean mitochondrial code"},
+    21: {"name": "Trematode Mitochondrial", "description": "Trematode mitochondrial code"},
+    22: {"name": "Scenedesmus Mitochondrial", "description": "Scenedesmus obliquus mitochondrial code"},
+    23: {"name": "Thraustochytrium Mitochondrial", "description": "Thraustochytrium mitochondrial code"},
+}
