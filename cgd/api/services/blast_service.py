@@ -770,6 +770,11 @@ def run_blast_search(
     Returns:
         BlastSearchResponse with results or error
     """
+    # Debug logging
+    logger.info(f"BLAST search request: program={request.program}, "
+                f"genomes={request.genomes}, dataset_type={request.dataset_type}, "
+                f"database={request.database}, databases={request.databases}")
+
     # Handle genomes + dataset_type selection (new approach)
     if request.genomes and request.dataset_type:
         # Convert genomes + dataset_type to database list
@@ -777,6 +782,7 @@ def run_blast_search(
             request.genomes,
             request.dataset_type.value
         )
+        logger.info(f"Built database names from genomes+dataset_type: {database_names}")
 
         # Validate program/database type compatibility
         program_info = BLAST_PROGRAMS.get(request.program)
