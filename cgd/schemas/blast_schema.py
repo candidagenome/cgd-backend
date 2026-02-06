@@ -206,6 +206,11 @@ class BlastSearchRequest(BaseModel):
         "html",
         description="Output format: html, text, xml, json"
     )
+    # Query comment/name
+    query_comment: Optional[str] = Field(
+        None,
+        description="Optional name/comment to identify the query"
+    )
 
 
 class BlastHsp(BaseModel):
@@ -399,3 +404,7 @@ class BlastMultiSearchRequest(BaseModel):
     reward: Optional[int] = Field(None, ge=1, le=10)
     penalty: Optional[int] = Field(None, le=-1, ge=-10)
     ungapped: bool = False
+    query_comment: Optional[str] = Field(
+        None,
+        description="Optional name/comment to identify the query"
+    )
