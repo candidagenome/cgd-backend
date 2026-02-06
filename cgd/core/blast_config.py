@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 # CGD organisms with BLAST configuration
 # Format: tag -> config dict
+# Note: Tags must match database file naming (e.g., genomic_C_albicans_SC5314_A22)
 BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
+    # C. albicans SC5314 assemblies
     "C_albicans_SC5314_A22": {
         "full_name": "Candida albicans SC5314 (Assembly 22)",
         "trans_table": 12,  # Alternative yeast nuclear code (CTG clade)
@@ -27,24 +29,42 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "full_name": "Candida albicans SC5314 (Assembly 21)",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_albicans_SC5314",
+        "jbrowse_data": "cgd_data/C_albicans_SC5314_A21",
         "is_cgd": True,
         "assembly": "A21",
     },
-    "C_glabrata_CBS138": {
-        "full_name": "Candida glabrata CBS138",
-        "trans_table": 1,  # Standard genetic code
-        "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_glabrata_CBS138",
-        "is_cgd": True,
-    },
-    "C_auris": {
-        "full_name": "Candida auris",
+    "C_albicans_SC5314_A19": {
+        "full_name": "Candida albicans SC5314 (Assembly 19)",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_auris",
+        "jbrowse_data": "cgd_data/C_albicans_SC5314_A19",
+        "is_cgd": True,
+        "assembly": "A19",
+    },
+    # C. albicans WO-1
+    "C_albicans_WO-1": {
+        "full_name": "Candida albicans WO-1",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_albicans_WO-1",
         "is_cgd": True,
     },
+    # C. auris strains
+    "C_auris_B11221": {
+        "full_name": "Candida auris B11221",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_auris_B11221",
+        "is_cgd": True,
+    },
+    "C_auris_B8441": {
+        "full_name": "Candida auris B8441",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_auris_B8441",
+        "is_cgd": True,
+    },
+    # C. dubliniensis
     "C_dubliniensis_CD36": {
         "full_name": "Candida dubliniensis CD36",
         "trans_table": 12,
@@ -52,6 +72,46 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "jbrowse_data": "cgd_data/C_dubliniensis_CD36",
         "is_cgd": True,
     },
+    # C. glabrata
+    "C_glabrata_CBS138": {
+        "full_name": "Candida glabrata CBS138",
+        "trans_table": 1,  # Standard genetic code (not CTG clade)
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_glabrata_CBS138",
+        "is_cgd": True,
+    },
+    # C. guilliermondii
+    "C_guilliermondii_ATCC_6260": {
+        "full_name": "Candida guilliermondii ATCC 6260",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_guilliermondii_ATCC_6260",
+        "is_cgd": True,
+    },
+    # C. lusitaniae strains
+    "C_lusitaniae_ATCC_42720": {
+        "full_name": "Candida lusitaniae ATCC 42720",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_lusitaniae_ATCC_42720",
+        "is_cgd": True,
+    },
+    "C_lusitaniae_CBS6936": {
+        "full_name": "Candida lusitaniae CBS6936",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_lusitaniae_CBS6936",
+        "is_cgd": True,
+    },
+    # C. orthopsilosis
+    "C_orthopsilosis_Co_90-125": {
+        "full_name": "Candida orthopsilosis Co 90-125",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_orthopsilosis_Co_90-125",
+        "is_cgd": True,
+    },
+    # C. parapsilosis
     "C_parapsilosis_CDC317": {
         "full_name": "Candida parapsilosis CDC317",
         "trans_table": 12,
@@ -59,13 +119,31 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "jbrowse_data": "cgd_data/C_parapsilosis_CDC317",
         "is_cgd": True,
     },
-    "C_tropicalis_MYA3404": {
+    # C. tropicalis
+    "C_tropicalis_MYA-3404": {
         "full_name": "Candida tropicalis MYA-3404",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_tropicalis_MYA3404",
+        "jbrowse_data": "cgd_data/C_tropicalis_MYA-3404",
         "is_cgd": True,
     },
+    # D. hansenii
+    "D_hansenii_CBS767": {
+        "full_name": "Debaryomyces hansenii CBS767",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/D_hansenii_CBS767",
+        "is_cgd": True,
+    },
+    # L. elongisporus
+    "L_elongisporus_NRLL_YB-4239": {
+        "full_name": "Lodderomyces elongisporus NRRL YB-4239",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/L_elongisporus_NRLL_YB-4239",
+        "is_cgd": True,
+    },
+    # S. cerevisiae (external - no CGD JBrowse)
     "S_cerevisiae_S288C": {
         "full_name": "Saccharomyces cerevisiae S288C",
         "trans_table": 1,  # Standard genetic code
