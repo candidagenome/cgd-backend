@@ -75,7 +75,16 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Database suffixes for different sequence types
+# Database prefixes for different sequence types (new naming convention)
+# Pattern: {prefix}_{organism_tag} e.g., default_genomic_C_albicans_SC5314_A22
+DATABASE_PREFIXES = {
+    "genomic": "default_genomic_",
+    "coding": "default_coding_",
+    "protein": "default_protein_",
+}
+
+# Legacy database suffixes (old naming convention)
+# Pattern: {organism_tag}_{suffix} e.g., C_albicans_SC5314_A22_genome
 DATABASE_SUFFIXES = {
     "genomic": "_genome",
     "gene": "_ORFs",
@@ -244,11 +253,10 @@ def get_organism_for_database(
     if organisms is None:
         organisms = BLAST_ORGANISMS
 
-    # Try to extract organism tag from database name
-    for tag, config in organisms.items():
-        for suffix in DATABASE_SUFFIXES.values():
-            if database_name == f"{tag}{suffix}":
-                return {"tag": tag, **config}
+    # Extract organism tag from database name
+    tag = extract_organism_tag_from_database(database_name)
+    if tag and tag in organisms:
+        return {"tag": tag, **organisms[tag]}
 
     # Also check for exact tag match (for all_candida type databases)
     if database_name.startswith("all_"):
@@ -268,12 +276,28 @@ def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
     """
     Extract organism tag from a database name.
 
+    Supports both naming conventions:
+    - New: "default_genomic_C_albicans_SC5314_A22" -> "C_albicans_SC5314_A22"
+    - Old: "C_albicans_SC5314_A22_genome" -> "C_albicans_SC5314_A22"
+    - Also: "genomic_C_albicans_SC5314_A21" -> "C_albicans_SC5314_A21"
+
     Args:
-        database_name: Name like "C_albicans_SC5314_A22_genome"
+        database_name: Name of the BLAST database
 
     Returns:
         Organism tag like "C_albicans_SC5314_A22" or None
     """
+    # New naming convention: prefix_organism_tag
+    for prefix in DATABASE_PREFIXES.values():
+        if database_name.startswith(prefix):
+            return database_name[len(prefix):]
+
+    # Also handle non-default prefix pattern: genomic_C_albicans_SC5314_A21
+    for seq_type in ["genomic_", "coding_", "protein_"]:
+        if database_name.startswith(seq_type):
+            return database_name[len(seq_type):]
+
+    # Legacy naming convention: organism_tag_suffix
     for suffix in DATABASE_SUFFIXES.values():
         if database_name.endswith(suffix):
             return database_name[:-len(suffix)]

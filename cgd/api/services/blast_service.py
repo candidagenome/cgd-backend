@@ -93,25 +93,17 @@ BLAST_PROGRAMS: Dict[BlastProgram, BlastProgramInfo] = {
 
 # Available BLAST databases with metadata
 BLAST_DATABASES: Dict[BlastDatabase, BlastDatabaseInfo] = {
-    # C. albicans Assembly 22
+    # C. albicans Assembly 22 (default/current)
     BlastDatabase.CA22_GENOME: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A22_genome",
+        name="default_genomic_C_albicans_SC5314_A22",
         display_name="C. albicans SC5314 A22 - Genome",
         description="C. albicans SC5314 Assembly 22 chromosomes",
         type=DatabaseType.NUCLEOTIDE,
         organism="Candida albicans SC5314",
         assembly="A22",
     ),
-    BlastDatabase.CA22_ORFS: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A22_ORFs",
-        display_name="C. albicans SC5314 A22 - ORFs",
-        description="C. albicans SC5314 Assembly 22 ORF sequences (genomic)",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="Candida albicans SC5314",
-        assembly="A22",
-    ),
     BlastDatabase.CA22_CODING: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A22_coding",
+        name="default_coding_C_albicans_SC5314_A22",
         display_name="C. albicans SC5314 A22 - Coding",
         description="C. albicans SC5314 Assembly 22 coding sequences",
         type=DatabaseType.NUCLEOTIDE,
@@ -119,7 +111,7 @@ BLAST_DATABASES: Dict[BlastDatabase, BlastDatabaseInfo] = {
         assembly="A22",
     ),
     BlastDatabase.CA22_PROTEIN: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A22_protein",
+        name="default_protein_C_albicans_SC5314_A22",
         display_name="C. albicans SC5314 A22 - Protein",
         description="C. albicans SC5314 Assembly 22 protein sequences",
         type=DatabaseType.PROTEIN,
@@ -128,94 +120,21 @@ BLAST_DATABASES: Dict[BlastDatabase, BlastDatabaseInfo] = {
     ),
     # C. albicans Assembly 21
     BlastDatabase.CA21_GENOME: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A21_genome",
+        name="genomic_C_albicans_SC5314_A21",
         display_name="C. albicans SC5314 A21 - Genome",
         description="C. albicans SC5314 Assembly 21 chromosomes",
         type=DatabaseType.NUCLEOTIDE,
         organism="Candida albicans SC5314",
         assembly="A21",
     ),
-    BlastDatabase.CA21_ORFS: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A21_ORFs",
-        display_name="C. albicans SC5314 A21 - ORFs",
-        description="C. albicans SC5314 Assembly 21 ORF sequences (genomic)",
+    # C. albicans Assembly 19
+    BlastDatabase.CA19_GENOME: BlastDatabaseInfo(
+        name="genomic_C_albicans_SC5314_A19",
+        display_name="C. albicans SC5314 A19 - Genome",
+        description="C. albicans SC5314 Assembly 19 chromosomes",
         type=DatabaseType.NUCLEOTIDE,
         organism="Candida albicans SC5314",
-        assembly="A21",
-    ),
-    BlastDatabase.CA21_CODING: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A21_coding",
-        display_name="C. albicans SC5314 A21 - Coding",
-        description="C. albicans SC5314 Assembly 21 coding sequences",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="Candida albicans SC5314",
-        assembly="A21",
-    ),
-    BlastDatabase.CA21_PROTEIN: BlastDatabaseInfo(
-        name="C_albicans_SC5314_A21_protein",
-        display_name="C. albicans SC5314 A21 - Protein",
-        description="C. albicans SC5314 Assembly 21 protein sequences",
-        type=DatabaseType.PROTEIN,
-        organism="Candida albicans SC5314",
-        assembly="A21",
-    ),
-    # C. glabrata
-    BlastDatabase.CG_GENOME: BlastDatabaseInfo(
-        name="C_glabrata_CBS138_genome",
-        display_name="C. glabrata CBS138 - Genome",
-        description="C. glabrata CBS138 chromosomes",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="Candida glabrata CBS138",
-    ),
-    BlastDatabase.CG_ORFS: BlastDatabaseInfo(
-        name="C_glabrata_CBS138_ORFs",
-        display_name="C. glabrata CBS138 - ORFs",
-        description="C. glabrata CBS138 ORF sequences (genomic)",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="Candida glabrata CBS138",
-    ),
-    BlastDatabase.CG_CODING: BlastDatabaseInfo(
-        name="C_glabrata_CBS138_coding",
-        display_name="C. glabrata CBS138 - Coding",
-        description="C. glabrata CBS138 coding sequences",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="Candida glabrata CBS138",
-    ),
-    BlastDatabase.CG_PROTEIN: BlastDatabaseInfo(
-        name="C_glabrata_CBS138_protein",
-        display_name="C. glabrata CBS138 - Protein",
-        description="C. glabrata CBS138 protein sequences",
-        type=DatabaseType.PROTEIN,
-        organism="Candida glabrata CBS138",
-    ),
-    # All Candida
-    BlastDatabase.ALL_CANDIDA_GENOME: BlastDatabaseInfo(
-        name="all_candida_genome",
-        display_name="All Candida - Genome",
-        description="All Candida species chromosomes combined",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="All Candida species",
-    ),
-    BlastDatabase.ALL_CANDIDA_ORFS: BlastDatabaseInfo(
-        name="all_candida_ORFs",
-        display_name="All Candida - ORFs",
-        description="All Candida species ORF sequences combined",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="All Candida species",
-    ),
-    BlastDatabase.ALL_CANDIDA_CODING: BlastDatabaseInfo(
-        name="all_candida_coding",
-        display_name="All Candida - Coding",
-        description="All Candida species coding sequences combined",
-        type=DatabaseType.NUCLEOTIDE,
-        organism="All Candida species",
-    ),
-    BlastDatabase.ALL_CANDIDA_PROTEIN: BlastDatabaseInfo(
-        name="all_candida_protein",
-        display_name="All Candida - Protein",
-        description="All Candida species protein sequences combined",
-        type=DatabaseType.PROTEIN,
-        organism="All Candida species",
+        assembly="A19",
     ),
 }
 

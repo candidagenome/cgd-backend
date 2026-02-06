@@ -214,15 +214,30 @@ class TestBlastOrganismConfig:
 
     def test_get_organism_for_database(self):
         """Should return organism config for database name."""
-        config = get_organism_for_database("C_albicans_SC5314_A22_genome")
+        # New naming convention
+        config = get_organism_for_database("default_genomic_C_albicans_SC5314_A22")
         assert config is not None
         assert config["tag"] == "C_albicans_SC5314_A22"
 
+        # Non-default prefix
+        config = get_organism_for_database("genomic_C_albicans_SC5314_A21")
+        assert config is not None
+        assert config["tag"] == "C_albicans_SC5314_A21"
+
     def test_extract_organism_tag_from_database(self):
         """Should extract organism tag from database name."""
-        tag = extract_organism_tag_from_database("C_albicans_SC5314_A22_genome")
+        # New naming convention
+        tag = extract_organism_tag_from_database("default_genomic_C_albicans_SC5314_A22")
         assert tag == "C_albicans_SC5314_A22"
 
+        tag = extract_organism_tag_from_database("default_protein_C_albicans_SC5314_A22")
+        assert tag == "C_albicans_SC5314_A22"
+
+        # Non-default prefix
+        tag = extract_organism_tag_from_database("genomic_C_albicans_SC5314_A21")
+        assert tag == "C_albicans_SC5314_A21"
+
+        # Legacy naming still works
         tag = extract_organism_tag_from_database("C_glabrata_CBS138_protein")
         assert tag == "C_glabrata_CBS138"
 
@@ -323,7 +338,7 @@ class TestDownloadGeneration:
             query_id="Query_1",
             query_length=100,
             query_def="Test query",
-            database="C_albicans_SC5314_A22_genome",
+            database="default_genomic_C_albicans_SC5314_A22",
             database_length=14000000,
             database_sequences=8,
             program="blastn",
@@ -429,7 +444,7 @@ class TestBlastSearchRequestValidation:
         request = BlastSearchRequest(
             sequence="ATGCATGCATGC",
             program=BlastProgram.BLASTN,
-            databases=["C_albicans_SC5314_A22_genome", "C_glabrata_CBS138_genome"],
+            databases=["default_genomic_C_albicans_SC5314_A22", "genomic_C_albicans_SC5314_A21"],
         )
         assert len(request.databases) == 2
 

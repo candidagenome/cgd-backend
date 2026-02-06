@@ -70,26 +70,14 @@ class DownloadFormat(str, Enum):
 
 class BlastDatabase(str, Enum):
     """Available BLAST databases."""
-    # C. albicans Assembly 22
-    CA22_GENOME = "C_albicans_SC5314_A22_genome"
-    CA22_ORFS = "C_albicans_SC5314_A22_ORFs"
-    CA22_CODING = "C_albicans_SC5314_A22_coding"
-    CA22_PROTEIN = "C_albicans_SC5314_A22_protein"
+    # C. albicans Assembly 22 (default/current)
+    CA22_GENOME = "default_genomic_C_albicans_SC5314_A22"
+    CA22_CODING = "default_coding_C_albicans_SC5314_A22"
+    CA22_PROTEIN = "default_protein_C_albicans_SC5314_A22"
     # C. albicans Assembly 21
-    CA21_GENOME = "C_albicans_SC5314_A21_genome"
-    CA21_ORFS = "C_albicans_SC5314_A21_ORFs"
-    CA21_CODING = "C_albicans_SC5314_A21_coding"
-    CA21_PROTEIN = "C_albicans_SC5314_A21_protein"
-    # C. glabrata
-    CG_GENOME = "C_glabrata_CBS138_genome"
-    CG_ORFS = "C_glabrata_CBS138_ORFs"
-    CG_CODING = "C_glabrata_CBS138_coding"
-    CG_PROTEIN = "C_glabrata_CBS138_protein"
-    # All Candida
-    ALL_CANDIDA_GENOME = "all_candida_genome"
-    ALL_CANDIDA_ORFS = "all_candida_ORFs"
-    ALL_CANDIDA_CODING = "all_candida_coding"
-    ALL_CANDIDA_PROTEIN = "all_candida_protein"
+    CA21_GENOME = "genomic_C_albicans_SC5314_A21"
+    # C. albicans Assembly 19
+    CA19_GENOME = "genomic_C_albicans_SC5314_A19"
 
 
 class DatabaseType(str, Enum):
