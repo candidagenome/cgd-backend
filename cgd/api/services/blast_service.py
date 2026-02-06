@@ -24,6 +24,8 @@ from cgd.core.blast_config import (
     get_all_blast_organisms,
     get_organism_for_database,
     extract_organism_tag_from_database,
+    build_database_names,
+    get_database_type_for_dataset,
 )
 from cgd.models.models import Feature, Seq, FeatRelationship
 from cgd.schemas.blast_schema import (
@@ -768,7 +770,35 @@ def run_blast_search(
     Returns:
         BlastSearchResponse with results or error
     """
-    # Validate program/database compatibility
+    # Handle genomes + dataset_type selection (new approach)
+    if request.genomes and request.dataset_type:
+        # Convert genomes + dataset_type to database list
+        database_names = build_database_names(
+            request.genomes,
+            request.dataset_type.value
+        )
+
+        # Validate program/database type compatibility
+        program_info = BLAST_PROGRAMS.get(request.program)
+        if not program_info:
+            return BlastSearchResponse(
+                success=False,
+                error=f"Invalid program: {request.program}",
+            )
+
+        expected_db_type = get_database_type_for_dataset(request.dataset_type.value)
+        if program_info.database_type.value != expected_db_type:
+            return BlastSearchResponse(
+                success=False,
+                error=f"Program {request.program.value} requires {program_info.database_type.value} "
+                      f"database, but dataset type {request.dataset_type.value} provides {expected_db_type} sequences",
+            )
+
+        # Use multi-database search
+        request.databases = database_names
+        return run_multi_database_blast(db, request)
+
+    # Validate program/database compatibility (original flow)
     program_info = BLAST_PROGRAMS.get(request.program)
     db_info = BLAST_DATABASES.get(request.database)
 

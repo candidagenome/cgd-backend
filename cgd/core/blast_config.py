@@ -305,6 +305,73 @@ def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
     return None
 
 
+# Dataset type to database prefix mapping
+# Maps DatasetType enum values to database file prefixes
+DATASET_TYPE_TO_PREFIX = {
+    "GENOME": "genomic",
+    "GENES": "orf_genomic",
+    "CODING": "orf_coding",
+    "PROTEIN": "protein",
+    "OTHER": "other_features_genomic",
+    "OTHER_SPLICED": "other_features_no_introns",
+}
+
+# Dataset type to database type mapping
+DATASET_TYPE_TO_DB_TYPE = {
+    "GENOME": "nucleotide",
+    "GENES": "nucleotide",
+    "CODING": "nucleotide",
+    "PROTEIN": "protein",
+    "OTHER": "nucleotide",
+    "OTHER_SPLICED": "nucleotide",
+}
+
+
+def build_database_name(genome_id: str, dataset_type: str) -> str:
+    """
+    Build a database name from genome ID and dataset type.
+
+    Args:
+        genome_id: Genome identifier (e.g., 'C_albicans_SC5314_A22')
+        dataset_type: Dataset type (e.g., 'GENOME', 'CODING', 'PROTEIN')
+
+    Returns:
+        Database name (e.g., 'genomic_C_albicans_SC5314_A22')
+    """
+    prefix = DATASET_TYPE_TO_PREFIX.get(dataset_type, "genomic")
+    return f"{prefix}_{genome_id}"
+
+
+def build_database_names(
+    genomes: List[str],
+    dataset_type: str
+) -> List[str]:
+    """
+    Build a list of database names from genome IDs and dataset type.
+
+    Args:
+        genomes: List of genome identifiers
+        dataset_type: Dataset type
+
+    Returns:
+        List of database names
+    """
+    return [build_database_name(genome, dataset_type) for genome in genomes]
+
+
+def get_database_type_for_dataset(dataset_type: str) -> str:
+    """
+    Get the database type (nucleotide or protein) for a dataset type.
+
+    Args:
+        dataset_type: Dataset type (e.g., 'GENOME', 'PROTEIN')
+
+    Returns:
+        Database type ('nucleotide' or 'protein')
+    """
+    return DATASET_TYPE_TO_DB_TYPE.get(dataset_type, "nucleotide")
+
+
 # BLAST task information for different programs
 BLAST_TASKS = {
     "blastn": [

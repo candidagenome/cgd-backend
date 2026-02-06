@@ -86,6 +86,16 @@ class DatabaseType(str, Enum):
     PROTEIN = "protein"
 
 
+class DatasetType(str, Enum):
+    """Dataset types for genome + dataset selection."""
+    GENOME = "GENOME"              # Complete genome sequence (DNA)
+    GENES = "GENES"                # Gene models with introns (DNA)
+    CODING = "CODING"              # Gene models without introns (DNA)
+    PROTEIN = "PROTEIN"            # Translation of coding sequence
+    OTHER = "OTHER"                # Non-coding features with introns (DNA)
+    OTHER_SPLICED = "OTHER_SPLICED"  # Non-coding features without introns (DNA)
+
+
 class BlastSearchRequest(BaseModel):
     """Request for BLAST search."""
     # Query input
@@ -103,13 +113,22 @@ class BlastSearchRequest(BaseModel):
         description="BLAST program to use"
     )
     database: Optional[BlastDatabase] = Field(
-        BlastDatabase.CA22_GENOME,
-        description="Target database (use this OR databases, not both)"
+        None,
+        description="Target database (use this OR databases OR genomes+dataset_type)"
     )
     # Multi-database support
     databases: Optional[List[str]] = Field(
         None,
-        description="Multiple databases to search (use this OR database, not both)"
+        description="Multiple databases to search (use this OR database OR genomes+dataset_type)"
+    )
+    # Genome + dataset type selection (new approach)
+    genomes: Optional[List[str]] = Field(
+        None,
+        description="List of genome IDs to search (e.g., ['C_albicans_SC5314_A22', 'C_glabrata_CBS138'])"
+    )
+    dataset_type: Optional[DatasetType] = Field(
+        None,
+        description="Dataset type to search (GENOME, GENES, CODING, PROTEIN, OTHER, OTHER_SPLICED)"
     )
     # Task variant
     task: Optional[BlastTask] = Field(
