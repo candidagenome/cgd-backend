@@ -675,9 +675,11 @@ def _parse_blast_xml(
         organism_config = get_organism_for_database(db_basename)
         organism_name = organism_config.get("full_name") if organism_config else None
 
-        # Generate JBrowse URL for genomic hits
+        # Generate JBrowse URL for genomic hits only (not protein databases)
+        # Protein databases have hit IDs that are gene/protein names, not chromosomes
         jbrowse_url = None
-        if organism_tag and hsps:
+        is_protein_db = "protein" in db_basename.lower() or "orf_trans_all" in db_basename.lower()
+        if organism_tag and hsps and not is_protein_db:
             # Use the first HSP's coordinates for the JBrowse link
             first_hsp = hsps[0]
             # For genomic databases, hit_id is typically the chromosome
