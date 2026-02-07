@@ -152,11 +152,11 @@ def _run_nrgrep_search(
     insertions: int = 0,
     deletions: int = 0,
     max_results: int = 1000,
-) -> List[Tuple[str, int, int, str, str]]:
+) -> Tuple[List[Tuple[str, int, int, str, str]], int]:
     """
     Run pattern search using nrgrep_coords binary.
 
-    Returns list of (seq_name, start, end, strand, matched_seq) tuples.
+    Returns: (list of (seq_name, start, end, strand, matched_seq) tuples, total_count)
     """
     if not _check_binary_available():
         raise RuntimeError("nrgrep_coords binary not available")
@@ -200,11 +200,14 @@ def _run_nrgrep_search(
         # Parse output
         hits = _parse_nrgrep_output(result.stdout, fasta_index, file_offsets)
 
+        # Track actual total before limiting
+        actual_total = len(hits)
+
         # Limit results
         if len(hits) > max_results:
             hits = hits[:max_results]
 
-        return hits
+        return hits, actual_total
 
     except subprocess.TimeoutExpired:
         raise RuntimeError("Pattern search timed out")
@@ -218,15 +221,16 @@ def _run_python_search(
     pattern_type: PatternType,
     strand: StrandOption,
     max_results: int = 1000,
-) -> Tuple[List[Tuple[str, int, int, str, str]], int, int]:
+) -> Tuple[List[Tuple[str, int, int, str, str]], int, int, int]:
     """
     Run pattern search using Python regex (fallback).
 
-    Returns: (hits, sequences_searched, total_residues)
+    Returns: (hits, sequences_searched, total_residues, actual_total_hits)
     """
     hits = []
     sequences_searched = 0
     total_residues = 0
+    actual_total_hits = 0
 
     # Build regex pattern
     iupac_map = IUPAC_DNA if pattern_type == PatternType.DNA else IUPAC_PROTEIN
@@ -262,10 +266,11 @@ def _run_python_search(
                             current_name, seq, regex_pattern,
                             strand, pattern_type
                         )
-                        hits.extend(seq_hits)
-
-                        if len(hits) >= max_results:
-                            return hits[:max_results], sequences_searched, total_residues
+                        actual_total_hits += len(seq_hits)
+                        # Only add to hits list if under max_results
+                        if len(hits) < max_results:
+                            remaining = max_results - len(hits)
+                            hits.extend(seq_hits[:remaining])
 
                     # Start new sequence
                     current_name = line[1:].split()[0]
@@ -282,12 +287,15 @@ def _run_python_search(
                     current_name, seq, regex_pattern,
                     strand, pattern_type
                 )
-                hits.extend(seq_hits)
+                actual_total_hits += len(seq_hits)
+                if len(hits) < max_results:
+                    remaining = max_results - len(hits)
+                    hits.extend(seq_hits[:remaining])
 
     except IOError as e:
         raise RuntimeError(f"Failed to read FASTA file: {e}")
 
-    return hits[:max_results], sequences_searched, total_residues
+    return hits[:max_results], sequences_searched, total_residues, actual_total_hits
 
 
 def _search_sequence_regex(
@@ -465,6 +473,8 @@ def run_patmatch_search(
         request.max_deletions > 0
     )
 
+    actual_total_hits = 0
+
     try:
         if use_binary:
             # Convert pattern for nrgrep
@@ -476,7 +486,7 @@ def run_patmatch_search(
             )
 
             # Run Watson strand search
-            hits = _run_nrgrep_search(
+            hits, watson_total = _run_nrgrep_search(
                 nrgrep_pattern,
                 dataset_config.fasta_file,
                 request.max_mismatches,
@@ -484,12 +494,13 @@ def run_patmatch_search(
                 request.max_deletions,
                 request.max_results,
             )
+            actual_total_hits = watson_total
 
             # For Crick strand, run with reverse complement pattern
             if (config_pattern_type == PatternType.DNA and
                     request.strand in [StrandOption.BOTH, StrandOption.CRICK]):
                 rc_pattern = get_reverse_complement(nrgrep_pattern)
-                crick_hits = _run_nrgrep_search(
+                crick_hits, crick_total = _run_nrgrep_search(
                     rc_pattern,
                     dataset_config.fasta_file,
                     request.max_mismatches,
@@ -497,22 +508,26 @@ def run_patmatch_search(
                     request.max_deletions,
                     request.max_results,
                 )
+                actual_total_hits += crick_total
                 # Mark as Crick strand hits
                 crick_hits = [(n, s, e, "C", m) for n, s, e, _, m in crick_hits]
                 hits.extend(crick_hits)
 
-            # Filter by strand if needed
+            # Filter by strand if needed and adjust actual_total_hits
             if request.strand == StrandOption.WATSON:
                 hits = [(n, s, e, st, m) for n, s, e, st, m in hits if st == "W"]
+                actual_total_hits = watson_total
             elif request.strand == StrandOption.CRICK:
                 hits = [(n, s, e, st, m) for n, s, e, st, m in hits if st == "C"]
+                # actual_total_hits was set to watson + crick, but we only want crick
+                actual_total_hits = actual_total_hits - watson_total
 
             sequences_searched = 0  # Not tracked with binary
             total_residues = 0
 
         else:
             # Use Python regex (no fuzzy matching support)
-            hits, sequences_searched, total_residues = _run_python_search(
+            hits, sequences_searched, total_residues, actual_total_hits = _run_python_search(
                 pattern,
                 dataset_config.fasta_file,
                 config_pattern_type,
@@ -561,12 +576,13 @@ def run_patmatch_search(
         pattern_type=request.pattern_type.value,
         dataset=dataset_config.display_name,
         strand=request.strand.value,
-        total_hits=len(patmatch_hits),
+        total_hits=actual_total_hits,
         hits=patmatch_hits,
         search_params={
             "max_mismatches": request.max_mismatches,
             "max_insertions": request.max_insertions,
             "max_deletions": request.max_deletions,
+            "max_results": request.max_results,
         },
         sequences_searched=sequences_searched,
         total_residues_searched=total_residues,
