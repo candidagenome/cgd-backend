@@ -43,7 +43,11 @@ class EnzymeInfo:
 
     @classmethod
     def from_line(cls, line: str) -> Optional["EnzymeInfo"]:
-        """Parse enzyme info from a line in the enzyme file."""
+        """Parse enzyme info from a line in the enzyme file.
+
+        File format: name offset pattern overhang
+        Example: AatII 5 GACGTC -4
+        """
         line = line.strip()
         if not line or line.startswith('#'):
             return None
@@ -55,8 +59,8 @@ class EnzymeInfo:
         try:
             name = parts[0]
             offset = int(parts[1])
-            overhang = int(parts[2])
-            pattern = parts[3]
+            pattern = parts[2]
+            overhang = int(parts[3])
 
             # Determine enzyme type from overhang
             if overhang == 0:
@@ -99,7 +103,8 @@ def load_enzymes(filter_type: EnzymeFilterType = EnzymeFilterType.ALL) -> List[E
     """
     Load enzyme information from the appropriate enzyme file.
 
-    Returns list of EnzymeInfo objects.
+    Returns list of EnzymeInfo objects. Falls back to builtin enzymes if
+    file doesn't exist, can't be read, or contains no valid entries.
     """
     enzyme_file = get_enzyme_file(filter_type)
     enzymes = []
@@ -115,6 +120,10 @@ def load_enzymes(filter_type: EnzymeFilterType = EnzymeFilterType.ALL) -> List[E
                 if enzyme:
                     enzymes.append(enzyme)
     except IOError:
+        return get_builtin_enzymes()
+
+    # Fall back to builtin if file was empty or had no valid entries
+    if not enzymes:
         return get_builtin_enzymes()
 
     return enzymes

@@ -103,8 +103,11 @@ class TestEnzymeInfo:
     """Tests for EnzymeInfo parsing."""
 
     def test_parse_valid_line(self):
-        """Should parse valid enzyme line."""
-        line = "EcoRI 1 4 GAATTC"
+        """Should parse valid enzyme line.
+
+        File format: name offset pattern overhang
+        """
+        line = "EcoRI 1 GAATTC 4"
         enzyme = EnzymeInfo.from_line(line)
 
         assert enzyme is not None
@@ -116,7 +119,7 @@ class TestEnzymeInfo:
 
     def test_parse_blunt_enzyme(self):
         """Should correctly identify blunt end enzyme."""
-        line = "SmaI 3 0 CCCGGG"
+        line = "SmaI 3 CCCGGG 0"
         enzyme = EnzymeInfo.from_line(line)
 
         assert enzyme is not None
@@ -124,7 +127,7 @@ class TestEnzymeInfo:
 
     def test_parse_three_prime_overhang(self):
         """Should correctly identify 3' overhang enzyme."""
-        line = "KpnI 5 -4 GGTACC"
+        line = "KpnI 5 GGTACC -4"
         enzyme = EnzymeInfo.from_line(line)
 
         assert enzyme is not None

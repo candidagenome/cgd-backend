@@ -126,6 +126,80 @@ def download_results(
     )
 
 
+@router.get("/debug/{locus}")
+def debug_search(
+    locus: str,
+    db: Session = Depends(get_db),
+):
+    """Debug endpoint to diagnose restriction mapping issues."""
+    import re
+    from cgd.api.services.restriction_mapper_service import (
+        _get_sequence_for_locus,
+        _iupac_to_regex,
+        _reverse_complement,
+        _find_cut_sites_python,
+    )
+    from cgd.core.restriction_config import load_enzymes, get_builtin_enzymes
+    from cgd.core.restriction_config import EnzymeFilterType as ConfigEnzymeFilterType
+
+    debug_info = {"locus": locus}
+
+    # Test sequence lookup
+    seq_result = _get_sequence_for_locus(db, locus)
+    if seq_result:
+        seq, feature_name, display_name, coords = seq_result
+        debug_info["sequence_found"] = True
+        debug_info["sequence_length"] = len(seq)
+        debug_info["first_50_chars"] = seq[:50]
+    else:
+        debug_info["sequence_found"] = False
+        return debug_info
+
+    # Test enzyme loading
+    try:
+        enzymes = load_enzymes(ConfigEnzymeFilterType.ALL)
+        debug_info["enzymes_loaded"] = len(enzymes)
+    except Exception as e:
+        debug_info["enzyme_load_error"] = str(e)
+        enzymes = []
+
+    # Test builtin enzymes
+    try:
+        builtin = get_builtin_enzymes()
+        debug_info["builtin_enzymes"] = len(builtin)
+    except Exception as e:
+        debug_info["builtin_error"] = str(e)
+
+    # Test reverse complement
+    try:
+        test_rc = _reverse_complement("GAATTC")
+        debug_info["reverse_complement_test"] = test_rc
+        debug_info["rc_correct"] = test_rc == "GAATTC"  # EcoRI is palindrome
+    except Exception as e:
+        debug_info["reverse_complement_error"] = str(e)
+
+    # Test one enzyme cut finding
+    if enzymes:
+        hindiii = next((e for e in enzymes if e.name == "HindIII"), None)
+        if hindiii:
+            try:
+                result = _find_cut_sites_python(seq, hindiii)
+                debug_info["hindiii_test"] = {
+                    "pattern": hindiii.pattern,
+                    "watson_cuts": result.cut_positions_watson,
+                    "crick_cuts": result.cut_positions_crick,
+                    "total_cuts": result.total_cuts,
+                }
+                # Direct regex test
+                regex = _iupac_to_regex(hindiii.pattern)
+                matches = list(re.finditer(regex, seq, re.IGNORECASE))
+                debug_info["hindiii_direct_regex_matches"] = len(matches)
+            except Exception as e:
+                debug_info["hindiii_test_error"] = str(e)
+
+    return debug_info
+
+
 @router.post("/download/no-cut", response_class=PlainTextResponse)
 def download_non_cutting(
     request: RestrictionMapperRequest,
