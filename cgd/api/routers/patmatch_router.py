@@ -3,6 +3,7 @@ Pattern Match Search API Router.
 """
 from typing import List
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
@@ -17,6 +18,7 @@ from cgd.api.services.patmatch_service import (
     get_patmatch_config,
     get_datasets_for_type,
     run_patmatch_search,
+    format_results_tsv,
 )
 
 router = APIRouter(prefix="/api/patmatch", tags=["pattern-match"])
@@ -116,3 +118,35 @@ def search_get(
         max_results=max_results,
     )
     return run_patmatch_search(db, request)
+
+
+@router.post("/download", response_class=PlainTextResponse)
+def download_results(
+    request: PatmatchSearchRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Download pattern match results as TSV.
+
+    Returns a tab-separated file with all matching sequences.
+    """
+    result = run_patmatch_search(db, request)
+
+    if not result.success or not result.result:
+        return PlainTextResponse(
+            content=f"# Error: {result.error or 'Unknown error'}",
+            media_type="text/plain",
+        )
+
+    tsv_content = format_results_tsv(result.result)
+    filename = f"patmatch_{result.result.pattern[:20]}_{result.result.dataset}.tsv"
+    # Sanitize filename
+    filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename)
+
+    return PlainTextResponse(
+        content=tsv_content,
+        media_type="text/tab-separated-values",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )

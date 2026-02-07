@@ -611,3 +611,38 @@ def _map_dataset_to_config_key(dataset_value: str) -> str:
     }
 
     return mapping.get(dataset_value, dataset_value)
+
+
+def format_results_tsv(result) -> str:
+    """Format pattern match results as TSV for download."""
+    lines = []
+
+    # Header comments
+    lines.append(f"# Pattern Match Results")
+    lines.append(f"# Pattern: {result.pattern}")
+    lines.append(f"# Type: {result.pattern_type}")
+    lines.append(f"# Dataset: {result.dataset}")
+    lines.append(f"# Strand: {result.strand}")
+    lines.append(f"# Total Hits: {result.total_hits}")
+    lines.append(f"# Sequences Searched: {result.sequences_searched}")
+    lines.append(f"# Total Residues: {result.total_residues_searched}")
+    lines.append("")
+
+    # Column headers
+    lines.append("Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After")
+
+    # Data rows
+    for hit in result.hits:
+        row = [
+            hit.sequence_name,
+            hit.sequence_description or "",
+            str(hit.match_start),
+            str(hit.match_end),
+            hit.strand,
+            hit.matched_sequence,
+            hit.context_before,
+            hit.context_after,
+        ]
+        lines.append("\t".join(row))
+
+    return "\n".join(lines)
