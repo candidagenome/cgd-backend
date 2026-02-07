@@ -231,6 +231,6 @@ def get_reverse_complement(seq: str) -> str:
     """Return the reverse complement of a DNA sequence."""
     complement_map = str.maketrans(
         "ACGTacgtRYSWKMBDHVNryswkmbdhvn",
-        "TGCAtgcaYRSWMKVHDBNyrssmkvhdbnn"
+        "TGCAtgcaYRSWMKVHDBNyrswmkvhdbn"
     )
     return seq.translate(complement_map)[::-1]

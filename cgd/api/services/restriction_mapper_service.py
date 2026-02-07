@@ -61,8 +61,8 @@ def _iupac_to_regex(pattern: str) -> str:
 
 def _reverse_complement(seq: str) -> str:
     """Return the reverse complement of a DNA sequence."""
-    complement_map = str.maketrans("ACGTacgtRYSWKMBDHVNrysswkmbdhvn",
-                                    "TGCAtgcaYRSWMKVHDBNyrssmkvhdbnn")
+    complement_map = str.maketrans("ACGTacgtRYSWKMBDHVNryswkmbdhvn",
+                                    "TGCAtgcaYRSWMKVHDBNyrswmkvhdbn")
     return seq.translate(complement_map)[::-1]
 
 
@@ -283,19 +283,21 @@ def _find_cut_sites_python(
     watson_cuts.sort()
     crick_cuts.sort()
 
-    # Calculate fragment sizes based on unique cut positions
-    all_cuts = sorted(set(watson_cuts + crick_cuts))
+    # For fragment calculation, use watson_cuts as they represent unique restriction sites
+    # (Crick strand cuts are the complementary cuts at the same sites, creating overhangs)
+    # For palindromic enzymes, both strands find the same site
+    unique_sites = sorted(set(watson_cuts))
     fragment_sizes = []
-    if all_cuts:
+    if unique_sites:
         # First fragment (from start to first cut)
-        fragment_sizes.append(all_cuts[0])
+        fragment_sizes.append(unique_sites[0])
         # Middle fragments
-        for i in range(1, len(all_cuts)):
-            fragment_sizes.append(all_cuts[i] - all_cuts[i - 1])
+        for i in range(1, len(unique_sites)):
+            fragment_sizes.append(unique_sites[i] - unique_sites[i - 1])
         # Last fragment (from last cut to end)
-        fragment_sizes.append(seq_len - all_cuts[-1])
+        fragment_sizes.append(seq_len - unique_sites[-1])
 
-    total_cuts = len(all_cuts)
+    total_cuts = len(unique_sites)
 
     # Map enzyme type from config to schema
     if enzyme.enzyme_type.value == "blunt":
@@ -360,19 +362,20 @@ def _find_cut_sites_binary(
     watson_cuts.sort()
     crick_cuts.sort()
 
-    # Calculate fragment sizes based on unique cut positions
-    all_cuts = sorted(set(watson_cuts + crick_cuts))
+    # For fragment calculation, use watson_cuts as they represent unique restriction sites
+    # (Crick strand cuts are the complementary cuts at the same sites, creating overhangs)
+    unique_sites = sorted(set(watson_cuts))
     fragment_sizes = []
-    if all_cuts:
+    if unique_sites:
         # First fragment (from start to first cut)
-        fragment_sizes.append(all_cuts[0])
+        fragment_sizes.append(unique_sites[0])
         # Middle fragments
-        for i in range(1, len(all_cuts)):
-            fragment_sizes.append(all_cuts[i] - all_cuts[i - 1])
+        for i in range(1, len(unique_sites)):
+            fragment_sizes.append(unique_sites[i] - unique_sites[i - 1])
         # Last fragment (from last cut to end)
-        fragment_sizes.append(seq_len - all_cuts[-1])
+        fragment_sizes.append(seq_len - unique_sites[-1])
 
-    total_cuts = len(all_cuts)
+    total_cuts = len(unique_sites)
 
     # Map enzyme type from config to schema
     if enzyme.enzyme_type.value == "blunt":
