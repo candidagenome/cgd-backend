@@ -371,7 +371,8 @@ def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
             return database_name[len(prefix):]
 
     # Also handle non-default prefix pattern: genomic_C_albicans_SC5314_A21
-    for seq_type in ["genomic_", "coding_", "protein_"]:
+    # Include all prefixes from DATASET_TYPE_TO_PREFIX
+    for seq_type in ["genomic_", "coding_", "protein_", "orf_genomic_", "orf_coding_", "orf_trans_all_", "other_features_genomic_", "other_features_no_introns_"]:
         if database_name.startswith(seq_type):
             return database_name[len(seq_type):]
 
@@ -389,7 +390,7 @@ DATASET_TYPE_TO_PREFIX = {
     "GENOME": "genomic",
     "GENES": "orf_genomic",
     "CODING": "orf_coding",
-    "PROTEIN": "protein",
+    "PROTEIN": "orf_trans_all",
     "OTHER": "other_features_genomic",
     "OTHER_SPLICED": "other_features_no_introns",
 }
