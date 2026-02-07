@@ -34,6 +34,9 @@ from cgd.core.restriction_config import (
     get_reverse_complement,
 )
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Complement mapping for Python fallback
 COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}
@@ -74,6 +77,7 @@ def _get_sequence_for_locus(
         Tuple of (sequence, feature_name, display_name, coordinates) or None if not found
     """
     query_upper = locus.strip().upper()
+    logger.debug(f"Searching for locus: {query_upper}")
 
     # Find feature by gene_name, feature_name, or dbxref_id
     feature = (
@@ -82,6 +86,8 @@ def _get_sequence_for_locus(
         .filter(func.upper(Feature.gene_name) == query_upper)
         .first()
     )
+    if feature:
+        logger.debug(f"Found by gene_name: {feature.feature_name}")
 
     if not feature:
         feature = (
@@ -90,6 +96,8 @@ def _get_sequence_for_locus(
             .filter(func.upper(Feature.feature_name) == query_upper)
             .first()
         )
+        if feature:
+            logger.debug(f"Found by feature_name: {feature.feature_name}")
 
     if not feature:
         feature = (
@@ -98,12 +106,16 @@ def _get_sequence_for_locus(
             .filter(func.upper(Feature.dbxref_id) == query_upper)
             .first()
         )
+        if feature:
+            logger.debug(f"Found by dbxref_id: {feature.feature_name}")
 
     if not feature:
+        logger.warning(f"Feature not found for locus: {locus}")
         return None
 
     # Get current genomic sequence
     # Note: seq_type is "Genomic" (capitalized) in the database
+    logger.debug(f"Querying Seq for feature_no={feature.feature_no}")
     seq_record = (
         db.query(Seq)
         .filter(
@@ -114,8 +126,15 @@ def _get_sequence_for_locus(
         .first()
     )
 
-    if not seq_record or not seq_record.residues:
+    if not seq_record:
+        logger.warning(f"No Seq record found for feature {feature.feature_name}")
         return None
+
+    if not seq_record.residues:
+        logger.warning(f"Seq record has no residues for feature {feature.feature_name}")
+        return None
+
+    logger.debug(f"Found sequence: length={len(seq_record.residues)}")
 
     # Get location info for coordinates
     location = (
@@ -513,13 +532,16 @@ def run_restriction_mapping(
     """
     # Get sequence
     if locus:
+        logger.info(f"Looking up locus: {locus}")
         result = _get_sequence_for_locus(db, locus)
         if not result:
+            logger.warning(f"Locus '{locus}' not found or has no genomic sequence")
             return RestrictionMapperResponse(
                 success=False,
                 error=f"Locus '{locus}' not found or has no genomic sequence"
             )
         dna_sequence, feature_name, display_name, coordinates = result
+        logger.info(f"Found sequence for {display_name}, length={len(dna_sequence)}")
         seq_name = display_name
     elif sequence:
         # Clean the sequence - remove non-DNA characters
@@ -539,10 +561,13 @@ def run_restriction_mapping(
 
     # Load enzymes based on filter type
     config_filter = _map_filter_type_to_config(enzyme_filter)
+    logger.info(f"Loading enzymes with filter: {enzyme_filter} -> {config_filter}")
     enzymes = load_enzymes(config_filter)
+    logger.info(f"Loaded {len(enzymes)} enzymes")
 
     # Check if binary is available
     use_binary = _check_binary_available()
+    logger.info(f"Using binary: {use_binary}")
 
     # Find cut sites for all enzymes
     all_cut_sites = []
