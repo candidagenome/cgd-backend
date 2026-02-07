@@ -43,7 +43,11 @@ class EnzymeInfo:
 
     @classmethod
     def from_line(cls, line: str) -> Optional["EnzymeInfo"]:
-        """Parse enzyme info from a line in the enzyme file."""
+        """Parse enzyme info from a line in the enzyme file.
+
+        File format: name offset pattern overhang
+        Example: AatII 5 GACGTC -4
+        """
         line = line.strip()
         if not line or line.startswith('#'):
             return None
@@ -55,8 +59,8 @@ class EnzymeInfo:
         try:
             name = parts[0]
             offset = int(parts[1])
-            overhang = int(parts[2])
-            pattern = parts[3]
+            pattern = parts[2]
+            overhang = int(parts[3])
 
             # Determine enzyme type from overhang
             if overhang == 0:
