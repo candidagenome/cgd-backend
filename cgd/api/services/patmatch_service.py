@@ -430,14 +430,14 @@ def run_patmatch_search(
         )
 
     # Get dataset configuration
-    # Map schema dataset enum to config key
-    dataset_key = _map_dataset_to_config_key(request.dataset.value)
+    # Dataset is now a string - either a config key or legacy enum value
+    dataset_key = _map_dataset_to_config_key(request.dataset)
     dataset_config = get_dataset_config(dataset_key)
 
     if not dataset_config:
         return PatmatchSearchResponse(
             success=False,
-            error=f"Unknown dataset: {request.dataset.value}",
+            error=f"Unknown dataset: {request.dataset}",
         )
 
     # Check if FASTA file exists

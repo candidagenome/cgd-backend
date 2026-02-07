@@ -84,7 +84,7 @@ def search(
 def search_get(
     pattern: str = Query(..., description="Pattern to search for"),
     pattern_type: PatternType = Query(PatternType.DNA, alias="type"),
-    dataset: str = Query("ca22_chromosomes", alias="ds"),
+    dataset: str = Query(..., alias="ds", description="Dataset name from /api/patmatch/config"),
     strand: str = Query("both"),
     max_mismatches: int = Query(0, alias="mm", ge=0, le=3),
     max_insertions: int = Query(0, alias="ins", ge=0, le=3),
@@ -97,14 +97,9 @@ def search_get(
 
     Supports the same options as the POST endpoint but via query parameters.
     """
-    from cgd.schemas.patmatch_schema import SequenceDataset, StrandOption
+    from cgd.schemas.patmatch_schema import StrandOption
 
-    # Convert string to enum
-    try:
-        dataset_enum = SequenceDataset(dataset)
-    except ValueError:
-        dataset_enum = SequenceDataset.CA22_CHROMOSOMES
-
+    # Convert strand string to enum
     try:
         strand_enum = StrandOption(strand)
     except ValueError:
@@ -113,7 +108,7 @@ def search_get(
     request = PatmatchSearchRequest(
         pattern=pattern,
         pattern_type=pattern_type,
-        dataset=dataset_enum,
+        dataset=dataset,
         strand=strand_enum,
         max_mismatches=max_mismatches,
         max_insertions=max_insertions,
