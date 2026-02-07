@@ -1,10 +1,16 @@
 """
 Restriction Mapper Service - handles restriction enzyme mapping on DNA sequences.
+
+This service uses the scan_for_matches binary for restriction site detection
+when available, with a Python regex fallback for portability.
 """
 from __future__ import annotations
 
+import os
 import re
-from typing import Optional, List, Tuple
+import subprocess
+import tempfile
+from typing import Optional, List, Tuple, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -18,104 +24,24 @@ from cgd.schemas.restriction_mapper_schema import (
     EnzymeFilterInfo,
     RestrictionMapperConfigResponse,
 )
+from cgd.core.restriction_config import (
+    SCAN_FOR_MATCHES_BINARY,
+    EnzymeFilterType as ConfigEnzymeFilterType,
+    EnzymeInfo,
+    load_enzymes,
+    get_enzyme_file,
+    IUPAC_TO_REGEX,
+    get_reverse_complement,
+)
 
 
-# IUPAC nucleotide codes to regex
-IUPAC_TO_REGEX = {
-    "A": "A",
-    "C": "C",
-    "G": "G",
-    "T": "T",
-    "U": "T",
-    "R": "[AG]",      # Purine
-    "Y": "[CT]",      # Pyrimidine
-    "S": "[GC]",      # Strong
-    "W": "[AT]",      # Weak
-    "K": "[GT]",      # Keto
-    "M": "[AC]",      # Amino
-    "B": "[CGT]",     # Not A
-    "D": "[AGT]",     # Not C
-    "H": "[ACT]",     # Not G
-    "V": "[ACG]",     # Not T
-    "N": "[ACGT]",    # Any
-}
-
-# Complement mapping
+# Complement mapping for Python fallback
 COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}
 
 
-# Restriction enzyme database
-# Format: (name, offset, overhang, pattern, enzyme_type)
-# offset: Position where the enzyme cuts on the Watson strand relative to pattern start
-# overhang: Length of the overhang (positive = 5', negative = 3')
-# pattern: Recognition sequence using IUPAC codes
-# enzyme_type: Type of cut (5_prime, 3_prime, or blunt)
-RESTRICTION_ENZYMES: List[Tuple[str, int, int, str, EnzymeType]] = [
-    # 6-base cutters with 5' overhang
-    ("EcoRI", 1, 4, "GAATTC", EnzymeType.FIVE_PRIME),
-    ("BamHI", 1, 4, "GGATCC", EnzymeType.FIVE_PRIME),
-    ("HindIII", 1, 4, "AAGCTT", EnzymeType.FIVE_PRIME),
-    ("SalI", 1, 4, "GTCGAC", EnzymeType.FIVE_PRIME),
-    ("XbaI", 1, 4, "TCTAGA", EnzymeType.FIVE_PRIME),
-    ("XhoI", 1, 4, "CTCGAG", EnzymeType.FIVE_PRIME),
-    ("NcoI", 1, 4, "CCATGG", EnzymeType.FIVE_PRIME),
-    ("NdeI", 2, 2, "CATATG", EnzymeType.FIVE_PRIME),
-    ("BglII", 1, 4, "AGATCT", EnzymeType.FIVE_PRIME),
-    ("ClaI", 2, 2, "ATCGAT", EnzymeType.FIVE_PRIME),
-    ("SacI", 5, -4, "GAGCTC", EnzymeType.THREE_PRIME),
-    ("SphI", 5, -4, "GCATGC", EnzymeType.THREE_PRIME),
-    ("KpnI", 5, -4, "GGTACC", EnzymeType.THREE_PRIME),
-    ("PstI", 5, -4, "CTGCAG", EnzymeType.THREE_PRIME),
-    ("ApaI", 5, -4, "GGGCCC", EnzymeType.THREE_PRIME),
-
-    # 6-base cutters with blunt ends
-    ("SmaI", 3, 0, "CCCGGG", EnzymeType.BLUNT),
-    ("EcoRV", 3, 0, "GATATC", EnzymeType.BLUNT),
-    ("StuI", 3, 0, "AGGCCT", EnzymeType.BLUNT),
-    ("HpaI", 3, 0, "GTTAAC", EnzymeType.BLUNT),
-    ("NruI", 3, 0, "TCGCGA", EnzymeType.BLUNT),
-    ("PvuII", 3, 0, "CAGCTG", EnzymeType.BLUNT),
-    ("ScaI", 3, 0, "AGTACT", EnzymeType.BLUNT),
-    ("SnaBI", 3, 0, "TACGTA", EnzymeType.BLUNT),
-
-    # 8-base cutters (rare cutters)
-    ("NotI", 2, 4, "GCGGCCGC", EnzymeType.FIVE_PRIME),
-    ("SfiI", 4, 3, "GGCCNNNNNGGCC", EnzymeType.THREE_PRIME),
-    ("PacI", 5, -2, "TTAATTAA", EnzymeType.THREE_PRIME),
-    ("AscI", 2, 4, "GGCGCGCC", EnzymeType.FIVE_PRIME),
-    ("SbfI", 6, -4, "CCTGCAGG", EnzymeType.THREE_PRIME),
-    ("FseI", 6, 2, "GGCCGGCC", EnzymeType.FIVE_PRIME),
-
-    # 4-base cutters (frequent cutters)
-    ("MboI", 0, 4, "GATC", EnzymeType.FIVE_PRIME),
-    ("Sau3AI", 0, 4, "GATC", EnzymeType.FIVE_PRIME),
-    ("HaeIII", 2, 0, "GGCC", EnzymeType.BLUNT),
-    ("AluI", 2, 0, "AGCT", EnzymeType.BLUNT),
-    ("RsaI", 2, 0, "GTAC", EnzymeType.BLUNT),
-    ("TaqI", 1, 2, "TCGA", EnzymeType.FIVE_PRIME),
-    ("MspI", 1, 2, "CCGG", EnzymeType.FIVE_PRIME),
-    ("HpaII", 1, 2, "CCGG", EnzymeType.FIVE_PRIME),
-    ("CfoI", 3, -2, "GCGC", EnzymeType.THREE_PRIME),
-
-    # 5-base/ambiguous cutters
-    ("HinfI", 1, 3, "GANTC", EnzymeType.FIVE_PRIME),
-    ("DdeI", 1, 3, "CTNAG", EnzymeType.FIVE_PRIME),
-    ("AvaI", 1, 4, "CYCGRG", EnzymeType.FIVE_PRIME),
-    ("AvaII", 1, 4, "GGWCC", EnzymeType.FIVE_PRIME),
-    ("BstNI", 2, 2, "CCWGG", EnzymeType.FIVE_PRIME),
-    ("StyI", 1, 4, "CCWWGG", EnzymeType.FIVE_PRIME),
-    ("AccI", 2, 2, "GTMKAC", EnzymeType.FIVE_PRIME),
-
-    # Additional common enzymes
-    ("NheI", 1, 4, "GCTAGC", EnzymeType.FIVE_PRIME),
-    ("SpeI", 1, 4, "ACTAGT", EnzymeType.FIVE_PRIME),
-    ("MluI", 1, 4, "ACGCGT", EnzymeType.FIVE_PRIME),
-    ("BsiWI", 1, 4, "CGTACG", EnzymeType.FIVE_PRIME),
-    ("AgeI", 1, 4, "ACCGGT", EnzymeType.FIVE_PRIME),
-    ("BsrGI", 1, 4, "TGTACA", EnzymeType.FIVE_PRIME),
-    ("PmeI", 4, 0, "GTTTAAAC", EnzymeType.BLUNT),
-    ("SwaI", 4, 0, "ATTTAAAT", EnzymeType.BLUNT),
-]
+def _check_binary_available() -> bool:
+    """Check if the scan_for_matches binary is available."""
+    return os.path.isfile(SCAN_FOR_MATCHES_BINARY) and os.access(SCAN_FOR_MATCHES_BINARY, os.X_OK)
 
 
 def _iupac_to_regex(pattern: str) -> str:
@@ -225,36 +151,100 @@ def _get_sequence_for_locus(
     )
 
 
-def _find_cut_sites(
+def _run_scan_for_matches(
     sequence: str,
-    enzyme_name: str,
-    pattern: str,
-    offset: int,
-    overhang: int,
-    enzyme_type: EnzymeType,
+    seq_name: str,
+    enzymes: List[EnzymeInfo],
+) -> Dict[str, List[Tuple[int, int, str]]]:
+    """
+    Run scan_for_matches binary to find restriction sites.
+
+    Args:
+        sequence: DNA sequence
+        seq_name: Name for the sequence
+        enzymes: List of enzyme info
+
+    Returns:
+        Dictionary mapping enzyme names to list of (start, end, matched_seq) tuples
+    """
+    results: Dict[str, List[Tuple[int, int, str]]] = {}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Write sequence to temp file
+        seq_file = os.path.join(tmpdir, "sequence.fasta")
+        with open(seq_file, "w") as f:
+            f.write(f">{seq_name}\n{sequence}\n")
+
+        # Process each enzyme
+        for enzyme in enzymes:
+            results[enzyme.name] = []
+
+            # Write pattern to temp file
+            pat_file = os.path.join(tmpdir, "pattern.pat")
+            with open(pat_file, "w") as f:
+                f.write(enzyme.pattern)
+
+            try:
+                # Run scan_for_matches with -c flag for complement search
+                cmd = [SCAN_FOR_MATCHES_BINARY, "-c", pat_file]
+
+                with open(seq_file, "r") as seq_input:
+                    result = subprocess.run(
+                        cmd,
+                        stdin=seq_input,
+                        capture_output=True,
+                        text=True,
+                        timeout=60
+                    )
+
+                if result.returncode == 0:
+                    # Parse output
+                    # Format: >seq_name:[start,end]
+                    #         matched_sequence
+                    for line in result.stdout.split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        # Match pattern like >seq_name[123,128] or >seq_name:[123,128]
+                        match = re.match(r">.+[\[:](\d+),(\d+)\]?", line)
+                        if match:
+                            start = int(match.group(1))
+                            end = int(match.group(2))
+                            results[enzyme.name].append((start, end, ""))
+
+            except subprocess.TimeoutExpired:
+                # Timeout - continue with other enzymes
+                pass
+            except Exception:
+                # Error running binary - continue with other enzymes
+                pass
+
+    return results
+
+
+def _find_cut_sites_python(
+    sequence: str,
+    enzyme: EnzymeInfo,
 ) -> EnzymeCutSite:
     """
-    Find all cut sites for an enzyme in the sequence.
+    Find all cut sites for an enzyme using Python regex (fallback).
 
     Args:
         sequence: DNA sequence (uppercase)
-        enzyme_name: Name of the enzyme
-        pattern: Recognition pattern (IUPAC)
-        offset: Cut position offset from pattern start
-        overhang: Overhang length (positive = 5', negative = 3', 0 = blunt)
-        enzyme_type: Type of enzyme
+        enzyme: EnzymeInfo object
 
     Returns:
         EnzymeCutSite with all cut positions and fragment sizes
     """
-    regex_pattern = _iupac_to_regex(pattern)
+    regex_pattern = _iupac_to_regex(enzyme.pattern)
     watson_cuts = []
     crick_cuts = []
 
     # Search Watson strand (+ strand)
     for match in re.finditer(regex_pattern, sequence, re.IGNORECASE):
         # Cut position is 1-based, after the offset position
-        cut_pos = match.start() + offset + 1
+        cut_pos = match.start() + enzyme.offset + 1
         watson_cuts.append(cut_pos)
 
     # Search Crick strand (- strand)
@@ -264,8 +254,7 @@ def _find_cut_sites(
 
     for match in re.finditer(regex_pattern, rc_sequence, re.IGNORECASE):
         # Convert position back to Watson coordinates
-        # The match is on the reverse complement, so we need to convert
-        rc_cut_pos = match.start() + offset + 1
+        rc_cut_pos = match.start() + enzyme.offset + 1
         # Convert to Watson strand position
         watson_pos = seq_len - rc_cut_pos + 1
         crick_cuts.append(watson_pos)
@@ -288,10 +277,95 @@ def _find_cut_sites(
 
     total_cuts = len(all_cuts)
 
+    # Map enzyme type from config to schema
+    if enzyme.enzyme_type.value == "blunt":
+        enz_type = EnzymeType.BLUNT
+    elif enzyme.enzyme_type.value == "5_prime":
+        enz_type = EnzymeType.FIVE_PRIME
+    else:
+        enz_type = EnzymeType.THREE_PRIME
+
     return EnzymeCutSite(
-        enzyme_name=enzyme_name,
-        recognition_seq=pattern,
-        enzyme_type=enzyme_type,
+        enzyme_name=enzyme.name,
+        recognition_seq=enzyme.pattern,
+        enzyme_type=enz_type,
+        cut_positions_watson=watson_cuts,
+        cut_positions_crick=crick_cuts,
+        total_cuts=total_cuts,
+        fragment_sizes=sorted(fragment_sizes) if fragment_sizes else [],
+    )
+
+
+def _find_cut_sites_binary(
+    sequence: str,
+    enzyme: EnzymeInfo,
+    binary_results: Dict[str, List[Tuple[int, int, str]]],
+) -> EnzymeCutSite:
+    """
+    Create EnzymeCutSite from scan_for_matches binary results.
+
+    Args:
+        sequence: DNA sequence
+        enzyme: EnzymeInfo object
+        binary_results: Results from scan_for_matches
+
+    Returns:
+        EnzymeCutSite with cut positions and fragment sizes
+    """
+    seq_len = len(sequence)
+    matches = binary_results.get(enzyme.name, [])
+
+    # scan_for_matches returns positions on both strands
+    # We need to separate them
+    watson_cuts = []
+    crick_cuts = []
+
+    # Process matches - the binary with -c flag searches both strands
+    # We need to determine which strand each match is on
+    regex_pattern = _iupac_to_regex(enzyme.pattern)
+
+    for start, end, _ in matches:
+        # Check if this is a Watson strand match
+        subseq = sequence[start - 1:end] if start > 0 and end <= seq_len else ""
+        if re.match(regex_pattern, subseq, re.IGNORECASE):
+            # Watson strand match
+            cut_pos = start + enzyme.offset
+            watson_cuts.append(cut_pos)
+        else:
+            # Crick strand match
+            cut_pos = end - enzyme.offset + 1
+            crick_cuts.append(cut_pos)
+
+    # Sort cut positions
+    watson_cuts.sort()
+    crick_cuts.sort()
+
+    # Calculate fragment sizes based on unique cut positions
+    all_cuts = sorted(set(watson_cuts + crick_cuts))
+    fragment_sizes = []
+    if all_cuts:
+        # First fragment (from start to first cut)
+        fragment_sizes.append(all_cuts[0])
+        # Middle fragments
+        for i in range(1, len(all_cuts)):
+            fragment_sizes.append(all_cuts[i] - all_cuts[i - 1])
+        # Last fragment (from last cut to end)
+        fragment_sizes.append(seq_len - all_cuts[-1])
+
+    total_cuts = len(all_cuts)
+
+    # Map enzyme type from config to schema
+    if enzyme.enzyme_type.value == "blunt":
+        enz_type = EnzymeType.BLUNT
+    elif enzyme.enzyme_type.value == "5_prime":
+        enz_type = EnzymeType.FIVE_PRIME
+    else:
+        enz_type = EnzymeType.THREE_PRIME
+
+    return EnzymeCutSite(
+        enzyme_name=enzyme.name,
+        recognition_seq=enzyme.pattern,
+        enzyme_type=enz_type,
         cut_positions_watson=watson_cuts,
         cut_positions_crick=crick_cuts,
         total_cuts=total_cuts,
@@ -346,8 +420,25 @@ def _filter_enzymes(
     return cutting, sorted(non_cutting)
 
 
+def _map_filter_type_to_config(filter_type: EnzymeFilterType) -> ConfigEnzymeFilterType:
+    """Map schema EnzymeFilterType to config EnzymeFilterType."""
+    mapping = {
+        EnzymeFilterType.ALL: ConfigEnzymeFilterType.ALL,
+        EnzymeFilterType.THREE_PRIME_OVERHANG: ConfigEnzymeFilterType.THREE_PRIME_OVERHANG,
+        EnzymeFilterType.FIVE_PRIME_OVERHANG: ConfigEnzymeFilterType.FIVE_PRIME_OVERHANG,
+        EnzymeFilterType.BLUNT: ConfigEnzymeFilterType.BLUNT,
+        EnzymeFilterType.CUT_ONCE: ConfigEnzymeFilterType.CUT_ONCE,
+        EnzymeFilterType.CUT_TWICE: ConfigEnzymeFilterType.CUT_TWICE,
+        EnzymeFilterType.SIX_BASE: ConfigEnzymeFilterType.SIX_BASE,
+    }
+    return mapping.get(filter_type, ConfigEnzymeFilterType.ALL)
+
+
 def get_restriction_mapper_config() -> RestrictionMapperConfigResponse:
     """Get restriction mapper configuration."""
+    # Load enzymes to get actual count
+    enzymes = load_enzymes(ConfigEnzymeFilterType.ALL)
+
     enzyme_filters = [
         EnzymeFilterInfo(
             value=EnzymeFilterType.ALL,
@@ -393,7 +484,7 @@ def get_restriction_mapper_config() -> RestrictionMapperConfigResponse:
 
     return RestrictionMapperConfigResponse(
         enzyme_filters=enzyme_filters,
-        total_enzymes=len(RESTRICTION_ENZYMES)
+        total_enzymes=len(enzymes)
     )
 
 
@@ -406,6 +497,8 @@ def run_restriction_mapping(
 ) -> RestrictionMapperResponse:
     """
     Run restriction enzyme mapping on a DNA sequence.
+
+    Uses scan_for_matches binary when available, falls back to Python regex.
 
     Args:
         db: Database session
@@ -443,13 +536,28 @@ def run_restriction_mapping(
             error="Either locus or sequence must be provided"
         )
 
+    # Load enzymes based on filter type
+    config_filter = _map_filter_type_to_config(enzyme_filter)
+    enzymes = load_enzymes(config_filter)
+
+    # Check if binary is available
+    use_binary = _check_binary_available()
+
     # Find cut sites for all enzymes
     all_cut_sites = []
-    for name, offset, overhang, pattern, enz_type in RESTRICTION_ENZYMES:
-        site = _find_cut_sites(
-            dna_sequence, name, pattern, offset, overhang, enz_type
-        )
-        all_cut_sites.append(site)
+
+    if use_binary:
+        # Use scan_for_matches binary
+        binary_results = _run_scan_for_matches(dna_sequence, seq_name, enzymes)
+
+        for enzyme in enzymes:
+            site = _find_cut_sites_binary(dna_sequence, enzyme, binary_results)
+            all_cut_sites.append(site)
+    else:
+        # Fall back to Python regex
+        for enzyme in enzymes:
+            site = _find_cut_sites_python(dna_sequence, enzyme)
+            all_cut_sites.append(site)
 
     # Apply filter
     if enzyme_filter == EnzymeFilterType.NO_CUT:
@@ -465,7 +573,7 @@ def run_restriction_mapping(
         coordinates=coordinates,
         cutting_enzymes=cutting_enzymes,
         non_cutting_enzymes=non_cutting,
-        total_enzymes_searched=len(RESTRICTION_ENZYMES),
+        total_enzymes_searched=len(enzymes),
     )
 
     return RestrictionMapperResponse(
@@ -512,16 +620,17 @@ def format_non_cutting_tsv(result: RestrictionMapResult) -> str:
     lines.append(f"# Sequence Length: {result.seq_length} bp")
     lines.append("")
 
-    # Create lookup for enzyme info
-    enzyme_lookup = {e[0]: e for e in RESTRICTION_ENZYMES}
+    # Load enzymes to get pattern info
+    enzymes = load_enzymes(ConfigEnzymeFilterType.ALL)
+    enzyme_lookup = {e.name: e for e in enzymes}
 
     lines.append("Enzyme\tRecognition\tType")
 
     for enzyme_name in result.non_cutting_enzymes:
         if enzyme_name in enzyme_lookup:
-            _, _, _, pattern, enz_type = enzyme_lookup[enzyme_name]
-            enzyme_type = enz_type.value.replace("_", " ")
-            lines.append(f"{enzyme_name}\t{pattern}\t{enzyme_type}")
+            enzyme = enzyme_lookup[enzyme_name]
+            enzyme_type = enzyme.enzyme_type.value.replace("_", " ")
+            lines.append(f"{enzyme_name}\t{enzyme.pattern}\t{enzyme_type}")
         else:
             lines.append(f"{enzyme_name}\t-\t-")
 

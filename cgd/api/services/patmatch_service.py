@@ -1,19 +1,33 @@
 """
 Pattern Match Service - handles pattern/motif searching in sequences.
+
+Uses nrgrep_coords binary for efficient fuzzy pattern matching,
+with Python regex fallback when binary is unavailable.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 import logging
-from typing import Optional, List, Tuple
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from typing import Optional, List, Dict, Tuple
 
-from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion
-from cgd.schemas.patmatch_schema import (
+from cgd.core.patmatch_config import (
+    NRGREP_BINARY,
+    PATMATCH_DATASETS,
     PatternType,
+    DatasetConfig,
+    get_available_datasets,
+    get_dataset_config,
+    convert_pattern_for_nrgrep,
+    get_reverse_complement,
+    IUPAC_DNA,
+    IUPAC_PROTEIN,
+)
+from cgd.schemas.patmatch_schema import (
+    PatternType as SchemaPatternType,
     StrandOption,
-    SequenceDataset,
     PatmatchSearchRequest,
     PatmatchSearchResult,
     PatmatchSearchResponse,
@@ -24,194 +38,357 @@ from cgd.schemas.patmatch_schema import (
 
 logger = logging.getLogger(__name__)
 
-# IUPAC nucleotide codes
-IUPAC_DNA = {
-    'A': 'A',
-    'C': 'C',
-    'G': 'G',
-    'T': 'T',
-    'U': 'T',
-    'R': '[AG]',      # Purine
-    'Y': '[CT]',      # Pyrimidine
-    'S': '[GC]',      # Strong
-    'W': '[AT]',      # Weak
-    'K': '[GT]',      # Keto
-    'M': '[AC]',      # Amino
-    'B': '[CGT]',     # Not A
-    'D': '[AGT]',     # Not C
-    'H': '[ACT]',     # Not G
-    'V': '[ACG]',     # Not T
-    'N': '[ACGT]',    # Any
-}
 
-# IUPAC protein codes (standard amino acids + ambiguity codes)
-IUPAC_PROTEIN = {
-    'A': 'A', 'C': 'C', 'D': 'D', 'E': 'E', 'F': 'F',
-    'G': 'G', 'H': 'H', 'I': 'I', 'K': 'K', 'L': 'L',
-    'M': 'M', 'N': 'N', 'P': 'P', 'Q': 'Q', 'R': 'R',
-    'S': 'S', 'T': 'T', 'V': 'V', 'W': 'W', 'Y': 'Y',
-    'B': '[DN]',      # Aspartic acid or Asparagine
-    'Z': '[EQ]',      # Glutamic acid or Glutamine
-    'X': '[A-Z]',     # Any amino acid
-    '*': '\\*',       # Stop codon
-}
+def _check_binary_available() -> bool:
+    """Check if nrgrep_coords binary is available and executable."""
+    return os.path.isfile(NRGREP_BINARY) and os.access(NRGREP_BINARY, os.X_OK)
 
-# Dataset configurations - maps dataset enum to display info and query parameters
-# Organism name patterns and genome versions for filtering
-ORGANISM_FILTERS = {
-    "ca": "albicans",  # C. albicans
-    "cg": "glabrata",  # C. glabrata
-}
 
-ASSEMBLY_VERSIONS = {
-    "22": "22",
-    "21": "21",
-}
+def _build_mismatch_option(mismatches: int, insertions: int, deletions: int) -> str:
+    """
+    Build the mismatch option string for nrgrep_coords.
 
-DATASET_INFO: dict[SequenceDataset, DatasetInfo] = {
-    # C. albicans Assembly 22
-    SequenceDataset.CA22_CHROMOSOMES: DatasetInfo(
-        name="ca22_chromosomes",
-        display_name="C. albicans A22 - Chromosomes/Contigs",
-        description="Complete chromosome sequences (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_ORF_GENOMIC: DatasetInfo(
-        name="ca22_orf_genomic",
-        display_name="C. albicans A22 - ORF Genomic DNA",
-        description="ORF sequences including introns (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_ORF_CODING: DatasetInfo(
-        name="ca22_orf_coding",
-        display_name="C. albicans A22 - ORF Coding DNA",
-        description="ORF coding sequences, exons only (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_ORF_GENOMIC_1KB: DatasetInfo(
-        name="ca22_orf_genomic_1kb",
-        display_name="C. albicans A22 - ORF Genomic +/- 1kb",
-        description="ORF sequences with 1kb flanking regions (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_INTERGENIC: DatasetInfo(
-        name="ca22_intergenic",
-        display_name="C. albicans A22 - Intergenic Regions",
-        description="Sequences between genes (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_NONCODING: DatasetInfo(
-        name="ca22_noncoding",
-        display_name="C. albicans A22 - Non-coding Features",
-        description="ncRNA, tRNA, rRNA, etc. (Assembly 22)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA22_ORF_PROTEIN: DatasetInfo(
-        name="ca22_orf_protein",
-        display_name="C. albicans A22 - Protein Sequences",
-        description="Translated ORF proteins (Assembly 22)",
-        pattern_type=PatternType.PROTEIN,
-    ),
-    # C. albicans Assembly 21
-    SequenceDataset.CA21_CHROMOSOMES: DatasetInfo(
-        name="ca21_chromosomes",
-        display_name="C. albicans A21 - Chromosomes/Contigs",
-        description="Complete chromosome sequences (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_ORF_GENOMIC: DatasetInfo(
-        name="ca21_orf_genomic",
-        display_name="C. albicans A21 - ORF Genomic DNA",
-        description="ORF sequences including introns (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_ORF_CODING: DatasetInfo(
-        name="ca21_orf_coding",
-        display_name="C. albicans A21 - ORF Coding DNA",
-        description="ORF coding sequences, exons only (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_ORF_GENOMIC_1KB: DatasetInfo(
-        name="ca21_orf_genomic_1kb",
-        display_name="C. albicans A21 - ORF Genomic +/- 1kb",
-        description="ORF sequences with 1kb flanking regions (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_INTERGENIC: DatasetInfo(
-        name="ca21_intergenic",
-        display_name="C. albicans A21 - Intergenic Regions",
-        description="Sequences between genes (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_NONCODING: DatasetInfo(
-        name="ca21_noncoding",
-        display_name="C. albicans A21 - Non-coding Features",
-        description="ncRNA, tRNA, rRNA, etc. (Assembly 21)",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CA21_ORF_PROTEIN: DatasetInfo(
-        name="ca21_orf_protein",
-        display_name="C. albicans A21 - Protein Sequences",
-        description="Translated ORF proteins (Assembly 21)",
-        pattern_type=PatternType.PROTEIN,
-    ),
-    # C. glabrata
-    SequenceDataset.CG_CHROMOSOMES: DatasetInfo(
-        name="cg_chromosomes",
-        display_name="C. glabrata - Chromosomes/Contigs",
-        description="Complete chromosome sequences",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CG_ORF_GENOMIC: DatasetInfo(
-        name="cg_orf_genomic",
-        display_name="C. glabrata - ORF Genomic DNA",
-        description="ORF sequences including introns",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CG_ORF_CODING: DatasetInfo(
-        name="cg_orf_coding",
-        display_name="C. glabrata - ORF Coding DNA",
-        description="ORF coding sequences, exons only",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.CG_ORF_PROTEIN: DatasetInfo(
-        name="cg_orf_protein",
-        display_name="C. glabrata - Protein Sequences",
-        description="Translated ORF proteins",
-        pattern_type=PatternType.PROTEIN,
-    ),
-    # All organisms combined
-    SequenceDataset.ALL_CHROMOSOMES: DatasetInfo(
-        name="all_chromosomes",
-        display_name="All Organisms - Chromosomes/Contigs",
-        description="Complete chromosome sequences from all organisms",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.ALL_ORF_GENOMIC: DatasetInfo(
-        name="all_orf_genomic",
-        display_name="All Organisms - ORF Genomic DNA",
-        description="ORF sequences including introns from all organisms",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.ALL_ORF_CODING: DatasetInfo(
-        name="all_orf_coding",
-        display_name="All Organisms - ORF Coding DNA",
-        description="ORF coding sequences from all organisms",
-        pattern_type=PatternType.DNA,
-    ),
-    SequenceDataset.ALL_ORF_PROTEIN: DatasetInfo(
-        name="all_orf_protein",
-        display_name="All Organisms - Protein Sequences",
-        description="Translated ORF proteins from all organisms",
-        pattern_type=PatternType.PROTEIN,
-    ),
-}
+    nrgrep_coords uses -k option for fuzzy matching:
+    - -k 0 = exact match
+    - -k N = allow up to N total errors (substitutions + insertions + deletions)
+    """
+    # nrgrep_coords -k option allows total errors
+    total_errors = mismatches + insertions + deletions
+    return str(total_errors)
+
+
+def _parse_nrgrep_output(
+    output: str,
+    fasta_index: Dict[int, str],
+    file_offsets: List[int],
+) -> List[Tuple[str, int, int, str, str]]:
+    """
+    Parse nrgrep_coords output.
+
+    nrgrep_coords output format: [start, end: matched_sequence]
+
+    Returns list of (seq_name, start, end, strand, matched_seq) tuples.
+    """
+    hits = []
+
+    for line in output.strip().split('\n'):
+        if not line or not line.startswith('['):
+            continue
+
+        # Parse: [start, end: matched_sequence]
+        # Remove brackets and parse
+        line = line.strip()
+        line = re.sub(r'[\[\]:,]', ' ', line)
+        parts = line.split()
+
+        if len(parts) < 3:
+            continue
+
+        try:
+            global_start = int(parts[0])
+            global_end = int(parts[1])
+            matched_seq = parts[2] if len(parts) > 2 else ""
+
+            # Find which sequence this hit is in using file offsets
+            seq_offset = _find_sequence_offset(global_start, file_offsets)
+            seq_name = fasta_index.get(seq_offset, "unknown")
+
+            # Convert to local coordinates
+            local_start = global_start - seq_offset + 1
+            local_end = global_end - seq_offset
+
+            hits.append((seq_name, local_start, local_end, "W", matched_seq))
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Failed to parse nrgrep output line: {line}, error: {e}")
+            continue
+
+    return hits
+
+
+def _find_sequence_offset(position: int, offsets: List[int]) -> int:
+    """Find the sequence offset for a given global position."""
+    result = 0
+    for offset in offsets:
+        if offset <= position:
+            result = offset
+        else:
+            break
+    return result
+
+
+def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
+    """
+    Generate an index of sequence names and their file offsets.
+
+    Returns: (offset_to_name dict, sorted list of offsets)
+    """
+    index = {}
+    offsets = []
+    current_offset = 0
+    current_name = None
+
+    try:
+        with open(fasta_file, 'r') as f:
+            for line in f:
+                if line.startswith('>'):
+                    # New sequence
+                    name = line[1:].split()[0].strip()
+                    index[current_offset] = name
+                    offsets.append(current_offset)
+                    current_name = name
+                else:
+                    # Sequence data - add to offset
+                    current_offset += len(line.strip())
+    except IOError as e:
+        logger.error(f"Failed to read FASTA file {fasta_file}: {e}")
+
+    return index, sorted(offsets)
+
+
+def _run_nrgrep_search(
+    pattern: str,
+    fasta_file: str,
+    mismatches: int = 0,
+    insertions: int = 0,
+    deletions: int = 0,
+    max_results: int = 1000,
+) -> List[Tuple[str, int, int, str, str]]:
+    """
+    Run pattern search using nrgrep_coords binary.
+
+    Returns list of (seq_name, start, end, strand, matched_seq) tuples.
+    """
+    if not _check_binary_available():
+        raise RuntimeError("nrgrep_coords binary not available")
+
+    if not os.path.exists(fasta_file):
+        raise FileNotFoundError(f"FASTA file not found: {fasta_file}")
+
+    # Generate index for the FASTA file
+    fasta_index, file_offsets = _generate_fasta_index(fasta_file)
+
+    # Build mismatch option
+    k_option = _build_mismatch_option(mismatches, insertions, deletions)
+
+    # Build command
+    # nrgrep_coords options:
+    # -i: case insensitive
+    # -k N: allow up to N errors
+    # -b SIZE: buffer size
+    cmd = [
+        NRGREP_BINARY,
+        '-i',  # case insensitive
+        '-k', k_option,
+        '-b', '1600000',  # buffer size
+        pattern,
+        fasta_file
+    ]
+
+    logger.debug(f"Running nrgrep: {' '.join(cmd)}")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
+        )
+
+        if result.returncode != 0 and result.stderr:
+            logger.warning(f"nrgrep stderr: {result.stderr}")
+
+        # Parse output
+        hits = _parse_nrgrep_output(result.stdout, fasta_index, file_offsets)
+
+        # Limit results
+        if len(hits) > max_results:
+            hits = hits[:max_results]
+
+        return hits
+
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Pattern search timed out")
+    except Exception as e:
+        raise RuntimeError(f"Pattern search failed: {e}")
+
+
+def _run_python_search(
+    pattern: str,
+    fasta_file: str,
+    pattern_type: PatternType,
+    strand: StrandOption,
+    max_results: int = 1000,
+) -> Tuple[List[Tuple[str, int, int, str, str]], int, int]:
+    """
+    Run pattern search using Python regex (fallback).
+
+    Returns: (hits, sequences_searched, total_residues)
+    """
+    hits = []
+    sequences_searched = 0
+    total_residues = 0
+
+    # Build regex pattern
+    iupac_map = IUPAC_DNA if pattern_type == PatternType.DNA else IUPAC_PROTEIN
+    regex_parts = []
+    for char in pattern.upper():
+        if char in iupac_map:
+            regex_parts.append(iupac_map[char])
+        elif char == '.':
+            regex_parts.append('.' if pattern_type == PatternType.PROTEIN else '[ACGT]')
+        else:
+            regex_parts.append(re.escape(char))
+
+    try:
+        regex_pattern = re.compile(''.join(regex_parts), re.IGNORECASE)
+    except re.error as e:
+        raise ValueError(f"Invalid pattern: {e}")
+
+    # Read and search FASTA file
+    try:
+        with open(fasta_file, 'r') as f:
+            current_name = None
+            current_seq = []
+
+            for line in f:
+                line = line.strip()
+                if line.startswith('>'):
+                    # Process previous sequence
+                    if current_name and current_seq:
+                        seq = ''.join(current_seq)
+                        sequences_searched += 1
+                        total_residues += len(seq)
+                        seq_hits = _search_sequence_regex(
+                            current_name, seq, regex_pattern,
+                            strand, pattern_type
+                        )
+                        hits.extend(seq_hits)
+
+                        if len(hits) >= max_results:
+                            return hits[:max_results], sequences_searched, total_residues
+
+                    # Start new sequence
+                    current_name = line[1:].split()[0]
+                    current_seq = []
+                else:
+                    current_seq.append(line)
+
+            # Process last sequence
+            if current_name and current_seq:
+                seq = ''.join(current_seq)
+                sequences_searched += 1
+                total_residues += len(seq)
+                seq_hits = _search_sequence_regex(
+                    current_name, seq, regex_pattern,
+                    strand, pattern_type
+                )
+                hits.extend(seq_hits)
+
+    except IOError as e:
+        raise RuntimeError(f"Failed to read FASTA file: {e}")
+
+    return hits[:max_results], sequences_searched, total_residues
+
+
+def _search_sequence_regex(
+    seq_name: str,
+    sequence: str,
+    regex_pattern: re.Pattern,
+    strand: StrandOption,
+    pattern_type: PatternType,
+) -> List[Tuple[str, int, int, str, str]]:
+    """Search a single sequence with regex pattern."""
+    hits = []
+
+    # Search Watson strand
+    if strand in [StrandOption.BOTH, StrandOption.WATSON]:
+        for match in regex_pattern.finditer(sequence):
+            start = match.start() + 1  # 1-based
+            end = match.end()
+            matched_seq = match.group()
+            hits.append((seq_name, start, end, "W", matched_seq))
+
+    # Search Crick strand (DNA only)
+    if pattern_type == PatternType.DNA and strand in [StrandOption.BOTH, StrandOption.CRICK]:
+        rev_seq = get_reverse_complement(sequence)
+        seq_len = len(sequence)
+
+        for match in regex_pattern.finditer(rev_seq):
+            # Convert to Watson coordinates
+            rev_start = match.start()
+            rev_end = match.end()
+            start = seq_len - rev_end + 1
+            end = seq_len - rev_start
+            matched_seq = match.group()
+            hits.append((seq_name, start, end, "C", matched_seq))
+
+    return hits
+
+
+def _get_hit_context(
+    fasta_file: str,
+    seq_name: str,
+    start: int,
+    end: int,
+    context_size: int = 20,
+) -> Tuple[str, str]:
+    """
+    Get context around a hit (for display).
+
+    Returns: (context_before, context_after)
+    """
+    # This is a simplified version - in practice, you might want to cache sequences
+    try:
+        with open(fasta_file, 'r') as f:
+            current_name = None
+            current_seq = []
+
+            for line in f:
+                line = line.strip()
+                if line.startswith('>'):
+                    if current_name == seq_name and current_seq:
+                        seq = ''.join(current_seq)
+                        ctx_start = max(0, start - 1 - context_size)
+                        ctx_end = min(len(seq), end + context_size)
+                        return (
+                            seq[ctx_start:start - 1],
+                            seq[end:ctx_end]
+                        )
+                    current_name = line[1:].split()[0]
+                    current_seq = []
+                else:
+                    current_seq.append(line)
+
+            # Check last sequence
+            if current_name == seq_name and current_seq:
+                seq = ''.join(current_seq)
+                ctx_start = max(0, start - 1 - context_size)
+                ctx_end = min(len(seq), end + context_size)
+                return (
+                    seq[ctx_start:start - 1],
+                    seq[end:ctx_end]
+                )
+
+    except IOError:
+        pass
+
+    return ("", "")
 
 
 def get_patmatch_config() -> PatmatchConfigResponse:
     """Get pattern match configuration options."""
+    datasets = []
+
+    for config in get_available_datasets():
+        datasets.append(DatasetInfo(
+            name=config.name,
+            display_name=config.display_name,
+            description=config.description,
+            pattern_type=SchemaPatternType(config.pattern_type.value),
+        ))
+
     return PatmatchConfigResponse(
-        datasets=list(DATASET_INFO.values()),
+        datasets=datasets,
         max_pattern_length=100,
         max_mismatches=3,
         max_insertions=3,
@@ -219,380 +396,30 @@ def get_patmatch_config() -> PatmatchConfigResponse:
     )
 
 
-def get_datasets_for_type(pattern_type: PatternType) -> List[DatasetInfo]:
+def get_datasets_for_type(pattern_type: SchemaPatternType) -> List[DatasetInfo]:
     """Get datasets compatible with a pattern type."""
-    return [
-        info for info in DATASET_INFO.values()
-        if info.pattern_type == pattern_type
-    ]
+    config_type = PatternType(pattern_type.value)
+    datasets = []
 
+    for config in get_available_datasets(config_type):
+        datasets.append(DatasetInfo(
+            name=config.name,
+            display_name=config.display_name,
+            description=config.description,
+            pattern_type=pattern_type,
+        ))
 
-def _pattern_to_regex(
-    pattern: str,
-    pattern_type: PatternType,
-    max_mismatches: int = 0,
-    max_insertions: int = 0,
-    max_deletions: int = 0,
-) -> str:
-    """
-    Convert a pattern with IUPAC codes to a regex pattern.
-
-    For simplicity, this implementation handles exact matches and IUPAC codes.
-    Fuzzy matching (mismatches/insertions/deletions) uses a simplified approach.
-    """
-    pattern = pattern.upper()
-    iupac_map = IUPAC_DNA if pattern_type == PatternType.DNA else IUPAC_PROTEIN
-
-    # Build regex from IUPAC codes
-    regex_parts = []
-    for char in pattern:
-        if char in iupac_map:
-            regex_parts.append(iupac_map[char])
-        elif char == '.':
-            # Wildcard
-            regex_parts.append('.' if pattern_type == PatternType.PROTEIN else '[ACGT]')
-        else:
-            # Escape special regex characters
-            regex_parts.append(re.escape(char))
-
-    base_regex = ''.join(regex_parts)
-
-    # For fuzzy matching, we use a simplified approach
-    # A full implementation would use more sophisticated algorithms
-    if max_mismatches > 0 or max_insertions > 0 or max_deletions > 0:
-        # For now, just use the base pattern
-        # Real fuzzy matching would require more complex logic
-        pass
-
-    return base_regex
-
-
-def _reverse_complement(seq: str) -> str:
-    """Return the reverse complement of a DNA sequence."""
-    complement = str.maketrans('ACGTacgt', 'TGCAtgca')
-    return seq.translate(complement)[::-1]
-
-
-def _parse_dataset_params(dataset: SequenceDataset) -> Tuple[Optional[str], Optional[str], str]:
-    """
-    Parse dataset enum to extract organism filter, genome version, and sequence type.
-
-    Returns: (organism_filter, genome_version, seq_category)
-    - organism_filter: 'albicans', 'glabrata', or None for all
-    - genome_version: '22', '21', or None for any
-    - seq_category: 'chromosomes', 'orf_genomic', 'orf_coding', 'orf_protein', etc.
-    """
-    name = dataset.value  # e.g., "ca22_chromosomes", "cg_orf_protein", "all_chromosomes"
-
-    organism_filter = None
-    genome_version = None
-
-    if name.startswith("ca22_"):
-        organism_filter = "albicans"
-        genome_version = "22"
-        seq_category = name[5:]  # Remove "ca22_"
-    elif name.startswith("ca21_"):
-        organism_filter = "albicans"
-        genome_version = "21"
-        seq_category = name[5:]  # Remove "ca21_"
-    elif name.startswith("cg_"):
-        organism_filter = "glabrata"
-        genome_version = None  # C. glabrata doesn't have multiple assemblies
-        seq_category = name[3:]  # Remove "cg_"
-    elif name.startswith("all_"):
-        organism_filter = None  # All organisms
-        genome_version = None
-        seq_category = name[4:]  # Remove "all_"
-    else:
-        # Fallback for old-style dataset names
-        seq_category = name
-
-    return organism_filter, genome_version, seq_category
-
-
-def _build_base_query(
-    db: Session,
-    organism_filter: Optional[str],
-    genome_version: Optional[str],
-    feature_types: List[str],
-    seq_type: str,
-):
-    """Build base query with organism and genome version filters."""
-    query = (
-        db.query(Feature, Seq, Organism)
-        .join(Seq, Feature.feature_no == Seq.feature_no)
-        .join(Organism, Feature.organism_no == Organism.organism_no)
-        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
-        .filter(
-            Feature.feature_type.in_(feature_types),
-            Seq.seq_type == seq_type,
-            Seq.is_seq_current == "Y",
-        )
-    )
-
-    # Filter by organism if specified
-    if organism_filter:
-        query = query.filter(
-            func.lower(Organism.organism_name).contains(organism_filter.lower())
-        )
-
-    # Filter by genome version if specified
-    if genome_version:
-        query = query.filter(
-            GenomeVersion.genome_version == genome_version
-        )
-
-    return query
-
-
-def _get_sequences_for_dataset(
-    db: Session,
-    dataset: SequenceDataset,
-) -> List[Tuple[str, str, str, Optional[str]]]:
-    """
-    Get sequences for a dataset.
-
-    Returns list of (name, description, sequence, chromosome) tuples.
-    """
-    sequences = []
-
-    # Parse dataset parameters
-    organism_filter, genome_version, seq_category = _parse_dataset_params(dataset)
-
-    if seq_category == "chromosomes":
-        # Get chromosome sequences
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["chromosome"], "genomic"
-        )
-        results = query.all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                org_short = _get_organism_short_name(organism.organism_name)
-                sequences.append((
-                    feature.feature_name,
-                    f"{org_short} Chromosome {feature.feature_name}",
-                    seq.residues.upper(),
-                    feature.feature_name,
-                ))
-
-    elif seq_category == "orf_genomic":
-        # Get ORF genomic sequences
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["ORF"], "genomic"
-        )
-        results = query.limit(10000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                desc = feature.gene_name or feature.feature_name
-                sequences.append((
-                    feature.feature_name,
-                    desc,
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    elif seq_category == "orf_coding":
-        # Get ORF coding sequences
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["ORF"], "coding"
-        )
-        results = query.limit(10000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                desc = feature.gene_name or feature.feature_name
-                sequences.append((
-                    feature.feature_name,
-                    desc,
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    elif seq_category == "orf_protein":
-        # Get protein sequences
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["ORF"], "protein"
-        )
-        results = query.limit(10000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                desc = feature.gene_name or feature.feature_name
-                sequences.append((
-                    feature.feature_name,
-                    desc,
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    elif seq_category == "orf_genomic_1kb":
-        # Get ORF genomic sequences with 1kb flanking
-        # This requires additional processing to add flanking regions
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["ORF"], "genomic"
-        )
-        results = query.limit(5000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                # For 1kb flanking, we'd need to get chromosome sequence
-                # For now, just return the ORF sequence as placeholder
-                desc = feature.gene_name or feature.feature_name
-                sequences.append((
-                    feature.feature_name,
-                    f"{desc} (+/- 1kb)",
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    elif seq_category == "intergenic":
-        # Get intergenic region sequences
-        # These are typically stored as separate features or need to be computed
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["intergenic_region", "intergenic"], "genomic"
-        )
-        results = query.limit(10000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                sequences.append((
-                    feature.feature_name,
-                    f"Intergenic: {feature.feature_name}",
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    elif seq_category == "noncoding":
-        # Get non-coding feature sequences
-        query = _build_base_query(
-            db, organism_filter, genome_version,
-            ["ncRNA", "tRNA", "rRNA", "snRNA", "snoRNA", "misc_RNA"],
-            "genomic"
-        )
-        results = query.limit(5000).all()
-        for feature, seq, organism in results:
-            if seq.residues:
-                desc = f"{feature.feature_type}: {feature.gene_name or feature.feature_name}"
-                sequences.append((
-                    feature.feature_name,
-                    desc,
-                    seq.residues.upper(),
-                    None,
-                ))
-
-    return sequences
-
-
-def _get_organism_short_name(organism_name: str) -> str:
-    """Get short organism name for display."""
-    if "albicans" in organism_name.lower():
-        return "C. albicans"
-    elif "glabrata" in organism_name.lower():
-        return "C. glabrata"
-    else:
-        return organism_name[:20]
-
-
-def _search_sequence(
-    name: str,
-    description: str,
-    sequence: str,
-    chromosome: Optional[str],
-    regex_pattern: re.Pattern,
-    strand: StrandOption,
-    pattern_type: PatternType,
-    context_size: int = 20,
-) -> List[PatmatchHit]:
-    """Search a single sequence for pattern matches."""
-    hits = []
-
-    # Search forward strand
-    if strand in [StrandOption.BOTH, StrandOption.WATSON]:
-        for match in regex_pattern.finditer(sequence):
-            start = match.start() + 1  # 1-based
-            end = match.end()
-            matched_seq = match.group()
-
-            # Get context
-            ctx_start = max(0, match.start() - context_size)
-            ctx_end = min(len(sequence), match.end() + context_size)
-            context_before = sequence[ctx_start:match.start()]
-            context_after = sequence[match.end():ctx_end]
-
-            # Build links
-            locus_link = f"/locus/{name}" if not name.startswith("Ca") or "chr" not in name.lower() else None
-            jbrowse_link = None
-            if chromosome:
-                jbrowse_link = f"/jbrowse?loc={chromosome}:{start}..{end}"
-
-            hits.append(PatmatchHit(
-                sequence_name=name,
-                sequence_description=description,
-                match_start=start,
-                match_end=end,
-                strand="+",
-                matched_sequence=matched_seq,
-                context_before=context_before,
-                context_after=context_after,
-                locus_link=locus_link,
-                jbrowse_link=jbrowse_link,
-            ))
-
-    # Search reverse complement (DNA only)
-    if pattern_type == PatternType.DNA and strand in [StrandOption.BOTH, StrandOption.CRICK]:
-        rev_seq = _reverse_complement(sequence)
-        seq_len = len(sequence)
-
-        for match in regex_pattern.finditer(rev_seq):
-            # Convert coordinates to forward strand
-            rev_start = match.start()
-            rev_end = match.end()
-            start = seq_len - rev_end + 1
-            end = seq_len - rev_start
-            matched_seq = match.group()
-
-            # Get context (from reverse complement)
-            ctx_start = max(0, match.start() - context_size)
-            ctx_end = min(len(rev_seq), match.end() + context_size)
-            context_before = rev_seq[ctx_start:match.start()]
-            context_after = rev_seq[match.end():ctx_end]
-
-            locus_link = f"/locus/{name}" if not name.startswith("Ca") or "chr" not in name.lower() else None
-            jbrowse_link = None
-            if chromosome:
-                jbrowse_link = f"/jbrowse?loc={chromosome}:{start}..{end}"
-
-            hits.append(PatmatchHit(
-                sequence_name=name,
-                sequence_description=description,
-                match_start=start,
-                match_end=end,
-                strand="-",
-                matched_sequence=matched_seq,
-                context_before=context_before,
-                context_after=context_after,
-                locus_link=locus_link,
-                jbrowse_link=jbrowse_link,
-            ))
-
-    return hits
+    return datasets
 
 
 def run_patmatch_search(
-    db: Session,
+    db,  # Not used when reading from files, kept for API compatibility
     request: PatmatchSearchRequest,
 ) -> PatmatchSearchResponse:
     """
     Run a pattern match search.
 
-    Args:
-        db: Database session
-        request: Pattern match search request
-
-    Returns:
-        PatmatchSearchResponse with results or error
+    Uses nrgrep_coords binary if available, otherwise falls back to Python regex.
     """
     # Validate pattern
     pattern = request.pattern.strip().upper()
@@ -602,88 +429,146 @@ def run_patmatch_search(
             error="Pattern is required",
         )
 
-    # Validate dataset/pattern type compatibility
-    dataset_info = DATASET_INFO.get(request.dataset)
-    if not dataset_info:
+    # Get dataset configuration
+    # Map schema dataset enum to config key
+    dataset_key = _map_dataset_to_config_key(request.dataset.value)
+    dataset_config = get_dataset_config(dataset_key)
+
+    if not dataset_config:
         return PatmatchSearchResponse(
             success=False,
-            error=f"Unknown dataset: {request.dataset}",
+            error=f"Unknown dataset: {request.dataset.value}",
         )
 
-    if dataset_info.pattern_type != request.pattern_type:
+    # Check if FASTA file exists
+    if not os.path.exists(dataset_config.fasta_file):
         return PatmatchSearchResponse(
             success=False,
-            error=f"Dataset '{dataset_info.display_name}' requires {dataset_info.pattern_type.value} patterns",
+            error=f"Dataset file not available: {dataset_config.display_name}",
         )
 
-    # Build regex pattern
+    # Validate pattern type matches dataset
+    expected_type = SchemaPatternType(dataset_config.pattern_type.value)
+    if expected_type != request.pattern_type:
+        return PatmatchSearchResponse(
+            success=False,
+            error=f"Dataset '{dataset_config.display_name}' requires {expected_type.value} patterns",
+        )
+
+    # Convert pattern type
+    config_pattern_type = PatternType(request.pattern_type.value)
+
+    # Try binary search first, fall back to Python
+    use_binary = _check_binary_available() and (
+        request.max_mismatches > 0 or
+        request.max_insertions > 0 or
+        request.max_deletions > 0
+    )
+
     try:
-        regex_str = _pattern_to_regex(
-            pattern,
-            request.pattern_type,
-            request.max_mismatches,
-            request.max_insertions,
-            request.max_deletions,
-        )
-        regex_pattern = re.compile(regex_str, re.IGNORECASE)
-    except re.error as e:
-        return PatmatchSearchResponse(
-            success=False,
-            error=f"Invalid pattern: {str(e)}",
-        )
+        if use_binary:
+            # Convert pattern for nrgrep
+            nrgrep_pattern = convert_pattern_for_nrgrep(
+                pattern, config_pattern_type,
+                request.max_mismatches,
+                request.max_insertions,
+                request.max_deletions,
+            )
 
-    # Get sequences to search
-    try:
-        sequences = _get_sequences_for_dataset(db, request.dataset)
+            # Run Watson strand search
+            hits = _run_nrgrep_search(
+                nrgrep_pattern,
+                dataset_config.fasta_file,
+                request.max_mismatches,
+                request.max_insertions,
+                request.max_deletions,
+                request.max_results,
+            )
+
+            # For Crick strand, run with reverse complement pattern
+            if (config_pattern_type == PatternType.DNA and
+                    request.strand in [StrandOption.BOTH, StrandOption.CRICK]):
+                rc_pattern = get_reverse_complement(nrgrep_pattern)
+                crick_hits = _run_nrgrep_search(
+                    rc_pattern,
+                    dataset_config.fasta_file,
+                    request.max_mismatches,
+                    request.max_insertions,
+                    request.max_deletions,
+                    request.max_results,
+                )
+                # Mark as Crick strand hits
+                crick_hits = [(n, s, e, "C", m) for n, s, e, _, m in crick_hits]
+                hits.extend(crick_hits)
+
+            # Filter by strand if needed
+            if request.strand == StrandOption.WATSON:
+                hits = [(n, s, e, st, m) for n, s, e, st, m in hits if st == "W"]
+            elif request.strand == StrandOption.CRICK:
+                hits = [(n, s, e, st, m) for n, s, e, st, m in hits if st == "C"]
+
+            sequences_searched = 0  # Not tracked with binary
+            total_residues = 0
+
+        else:
+            # Use Python regex (no fuzzy matching support)
+            hits, sequences_searched, total_residues = _run_python_search(
+                pattern,
+                dataset_config.fasta_file,
+                config_pattern_type,
+                request.strand,
+                request.max_results,
+            )
+
     except Exception as e:
-        logger.exception("Error fetching sequences")
+        logger.exception("Pattern search failed")
         return PatmatchSearchResponse(
             success=False,
-            error=f"Error fetching sequences: {str(e)}",
+            error=f"Search failed: {str(e)}",
         )
 
-    if not sequences:
-        return PatmatchSearchResponse(
-            success=False,
-            error=f"No sequences found in dataset '{dataset_info.display_name}'",
+    # Limit results
+    hits = hits[:request.max_results]
+
+    # Convert to PatmatchHit objects
+    patmatch_hits = []
+    for seq_name, start, end, strand, matched_seq in hits:
+        # Get context
+        ctx_before, ctx_after = _get_hit_context(
+            dataset_config.fasta_file, seq_name, start, end
         )
 
-    # Search all sequences
-    all_hits = []
-    total_residues = 0
+        # Build links
+        locus_link = f"/locus/{seq_name}"
+        jbrowse_link = None  # Could add JBrowse link based on coordinates
 
-    for name, description, sequence, chromosome in sequences:
-        total_residues += len(sequence)
-        hits = _search_sequence(
-            name,
-            description,
-            sequence,
-            chromosome,
-            regex_pattern,
-            request.strand,
-            request.pattern_type,
-        )
-        all_hits.extend(hits)
-
-        # Check if we have enough results
-        if len(all_hits) >= request.max_results:
-            all_hits = all_hits[:request.max_results]
-            break
+        patmatch_hits.append(PatmatchHit(
+            sequence_name=seq_name,
+            sequence_description=seq_name,
+            match_start=start,
+            match_end=end,
+            strand="+" if strand == "W" else "-",
+            matched_sequence=matched_seq,
+            context_before=ctx_before,
+            context_after=ctx_after,
+            locus_link=locus_link,
+            jbrowse_link=jbrowse_link,
+        ))
 
     # Build result
     result = PatmatchSearchResult(
         pattern=pattern,
         pattern_type=request.pattern_type.value,
-        dataset=dataset_info.display_name,
+        dataset=dataset_config.display_name,
         strand=request.strand.value,
-        total_hits=len(all_hits),
-        hits=all_hits,
+        total_hits=len(patmatch_hits),
+        hits=patmatch_hits,
         search_params={
             "max_mismatches": request.max_mismatches,
             "max_insertions": request.max_insertions,
             "max_deletions": request.max_deletions,
         },
-        sequences_searched=len(sequences),
+        sequences_searched=sequences_searched,
         total_residues_searched=total_residues,
     )
 
@@ -691,3 +576,38 @@ def run_patmatch_search(
         success=True,
         result=result,
     )
+
+
+def _map_dataset_to_config_key(dataset_value: str) -> str:
+    """
+    Map schema dataset enum value to config dataset key.
+
+    Schema uses short names like 'ca22_chromosomes',
+    config uses full names like 'genomic_C_albicans_SC5314_A22'.
+    """
+    # Mapping from schema dataset values to config keys
+    mapping = {
+        # C. albicans A22
+        "ca22_chromosomes": "genomic_C_albicans_SC5314_A22",
+        "ca22_orf_genomic": "orf_genomic_C_albicans_SC5314_A22",
+        "ca22_orf_coding": "orf_coding_C_albicans_SC5314_A22",
+        "ca22_orf_genomic_1kb": "orf_genomic_1000_C_albicans_SC5314_A22",
+        "ca22_intergenic": "not_feature_C_albicans_SC5314_A22",
+        "ca22_noncoding": "other_features_genomic_C_albicans_SC5314_A22",
+        "ca22_orf_protein": "orf_trans_all_C_albicans_SC5314_A22",
+        # C. albicans A21
+        "ca21_chromosomes": "genomic_C_albicans_SC5314_A21",
+        "ca21_orf_genomic": "orf_genomic_C_albicans_SC5314_A21",
+        "ca21_orf_coding": "orf_coding_C_albicans_SC5314_A21",
+        "ca21_orf_genomic_1kb": "orf_genomic_1000_C_albicans_SC5314_A21",
+        "ca21_intergenic": "not_feature_C_albicans_SC5314_A21",
+        "ca21_noncoding": "other_features_genomic_C_albicans_SC5314_A21",
+        "ca21_orf_protein": "orf_trans_all_C_albicans_SC5314_A21",
+        # C. glabrata
+        "cg_chromosomes": "genomic_C_glabrata_CBS138_",
+        "cg_orf_genomic": "orf_genomic_C_glabrata_CBS138_",
+        "cg_orf_coding": "orf_coding_C_glabrata_CBS138_",
+        "cg_orf_protein": "orf_trans_all_C_glabrata_CBS138_",
+    }
+
+    return mapping.get(dataset_value, dataset_value)
