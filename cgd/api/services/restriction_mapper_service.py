@@ -43,7 +43,11 @@ COMPLEMENT = {"A": "T", "T": "A", "C": "G", "G": "C"}
 
 
 def _check_binary_available() -> bool:
-    """Check if the scan_for_matches binary is available."""
+    """Check if the scan_for_matches binary is available and enabled."""
+    # Allow disabling binary via environment variable
+    if os.environ.get("RESTRICTION_MAPPER_USE_PYTHON", "").lower() in ("1", "true", "yes"):
+        logger.info("Binary disabled via RESTRICTION_MAPPER_USE_PYTHON env var")
+        return False
     return os.path.isfile(SCAN_FOR_MATCHES_BINARY) and os.access(SCAN_FOR_MATCHES_BINARY, os.X_OK)
 
 
@@ -217,6 +221,8 @@ def _run_scan_for_matches(
                         timeout=60
                     )
 
+                logger.debug(f"Binary run for {enzyme.name}: returncode={result.returncode}, stdout_len={len(result.stdout)}, stderr={result.stderr[:100] if result.stderr else 'none'}")
+
                 if result.returncode == 0:
                     # Parse output
                     # Format: >seq_name:[start,end]
@@ -232,12 +238,13 @@ def _run_scan_for_matches(
                             start = int(match.group(1))
                             end = int(match.group(2))
                             results[enzyme.name].append((start, end, ""))
+                            logger.debug(f"  Found match for {enzyme.name}: {start}-{end}")
 
             except subprocess.TimeoutExpired:
-                # Timeout - continue with other enzymes
+                logger.warning(f"Binary timeout for {enzyme.name}")
                 pass
-            except Exception:
-                # Error running binary - continue with other enzymes
+            except Exception as e:
+                logger.warning(f"Binary error for {enzyme.name}: {e}")
                 pass
 
     return results
