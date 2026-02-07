@@ -333,6 +333,62 @@ def _search_sequence_regex(
     return hits
 
 
+def _load_sequences_for_context(
+    fasta_file: str,
+    seq_names: set,
+) -> Dict[str, str]:
+    """
+    Load sequences from FASTA file for the given sequence names.
+
+    Only loads sequences that are needed, reading the file once.
+    Returns: dict mapping seq_name to sequence string
+    """
+    sequences = {}
+    try:
+        with open(fasta_file, 'r') as f:
+            current_name = None
+            current_seq = []
+
+            for line in f:
+                line = line.strip()
+                if line.startswith('>'):
+                    # Save previous sequence if it was needed
+                    if current_name and current_name in seq_names and current_seq:
+                        sequences[current_name] = ''.join(current_seq)
+                        # Early exit if we have all sequences
+                        if len(sequences) == len(seq_names):
+                            return sequences
+
+                    current_name = line[1:].split()[0]
+                    current_seq = [] if current_name in seq_names else None
+                elif current_seq is not None:
+                    current_seq.append(line)
+
+            # Don't forget the last sequence
+            if current_name and current_name in seq_names and current_seq:
+                sequences[current_name] = ''.join(current_seq)
+
+    except IOError as e:
+        logger.warning(f"Failed to read FASTA for context: {e}")
+
+    return sequences
+
+
+def _get_context_from_sequence(
+    sequence: str,
+    start: int,
+    end: int,
+    context_size: int = 20,
+) -> Tuple[str, str]:
+    """Extract context before and after a match from a sequence."""
+    ctx_start = max(0, start - 1 - context_size)
+    ctx_end = min(len(sequence), end + context_size)
+    return (
+        sequence[ctx_start:start - 1],
+        sequence[end:ctx_end]
+    )
+
+
 def _get_hit_context(
     fasta_file: str,
     seq_name: str,
@@ -342,44 +398,13 @@ def _get_hit_context(
 ) -> Tuple[str, str]:
     """
     Get context around a hit (for display).
+    Note: For batch operations, use _load_sequences_for_context instead.
 
     Returns: (context_before, context_after)
     """
-    # This is a simplified version - in practice, you might want to cache sequences
-    try:
-        with open(fasta_file, 'r') as f:
-            current_name = None
-            current_seq = []
-
-            for line in f:
-                line = line.strip()
-                if line.startswith('>'):
-                    if current_name == seq_name and current_seq:
-                        seq = ''.join(current_seq)
-                        ctx_start = max(0, start - 1 - context_size)
-                        ctx_end = min(len(seq), end + context_size)
-                        return (
-                            seq[ctx_start:start - 1],
-                            seq[end:ctx_end]
-                        )
-                    current_name = line[1:].split()[0]
-                    current_seq = []
-                else:
-                    current_seq.append(line)
-
-            # Check last sequence
-            if current_name == seq_name and current_seq:
-                seq = ''.join(current_seq)
-                ctx_start = max(0, start - 1 - context_size)
-                ctx_end = min(len(seq), end + context_size)
-                return (
-                    seq[ctx_start:start - 1],
-                    seq[end:ctx_end]
-                )
-
-    except IOError:
-        pass
-
+    sequences = _load_sequences_for_context(fasta_file, {seq_name})
+    if seq_name in sequences:
+        return _get_context_from_sequence(sequences[seq_name], start, end, context_size)
     return ("", "")
 
 
@@ -545,13 +570,23 @@ def run_patmatch_search(
     # Limit results
     hits = hits[:request.max_results]
 
+    # Batch load sequences for context (much faster than loading per-hit)
+    unique_seq_names = {h[0] for h in hits}
+    logger.debug(f"Loading {len(unique_seq_names)} sequences for context")
+    sequences_cache = _load_sequences_for_context(
+        dataset_config.fasta_file, unique_seq_names
+    )
+
     # Convert to PatmatchHit objects
     patmatch_hits = []
     for seq_name, start, end, strand, matched_seq in hits:
-        # Get context
-        ctx_before, ctx_after = _get_hit_context(
-            dataset_config.fasta_file, seq_name, start, end
-        )
+        # Get context from cached sequences
+        if seq_name in sequences_cache:
+            ctx_before, ctx_after = _get_context_from_sequence(
+                sequences_cache[seq_name], start, end
+            )
+        else:
+            ctx_before, ctx_after = "", ""
 
         # Build links
         locus_link = f"/locus/{seq_name}"
