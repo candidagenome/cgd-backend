@@ -94,6 +94,27 @@ class PhylogeneticTreeOut(BaseModel):
     download_links: list[DownloadLinkOut] = []
 
 
+class AlignmentSequenceOut(BaseModel):
+    """Single sequence in an alignment."""
+    sequence_id: str  # Identifier (e.g., orf19.5543)
+    organism_name: typing.Optional[str] = None  # Full organism name
+    sequence: str  # Aligned sequence with gaps
+
+
+class SequenceAlignmentOut(BaseModel):
+    """Sequence alignment section data (protein or coding)."""
+    # Alignment type: "protein" or "coding"
+    alignment_type: str
+    # Method used to build alignment
+    method: typing.Optional[str] = None  # e.g., "MUSCLE"
+    # Aligned sequences
+    sequences: list[AlignmentSequenceOut] = []
+    # Alignment length (with gaps)
+    alignment_length: typing.Optional[int] = None
+    # Download links for alignment files
+    download_links: list[DownloadLinkOut] = []
+
+
 class HomologyDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
@@ -102,6 +123,10 @@ class HomologyDetailsForOrganism(BaseModel):
     ortholog_cluster: typing.Optional[OrthologClusterOut] = None
     # Phylogenetic Tree section
     phylogenetic_tree: typing.Optional[PhylogeneticTreeOut] = None
+    # Protein Sequence Alignment section
+    protein_alignment: typing.Optional[SequenceAlignmentOut] = None
+    # Coding Sequence Alignment section
+    coding_alignment: typing.Optional[SequenceAlignmentOut] = None
     # Best hits in CGD species (BLAST)
     best_hits_cgd: typing.Optional[BestHitsInCGDOut] = None
     # Orthologs in fungal species (external)
