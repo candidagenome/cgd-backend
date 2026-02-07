@@ -685,7 +685,7 @@ def _parse_blast_xml(
             # For gene/protein databases, hit_id is the feature name
             feature_name = hit_id
             locus_link = f"/locus/{feature_name}"
-            literature_link = f"/locus/{feature_name}/literature"
+            literature_link = f"/locus/{feature_name}?tab=literature"
         else:
             # For genomic databases, try to extract locus from hit description
             locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
