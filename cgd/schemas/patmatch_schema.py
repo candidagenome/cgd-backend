@@ -62,8 +62,54 @@ class PatmatchSearchRequest(BaseModel):
     max_results: int = Field(
         100,
         ge=1,
-        le=1000,
-        description="Maximum number of results to return"
+        le=50000,
+        description="Maximum number of results to return (API limited to 1000, download up to 50000)"
+    )
+
+
+class PatmatchDownloadRequest(BaseModel):
+    """Request for downloading pattern match results (higher limit)."""
+    pattern: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Pattern to search for (DNA or protein sequence, supports IUPAC codes)"
+    )
+    pattern_type: PatternType = Field(
+        PatternType.DNA,
+        description="Type of pattern (DNA or protein)"
+    )
+    dataset: str = Field(
+        ...,
+        description="Sequence dataset to search (from /api/patmatch/config)"
+    )
+    strand: StrandOption = Field(
+        StrandOption.BOTH,
+        description="Which strand(s) to search (DNA only)"
+    )
+    max_mismatches: int = Field(
+        0,
+        ge=0,
+        le=3,
+        description="Maximum number of mismatches allowed"
+    )
+    max_insertions: int = Field(
+        0,
+        ge=0,
+        le=3,
+        description="Maximum number of insertions allowed"
+    )
+    max_deletions: int = Field(
+        0,
+        ge=0,
+        le=3,
+        description="Maximum number of deletions allowed"
+    )
+    max_results: int = Field(
+        10000,
+        ge=1,
+        le=50000,
+        description="Maximum number of results to download (default 10000, max 50000)"
     )
 
 

@@ -10,6 +10,7 @@ from cgd.db.deps import get_db
 from cgd.schemas.patmatch_schema import (
     PatternType,
     PatmatchSearchRequest,
+    PatmatchDownloadRequest,
     PatmatchSearchResponse,
     PatmatchConfigResponse,
     DatasetInfo,
@@ -122,15 +123,27 @@ def search_get(
 
 @router.post("/download", response_class=PlainTextResponse)
 def download_results(
-    request: PatmatchSearchRequest,
+    request: PatmatchDownloadRequest,
     db: Session = Depends(get_db),
 ):
     """
     Download pattern match results as TSV.
 
     Returns a tab-separated file with all matching sequences.
+    Supports up to 50,000 results (higher limit than search endpoint).
     """
-    result = run_patmatch_search(db, request)
+    # Convert to search request for the service
+    search_request = PatmatchSearchRequest(
+        pattern=request.pattern,
+        pattern_type=request.pattern_type,
+        dataset=request.dataset,
+        strand=request.strand,
+        max_mismatches=request.max_mismatches,
+        max_insertions=request.max_insertions,
+        max_deletions=request.max_deletions,
+        max_results=min(request.max_results, 50000),  # Cap at 50k for safety
+    )
+    result = run_patmatch_search(db, search_request)
 
     if not result.success or not result.result:
         return PlainTextResponse(
