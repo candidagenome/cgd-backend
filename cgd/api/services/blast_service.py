@@ -666,19 +666,33 @@ def _parse_blast_xml(
 
         query_cover = len(query_coverage_set) / query_len * 100 if query_len > 0 else 0
 
-        # Try to extract locus link from hit_id or hit_def
-        locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
-
         # Extract organism info from database path
         db_basename = os.path.basename(database)
         organism_tag = extract_organism_tag_from_database(db_basename)
         organism_config = get_organism_for_database(db_basename)
         organism_name = organism_config.get("full_name") if organism_config else None
+        is_cgd = organism_config.get("is_cgd", False) if organism_config else False
+
+        # Determine if this is a gene/protein database (vs genomic/chromosome)
+        is_protein_db = "protein" in db_basename.lower() or "orf_trans_all" in db_basename.lower()
+        is_gene_db = "orf_genomic" in db_basename.lower() or "orf_coding" in db_basename.lower()
+        is_feature_db = is_protein_db or is_gene_db  # Databases where hit_id is a feature name
+
+        # Generate locus and literature links for gene/protein hits (CGD organisms only)
+        locus_link = None
+        literature_link = None
+        if is_feature_db and is_cgd:
+            # For gene/protein databases, hit_id is the feature name
+            feature_name = hit_id
+            locus_link = f"/locus/{feature_name}"
+            literature_link = f"/locus/{feature_name}/literature"
+        else:
+            # For genomic databases, try to extract locus from hit description
+            locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
 
         # Generate JBrowse URL for genomic hits only (not protein databases)
         # Protein databases have hit IDs that are gene/protein names, not chromosomes
         jbrowse_url = None
-        is_protein_db = "protein" in db_basename.lower() or "orf_trans_all" in db_basename.lower()
         if organism_tag and hsps and not is_protein_db:
             # Use the first HSP's coordinates for the JBrowse link
             first_hsp = hsps[0]
@@ -709,6 +723,7 @@ def _parse_blast_xml(
             total_score=total_score,
             query_cover=query_cover,
             locus_link=locus_link,
+            literature_link=literature_link,
             jbrowse_url=jbrowse_url,
             organism_name=organism_name,
             organism_tag=organism_tag,

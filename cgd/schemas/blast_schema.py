@@ -258,6 +258,7 @@ class BlastHit(BaseModel):
     query_cover: float
     # Links
     locus_link: Optional[str] = None
+    literature_link: Optional[str] = None
     jbrowse_url: Optional[str] = None
     # Organism info
     organism_name: Optional[str] = None
