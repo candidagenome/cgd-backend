@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 # CGD organisms with BLAST configuration
 # Format: tag -> config dict
+# Note: Tags must match database file naming (e.g., genomic_C_albicans_SC5314_A22)
 BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
+    # C. albicans SC5314 assemblies
     "C_albicans_SC5314_A22": {
         "full_name": "Candida albicans SC5314 (Assembly 22)",
         "trans_table": 12,  # Alternative yeast nuclear code (CTG clade)
@@ -27,24 +29,42 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "full_name": "Candida albicans SC5314 (Assembly 21)",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_albicans_SC5314",
+        "jbrowse_data": None,  # No JBrowse data for A21
         "is_cgd": True,
         "assembly": "A21",
     },
-    "C_glabrata_CBS138": {
-        "full_name": "Candida glabrata CBS138",
-        "trans_table": 1,  # Standard genetic code
-        "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_glabrata_CBS138",
-        "is_cgd": True,
-    },
-    "C_auris": {
-        "full_name": "Candida auris",
+    "C_albicans_SC5314_A19": {
+        "full_name": "Candida albicans SC5314 (Assembly 19)",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_auris",
+        "jbrowse_data": None,  # No JBrowse data for A19
+        "is_cgd": True,
+        "assembly": "A19",
+    },
+    # C. albicans WO-1
+    "C_albicans_WO-1": {
+        "full_name": "Candida albicans WO-1",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_albicans_WO-1",
         "is_cgd": True,
     },
+    # C. auris strains
+    "C_auris_B11221": {
+        "full_name": "Candida auris B11221",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_auris_B11221",
+        "is_cgd": True,
+    },
+    "C_auris_B8441": {
+        "full_name": "Candida auris B8441",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_auris_B8441",
+        "is_cgd": True,
+    },
+    # C. dubliniensis
     "C_dubliniensis_CD36": {
         "full_name": "Candida dubliniensis CD36",
         "trans_table": 12,
@@ -52,6 +72,46 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "jbrowse_data": "cgd_data/C_dubliniensis_CD36",
         "is_cgd": True,
     },
+    # C. glabrata
+    "C_glabrata_CBS138": {
+        "full_name": "Candida glabrata CBS138",
+        "trans_table": 1,  # Standard genetic code (not CTG clade)
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_glabrata_CBS138",
+        "is_cgd": True,
+    },
+    # C. guilliermondii
+    "C_guilliermondii_ATCC_6260": {
+        "full_name": "Candida guilliermondii ATCC 6260",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_guilliermondii_ATCC_6260",
+        "is_cgd": True,
+    },
+    # C. lusitaniae strains
+    "C_lusitaniae_ATCC_42720": {
+        "full_name": "Candida lusitaniae ATCC 42720",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_lusitaniae_ATCC_42720",
+        "is_cgd": True,
+    },
+    "C_lusitaniae_CBS6936": {
+        "full_name": "Candida lusitaniae CBS6936",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_lusitaniae_CBS6936",
+        "is_cgd": True,
+    },
+    # C. orthopsilosis
+    "C_orthopsilosis_Co_90-125": {
+        "full_name": "Candida orthopsilosis Co 90-125",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_orthopsilosis_Co_90-125",
+        "is_cgd": True,
+    },
+    # C. parapsilosis
     "C_parapsilosis_CDC317": {
         "full_name": "Candida parapsilosis CDC317",
         "trans_table": 12,
@@ -59,13 +119,31 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "jbrowse_data": "cgd_data/C_parapsilosis_CDC317",
         "is_cgd": True,
     },
-    "C_tropicalis_MYA3404": {
+    # C. tropicalis
+    "C_tropicalis_MYA-3404": {
         "full_name": "Candida tropicalis MYA-3404",
         "trans_table": 12,
         "seq_sets": ["genomic", "gene", "coding", "protein"],
-        "jbrowse_data": "cgd_data/C_tropicalis_MYA3404",
+        "jbrowse_data": "cgd_data/C_tropicalis_MYA-3404",
         "is_cgd": True,
     },
+    # D. hansenii
+    "D_hansenii_CBS767": {
+        "full_name": "Debaryomyces hansenii CBS767",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/D_hansenii_CBS767",
+        "is_cgd": True,
+    },
+    # L. elongisporus
+    "L_elongisporus_NRLL_YB-4239": {
+        "full_name": "Lodderomyces elongisporus NRRL YB-4239",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/L_elongisporus_NRLL_YB-4239",
+        "is_cgd": True,
+    },
+    # S. cerevisiae (external - no CGD JBrowse)
     "S_cerevisiae_S288C": {
         "full_name": "Saccharomyces cerevisiae S288C",
         "trans_table": 1,  # Standard genetic code
@@ -293,7 +371,8 @@ def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
             return database_name[len(prefix):]
 
     # Also handle non-default prefix pattern: genomic_C_albicans_SC5314_A21
-    for seq_type in ["genomic_", "coding_", "protein_"]:
+    # Include all prefixes from DATASET_TYPE_TO_PREFIX
+    for seq_type in ["genomic_", "coding_", "protein_", "orf_genomic_", "orf_coding_", "orf_trans_all_", "other_features_genomic_", "other_features_no_introns_"]:
         if database_name.startswith(seq_type):
             return database_name[len(seq_type):]
 
@@ -303,6 +382,73 @@ def extract_organism_tag_from_database(database_name: str) -> Optional[str]:
             return database_name[:-len(suffix)]
 
     return None
+
+
+# Dataset type to database prefix mapping
+# Maps DatasetType enum values to database file prefixes
+DATASET_TYPE_TO_PREFIX = {
+    "GENOME": "genomic",
+    "GENES": "orf_genomic",
+    "CODING": "orf_coding",
+    "PROTEIN": "orf_trans_all",
+    "OTHER": "other_features_genomic",
+    "OTHER_SPLICED": "other_features_no_introns",
+}
+
+# Dataset type to database type mapping
+DATASET_TYPE_TO_DB_TYPE = {
+    "GENOME": "nucleotide",
+    "GENES": "nucleotide",
+    "CODING": "nucleotide",
+    "PROTEIN": "protein",
+    "OTHER": "nucleotide",
+    "OTHER_SPLICED": "nucleotide",
+}
+
+
+def build_database_name(genome_id: str, dataset_type: str) -> str:
+    """
+    Build a database name from genome ID and dataset type.
+
+    Args:
+        genome_id: Genome identifier (e.g., 'C_albicans_SC5314_A22')
+        dataset_type: Dataset type (e.g., 'GENOME', 'CODING', 'PROTEIN')
+
+    Returns:
+        Database name (e.g., 'genomic_C_albicans_SC5314_A22')
+    """
+    prefix = DATASET_TYPE_TO_PREFIX.get(dataset_type, "genomic")
+    return f"{prefix}_{genome_id}"
+
+
+def build_database_names(
+    genomes: List[str],
+    dataset_type: str
+) -> List[str]:
+    """
+    Build a list of database names from genome IDs and dataset type.
+
+    Args:
+        genomes: List of genome identifiers
+        dataset_type: Dataset type
+
+    Returns:
+        List of database names
+    """
+    return [build_database_name(genome, dataset_type) for genome in genomes]
+
+
+def get_database_type_for_dataset(dataset_type: str) -> str:
+    """
+    Get the database type (nucleotide or protein) for a dataset type.
+
+    Args:
+        dataset_type: Dataset type (e.g., 'GENOME', 'PROTEIN')
+
+    Returns:
+        Database type ('nucleotide' or 'protein')
+    """
+    return DATASET_TYPE_TO_DB_TYPE.get(dataset_type, "nucleotide")
 
 
 # BLAST task information for different programs

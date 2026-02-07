@@ -24,6 +24,8 @@ from cgd.core.blast_config import (
     get_all_blast_organisms,
     get_organism_for_database,
     extract_organism_tag_from_database,
+    build_database_names,
+    get_database_type_for_dataset,
 )
 from cgd.models.models import Feature, Seq, FeatRelationship
 from cgd.schemas.blast_schema import (
@@ -664,17 +666,34 @@ def _parse_blast_xml(
 
         query_cover = len(query_coverage_set) / query_len * 100 if query_len > 0 else 0
 
-        # Try to extract locus link from hit_id or hit_def
-        locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
-
         # Extract organism info from database path
-        organism_tag = extract_organism_tag_from_database(os.path.basename(database))
-        organism_config = get_organism_for_database(os.path.basename(database))
+        db_basename = os.path.basename(database)
+        organism_tag = extract_organism_tag_from_database(db_basename)
+        organism_config = get_organism_for_database(db_basename)
         organism_name = organism_config.get("full_name") if organism_config else None
+        is_cgd = organism_config.get("is_cgd", False) if organism_config else False
 
-        # Generate JBrowse URL for genomic hits
+        # Determine if this is a gene/protein database (vs genomic/chromosome)
+        is_protein_db = "protein" in db_basename.lower() or "orf_trans_all" in db_basename.lower()
+        is_gene_db = "orf_genomic" in db_basename.lower() or "orf_coding" in db_basename.lower()
+        is_feature_db = is_protein_db or is_gene_db  # Databases where hit_id is a feature name
+
+        # Generate locus and literature links for gene/protein hits (CGD organisms only)
+        locus_link = None
+        literature_link = None
+        if is_feature_db and is_cgd:
+            # For gene/protein databases, hit_id is the feature name
+            feature_name = hit_id
+            locus_link = f"/locus/{feature_name}"
+            literature_link = f"/locus/{feature_name}?tab=literature"
+        else:
+            # For genomic databases, try to extract locus from hit description
+            locus_link = _extract_locus_link(hit_id, hit_def, hit_accession)
+
+        # Generate JBrowse URL for genomic hits only (not protein databases)
+        # Protein databases have hit IDs that are gene/protein names, not chromosomes
         jbrowse_url = None
-        if organism_tag and hsps:
+        if organism_tag and hsps and not is_protein_db:
             # Use the first HSP's coordinates for the JBrowse link
             first_hsp = hsps[0]
             # For genomic databases, hit_id is typically the chromosome
@@ -704,6 +723,7 @@ def _parse_blast_xml(
             total_score=total_score,
             query_cover=query_cover,
             locus_link=locus_link,
+            literature_link=literature_link,
             jbrowse_url=jbrowse_url,
             organism_name=organism_name,
             organism_tag=organism_tag,
@@ -768,7 +788,41 @@ def run_blast_search(
     Returns:
         BlastSearchResponse with results or error
     """
-    # Validate program/database compatibility
+    # Debug logging
+    logger.info(f"BLAST search request: program={request.program}, "
+                f"genomes={request.genomes}, dataset_type={request.dataset_type}, "
+                f"database={request.database}, databases={request.databases}")
+
+    # Handle genomes + dataset_type selection (new approach)
+    if request.genomes and request.dataset_type:
+        # Convert genomes + dataset_type to database list
+        database_names = build_database_names(
+            request.genomes,
+            request.dataset_type.value
+        )
+        logger.info(f"Built database names from genomes+dataset_type: {database_names}")
+
+        # Validate program/database type compatibility
+        program_info = BLAST_PROGRAMS.get(request.program)
+        if not program_info:
+            return BlastSearchResponse(
+                success=False,
+                error=f"Invalid program: {request.program}",
+            )
+
+        expected_db_type = get_database_type_for_dataset(request.dataset_type.value)
+        if program_info.database_type.value != expected_db_type:
+            return BlastSearchResponse(
+                success=False,
+                error=f"Program {request.program.value} requires {program_info.database_type.value} "
+                      f"database, but dataset type {request.dataset_type.value} provides {expected_db_type} sequences",
+            )
+
+        # Use multi-database search
+        request.databases = database_names
+        return run_multi_database_blast(db, request)
+
+    # Validate program/database compatibility (original flow)
     program_info = BLAST_PROGRAMS.get(request.program)
     db_info = BLAST_DATABASES.get(request.database)
 
