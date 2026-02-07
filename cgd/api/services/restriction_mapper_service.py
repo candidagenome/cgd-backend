@@ -103,11 +103,12 @@ def _get_sequence_for_locus(
         return None
 
     # Get current genomic sequence
+    # Note: seq_type is "Genomic" (capitalized) in the database
     seq_record = (
         db.query(Seq)
         .filter(
             Seq.feature_no == feature.feature_no,
-            Seq.seq_type == "genomic",
+            func.upper(Seq.seq_type) == "GENOMIC",
             Seq.is_seq_current == "Y"
         )
         .first()
