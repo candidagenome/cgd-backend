@@ -16,6 +16,98 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/homology", tags=["homology"])
 
 
+def _parse_fasta(fasta_content: str) -> list[tuple[str, str]]:
+    """Parse FASTA format. Returns list of (seq_id, sequence) tuples."""
+    sequences = []
+    current_id = None
+    current_seq = []
+
+    for line in fasta_content.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            if current_id is not None:
+                sequences.append((current_id, ''.join(current_seq)))
+            current_id = line[1:].split()[0]
+            current_seq = []
+        else:
+            current_seq.append(line)
+
+    if current_id is not None:
+        sequences.append((current_id, ''.join(current_seq)))
+
+    return sequences
+
+
+def _back_translate_alignment(
+    protein_alignment: list[tuple[str, str]],
+    coding_sequences: dict[str, str]
+) -> list[tuple[str, str]]:
+    """
+    Generate coding sequence alignment by back-translating from protein alignment.
+
+    For each position in the protein alignment:
+    - If amino acid: copy the next 3 nucleotides (one codon)
+    - If gap ('-'): insert '---' (three gaps)
+    """
+    coding_alignment = []
+
+    for seq_id, protein_seq in protein_alignment:
+        coding_seq = coding_sequences.get(seq_id, '')
+        if not coding_seq:
+            continue
+
+        aligned_coding = []
+        coding_idx = 0
+
+        for aa in protein_seq:
+            if aa == '-':
+                aligned_coding.append('---')
+            else:
+                codon_end = coding_idx + 3
+                if codon_end <= len(coding_seq):
+                    aligned_coding.append(coding_seq[coding_idx:codon_end])
+                else:
+                    remaining = coding_seq[coding_idx:] if coding_idx < len(coding_seq) else ''
+                    aligned_coding.append(remaining + 'N' * (3 - len(remaining)))
+                coding_idx += 3
+
+        coding_alignment.append((seq_id, ''.join(aligned_coding)))
+
+    return coding_alignment
+
+
+def _generate_coding_alignment_fasta(alignment_dir: Path, dbid: str) -> str:
+    """Generate coding alignment FASTA by back-translating protein alignment."""
+    protein_file = alignment_dir / f"{dbid}_protein_align.fasta"
+    coding_file = alignment_dir / f"{dbid}_coding.fasta"
+
+    if not protein_file.exists() or not coding_file.exists():
+        return ""
+
+    protein_content = protein_file.read_text()
+    coding_content = coding_file.read_text()
+
+    protein_alignment = _parse_fasta(protein_content)
+    coding_seqs = {seq_id: seq for seq_id, seq in _parse_fasta(coding_content)}
+
+    if not protein_alignment or not coding_seqs:
+        return ""
+
+    aligned_coding = _back_translate_alignment(protein_alignment, coding_seqs)
+
+    # Format as FASTA
+    lines = []
+    for seq_id, sequence in aligned_coding:
+        lines.append(f">{seq_id}")
+        # Wrap sequence at 60 characters
+        for i in range(0, len(sequence), 60):
+            lines.append(sequence[i:i+60])
+
+    return '\n'.join(lines)
+
+
 def _get_alignment_dir(dbid: str) -> Path:
     """Get the alignment directory for a given dbid."""
     match = re.search(r'[^\d]*0*(\d+)', dbid)
@@ -43,6 +135,9 @@ def get_alignment_fasta(dbid: str, alignment_type: str):
 
     Returns:
         Alignment file content in FASTA format
+
+    For coding alignments, the alignment is generated on-the-fly by back-translating
+    the protein alignment (matching the Perl implementation in Tools/SeqAlign.pm).
     """
     if alignment_type not in ("protein", "coding"):
         raise HTTPException(
@@ -51,20 +146,26 @@ def get_alignment_fasta(dbid: str, alignment_type: str):
         )
 
     alignment_dir = _get_alignment_dir(dbid)
-    align_file = alignment_dir / f"{dbid}_{alignment_type}_align.fasta"
-
-    # For coding, also try source file
-    if not align_file.exists() and alignment_type == "coding":
-        align_file = alignment_dir / f"{dbid}_coding.fasta"
-
-    if not align_file.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Alignment file not found for {dbid}"
-        )
 
     try:
-        content = align_file.read_text()
+        if alignment_type == "protein":
+            # Protein alignment - read directly from file
+            align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            if not align_file.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Protein alignment file not found for {dbid}"
+                )
+            content = align_file.read_text()
+        else:
+            # Coding alignment - generate by back-translating protein alignment
+            content = _generate_coding_alignment_fasta(alignment_dir, dbid)
+            if not content:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Could not generate coding alignment for {dbid}"
+                )
+
         return PlainTextResponse(
             content=content,
             media_type="text/plain",
@@ -72,9 +173,11 @@ def get_alignment_fasta(dbid: str, alignment_type: str):
                 "Content-Disposition": f"attachment; filename={dbid}_{alignment_type}_align.fasta"
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error reading alignment file: {e}")
-        raise HTTPException(status_code=500, detail="Error reading alignment file")
+        logger.error(f"Error generating alignment: {e}")
+        raise HTTPException(status_code=500, detail="Error generating alignment file")
 
 
 @router.get(

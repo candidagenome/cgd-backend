@@ -2438,10 +2438,10 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     tracks.append(trk)
 
             tracks_str = '%2C'.join(tracks)  # URL-encoded comma
-            # Use full CGD URL for JBrowse iframe - match Perl URL format exactly
+            # Use configurable JBrowse URL for protein domain visualization
             # Perl: pbrowseHome + '&loc=' + feature + ':1..' + len + '&tracklist=0&nav=0&overview=0&tracks=...'
             pbrowse_url = (
-                f"http://www.candidagenome.org/jbrowse/index.html"
+                f"{settings.jbrowse_base_url}"
                 f"?data=cgd_data/{strain_abbrev}_prot"
                 f"&loc={f.feature_name}:1..{protein_length}"
                 f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
@@ -2603,6 +2603,58 @@ def _parse_fasta_alignment(fasta_content: str) -> list[tuple[str, str]]:
     return sequences
 
 
+def _back_translate_alignment(
+    protein_alignment: list[tuple[str, str]],
+    coding_sequences: dict[str, str]
+) -> list[tuple[str, str]]:
+    """
+    Generate coding sequence alignment by back-translating from protein alignment.
+
+    This replicates the Perl algorithm in Tools/SeqAlign.pm make_cds_alignment().
+    For each position in the protein alignment:
+    - If amino acid: copy the next 3 nucleotides (one codon) from unaligned coding sequence
+    - If gap ('-'): insert '---' (three gaps)
+
+    Args:
+        protein_alignment: List of (seq_id, aligned_protein_seq) tuples
+        coding_sequences: Dict of {seq_id: unaligned_coding_seq}
+
+    Returns:
+        List of (seq_id, aligned_coding_seq) tuples
+    """
+    coding_alignment = []
+
+    for seq_id, protein_seq in protein_alignment:
+        # Get the unaligned coding sequence for this ID
+        coding_seq = coding_sequences.get(seq_id, '')
+
+        if not coding_seq:
+            # No coding sequence available, skip this one
+            continue
+
+        aligned_coding = []
+        coding_idx = 0  # Index into unaligned coding sequence
+
+        for aa in protein_seq:
+            if aa == '-':
+                # Gap in protein alignment - insert 3 gaps for codon
+                aligned_coding.append('---')
+            else:
+                # Amino acid - copy next codon (3 nucleotides)
+                codon_end = coding_idx + 3
+                if codon_end <= len(coding_seq):
+                    aligned_coding.append(coding_seq[coding_idx:codon_end])
+                else:
+                    # Not enough nucleotides left - pad with N
+                    remaining = coding_seq[coding_idx:] if coding_idx < len(coding_seq) else ''
+                    aligned_coding.append(remaining + 'N' * (3 - len(remaining)))
+                coding_idx += 3
+
+        coding_alignment.append((seq_id, ''.join(aligned_coding)))
+
+    return coding_alignment
+
+
 def _get_organism_name_from_prefix(seq_id: str) -> Optional[str]:
     """
     Get organism name from sequence ID prefix.
@@ -2654,17 +2706,24 @@ def _get_organism_name_from_prefix(seq_id: str) -> Optional[str]:
 def _load_sequence_alignment(
     dbid: str,
     alignment_type: str,
+    query_seq_id: Optional[str] = None,
 ) -> Optional[SequenceAlignmentOut]:
     """
     Load sequence alignment data for a given locus.
 
     Alignment files are stored in {CGD_DATA_DIR}/homology/alignments/{bucket}/
     - Protein: {dbid}_protein_align.fasta
-    - Coding: {dbid}_coding_align.fasta (generated) or {dbid}_coding.fasta (source)
+    - Coding: Generated on-the-fly by back-translating protein alignment
+
+    For coding alignments, we use the same algorithm as the Perl version:
+    back-translate the protein alignment to derive the coding alignment.
+    This is done by mapping each gap in the protein alignment to '---' (3 gaps)
+    and each amino acid to its corresponding codon from the unaligned coding sequence.
 
     Args:
         dbid: Database identifier (e.g., "CAL0001234")
         alignment_type: "protein" or "coding"
+        query_seq_id: The sequence ID to put first (e.g., "CR_04570C_A" for CDC10)
 
     Returns:
         SequenceAlignmentOut or None if no alignment files exist.
@@ -2679,26 +2738,64 @@ def _load_sequence_alignment(
 
     alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
 
-    # Determine alignment file name
-    if alignment_type == "protein":
-        align_file = alignment_dir / f"{dbid}_protein_align.fasta"
-        method = "MUSCLE"
-    else:  # coding
-        # Try aligned version first, fall back to source
-        align_file = alignment_dir / f"{dbid}_coding_align.fasta"
-        if not align_file.exists():
-            align_file = alignment_dir / f"{dbid}_coding.fasta"
-        method = "MUSCLE"
-
-    if not align_file.exists():
-        return None
-
     try:
-        fasta_content = align_file.read_text()
-        parsed_seqs = _parse_fasta_alignment(fasta_content)
+        if alignment_type == "protein":
+            # Load protein alignment directly
+            align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            method = "MUSCLE"
+
+            if not align_file.exists():
+                return None
+
+            fasta_content = align_file.read_text()
+            parsed_seqs = _parse_fasta_alignment(fasta_content)
+
+        else:  # coding
+            # Generate coding alignment by back-translating protein alignment
+            # This matches the Perl algorithm in Tools/SeqAlign.pm make_cds_alignment()
+            method = "Back-translated from protein alignment"
+
+            # First, load the protein alignment
+            protein_align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            if not protein_align_file.exists():
+                return None
+
+            protein_content = protein_align_file.read_text()
+            protein_alignment = _parse_fasta_alignment(protein_content)
+
+            if not protein_alignment:
+                return None
+
+            # Then, load the unaligned coding sequences
+            coding_file = alignment_dir / f"{dbid}_coding.fasta"
+            if not coding_file.exists():
+                return None
+
+            coding_content = coding_file.read_text()
+            coding_seqs_list = _parse_fasta_alignment(coding_content)
+
+            if not coding_seqs_list:
+                return None
+
+            # Convert to dict for lookup
+            coding_sequences = {seq_id: seq for seq_id, seq in coding_seqs_list}
+
+            # Generate aligned coding sequences by back-translation
+            parsed_seqs = _back_translate_alignment(protein_alignment, coding_sequences)
 
         if not parsed_seqs:
             return None
+
+        # Reorder sequences so the query sequence is first
+        if query_seq_id:
+            # Find the query sequence and move it to the front
+            query_idx = None
+            for i, (seq_id, _) in enumerate(parsed_seqs):
+                if seq_id == query_seq_id:
+                    query_idx = i
+                    break
+            if query_idx is not None and query_idx > 0:
+                parsed_seqs = [parsed_seqs[query_idx]] + parsed_seqs[:query_idx] + parsed_seqs[query_idx+1:]
 
         # Build sequence list with organism names
         sequences = []
@@ -2717,20 +2814,27 @@ def _load_sequence_alignment(
         # Build download links
         download_links = []
 
-        # FASTA format download
-        fasta_download_file = alignment_dir / f"{dbid}_{alignment_type}_align.fasta"
-        if fasta_download_file.exists():
-            download_links.append(DownloadLinkOut(
-                label=f"{alignment_type.capitalize()} alignment (Multi-FASTA format)",
-                url=f"/api/homology/alignment/{dbid}/{alignment_type}/fasta"
-            ))
+        if alignment_type == "protein":
+            # FASTA format download
+            fasta_download_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            if fasta_download_file.exists():
+                download_links.append(DownloadLinkOut(
+                    label="Protein alignment (Multi-FASTA format)",
+                    url=f"/api/homology/alignment/{dbid}/protein/fasta"
+                ))
 
-        # ClustalW format download (if exists)
-        clw_file = alignment_dir / f"{dbid}_{alignment_type}_align.clw"
-        if clw_file.exists():
+            # ClustalW format download (if exists)
+            clw_file = alignment_dir / f"{dbid}_protein_align.clw"
+            if clw_file.exists():
+                download_links.append(DownloadLinkOut(
+                    label="Protein alignment (ClustalW format)",
+                    url=f"/api/homology/alignment/{dbid}/protein/clustalw"
+                ))
+        else:
+            # Coding alignment - generated on-the-fly via back-translation
             download_links.append(DownloadLinkOut(
-                label=f"{alignment_type.capitalize()} alignment (ClustalW format)",
-                url=f"/api/homology/alignment/{dbid}/{alignment_type}/clustalw"
+                label="Coding alignment (Multi-FASTA format)",
+                url=f"/api/homology/alignment/{dbid}/coding/fasta"
             ))
 
         return SequenceAlignmentOut(
@@ -3151,8 +3255,9 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
 
         # Load protein and coding sequence alignments if available
-        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein") if f.dbxref_id else None
-        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding") if f.dbxref_id else None
+        # Pass feature_name as query_seq_id to put the query sequence first
+        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein", f.feature_name) if f.dbxref_id else None
+        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding", f.feature_name) if f.dbxref_id else None
 
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
@@ -3260,8 +3365,8 @@ JBROWSE_CONFIG = {
     # Add other organisms as needed
 }
 
-# JBrowse base URL
-JBROWSE_BASE_URL = "http://www.candidagenome.org/jbrowse/index.html"
+# JBrowse base URL - use settings for configurability
+JBROWSE_BASE_URL = settings.jbrowse_base_url
 
 # Flanking basepairs to add to JBrowse coordinates (matching Perl JBROWSE_EXT)
 JBROWSE_FLANK = 1000
