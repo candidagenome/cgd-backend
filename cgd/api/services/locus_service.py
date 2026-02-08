@@ -2603,6 +2603,58 @@ def _parse_fasta_alignment(fasta_content: str) -> list[tuple[str, str]]:
     return sequences
 
 
+def _back_translate_alignment(
+    protein_alignment: list[tuple[str, str]],
+    coding_sequences: dict[str, str]
+) -> list[tuple[str, str]]:
+    """
+    Generate coding sequence alignment by back-translating from protein alignment.
+
+    This replicates the Perl algorithm in Tools/SeqAlign.pm make_cds_alignment().
+    For each position in the protein alignment:
+    - If amino acid: copy the next 3 nucleotides (one codon) from unaligned coding sequence
+    - If gap ('-'): insert '---' (three gaps)
+
+    Args:
+        protein_alignment: List of (seq_id, aligned_protein_seq) tuples
+        coding_sequences: Dict of {seq_id: unaligned_coding_seq}
+
+    Returns:
+        List of (seq_id, aligned_coding_seq) tuples
+    """
+    coding_alignment = []
+
+    for seq_id, protein_seq in protein_alignment:
+        # Get the unaligned coding sequence for this ID
+        coding_seq = coding_sequences.get(seq_id, '')
+
+        if not coding_seq:
+            # No coding sequence available, skip this one
+            continue
+
+        aligned_coding = []
+        coding_idx = 0  # Index into unaligned coding sequence
+
+        for aa in protein_seq:
+            if aa == '-':
+                # Gap in protein alignment - insert 3 gaps for codon
+                aligned_coding.append('---')
+            else:
+                # Amino acid - copy next codon (3 nucleotides)
+                codon_end = coding_idx + 3
+                if codon_end <= len(coding_seq):
+                    aligned_coding.append(coding_seq[coding_idx:codon_end])
+                else:
+                    # Not enough nucleotides left - pad with N
+                    remaining = coding_seq[coding_idx:] if coding_idx < len(coding_seq) else ''
+                    aligned_coding.append(remaining + 'N' * (3 - len(remaining)))
+                coding_idx += 3
+
+        coding_alignment.append((seq_id, ''.join(aligned_coding)))
+
+    return coding_alignment
+
+
 def _get_organism_name_from_prefix(seq_id: str) -> Optional[str]:
     """
     Get organism name from sequence ID prefix.
@@ -2660,7 +2712,12 @@ def _load_sequence_alignment(
 
     Alignment files are stored in {CGD_DATA_DIR}/homology/alignments/{bucket}/
     - Protein: {dbid}_protein_align.fasta
-    - Coding: {dbid}_coding_align.fasta (generated) or {dbid}_coding.fasta (source)
+    - Coding: Generated on-the-fly by back-translating protein alignment
+
+    For coding alignments, we use the same algorithm as the Perl version:
+    back-translate the protein alignment to derive the coding alignment.
+    This is done by mapping each gap in the protein alignment to '---' (3 gaps)
+    and each amino acid to its corresponding codon from the unaligned coding sequence.
 
     Args:
         dbid: Database identifier (e.g., "CAL0001234")
@@ -2679,23 +2736,50 @@ def _load_sequence_alignment(
 
     alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
 
-    # Determine alignment file name
-    if alignment_type == "protein":
-        align_file = alignment_dir / f"{dbid}_protein_align.fasta"
-        method = "MUSCLE"
-    else:  # coding
-        # Try aligned version first, fall back to source
-        align_file = alignment_dir / f"{dbid}_coding_align.fasta"
-        if not align_file.exists():
-            align_file = alignment_dir / f"{dbid}_coding.fasta"
-        method = "MUSCLE"
-
-    if not align_file.exists():
-        return None
-
     try:
-        fasta_content = align_file.read_text()
-        parsed_seqs = _parse_fasta_alignment(fasta_content)
+        if alignment_type == "protein":
+            # Load protein alignment directly
+            align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            method = "MUSCLE"
+
+            if not align_file.exists():
+                return None
+
+            fasta_content = align_file.read_text()
+            parsed_seqs = _parse_fasta_alignment(fasta_content)
+
+        else:  # coding
+            # Generate coding alignment by back-translating protein alignment
+            # This matches the Perl algorithm in Tools/SeqAlign.pm make_cds_alignment()
+            method = "Back-translated from protein alignment"
+
+            # First, load the protein alignment
+            protein_align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            if not protein_align_file.exists():
+                return None
+
+            protein_content = protein_align_file.read_text()
+            protein_alignment = _parse_fasta_alignment(protein_content)
+
+            if not protein_alignment:
+                return None
+
+            # Then, load the unaligned coding sequences
+            coding_file = alignment_dir / f"{dbid}_coding.fasta"
+            if not coding_file.exists():
+                return None
+
+            coding_content = coding_file.read_text()
+            coding_seqs_list = _parse_fasta_alignment(coding_content)
+
+            if not coding_seqs_list:
+                return None
+
+            # Convert to dict for lookup
+            coding_sequences = {seq_id: seq for seq_id, seq in coding_seqs_list}
+
+            # Generate aligned coding sequences by back-translation
+            parsed_seqs = _back_translate_alignment(protein_alignment, coding_sequences)
 
         if not parsed_seqs:
             return None
@@ -2714,24 +2798,25 @@ def _load_sequence_alignment(
             if alignment_length is None:
                 alignment_length = len(sequence)
 
-        # Build download links
+        # Build download links (only for protein - coding is generated on-the-fly)
         download_links = []
 
-        # FASTA format download
-        fasta_download_file = alignment_dir / f"{dbid}_{alignment_type}_align.fasta"
-        if fasta_download_file.exists():
-            download_links.append(DownloadLinkOut(
-                label=f"{alignment_type.capitalize()} alignment (Multi-FASTA format)",
-                url=f"/api/homology/alignment/{dbid}/{alignment_type}/fasta"
-            ))
+        if alignment_type == "protein":
+            # FASTA format download
+            fasta_download_file = alignment_dir / f"{dbid}_protein_align.fasta"
+            if fasta_download_file.exists():
+                download_links.append(DownloadLinkOut(
+                    label="Protein alignment (Multi-FASTA format)",
+                    url=f"/api/homology/alignment/{dbid}/protein/fasta"
+                ))
 
-        # ClustalW format download (if exists)
-        clw_file = alignment_dir / f"{dbid}_{alignment_type}_align.clw"
-        if clw_file.exists():
-            download_links.append(DownloadLinkOut(
-                label=f"{alignment_type.capitalize()} alignment (ClustalW format)",
-                url=f"/api/homology/alignment/{dbid}/{alignment_type}/clustalw"
-            ))
+            # ClustalW format download (if exists)
+            clw_file = alignment_dir / f"{dbid}_protein_align.clw"
+            if clw_file.exists():
+                download_links.append(DownloadLinkOut(
+                    label="Protein alignment (ClustalW format)",
+                    url=f"/api/homology/alignment/{dbid}/protein/clustalw"
+                ))
 
         return SequenceAlignmentOut(
             alignment_type=alignment_type,
