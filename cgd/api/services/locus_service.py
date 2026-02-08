@@ -2811,7 +2811,7 @@ def _load_sequence_alignment(
             if alignment_length is None:
                 alignment_length = len(sequence)
 
-        # Build download links (only for protein - coding is generated on-the-fly)
+        # Build download links
         download_links = []
 
         if alignment_type == "protein":
@@ -2830,6 +2830,12 @@ def _load_sequence_alignment(
                     label="Protein alignment (ClustalW format)",
                     url=f"/api/homology/alignment/{dbid}/protein/clustalw"
                 ))
+        else:
+            # Coding alignment - generated on-the-fly via back-translation
+            download_links.append(DownloadLinkOut(
+                label="Coding alignment (Multi-FASTA format)",
+                url=f"/api/homology/alignment/{dbid}/coding/fasta"
+            ))
 
         return SequenceAlignmentOut(
             alignment_type=alignment_type,
