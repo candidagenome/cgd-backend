@@ -2706,6 +2706,7 @@ def _get_organism_name_from_prefix(seq_id: str) -> Optional[str]:
 def _load_sequence_alignment(
     dbid: str,
     alignment_type: str,
+    query_seq_id: Optional[str] = None,
 ) -> Optional[SequenceAlignmentOut]:
     """
     Load sequence alignment data for a given locus.
@@ -2722,6 +2723,7 @@ def _load_sequence_alignment(
     Args:
         dbid: Database identifier (e.g., "CAL0001234")
         alignment_type: "protein" or "coding"
+        query_seq_id: The sequence ID to put first (e.g., "CR_04570C_A" for CDC10)
 
     Returns:
         SequenceAlignmentOut or None if no alignment files exist.
@@ -2783,6 +2785,17 @@ def _load_sequence_alignment(
 
         if not parsed_seqs:
             return None
+
+        # Reorder sequences so the query sequence is first
+        if query_seq_id:
+            # Find the query sequence and move it to the front
+            query_idx = None
+            for i, (seq_id, _) in enumerate(parsed_seqs):
+                if seq_id == query_seq_id:
+                    query_idx = i
+                    break
+            if query_idx is not None and query_idx > 0:
+                parsed_seqs = [parsed_seqs[query_idx]] + parsed_seqs[:query_idx] + parsed_seqs[query_idx+1:]
 
         # Build sequence list with organism names
         sequences = []
@@ -3236,8 +3249,9 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
 
         # Load protein and coding sequence alignments if available
-        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein") if f.dbxref_id else None
-        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding") if f.dbxref_id else None
+        # Pass feature_name as query_seq_id to put the query sequence first
+        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein", f.feature_name) if f.dbxref_id else None
+        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding", f.feature_name) if f.dbxref_id else None
 
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
