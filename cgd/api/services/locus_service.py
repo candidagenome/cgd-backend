@@ -2516,6 +2516,8 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
     alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
     unrooted_tree_file = alignment_dir / f"{dbid}_tree_unrooted.par"
     rooted_tree_file = alignment_dir / f"{dbid}_tree_rooted.par"
+    rooted_xml_file = alignment_dir / f"{dbid}_tree_rooted.xml"
+    annotated_xml_file = alignment_dir / f"{dbid}_tree_annotated.xml"
 
     # Check if tree files exist
     if not unrooted_tree_file.exists():
@@ -2536,17 +2538,27 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
         branch_lengths = re.findall(r':([0-9.]+)', newick_tree)
         tree_length = sum(float(bl) for bl in branch_lengths) if branch_lengths else None
 
-        # Build download links
+        # Build download links for all available tree formats
         download_links = []
         if unrooted_tree_file.exists():
             download_links.append(DownloadLinkOut(
                 label="Unrooted Tree (Newick format)",
-                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=unrooted"
+                url=f"/api/homology/tree/{dbid}/unrooted"
             ))
         if rooted_tree_file.exists():
             download_links.append(DownloadLinkOut(
                 label="Rooted Tree (Newick format)",
-                url=f"/cgi-bin/compute/get_tree_file.pl?dbid={dbid}&type=rooted"
+                url=f"/api/homology/tree/{dbid}/rooted"
+            ))
+        if rooted_xml_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Rooted Tree (phyloXML format)",
+                url=f"/api/homology/tree/{dbid}/xml"
+            ))
+        if annotated_xml_file.exists():
+            download_links.append(DownloadLinkOut(
+                label="Rooted, Annotated Tree (phyloXML format)",
+                url=f"/api/homology/tree/{dbid}/annotated"
             ))
 
         return PhylogeneticTreeOut(
