@@ -121,6 +121,8 @@ from cgd.schemas.homology_schema import (
     ExternalHomologOut,
     ExternalHomologsSectionOut,
     PhylogeneticTreeOut,
+    SequenceAlignmentOut,
+    AlignmentSequenceOut,
 )
 from cgd.core.settings import settings
 from cgd.models.locus_model import Feature
@@ -2559,6 +2561,178 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
         return None
 
 
+def _parse_fasta_alignment(fasta_content: str) -> list[tuple[str, str]]:
+    """
+    Parse a FASTA format alignment file.
+    Returns list of (sequence_id, sequence) tuples.
+    """
+    sequences = []
+    current_id = None
+    current_seq = []
+
+    for line in fasta_content.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            # Save previous sequence
+            if current_id is not None:
+                sequences.append((current_id, ''.join(current_seq)))
+            # Start new sequence
+            current_id = line[1:].split()[0]  # Get ID before first space
+            current_seq = []
+        else:
+            current_seq.append(line)
+
+    # Save last sequence
+    if current_id is not None:
+        sequences.append((current_id, ''.join(current_seq)))
+
+    return sequences
+
+
+def _get_organism_name_from_prefix(seq_id: str) -> Optional[str]:
+    """
+    Get organism name from sequence ID prefix.
+    Based on CGOB strain prefix mapping.
+    """
+    prefix_to_organism = {
+        'C1_': 'Candida albicans SC5314',
+        'C2_': 'Candida albicans SC5314',
+        'C3_': 'Candida albicans SC5314',
+        'C4_': 'Candida albicans SC5314',
+        'C5_': 'Candida albicans SC5314',
+        'C6_': 'Candida albicans SC5314',
+        'C7_': 'Candida albicans SC5314',
+        'CR_': 'Candida albicans SC5314',
+        'CM_': 'Candida albicans SC5314',
+        'orf19': 'Candida albicans SC5314',
+        'calb_': 'Candida albicans SC5314',
+        'cawg_': 'Candida albicans WO-1',
+        'cd36_': 'Candida dubliniensis CD36',
+        'cdub_': 'Candida dubliniensis CD36',
+        'ctrg_': 'Candida tropicalis MYA-3404',
+        'ctro_': 'Candida tropicalis MYA-3404',
+        'cpar_': 'Candida parapsilosis CDC317',
+        'cpar2_': 'Candida parapsilosis CDC317',
+        'cort_': 'Candida orthopsilosis Co 90-125',
+        'lelg_': 'Lodderomyces elongisporus NRRL YB-4239',
+        'lelo_': 'Lodderomyces elongisporus NRRL YB-4239',
+        'deha': 'Debaryomyces hansenii CBS767',
+        'dhan_': 'Debaryomyces hansenii CBS767',
+        'pgug_': 'Candida guilliermondii ATCC 6260',
+        'cgui_': 'Candida guilliermondii ATCC 6260',
+        'clug_': 'Candida lusitaniae ATCC 42720',
+        'clus_': 'Candida lusitaniae ATCC 42720',
+        'y': 'Saccharomyces cerevisiae S288C',
+        'scer_': 'Saccharomyces cerevisiae S288C',
+        'cagl': 'Candida glabrata CBS138',
+        'cgla_': 'Candida glabrata CBS138',
+        'b9j08': 'Candida auris B8441',
+    }
+
+    seq_id_lower = seq_id.lower()
+    for prefix, organism in prefix_to_organism.items():
+        if seq_id_lower.startswith(prefix.lower()):
+            return organism
+
+    return None
+
+
+def _load_sequence_alignment(
+    dbid: str,
+    alignment_type: str,
+) -> Optional[SequenceAlignmentOut]:
+    """
+    Load sequence alignment data for a given locus.
+
+    Alignment files are stored in {CGD_DATA_DIR}/homology/alignments/{bucket}/
+    - Protein: {dbid}_protein_align.fasta
+    - Coding: {dbid}_coding_align.fasta (generated) or {dbid}_coding.fasta (source)
+
+    Args:
+        dbid: Database identifier (e.g., "CAL0001234")
+        alignment_type: "protein" or "coding"
+
+    Returns:
+        SequenceAlignmentOut or None if no alignment files exist.
+    """
+    # Extract numeric part from dbid
+    match = re.search(r'[^\d]*0*(\d+)', dbid)
+    if not match:
+        return None
+
+    numeric_tag = int(match.group(1))
+    bucket = numeric_tag // 100
+
+    alignment_dir = Path(settings.cgd_data_dir) / "homology" / "alignments" / str(bucket)
+
+    # Determine alignment file name
+    if alignment_type == "protein":
+        align_file = alignment_dir / f"{dbid}_protein_align.fasta"
+        method = "MUSCLE"
+    else:  # coding
+        # Try aligned version first, fall back to source
+        align_file = alignment_dir / f"{dbid}_coding_align.fasta"
+        if not align_file.exists():
+            align_file = alignment_dir / f"{dbid}_coding.fasta"
+        method = "MUSCLE"
+
+    if not align_file.exists():
+        return None
+
+    try:
+        fasta_content = align_file.read_text()
+        parsed_seqs = _parse_fasta_alignment(fasta_content)
+
+        if not parsed_seqs:
+            return None
+
+        # Build sequence list with organism names
+        sequences = []
+        alignment_length = None
+
+        for seq_id, sequence in parsed_seqs:
+            organism_name = _get_organism_name_from_prefix(seq_id)
+            sequences.append(AlignmentSequenceOut(
+                sequence_id=seq_id,
+                organism_name=organism_name,
+                sequence=sequence,
+            ))
+            if alignment_length is None:
+                alignment_length = len(sequence)
+
+        # Build download links
+        download_links = []
+
+        # FASTA format download
+        fasta_download_file = alignment_dir / f"{dbid}_{alignment_type}_align.fasta"
+        if fasta_download_file.exists():
+            download_links.append(DownloadLinkOut(
+                label=f"{alignment_type.capitalize()} alignment (Multi-FASTA format)",
+                url=f"/api/homology/alignment/{dbid}/{alignment_type}/fasta"
+            ))
+
+        # ClustalW format download (if exists)
+        clw_file = alignment_dir / f"{dbid}_{alignment_type}_align.clw"
+        if clw_file.exists():
+            download_links.append(DownloadLinkOut(
+                label=f"{alignment_type.capitalize()} alignment (ClustalW format)",
+                url=f"/api/homology/alignment/{dbid}/{alignment_type}/clustalw"
+            ))
+
+        return SequenceAlignmentOut(
+            alignment_type=alignment_type,
+            method=method,
+            sequences=sequences,
+            alignment_length=alignment_length,
+            download_links=download_links,
+        )
+
+    except Exception:
+        return None
+
+
 def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsResponse:
     """
     Query homology group data for each feature matching the locus name,
@@ -2964,12 +3138,18 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         # Use dbxref_id (Stanford ID like CAL0126527) as the dbid for tree files
         phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
 
+        # Load protein and coding sequence alignments if available
+        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein") if f.dbxref_id else None
+        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding") if f.dbxref_id else None
+
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             homology_groups=homology_groups,
             ortholog_cluster=ortholog_cluster,
             phylogenetic_tree=phylogenetic_tree,
+            protein_alignment=protein_alignment,
+            coding_alignment=coding_alignment,
             best_hits_cgd=best_hits_cgd,
             orthologs_fungal=orthologs_fungal,
             best_hits_fungal=best_hits_fungal,

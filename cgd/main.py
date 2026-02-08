@@ -25,6 +25,7 @@ from cgd.api.routers.gene_registry_router import router as gene_registry_router
 from cgd.api.routers.webprimer_router import router as webprimer_router
 from cgd.api.routers.go_term_finder_router import router as go_term_finder_router
 from cgd.api.routers.go_slim_mapper_router import router as go_slim_mapper_router
+from cgd.api.routers.homology_router import router as homology_router
 
 
 def create_app() -> FastAPI:
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(webprimer_router)
     app.include_router(go_term_finder_router)
     app.include_router(go_slim_mapper_router)
+    app.include_router(homology_router)
 
     return app
 
