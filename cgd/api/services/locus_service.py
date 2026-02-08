@@ -2438,10 +2438,10 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     tracks.append(trk)
 
             tracks_str = '%2C'.join(tracks)  # URL-encoded comma
-            # Use full CGD URL for JBrowse iframe - match Perl URL format exactly
+            # Use configurable JBrowse URL for protein domain visualization
             # Perl: pbrowseHome + '&loc=' + feature + ':1..' + len + '&tracklist=0&nav=0&overview=0&tracks=...'
             pbrowse_url = (
-                f"http://www.candidagenome.org/jbrowse/index.html"
+                f"{settings.jbrowse_base_url}"
                 f"?data=cgd_data/{strain_abbrev}_prot"
                 f"&loc={f.feature_name}:1..{protein_length}"
                 f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
@@ -3365,8 +3365,8 @@ JBROWSE_CONFIG = {
     # Add other organisms as needed
 }
 
-# JBrowse base URL
-JBROWSE_BASE_URL = "http://www.candidagenome.org/jbrowse/index.html"
+# JBrowse base URL - use settings for configurability
+JBROWSE_BASE_URL = settings.jbrowse_base_url
 
 # Flanking basepairs to add to JBrowse coordinates (matching Perl JBROWSE_EXT)
 JBROWSE_FLANK = 1000
