@@ -14,6 +14,7 @@ from .gene_registry_curation_router import router as gene_registry_curation_rout
 from .paragraph_curation_router import router as paragraph_curation_router
 from .litreview_curation_router import router as litreview_curation_router
 from .ref_annotation_curation_router import router as ref_annotation_curation_router
+from .db_search_router import router as db_search_router
 
 __all__ = [
     "todo_list_router",
@@ -30,4 +31,5 @@ __all__ = [
     "paragraph_curation_router",
     "litreview_curation_router",
     "ref_annotation_curation_router",
+    "db_search_router",
 ]
