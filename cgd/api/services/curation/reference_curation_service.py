@@ -91,7 +91,7 @@ class ReferenceCurationService:
             .first()
         )
 
-    async def fetch_pubmed_metadata(self, pubmed: int) -> dict:
+    def fetch_pubmed_metadata(self, pubmed: int) -> dict:
         """
         Fetch metadata from PubMed E-utilities.
 
@@ -104,8 +104,8 @@ class ReferenceCurationService:
             "rettype": "medline",
         }
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(PUBMED_EFETCH_URL, params=params)
+        try:
+            response = httpx.get(PUBMED_EFETCH_URL, params=params, timeout=30.0)
 
             if response.status_code != 200:
                 raise ReferenceCurationError(
@@ -113,6 +113,14 @@ class ReferenceCurationService:
                 )
 
             return self._parse_pubmed_xml(response.text)
+        except httpx.TimeoutException:
+            raise ReferenceCurationError(
+                f"Timeout fetching PubMed metadata for PMID:{pubmed}"
+            )
+        except httpx.RequestError as e:
+            raise ReferenceCurationError(
+                f"Network error fetching PubMed metadata: {e}"
+            )
 
     def _parse_pubmed_xml(self, xml_text: str) -> dict:
         """Parse PubMed XML response into structured metadata."""
@@ -242,12 +250,56 @@ class ReferenceCurationService:
                 f"Valid statuses: {', '.join(self.VALID_STATUSES)}"
             )
 
-        # For now, create a placeholder reference
-        # Full PubMed metadata fetching would be done asynchronously
-        # or in a background task
+        # Fetch metadata from PubMed
+        try:
+            metadata = self.fetch_pubmed_metadata(pubmed)
+        except ReferenceCurationError:
+            # If PubMed fetch fails, create a placeholder reference
+            logger.warning(
+                f"Failed to fetch PubMed metadata for {pubmed}, creating placeholder"
+            )
+            metadata = {
+                "title": "",
+                "year": datetime.now().year,
+                "volume": "",
+                "pages": "",
+                "journal_abbrev": "",
+                "authors": [],
+            }
 
-        # Create citation placeholder
-        citation = f"PMID:{pubmed}"
+        # Build citation string
+        if metadata.get("authors"):
+            first_author = metadata["authors"][0].get("last_name", "")
+            if len(metadata["authors"]) > 1:
+                author_str = f"{first_author} et al."
+            else:
+                author_str = first_author
+        else:
+            author_str = ""
+
+        citation_parts = [author_str]
+        if metadata.get("year"):
+            citation_parts.append(f"({metadata['year']})")
+        if metadata.get("journal_abbrev"):
+            citation_parts.append(metadata["journal_abbrev"])
+        if metadata.get("volume"):
+            vol_str = metadata["volume"]
+            if metadata.get("pages"):
+                vol_str += f":{metadata['pages']}"
+            citation_parts.append(vol_str)
+
+        citation = " ".join(filter(None, citation_parts)) or f"PMID:{pubmed}"
+
+        # Get or create journal
+        journal_no = None
+        if metadata.get("journal_abbrev"):
+            journal = (
+                self.db.query(Journal)
+                .filter(Journal.abbreviation == metadata["journal_abbrev"])
+                .first()
+            )
+            if journal:
+                journal_no = journal.journal_no
 
         reference = Reference(
             pubmed=pubmed,
@@ -256,13 +308,58 @@ class ReferenceCurationService:
             pdf_status="N",  # Default: no PDF
             dbxref_id=f"PMID:{pubmed}",
             citation=citation,
-            year=datetime.now().year,  # Placeholder, would be updated from PubMed
-            title="",  # Would be populated from PubMed
+            year=metadata.get("year") or datetime.now().year,
+            title=metadata.get("title", "")[:400],  # Truncate to fit column
+            volume=metadata.get("volume", "")[:20] if metadata.get("volume") else None,
+            pages=metadata.get("pages", "")[:20] if metadata.get("pages") else None,
+            journal_no=journal_no,
             created_by=curator_userid[:12],
         )
 
         self.db.add(reference)
         self.db.flush()
+
+        # Add authors
+        if metadata.get("authors"):
+            for order, author_data in enumerate(metadata["authors"], start=1):
+                author_name = author_data.get("last_name", "")
+                if author_data.get("initials"):
+                    author_name += f" {author_data['initials']}"
+
+                if not author_name.strip():
+                    continue
+
+                # Get or create author
+                author = (
+                    self.db.query(Author)
+                    .filter(Author.author_name == author_name[:100])
+                    .first()
+                )
+                if not author:
+                    author = Author(
+                        author_name=author_name[:100],
+                        created_by=curator_userid[:12],
+                    )
+                    self.db.add(author)
+                    self.db.flush()
+
+                # Create author-reference link
+                author_editor = AuthorEditor(
+                    reference_no=reference.reference_no,
+                    author_no=author.author_no,
+                    author_type="Author",
+                    author_order=order,
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(author_editor)
+
+        # Add abstract if available
+        if metadata.get("abstract"):
+            abstract_record = Abstract(
+                reference_no=reference.reference_no,
+                abstract=metadata["abstract"][:4000],  # Truncate to fit
+            )
+            self.db.add(abstract_record)
 
         # Clear bad reference record if overriding
         if override_bad:
@@ -274,7 +371,7 @@ class ReferenceCurationService:
 
         logger.info(
             f"Created reference {reference.reference_no} from PubMed {pubmed} "
-            f"by {curator_userid}"
+            f"with {len(metadata.get('authors', []))} authors by {curator_userid}"
         )
 
         return reference.reference_no
@@ -598,7 +695,7 @@ class ReferenceCurationService:
             "source": reference.source,
             "curation_status": curation_status,
             "topics": topics,
-            "abstract": abstract.text if abstract else None,
+            "abstract": abstract.abstract if abstract else None,
             "authors": [
                 {
                     "author_no": ae.author_no,
