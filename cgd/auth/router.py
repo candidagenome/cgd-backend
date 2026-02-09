@@ -3,6 +3,8 @@
 import logging
 from datetime import timedelta
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -95,7 +97,7 @@ async def login(
 async def logout(
     response: Response,
     current_user: CurrentUser,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ):
     """

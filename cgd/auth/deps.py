@@ -17,8 +17,8 @@ security = HTTPBearer(auto_error=False)
 
 async def get_current_user(
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    access_token: str | None = Cookie(default=None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    access_token: Optional[str] = Cookie(default=None),
 ) -> UserInfo:
     """
     FastAPI dependency to get the current authenticated user.
@@ -76,8 +76,8 @@ async def get_current_user(
 
 async def get_current_user_optional(
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    access_token: str | None = Cookie(default=None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    access_token: Optional[str] = Cookie(default=None),
 ) -> Optional[UserInfo]:
     """
     Optional version of get_current_user.
