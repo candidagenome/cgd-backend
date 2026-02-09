@@ -45,6 +45,7 @@ from cgd.api.routers.curation import (
     gene_registry_curation_router,
     paragraph_curation_router,
     litreview_curation_router,
+    ref_annotation_curation_router,
 )
 
 
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(gene_registry_curation_router)
     app.include_router(paragraph_curation_router)
     app.include_router(litreview_curation_router)
+    app.include_router(ref_annotation_curation_router)
 
     return app
 
