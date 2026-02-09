@@ -16,6 +16,9 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
+    Code,
+    Cv,
+    CvTerm,
     Experiment,
     ExptExptprop,
     ExptProperty,
@@ -562,15 +565,57 @@ class PhenotypeCurationService:
         Get CV terms for a given CV name.
 
         Used for experiment_type, mutant_type, observable, qualifier dropdowns.
+        Queries the Code table for simple coded values, or Cv/CvTerm tables
+        for ontology-based terms.
         """
-        # This is a simplified implementation
-        # In production, this would query the cv_term and cv tables
-        if cv_name.lower() == "experiment_type":
-            return self.EXPERIMENT_TYPES
-        elif cv_name.lower() == "mutant_type":
-            return self.MUTANT_TYPES
-        elif cv_name.lower() == "qualifier":
-            return self.QUALIFIERS
+        cv_lower = cv_name.lower()
+
+        # Map CV names to Code table lookup parameters
+        code_mapping = {
+            "experiment_type": ("EXPERIMENT", "EXPERIMENT_TYPE"),
+            "mutant_type": ("PHENOTYPE", "MUTANT_TYPE"),
+            "qualifier": ("PHENOTYPE", "QUALIFIER"),
+        }
+
+        if cv_lower in code_mapping:
+            tab_name, col_name = code_mapping[cv_lower]
+            result = (
+                self.db.query(Code.code_value)
+                .filter(
+                    Code.tab_name == tab_name,
+                    Code.col_name == col_name,
+                )
+                .order_by(Code.code_value)
+                .all()
+            )
+            terms = [r[0] for r in result]
+
+            # Fall back to hardcoded if database returns nothing
+            if terms:
+                return terms
+
+            # Use hardcoded fallbacks
+            if cv_lower == "experiment_type":
+                return self.EXPERIMENT_TYPES
+            elif cv_lower == "mutant_type":
+                return self.MUTANT_TYPES
+            elif cv_lower == "qualifier":
+                return self.QUALIFIERS
+
+        # For observable and other ontology-based terms, query Cv/CvTerm tables
+        cv = (
+            self.db.query(Cv)
+            .filter(func.lower(Cv.cv_name) == cv_lower)
+            .first()
+        )
+        if cv:
+            result = (
+                self.db.query(CvTerm.term_name)
+                .filter(CvTerm.cv_no == cv.cv_no)
+                .order_by(CvTerm.term_name)
+                .all()
+            )
+            return [r[0] for r in result]
 
         return []
 
