@@ -55,7 +55,6 @@ class PhenotypeCurationService:
         "insertional mutagenesis",
         "RNAi",
         "overexpression",
-        "insertional mutagenesis",
     ]
 
     # Valid mutant types (from CV)
