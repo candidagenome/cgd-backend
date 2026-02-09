@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Index, PrimaryKeyConstraint, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from cgd.db.engine import Base
+from cgd.models import Base
 
 
 class CuratorSession(Base):
