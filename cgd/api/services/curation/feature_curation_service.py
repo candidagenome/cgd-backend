@@ -450,6 +450,181 @@ class FeatureCurationService:
 
         return ref_link.ref_link_no
 
+    def add_location_to_feature(
+        self,
+        feature_name: str,
+        organism_abbrev: str,
+        chromosome_name: str,
+        start_coord: int,
+        stop_coord: int,
+        strand: Optional[str],
+        curator_userid: str,
+    ) -> dict:
+        """
+        Add a new location (coordinates) to an existing feature.
+
+        This is used when a feature needs to have coordinates added for
+        an additional assembly/genome version.
+
+        Returns dict with feature_no, feat_location_no, and seq_no.
+        """
+        # Look up the existing feature
+        feature = (
+            self.db.query(Feature)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(
+                func.upper(Feature.feature_name) == feature_name.upper(),
+                func.upper(Organism.organism_abbrev) == organism_abbrev.upper(),
+            )
+            .first()
+        )
+
+        if not feature:
+            # Try gene_name as well
+            feature = (
+                self.db.query(Feature)
+                .join(Organism, Feature.organism_no == Organism.organism_no)
+                .filter(
+                    func.upper(Feature.gene_name) == feature_name.upper(),
+                    func.upper(Organism.organism_abbrev) == organism_abbrev.upper(),
+                )
+                .first()
+            )
+
+        if not feature:
+            raise FeatureCurationError(
+                f"Feature '{feature_name}' not found for organism '{organism_abbrev}'"
+            )
+
+        # Validate feature type allows mapping
+        if feature.feature_type in [
+            "not in systematic sequence",
+            "not physically mapped",
+        ]:
+            raise FeatureCurationError(
+                f"Cannot add location to feature type '{feature.feature_type}'"
+            )
+
+        # Validate strand for certain feature types
+        requires_strand = feature.feature_type not in [
+            "ARS",
+            "ARS consensus sequence",
+            "telomere",
+        ]
+        if requires_strand and not strand:
+            raise FeatureCurationError(
+                f"Strand is required for feature type '{feature.feature_type}'"
+            )
+
+        if strand and strand not in self.STRANDS:
+            raise FeatureCurationError(
+                f"Invalid strand: {strand}. Use 'W' (Watson) or 'C' (Crick)"
+            )
+
+        # Validate coordinate/strand consistency
+        if strand == "C" and start_coord < stop_coord:
+            raise FeatureCurationError(
+                "For Crick strand, start_coord should be > stop_coord"
+            )
+        if strand == "W" and start_coord > stop_coord:
+            raise FeatureCurationError(
+                "For Watson strand, start_coord should be < stop_coord"
+            )
+
+        # Add the location
+        feat_location_no = self._add_feature_location(
+            feature_no=feature.feature_no,
+            chromosome_name=chromosome_name,
+            organism_abbrev=organism_abbrev,
+            start_coord=start_coord,
+            stop_coord=stop_coord,
+            strand=strand,
+            curator_userid=curator_userid,
+        )
+
+        self.db.commit()
+
+        logger.info(
+            f"Added new location for feature {feature.feature_no} ({feature_name}): "
+            f"{chromosome_name}:{start_coord}-{stop_coord} ({strand})"
+        )
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "feat_location_no": feat_location_no,
+        }
+
+    def get_feature_info(self, feature_name: str, organism_abbrev: str) -> Optional[dict]:
+        """
+        Get info about an existing feature for the add location form.
+
+        Returns feature info including existing locations, or None if not found.
+        """
+        # Look up the feature
+        feature = (
+            self.db.query(Feature)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(
+                func.upper(Feature.feature_name) == feature_name.upper(),
+                func.upper(Organism.organism_abbrev) == organism_abbrev.upper(),
+            )
+            .first()
+        )
+
+        if not feature:
+            # Try gene_name as well
+            feature = (
+                self.db.query(Feature)
+                .join(Organism, Feature.organism_no == Organism.organism_no)
+                .filter(
+                    func.upper(Feature.gene_name) == feature_name.upper(),
+                    func.upper(Organism.organism_abbrev) == organism_abbrev.upper(),
+                )
+                .first()
+            )
+
+        if not feature:
+            return None
+
+        # Get existing locations
+        locations = (
+            self.db.query(FeatLocation)
+            .filter(FeatLocation.feature_no == feature.feature_no)
+            .all()
+        )
+
+        location_info = []
+        for loc in locations:
+            # Get chromosome name from root_seq
+            chr_seq = self.db.query(Seq).filter(Seq.seq_no == loc.root_seq_no).first()
+            chr_name = None
+            if chr_seq:
+                chr_feature = (
+                    self.db.query(Feature)
+                    .filter(Feature.feature_no == chr_seq.feature_no)
+                    .first()
+                )
+                if chr_feature:
+                    chr_name = chr_feature.feature_name
+
+            location_info.append({
+                "feat_location_no": loc.feat_location_no,
+                "chromosome": chr_name,
+                "start_coord": loc.start_coord,
+                "stop_coord": loc.stop_coord,
+                "strand": loc.strand,
+                "is_current": loc.is_loc_current,
+            })
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "gene_name": feature.gene_name,
+            "feature_type": feature.feature_type,
+            "locations": location_info,
+        }
+
     def delete_feature(self, feature_no: int, curator_userid: str) -> None:
         """
         Delete a feature.

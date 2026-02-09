@@ -126,6 +126,50 @@ class DeleteFeatureResponse(BaseModel):
     message: str
 
 
+class AddLocationRequest(BaseModel):
+    """Request to add a location to an existing feature."""
+
+    feature_name: str = Field(..., description="Existing feature name")
+    organism_abbrev: str = Field(..., description="Organism abbreviation")
+    chromosome_name: str = Field(..., description="Chromosome name")
+    start_coord: int = Field(..., description="Start coordinate")
+    stop_coord: int = Field(..., description="Stop coordinate")
+    strand: Optional[str] = Field(
+        None, description="Strand: W (Watson/forward) or C (Crick/reverse)"
+    )
+
+
+class AddLocationResponse(BaseModel):
+    """Response for adding location to feature."""
+
+    feature_no: int
+    feature_name: str
+    feat_location_no: int
+    message: str
+
+
+class FeatureLocationOut(BaseModel):
+    """Existing location info."""
+
+    feat_location_no: int
+    chromosome: Optional[str] = None
+    start_coord: Optional[int] = None
+    stop_coord: Optional[int] = None
+    strand: Optional[str] = None
+    is_current: Optional[str] = None
+
+
+class FeatureInfoResponse(BaseModel):
+    """Response for feature info lookup."""
+
+    found: bool
+    feature_no: Optional[int] = None
+    feature_name: Optional[str] = None
+    gene_name: Optional[str] = None
+    feature_type: Optional[str] = None
+    locations: list[FeatureLocationOut] = []
+
+
 # ---------------------------
 # Endpoints
 # ---------------------------
@@ -183,6 +227,35 @@ def get_strands(current_user: CurrentUser):
     return StrandsResponse(strands=FeatureCurationService.STRANDS)
 
 
+@router.get("/info/{organism_abbrev}/{feature_name}", response_model=FeatureInfoResponse)
+def get_feature_info(
+    organism_abbrev: str,
+    feature_name: str,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get info about an existing feature for the add location form.
+
+    Returns feature info including existing locations.
+    """
+    service = FeatureCurationService(db)
+
+    info = service.get_feature_info(feature_name, organism_abbrev)
+
+    if info:
+        return FeatureInfoResponse(
+            found=True,
+            feature_no=info["feature_no"],
+            feature_name=info["feature_name"],
+            gene_name=info["gene_name"],
+            feature_type=info["feature_type"],
+            locations=[FeatureLocationOut(**loc) for loc in info["locations"]],
+        )
+
+    return FeatureInfoResponse(found=False)
+
+
 @router.post("/check", response_model=CheckFeatureResponse)
 def check_feature_exists(
     request: CheckFeatureRequest,
@@ -204,6 +277,45 @@ def check_feature_exists(
         )
 
     return CheckFeatureResponse(exists=False)
+
+
+@router.post("/location", response_model=AddLocationResponse)
+def add_location(
+    request: AddLocationRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Add a new location (coordinates) to an existing feature.
+
+    This is used when a feature needs to have coordinates added for
+    an additional assembly/genome version.
+    """
+    service = FeatureCurationService(db)
+
+    try:
+        result = service.add_location_to_feature(
+            feature_name=request.feature_name,
+            organism_abbrev=request.organism_abbrev,
+            chromosome_name=request.chromosome_name,
+            start_coord=request.start_coord,
+            stop_coord=request.stop_coord,
+            strand=request.strand,
+            curator_userid=current_user.userid,
+        )
+
+        return AddLocationResponse(
+            feature_no=result["feature_no"],
+            feature_name=result["feature_name"],
+            feat_location_no=result["feat_location_no"],
+            message=f"Location added to feature '{result['feature_name']}' successfully",
+        )
+
+    except FeatureCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @router.post("/", response_model=CreateFeatureResponse)
