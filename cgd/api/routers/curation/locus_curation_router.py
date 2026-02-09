@@ -5,7 +5,7 @@ Requires curator authentication.
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -41,7 +41,7 @@ class FeatureSearchItem(BaseModel):
 class FeatureSearchResponse(BaseModel):
     """Response for feature search."""
 
-    features: list[FeatureSearchItem]
+    features: List[FeatureSearchItem]
     total: int
     page: int
     page_size: int
@@ -57,19 +57,19 @@ class AliasRefOut(BaseModel):
 class AliasOut(BaseModel):
     """Alias in feature details."""
 
-    feature_alias_no: int
+    feat_alias_no: int
+    alias_no: int
     alias_name: str
     alias_type: str
-    source: str
-    references: list[AliasRefOut]
+    references: List[AliasRefOut]
 
 
 class NoteOut(BaseModel):
     """Note in feature details."""
 
-    feature_note_no: int
+    note_link_no: int
+    note_no: int
     note_type: str
-    note_class: Optional[str]
     note_text: str
     date_created: Optional[str]
 
@@ -91,16 +91,13 @@ class FeatureDetailResponse(BaseModel):
     gene_name: Optional[str]
     name_description: Optional[str]
     feature_type: str
-    qualifier: Optional[str]
     headline: Optional[str]
-    description: Optional[str]
-    gene_product: Optional[str]
     source: str
     date_created: Optional[str]
     created_by: str
-    aliases: list[AliasOut]
-    notes: list[NoteOut]
-    urls: list[UrlOut]
+    aliases: List[AliasOut]
+    notes: List[NoteOut]
+    urls: List[UrlOut]
 
 
 class UpdateFeatureRequest(BaseModel):
@@ -109,10 +106,7 @@ class UpdateFeatureRequest(BaseModel):
     gene_name: Optional[str] = Field(None, description="Standard gene name")
     name_description: Optional[str] = Field(None, description="Name description")
     headline: Optional[str] = Field(None, description="Headline/short description")
-    description: Optional[str] = Field(None, description="Full description")
-    gene_product: Optional[str] = Field(None, description="Gene product")
     feature_type: Optional[str] = Field(None, description="Feature type")
-    qualifier: Optional[str] = Field(None, description="Feature qualifier")
 
 
 class SuccessResponse(BaseModel):
@@ -135,7 +129,6 @@ class AddNoteRequest(BaseModel):
 
     note_type: str = Field(..., description="Note type")
     note_text: str = Field(..., description="Note text")
-    note_class: Optional[str] = Field(None, description="Note class")
 
 
 class AddUrlRequest(BaseModel):
@@ -258,7 +251,7 @@ def add_alias(
     service = LocusCurationService(db)
 
     try:
-        alias_no = service.add_alias(
+        feat_alias_no = service.add_alias(
             feature_no,
             request.alias_name,
             request.alias_type,
@@ -267,7 +260,7 @@ def add_alias(
         )
 
         return AddItemResponse(
-            id=alias_no,
+            id=feat_alias_no,
             message="Alias added to feature",
         )
     except LocusCurationError as e:
@@ -277,9 +270,9 @@ def add_alias(
         )
 
 
-@router.delete("/alias/{feature_alias_no}", response_model=SuccessResponse)
+@router.delete("/alias/{feat_alias_no}", response_model=SuccessResponse)
 def remove_alias(
-    feature_alias_no: int,
+    feat_alias_no: int,
     current_user: CurrentUser,
     db: Session = Depends(get_db),
 ):
@@ -287,7 +280,7 @@ def remove_alias(
     service = LocusCurationService(db)
 
     try:
-        service.remove_alias(feature_alias_no, current_user.userid)
+        service.remove_alias(feat_alias_no, current_user.userid)
 
         return SuccessResponse(
             success=True,
@@ -311,16 +304,15 @@ def add_note(
     service = LocusCurationService(db)
 
     try:
-        note_no = service.add_note(
+        note_link_no = service.add_note(
             feature_no,
             request.note_type,
             request.note_text,
             current_user.userid,
-            request.note_class,
         )
 
         return AddItemResponse(
-            id=note_no,
+            id=note_link_no,
             message="Note added to feature",
         )
     except LocusCurationError as e:
@@ -330,9 +322,9 @@ def add_note(
         )
 
 
-@router.delete("/note/{feature_note_no}", response_model=SuccessResponse)
+@router.delete("/note/{note_link_no}", response_model=SuccessResponse)
 def remove_note(
-    feature_note_no: int,
+    note_link_no: int,
     current_user: CurrentUser,
     db: Session = Depends(get_db),
 ):
@@ -340,7 +332,7 @@ def remove_note(
     service = LocusCurationService(db)
 
     try:
-        service.remove_note(feature_note_no, current_user.userid)
+        service.remove_note(note_link_no, current_user.userid)
 
         return SuccessResponse(
             success=True,
