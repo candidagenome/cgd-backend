@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
             "https://www.candidagenome.org",
             "https://candidagenome.org",
             "https://dev.candidagenome.org",
+            "https://frontend.dev.candidagenome.org",
         ],
         allow_credentials=True,
         allow_methods=["*"],
