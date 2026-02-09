@@ -104,7 +104,7 @@ class AuthService:
             # We need to replace user:pass with the provided credentials
             try:
                 # Parse the URL to extract connection details
-                from urllib.parse import urlparse, parse_qs
+                from urllib.parse import urlparse, parse_qs, quote
 
                 parsed = urlparse(base_url)
                 host = parsed.hostname
@@ -114,16 +114,20 @@ class AuthService:
                 query_params = parse_qs(parsed.query)
                 service_name = query_params.get("service_name", [""])[0]
 
+                # URL-encode credentials to handle special characters
+                encoded_userid = quote(userid, safe='')
+                encoded_password = quote(password, safe='')
+
                 if service_name:
                     user_url = (
-                        f"oracle+oracledb://{userid}:{password}@"
+                        f"oracle+oracledb://{encoded_userid}:{encoded_password}@"
                         f"{host}:{port}/?service_name={service_name}"
                     )
                 else:
                     # Assume SID is in the path
                     sid = parsed.path.strip("/")
                     user_url = (
-                        f"oracle+oracledb://{userid}:{password}@"
+                        f"oracle+oracledb://{encoded_userid}:{encoded_password}@"
                         f"{host}:{port}/{sid}"
                     )
 
