@@ -306,7 +306,7 @@ def get_colleague_detail(
     keywords = None
     research_topics = None
     kw_entries = (
-        db.query(Keyword.keyword, Keyword.kw_source)
+        db.query(Keyword.keyword, Keyword.source)
         .join(CollKw, CollKw.keyword_no == Keyword.keyword_no)
         .filter(CollKw.colleague_no == colleague_no)
         .all()
