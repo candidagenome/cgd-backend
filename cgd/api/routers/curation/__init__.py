@@ -12,6 +12,7 @@ from .feature_curation_router import router as feature_curation_router
 from .link_curation_router import router as link_curation_router
 from .gene_registry_curation_router import router as gene_registry_curation_router
 from .paragraph_curation_router import router as paragraph_curation_router
+from .litreview_curation_router import router as litreview_curation_router
 
 __all__ = [
     "todo_list_router",
@@ -26,4 +27,5 @@ __all__ = [
     "link_curation_router",
     "gene_registry_curation_router",
     "paragraph_curation_router",
+    "litreview_curation_router",
 ]
