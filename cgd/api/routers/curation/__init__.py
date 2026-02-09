@@ -17,6 +17,7 @@ from .ref_annotation_curation_router import router as ref_annotation_curation_ro
 from .db_search_router import router as db_search_router
 from .sequence_curation_router import router as sequence_curation_router
 from .coordinate_curation_router import router as coordinate_curation_router
+from .seq_alignment_router import router as seq_alignment_router
 
 __all__ = [
     "todo_list_router",
@@ -36,4 +37,5 @@ __all__ = [
     "db_search_router",
     "sequence_curation_router",
     "coordinate_curation_router",
+    "seq_alignment_router",
 ]
