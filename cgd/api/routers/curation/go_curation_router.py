@@ -119,6 +119,70 @@ class DeleteAnnotationResponse(BaseModel):
 # ---------------------------
 
 
+# Non-parameterized routes MUST come before /{feature_name} and /{annotation_no}
+# routes to prevent "evidence-codes" etc. from matching as path parameters
+
+
+@router.get("/evidence-codes", tags=["curation-go"])
+def get_evidence_codes(current_user: CurrentUser):
+    """Get list of valid GO evidence codes."""
+    return {"evidence_codes": GoCurationService.EVIDENCE_CODES}
+
+
+@router.get("/qualifiers/{aspect}", tags=["curation-go"])
+def get_qualifiers_for_aspect(
+    aspect: str,
+    current_user: CurrentUser,
+):
+    """
+    Get valid GO qualifiers for a given aspect.
+
+    Args:
+        aspect: GO aspect (F/P/C or function/process/component)
+    """
+    aspect_key = aspect[0].upper() if len(aspect) > 1 else aspect.upper()
+    qualifiers = GoCurationService.QUALIFIERS.get(aspect_key, [])
+
+    if not qualifiers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid aspect: {aspect}. Use F/P/C or function/process/component",
+        )
+
+    return {"aspect": aspect_key, "qualifiers": qualifiers}
+
+
+@router.delete("/ref/{go_ref_no}", response_model=DeleteAnnotationResponse)
+def delete_go_reference(
+    go_ref_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Remove a reference from a GO annotation.
+
+    Cannot remove the only reference; delete the annotation instead.
+    """
+    service = GoCurationService(db)
+
+    try:
+        service.delete_reference_from_annotation(go_ref_no, current_user.userid)
+
+        return DeleteAnnotationResponse(
+            success=True,
+            message=f"Reference removed from annotation",
+        )
+
+    except GoCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+# Parameterized routes below
+
+
 @router.get("/{feature_name}", response_model=FeatureAnnotationsResponse)
 def get_go_annotations(
     feature_name: str,
@@ -252,58 +316,3 @@ def delete_go_annotation(
         )
 
 
-@router.delete("/ref/{go_ref_no}", response_model=DeleteAnnotationResponse)
-def delete_go_reference(
-    go_ref_no: int,
-    current_user: CurrentUser,
-    db: Session = Depends(get_db),
-):
-    """
-    Remove a reference from a GO annotation.
-
-    Cannot remove the only reference; delete the annotation instead.
-    """
-    service = GoCurationService(db)
-
-    try:
-        service.delete_reference_from_annotation(go_ref_no, current_user.userid)
-
-        return DeleteAnnotationResponse(
-            success=True,
-            message=f"Reference removed from annotation",
-        )
-
-    except GoCurationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-
-
-@router.get("/evidence-codes", tags=["curation-go"])
-def get_evidence_codes(current_user: CurrentUser):
-    """Get list of valid GO evidence codes."""
-    return {"evidence_codes": GoCurationService.EVIDENCE_CODES}
-
-
-@router.get("/qualifiers/{aspect}", tags=["curation-go"])
-def get_qualifiers_for_aspect(
-    aspect: str,
-    current_user: CurrentUser,
-):
-    """
-    Get valid GO qualifiers for a given aspect.
-
-    Args:
-        aspect: GO aspect (F/P/C or function/process/component)
-    """
-    aspect_key = aspect[0].upper() if len(aspect) > 1 else aspect.upper()
-    qualifiers = GoCurationService.QUALIFIERS.get(aspect_key, [])
-
-    if not qualifiers:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid aspect: {aspect}. Use F/P/C or function/process/component",
-        )
-
-    return {"aspect": aspect_key, "qualifiers": qualifiers}

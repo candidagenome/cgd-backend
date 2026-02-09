@@ -134,6 +134,49 @@ class PropertyTypesResponse(BaseModel):
 # ---------------------------
 
 
+# Non-parameterized routes MUST come before /{feature_name} and /{annotation_no}
+# routes to prevent "cv" or "property-types" from matching as path parameters
+
+
+@router.get("/cv/{cv_name}", response_model=CVTermsResponse)
+def get_cv_terms(
+    cv_name: str,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get CV terms for dropdowns.
+
+    Args:
+        cv_name: experiment_type, mutant_type, qualifier, or observable
+    """
+    service = PhenotypeCurationService(db)
+    terms = service.get_cv_terms(cv_name)
+
+    if not terms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown CV name: {cv_name}",
+        )
+
+    return CVTermsResponse(cv_name=cv_name, terms=terms)
+
+
+@router.get("/property-types", response_model=PropertyTypesResponse)
+def get_property_types(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Get valid property types for experiment properties."""
+    service = PhenotypeCurationService(db)
+    property_types = service.get_property_types()
+
+    return PropertyTypesResponse(property_types=property_types)
+
+
+# Parameterized routes below
+
+
 @router.get("/{feature_name}", response_model=FeaturePhenotypeResponse)
 def get_phenotype_annotations(
     feature_name: str,
@@ -265,39 +308,3 @@ def delete_phenotype_annotation(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-
-
-@router.get("/cv/{cv_name}", response_model=CVTermsResponse)
-def get_cv_terms(
-    cv_name: str,
-    current_user: CurrentUser,
-    db: Session = Depends(get_db),
-):
-    """
-    Get CV terms for dropdowns.
-
-    Args:
-        cv_name: experiment_type, mutant_type, qualifier, or observable
-    """
-    service = PhenotypeCurationService(db)
-    terms = service.get_cv_terms(cv_name)
-
-    if not terms:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown CV name: {cv_name}",
-        )
-
-    return CVTermsResponse(cv_name=cv_name, terms=terms)
-
-
-@router.get("/property-types", response_model=PropertyTypesResponse)
-def get_property_types(
-    current_user: CurrentUser,
-    db: Session = Depends(get_db),
-):
-    """Get valid property types for experiment properties."""
-    service = PhenotypeCurationService(db)
-    property_types = service.get_property_types()
-
-    return PropertyTypesResponse(property_types=property_types)

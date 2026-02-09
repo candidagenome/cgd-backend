@@ -137,6 +137,22 @@ class ReferenceCurationDetailsResponse(BaseModel):
 # ---------------------------
 
 
+# Non-parameterized routes MUST come before /{reference_no} routes
+# to prevent "statuses" from matching as a reference_no
+
+
+@router.get("/statuses/reference")
+def get_reference_statuses(current_user: CurrentUser):
+    """Get list of valid reference status values."""
+    return {"statuses": ReferenceCurationService.VALID_STATUSES}
+
+
+@router.get("/statuses/curation")
+def get_curation_statuses(current_user: CurrentUser):
+    """Get list of valid curation status values."""
+    return {"statuses": ReferenceCurationService.CURATION_STATUSES}
+
+
 @router.post("/pubmed", response_model=CreateReferenceResponse)
 def create_reference_from_pubmed(
     request: CreateFromPubmedRequest,
@@ -322,15 +338,3 @@ def link_to_literature_guide(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-
-
-@router.get("/statuses/reference")
-def get_reference_statuses(current_user: CurrentUser):
-    """Get list of valid reference status values."""
-    return {"statuses": ReferenceCurationService.VALID_STATUSES}
-
-
-@router.get("/statuses/curation")
-def get_curation_statuses(current_user: CurrentUser):
-    """Get list of valid curation status values."""
-    return {"statuses": ReferenceCurationService.CURATION_STATUSES}
