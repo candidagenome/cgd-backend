@@ -4,6 +4,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Import auth router
+from cgd.auth import auth_router
+
 # Import routers (routers should NOT call app.include_router() themselves)
 from cgd.api.routers.health_router import router as health_router
 from cgd.api.routers.locus_router import router as locus_router
@@ -26,6 +29,28 @@ from cgd.api.routers.webprimer_router import router as webprimer_router
 from cgd.api.routers.go_term_finder_router import router as go_term_finder_router
 from cgd.api.routers.go_slim_mapper_router import router as go_slim_mapper_router
 from cgd.api.routers.homology_router import router as homology_router
+
+# Import curation routers (require authentication)
+from cgd.api.routers.curation import (
+    todo_list_router,
+    go_curation_router,
+    reference_curation_router,
+    phenotype_curation_router,
+    colleague_curation_router,
+    locus_curation_router,
+    litguide_curation_router,
+    note_curation_router,
+    feature_curation_router,
+    link_curation_router,
+    gene_registry_curation_router,
+    paragraph_curation_router,
+    litreview_curation_router,
+    ref_annotation_curation_router,
+    db_search_router,
+    sequence_curation_router,
+    coordinate_curation_router,
+    seq_alignment_router,
+)
 
 
 def create_app() -> FastAPI:
@@ -50,6 +75,7 @@ def create_app() -> FastAPI:
     )
 
     # Routers
+    app.include_router(auth_router)
     app.include_router(health_router)
     app.include_router(locus_router)
     app.include_router(reference_router)
@@ -71,6 +97,26 @@ def create_app() -> FastAPI:
     app.include_router(go_term_finder_router)
     app.include_router(go_slim_mapper_router)
     app.include_router(homology_router)
+
+    # Curation routers (require authentication)
+    app.include_router(todo_list_router)
+    app.include_router(go_curation_router)
+    app.include_router(reference_curation_router)
+    app.include_router(phenotype_curation_router)
+    app.include_router(colleague_curation_router)
+    app.include_router(locus_curation_router)
+    app.include_router(litguide_curation_router)
+    app.include_router(note_curation_router)
+    app.include_router(feature_curation_router)
+    app.include_router(link_curation_router)
+    app.include_router(gene_registry_curation_router)
+    app.include_router(paragraph_curation_router)
+    app.include_router(litreview_curation_router)
+    app.include_router(ref_annotation_curation_router)
+    app.include_router(db_search_router)
+    app.include_router(sequence_curation_router)
+    app.include_router(coordinate_curation_router)
+    app.include_router(seq_alignment_router)
 
     return app
 

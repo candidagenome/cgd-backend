@@ -1,3 +1,4 @@
+import secrets
 from typing import Optional
 
 from pydantic import Field
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
 
     Required:
       - DATABASE_URL
+      - JWT_SECRET_KEY (or auto-generated for development)
 
     Optional:
       - DB_SCHEMA: used for prefixing table names in raw SQL: "{schema}.{table}"
@@ -19,6 +21,23 @@ class Settings(BaseSettings):
 
     database_url: str
     db_schema: Optional[str] = None
+
+    # JWT Authentication settings
+    jwt_secret_key: str = Field(
+        default_factory=lambda: secrets.token_urlsafe(32),
+        validation_alias="JWT_SECRET_KEY",
+        description="Secret key for JWT signing. MUST be set in production.",
+    )
+    jwt_access_token_expire_minutes: int = Field(
+        default=15,
+        validation_alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
+        description="Access token expiration in minutes",
+    )
+    jwt_refresh_token_expire_days: int = Field(
+        default=7,
+        validation_alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS",
+        description="Refresh token expiration in days",
+    )
 
     # Path to CGD data files (default matches typical production setup)
     cgd_data_dir: str = "/data"
