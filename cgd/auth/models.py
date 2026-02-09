@@ -1,6 +1,7 @@
 """SQLAlchemy models for authentication/session management."""
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, Index, PrimaryKeyConstraint, String, text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -49,12 +50,12 @@ class CuratorSession(Base):
         default=False,
         comment="Whether session has been revoked (logout)",
     )
-    user_agent: Mapped[str | None] = mapped_column(
+    user_agent: Mapped[Optional[str]] = mapped_column(
         String(512),
         nullable=True,
         comment="Browser user agent for audit",
     )
-    ip_address: Mapped[str | None] = mapped_column(
+    ip_address: Mapped[Optional[str]] = mapped_column(
         String(45),
         nullable=True,
         comment="Client IP address for audit",
