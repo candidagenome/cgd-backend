@@ -42,11 +42,37 @@ class CreateFromPubmedRequest(BaseModel):
     )
 
 
+class CreateManualReferenceRequest(BaseModel):
+    """Request to create reference manually (without PubMed)."""
+
+    title: str = Field(..., description="Reference title")
+    year: int = Field(..., description="Publication year")
+    status: str = Field(
+        default="Published",
+        description="Reference status (Published, Epub ahead of print, etc.)",
+    )
+    authors: Optional[list[str]] = Field(
+        None,
+        description="List of author names (e.g., ['Smith J', 'Doe JA'])",
+    )
+    journal_abbrev: Optional[str] = Field(
+        None,
+        description="Journal abbreviation",
+    )
+    volume: Optional[str] = Field(None, description="Volume number")
+    pages: Optional[str] = Field(None, description="Page range")
+    abstract: Optional[str] = Field(None, description="Abstract text")
+    publication_types: Optional[list[str]] = Field(
+        None,
+        description="Publication types (e.g., ['Journal Article'])",
+    )
+
+
 class CreateReferenceResponse(BaseModel):
     """Response for reference creation."""
 
     reference_no: int
-    pubmed: int
+    pubmed: Optional[int] = None
     message: str
 
 
@@ -178,6 +204,47 @@ def create_reference_from_pubmed(
             reference_no=reference_no,
             pubmed=request.pubmed,
             message=f"Reference created successfully from PubMed {request.pubmed}",
+        )
+
+    except ReferenceCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/manual", response_model=CreateReferenceResponse)
+def create_manual_reference(
+    request: CreateManualReferenceRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a new reference manually (without PubMed ID).
+
+    Use this for references that are not in PubMed, such as
+    unpublished work, theses, or non-indexed publications.
+    """
+    service = ReferenceCurationService(db)
+
+    try:
+        reference_no = service.create_manual_reference(
+            title=request.title,
+            year=request.year,
+            reference_status=request.status,
+            curator_userid=current_user.userid,
+            authors=request.authors,
+            journal_abbrev=request.journal_abbrev,
+            volume=request.volume,
+            pages=request.pages,
+            abstract=request.abstract,
+            publication_types=request.publication_types,
+        )
+
+        return CreateReferenceResponse(
+            reference_no=reference_no,
+            pubmed=None,
+            message=f"Reference {reference_no} created successfully",
         )
 
     except ReferenceCurationError as e:

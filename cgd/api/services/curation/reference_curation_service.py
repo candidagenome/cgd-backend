@@ -204,6 +204,181 @@ class ReferenceCurationService:
         except ElementTree.ParseError as e:
             raise ReferenceCurationError(f"Failed to parse PubMed XML: {e}")
 
+    def create_manual_reference(
+        self,
+        title: str,
+        year: int,
+        reference_status: str,
+        curator_userid: str,
+        authors: Optional[list[str]] = None,
+        journal_abbrev: Optional[str] = None,
+        volume: Optional[str] = None,
+        pages: Optional[str] = None,
+        abstract: Optional[str] = None,
+        publication_types: Optional[list[str]] = None,
+    ) -> int:
+        """
+        Create a reference manually (without PubMed ID).
+
+        Args:
+            title: Reference title
+            year: Publication year
+            reference_status: Reference status (Published, Epub ahead of print, etc.)
+            curator_userid: Curator's userid
+            authors: List of author names (e.g., ["Smith J", "Doe JA"])
+            journal_abbrev: Journal abbreviation
+            volume: Volume number
+            pages: Page range
+            abstract: Abstract text
+            publication_types: List of publication types (e.g., ["Journal Article"])
+
+        Returns:
+            New reference_no
+
+        Raises:
+            ReferenceCurationError: If validation fails
+        """
+        # Validate status
+        if reference_status not in self.VALID_STATUSES:
+            raise ReferenceCurationError(
+                f"Invalid status '{reference_status}'. "
+                f"Valid statuses: {', '.join(self.VALID_STATUSES)}"
+            )
+
+        if not title:
+            raise ReferenceCurationError("Title is required")
+
+        if not year:
+            raise ReferenceCurationError("Year is required")
+
+        # Build citation string
+        if authors:
+            first_author = authors[0].split()[0] if authors[0] else ""
+            if len(authors) > 1:
+                author_str = f"{first_author} et al."
+            else:
+                author_str = first_author
+        else:
+            author_str = ""
+
+        citation_parts = [author_str]
+        citation_parts.append(f"({year})")
+        if journal_abbrev:
+            citation_parts.append(journal_abbrev)
+        if volume:
+            vol_str = volume
+            if pages:
+                vol_str += f":{pages}"
+            citation_parts.append(vol_str)
+
+        citation = " ".join(filter(None, citation_parts)) or title[:50]
+
+        # Check for duplicate citation
+        existing = (
+            self.db.query(Reference)
+            .filter(Reference.citation == citation)
+            .first()
+        )
+        if existing:
+            raise ReferenceCurationError(
+                f"Reference with citation '{citation}' already exists "
+                f"(reference_no: {existing.reference_no})"
+            )
+
+        # Get journal_no if journal provided
+        journal_no = None
+        if journal_abbrev:
+            journal = (
+                self.db.query(Journal)
+                .filter(Journal.abbreviation == journal_abbrev)
+                .first()
+            )
+            if journal:
+                journal_no = journal.journal_no
+            else:
+                # Create new journal if it doesn't exist
+                journal = Journal(
+                    abbreviation=journal_abbrev[:50],
+                    full_name=journal_abbrev[:200],
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(journal)
+                self.db.flush()
+                journal_no = journal.journal_no
+
+        # Determine PDF status based on reference status
+        pdf_status = "N" if reference_status == "Published" else "NAP"
+
+        reference = Reference(
+            pubmed=None,
+            source="Curator non-PubMed reference",
+            status=reference_status,
+            pdf_status=pdf_status,
+            citation=citation[:500],
+            year=year,
+            title=title[:400],
+            volume=volume[:20] if volume else None,
+            pages=pages[:20] if pages else None,
+            journal_no=journal_no,
+            created_by=curator_userid[:12],
+        )
+
+        self.db.add(reference)
+        self.db.flush()
+
+        # Add authors
+        if authors:
+            for order, author_name in enumerate(authors, start=1):
+                if not author_name.strip():
+                    continue
+
+                # Clean author name (remove punctuation)
+                clean_name = author_name.replace(",", "").replace(".", "").strip()
+
+                # Get or create author
+                author = (
+                    self.db.query(Author)
+                    .filter(Author.author_name == clean_name[:100])
+                    .first()
+                )
+                if not author:
+                    author = Author(
+                        author_name=clean_name[:100],
+                        created_by=curator_userid[:12],
+                    )
+                    self.db.add(author)
+                    self.db.flush()
+
+                # Create author-reference link
+                author_editor = AuthorEditor(
+                    reference_no=reference.reference_no,
+                    author_no=author.author_no,
+                    author_type="Author",
+                    author_order=order,
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(author_editor)
+
+        # Add abstract if available
+        if abstract:
+            # Truncate if too long
+            if len(abstract) > 4000:
+                abstract = abstract[:3950] + "...ABSTRACT TRUNCATED AT 3950 CHARACTERS."
+            abstract_record = Abstract(
+                reference_no=reference.reference_no,
+                abstract=abstract,
+            )
+            self.db.add(abstract_record)
+
+        self.db.commit()
+
+        logger.info(
+            f"Created manual reference {reference.reference_no} "
+            f"with {len(authors) if authors else 0} authors by {curator_userid}"
+        )
+
+        return reference.reference_no
+
     def create_reference_from_pubmed(
         self,
         pubmed: int,
