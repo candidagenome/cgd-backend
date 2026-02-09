@@ -183,12 +183,13 @@ class GoCurationService:
             raise GoCurationError(f"Reference {reference_no} not found")
 
         # Check for unlink if feature provided
-        if feature_no:
+        if feature_no and ref.pubmed:
             unlink = (
                 self.db.query(RefUnlink)
                 .filter(
-                    RefUnlink.reference_no == reference_no,
-                    RefUnlink.feature_no == feature_no,
+                    RefUnlink.pubmed == ref.pubmed,
+                    RefUnlink.tab_name == "FEATURE",
+                    RefUnlink.primary_key == feature_no,
                 )
                 .first()
             )

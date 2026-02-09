@@ -427,13 +427,13 @@ class LocusCurationService:
         # Create or get URL
         url = self.db.query(Url).filter(
             Url.url_type == url_type,
-            Url.link == link,
+            Url.url == link,
         ).first()
 
         if not url:
             url = Url(
                 url_type=url_type,
-                link=link,
+                url=link,
                 created_by=curator_userid[:12],
             )
             self.db.add(url)

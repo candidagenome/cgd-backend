@@ -70,11 +70,13 @@ class MockRefUnlink:
 
     def __init__(
         self,
-        reference_no: int,
-        feature_no: int,
+        pubmed: int,
+        tab_name: str,
+        primary_key: int,
     ):
-        self.reference_no = reference_no
-        self.feature_no = feature_no
+        self.pubmed = pubmed
+        self.tab_name = tab_name
+        self.primary_key = primary_key
 
 
 class MockGoAnnotation:
@@ -413,19 +415,37 @@ class TestValidateReference:
 
         assert "not found" in str(exc_info.value)
 
-    @pytest.mark.skip(reason="RefUnlink model uses pubmed/primary_key columns, not reference_no/feature_no - service needs update")
     def test_unlinked_reference_raises_error(self, mock_db, sample_references):
         """Should raise error for reference unlinked from feature."""
-        # Note: RefUnlink model has columns: pubmed, tab_name, primary_key
-        # Service code incorrectly assumes: reference_no, feature_no
-        pass
+        # Reference with pubmed 12345678
+        ref = sample_references[0]
+        unlink = MockRefUnlink(pubmed=12345678, tab_name="FEATURE", primary_key=1)
 
-    @pytest.mark.skip(reason="RefUnlink model uses pubmed/primary_key columns, not reference_no/feature_no - service needs update")
+        mock_db.query.side_effect = [
+            MockQuery([ref]),  # Reference lookup
+            MockQuery([unlink]),  # RefUnlink lookup - found
+        ]
+
+        service = GoCurationService(mock_db)
+
+        with pytest.raises(GoCurationError) as exc_info:
+            service.validate_reference(1, feature_no=1)
+
+        assert "unlinked" in str(exc_info.value)
+
     def test_linked_reference_valid(self, mock_db, sample_references):
         """Should accept reference not unlinked from feature."""
-        # Note: RefUnlink model has columns: pubmed, tab_name, primary_key
-        # Service code incorrectly assumes: reference_no, feature_no
-        pass
+        ref = sample_references[0]
+
+        mock_db.query.side_effect = [
+            MockQuery([ref]),  # Reference lookup
+            MockQuery([]),  # RefUnlink lookup - not found (not unlinked)
+        ]
+
+        service = GoCurationService(mock_db)
+        result = service.validate_reference(1001, feature_no=1)
+
+        assert result.reference_no == 1001
 
 
 class TestValidateQualifiers:

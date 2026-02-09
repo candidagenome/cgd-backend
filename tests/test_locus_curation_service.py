@@ -602,9 +602,6 @@ class TestRemoveNote:
 class TestAddUrl:
     """Tests for adding URLs."""
 
-    @pytest.mark.skip(
-        reason="Url model uses 'url' column, not 'link' - service needs update"
-    )
     def test_creates_new_url(self, mock_db, sample_features):
         """Should create new URL if not exists."""
         mock_db.query.side_effect = [
@@ -619,9 +616,6 @@ class TestAddUrl:
         assert mock_db.add.call_count >= 2  # URL + FeatUrl
         mock_db.commit.assert_called_once()
 
-    @pytest.mark.skip(
-        reason="Url model uses 'url' column, not 'link' - service needs update"
-    )
     def test_raises_for_duplicate_url(self, mock_db, sample_features):
         """Should raise error if URL already linked."""
         existing_url = MockUrl(1, "External", "https://example.com")

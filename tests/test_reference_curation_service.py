@@ -277,25 +277,37 @@ class TestCheckBadReference:
 class TestCheckUnlinkedReference:
     """Tests for checking unlinked references."""
 
-    @pytest.mark.skip(
-        reason="RefUnlink model uses 'pubmed/primary_key' columns, not 'reference_no/feature_no' - service needs update"
-    )
-    def test_returns_ref_unlink_when_found(self, mock_db):
+    def test_returns_ref_unlink_when_found(self, mock_db, sample_references):
         """Should return RefUnlink when found."""
         ref_unlink = MockRefUnlink(12345678, "FEATURE", 1)
-        mock_db.query.return_value = MockQuery([ref_unlink])
+
+        mock_db.query.side_effect = [
+            MockQuery([sample_references[0]]),  # Reference lookup (has pubmed 12345678)
+            MockQuery([ref_unlink]),  # RefUnlink lookup
+        ]
 
         service = ReferenceCurationService(mock_db)
         result = service.check_unlinked_reference(1, 1)
 
         assert result is not None
 
-    @pytest.mark.skip(
-        reason="RefUnlink model uses 'pubmed/primary_key' columns, not 'reference_no/feature_no' - service needs update"
-    )
-    def test_returns_none_when_not_found(self, mock_db):
+    def test_returns_none_when_not_found(self, mock_db, sample_references):
         """Should return None when not found."""
-        mock_db.query.return_value = MockQuery([])
+        mock_db.query.side_effect = [
+            MockQuery([sample_references[0]]),  # Reference lookup
+            MockQuery([]),  # RefUnlink lookup - not found
+        ]
+
+        service = ReferenceCurationService(mock_db)
+        result = service.check_unlinked_reference(1, 1)
+
+        assert result is None
+
+    def test_returns_none_for_reference_without_pubmed(self, mock_db):
+        """Should return None if reference has no pubmed."""
+        ref_no_pubmed = MockReference(1, None, "S000123456")
+
+        mock_db.query.return_value = MockQuery([ref_no_pubmed])
 
         service = ReferenceCurationService(mock_db)
         result = service.check_unlinked_reference(1, 1)
@@ -365,15 +377,13 @@ class TestCreateManualReference:
 
         assert "already exists" in str(exc_info.value)
 
-    @pytest.mark.skip(
-        reason="Reference model uses 'page' column, not 'pages' - service needs update"
-    )
     def test_creates_reference(self, mock_db):
         """Should create manual reference."""
-        # First query - check duplicate, second - get journal
         mock_db.query.side_effect = [
-            MockQuery([]),  # No duplicate
+            MockQuery([]),  # No duplicate reference
             MockQuery([]),  # No existing journal
+            MockQuery([]),  # Author 1 lookup - not found
+            MockQuery([]),  # Author 2 lookup - not found
         ]
 
         service = ReferenceCurationService(mock_db)
@@ -385,7 +395,7 @@ class TestCreateManualReference:
             authors=["Smith J", "Doe JA"],
         )
 
-        # Should have added reference and authors
+        # Should have added reference, journal, and authors
         assert mock_db.add.call_count >= 1
         mock_db.commit.assert_called_once()
 

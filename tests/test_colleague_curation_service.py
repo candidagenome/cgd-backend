@@ -534,9 +534,6 @@ class TestDeleteColleague:
 class TestAddColleagueUrl:
     """Tests for adding URLs to colleagues."""
 
-    @pytest.mark.skip(
-        reason="Url model uses 'url' column, not 'link' - service needs update"
-    )
     def test_creates_new_url(self, mock_db, sample_colleagues):
         """Should create new URL if not exists."""
         mock_db.query.side_effect = [
@@ -550,9 +547,6 @@ class TestAddColleagueUrl:
         assert mock_db.add.call_count >= 2  # URL + CollUrl
         mock_db.commit.assert_called_once()
 
-    @pytest.mark.skip(
-        reason="Url model uses 'url' column, not 'link' - service needs update"
-    )
     def test_reuses_existing_url(self, mock_db, sample_colleagues):
         """Should reuse existing URL."""
         existing_url = MockUrl(1, "Lab", "https://example.com")
@@ -874,9 +868,6 @@ class TestRemoveColleagueRelationship:
 class TestAddColleagueRemark:
     """Tests for adding remarks to colleagues."""
 
-    @pytest.mark.skip(
-        reason="ColleagueRemark model uses 'remark' column, not 'remark_text' - service needs update"
-    )
     def test_creates_remark(self, mock_db, sample_colleagues):
         """Should create remark."""
         mock_db.query.return_value = MockQuery([sample_colleagues[0]])

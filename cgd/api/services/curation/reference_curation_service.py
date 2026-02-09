@@ -87,11 +87,17 @@ class ReferenceCurationService:
         self, reference_no: int, feature_no: int
     ) -> Optional[RefUnlink]:
         """Check if reference is unlinked from a feature."""
+        # Get the pubmed ID from the reference
+        reference = self.get_reference_by_no(reference_no)
+        if not reference or not reference.pubmed:
+            return None
+
         return (
             self.db.query(RefUnlink)
             .filter(
-                RefUnlink.reference_no == reference_no,
-                RefUnlink.feature_no == feature_no,
+                RefUnlink.pubmed == reference.pubmed,
+                RefUnlink.tab_name == "FEATURE",
+                RefUnlink.primary_key == feature_no,
             )
             .first()
         )
@@ -323,7 +329,7 @@ class ReferenceCurationService:
             year=year,
             title=title[:400],
             volume=volume[:20] if volume else None,
-            pages=pages[:20] if pages else None,
+            page=pages[:20] if pages else None,
             journal_no=journal_no,
             created_by=curator_userid[:12],
         )
@@ -360,7 +366,6 @@ class ReferenceCurationService:
                     author_no=author.author_no,
                     author_type="Author",
                     author_order=order,
-                    created_by=curator_userid[:12],
                 )
                 self.db.add(author_editor)
 
@@ -491,7 +496,7 @@ class ReferenceCurationService:
             year=metadata.get("year") or datetime.now().year,
             title=metadata.get("title", "")[:400],  # Truncate to fit column
             volume=metadata.get("volume", "")[:20] if metadata.get("volume") else None,
-            pages=metadata.get("pages", "")[:20] if metadata.get("pages") else None,
+            page=metadata.get("pages", "")[:20] if metadata.get("pages") else None,
             journal_no=journal_no,
             created_by=curator_userid[:12],
         )
@@ -529,7 +534,6 @@ class ReferenceCurationService:
                     author_no=author.author_no,
                     author_type="Author",
                     author_order=order,
-                    created_by=curator_userid[:12],
                 )
                 self.db.add(author_editor)
 
@@ -603,7 +607,7 @@ class ReferenceCurationService:
         if volume:
             reference.volume = volume
         if pages:
-            reference.pages = pages
+            reference.page = pages
 
         self.db.commit()
 

@@ -166,7 +166,7 @@ class ColleagueCurationService:
             remarks.append({
                 "colleague_remark_no": remark.colleague_remark_no,
                 "remark_type": remark.remark_type,
-                "remark_text": remark.remark_text,
+                "remark_text": remark.remark,
                 "date_created": remark.date_created.isoformat()
                 if remark.date_created else None,
             })
@@ -332,13 +332,13 @@ class ColleagueCurationService:
         # Create or get URL
         url = self.db.query(Url).filter(
             Url.url_type == url_type,
-            Url.link == link,
+            Url.url == link,
         ).first()
 
         if not url:
             url = Url(
                 url_type=url_type,
-                link=link,
+                url=link,
                 created_by=curator_userid[:12],
             )
             self.db.add(url)
@@ -559,7 +559,7 @@ class ColleagueCurationService:
         remark = ColleagueRemark(
             colleague_no=colleague_no,
             remark_type=remark_type,
-            remark_text=remark_text,
+            remark=remark_text,
             created_by=curator_userid[:12],
         )
         self.db.add(remark)
