@@ -8,6 +8,7 @@ from .colleague_curation_router import router as colleague_curation_router
 from .locus_curation_router import router as locus_curation_router
 from .litguide_curation_router import router as litguide_curation_router
 from .note_curation_router import router as note_curation_router
+from .feature_curation_router import router as feature_curation_router
 
 __all__ = [
     "todo_list_router",
@@ -18,4 +19,5 @@ __all__ = [
     "locus_curation_router",
     "litguide_curation_router",
     "note_curation_router",
+    "feature_curation_router",
 ]
