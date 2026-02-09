@@ -21,9 +21,14 @@ from cgd.models.models import (
     Abstract,
     Author,
     AuthorEditor,
+    Dbxref,
+    DbxrefRef,
+    DeleteLog,
     Feature,
+    GoRef,
     Journal,
     RefBad,
+    RefLink,
     RefProperty,
     RefUnlink,
     Reference,
@@ -879,3 +884,296 @@ class ReferenceCurationService:
                 for ae in authors
             ],
         }
+
+    def search_references(
+        self,
+        pubmed: Optional[int] = None,
+        reference_no: Optional[int] = None,
+        dbxref_id: Optional[str] = None,
+        volume: Optional[str] = None,
+        page: Optional[str] = None,
+        author: Optional[str] = None,
+        keyword: Optional[str] = None,
+        min_year: Optional[int] = None,
+        max_year: Optional[int] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """
+        Search for references by various criteria.
+
+        Args:
+            pubmed: PubMed ID
+            reference_no: Reference number
+            dbxref_id: CGDID (dbxref_id)
+            volume: Journal volume
+            page: Page number/range
+            author: Author name (partial match)
+            keyword: Keyword in title or abstract
+            min_year: Minimum publication year
+            max_year: Maximum publication year
+            limit: Maximum results to return
+
+        Returns:
+            List of reference dictionaries
+        """
+        if pubmed:
+            ref = self.get_reference_by_pubmed(pubmed)
+            if ref:
+                return [self._reference_to_dict(ref)]
+            return []
+
+        if reference_no:
+            ref = self.get_reference_by_no(reference_no)
+            if ref:
+                return [self._reference_to_dict(ref)]
+            return []
+
+        if dbxref_id:
+            ref = (
+                self.db.query(Reference)
+                .filter(Reference.dbxref_id == dbxref_id)
+                .first()
+            )
+            if ref:
+                return [self._reference_to_dict(ref)]
+            return []
+
+        # Build query for other search types
+        query = self.db.query(Reference)
+
+        if volume and page:
+            query = query.filter(
+                Reference.volume == volume,
+                Reference.page.like(f"{page}%"),
+            )
+
+        if author:
+            # Join with author tables for author search
+            author_pattern = f"%{author}%"
+            author_refs = (
+                self.db.query(AuthorEditor.reference_no)
+                .join(Author, AuthorEditor.author_no == Author.author_no)
+                .filter(Author.author_name.ilike(author_pattern))
+                .distinct()
+                .subquery()
+            )
+            query = query.filter(Reference.reference_no.in_(author_refs))
+
+        if keyword:
+            # Search in title and abstract
+            keyword_pattern = f"%{keyword}%"
+            # Get reference_nos that have matching abstracts
+            abstract_refs = (
+                self.db.query(Abstract.reference_no)
+                .filter(Abstract.abstract.ilike(keyword_pattern))
+                .subquery()
+            )
+            query = query.filter(
+                (Reference.title.ilike(keyword_pattern))
+                | (Reference.reference_no.in_(abstract_refs))
+            )
+
+        if min_year:
+            query = query.filter(Reference.year >= min_year)
+
+        if max_year:
+            query = query.filter(Reference.year <= max_year)
+
+        # Order by year descending, then reference_no
+        query = query.order_by(Reference.year.desc(), Reference.reference_no.desc())
+
+        references = query.limit(limit).all()
+
+        return [self._reference_to_dict(ref) for ref in references]
+
+    def _reference_to_dict(self, ref: Reference) -> dict:
+        """Convert Reference model to dictionary."""
+        return {
+            "reference_no": ref.reference_no,
+            "pubmed": ref.pubmed,
+            "dbxref_id": ref.dbxref_id,
+            "citation": ref.citation,
+            "title": ref.title,
+            "year": ref.year,
+            "volume": ref.volume,
+            "page": ref.page,
+            "status": ref.status,
+            "source": ref.source,
+        }
+
+    def is_reference_in_use(self, reference_no: int) -> dict:
+        """
+        Check if a reference has linked data.
+
+        Returns dict with flags for each type of linked data.
+        """
+        # Check go_ref table
+        go_ref_count = (
+            self.db.query(func.count(GoRef.go_ref_no))
+            .filter(GoRef.reference_no == reference_no)
+            .scalar()
+        )
+
+        # Check ref_link table
+        ref_link_count = (
+            self.db.query(func.count(RefLink.ref_link_no))
+            .filter(RefLink.reference_no == reference_no)
+            .scalar()
+        )
+
+        # Check ref_property/refprop_feat for linked features
+        refprop_feat_count = (
+            self.db.query(func.count(RefpropFeat.refprop_feat_no))
+            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .filter(RefProperty.reference_no == reference_no)
+            .scalar()
+        )
+
+        in_use = (
+            go_ref_count > 0
+            or ref_link_count > 0
+            or refprop_feat_count > 0
+        )
+
+        return {
+            "in_use": in_use,
+            "go_ref_count": go_ref_count,
+            "ref_link_count": ref_link_count,
+            "refprop_feat_count": refprop_feat_count,
+        }
+
+    def delete_reference_with_cleanup(
+        self,
+        reference_no: int,
+        curator_userid: str,
+        delete_log_comment: Optional[str] = None,
+        make_secondary_for: Optional[int] = None,
+    ) -> dict:
+        """
+        Delete a reference with proper cleanup.
+
+        - Adds pubmed to REF_BAD if applicable
+        - Deletes from REF_UNLINK
+        - Handles CGDID (make secondary or mark deleted)
+        - Logs deletion in DELETE_LOG
+
+        Args:
+            reference_no: Reference to delete
+            curator_userid: Curator's userid
+            delete_log_comment: Optional comment for delete log
+            make_secondary_for: If set, make CGDID secondary for this reference_no
+
+        Returns:
+            Result dict with messages
+        """
+        messages = []
+
+        reference = self.get_reference_by_no(reference_no)
+        if not reference:
+            raise ReferenceCurationError(f"Reference {reference_no} not found")
+
+        # Check if in use
+        usage = self.is_reference_in_use(reference_no)
+        if usage["in_use"]:
+            raise ReferenceCurationError(
+                f"Reference {reference_no} is linked to data and cannot be deleted. "
+                "Transfer or delete linked data first."
+            )
+
+        pubmed = reference.pubmed
+        dbxref_id = reference.dbxref_id
+
+        # Delete the reference
+        try:
+            self.db.delete(reference)
+            self.db.flush()
+            messages.append(f"Reference {reference_no} deleted")
+        except Exception as e:
+            self.db.rollback()
+            raise ReferenceCurationError(f"Failed to delete reference: {e}")
+
+        # Delete from ref_unlink if pubmed exists
+        if pubmed:
+            try:
+                self.db.query(RefUnlink).filter(RefUnlink.pubmed == pubmed).delete()
+                messages.append(f"Cleaned up ref_unlink entries for PMID:{pubmed}")
+            except Exception:
+                pass  # Not critical
+
+            # Add to ref_bad
+            existing_bad = self.db.query(RefBad).filter(RefBad.pubmed == pubmed).first()
+            if not existing_bad:
+                try:
+                    ref_bad = RefBad(
+                        pubmed=pubmed,
+                        created_by=curator_userid[:12],
+                    )
+                    self.db.add(ref_bad)
+                    messages.append(f"Added PMID:{pubmed} to ref_bad")
+                except Exception:
+                    pass  # Not critical
+
+        # Handle CGDID
+        if dbxref_id:
+            dbxref = (
+                self.db.query(Dbxref)
+                .filter(Dbxref.dbxref_id == dbxref_id)
+                .first()
+            )
+
+            if dbxref and make_secondary_for:
+                # Make it secondary for another reference
+                target_ref = self.get_reference_by_no(make_secondary_for)
+                if target_ref:
+                    dbxref.dbxref_type = "CGDID Secondary"
+                    # Create link to new reference
+                    dbxref_ref = DbxrefRef(
+                        dbxref_no=dbxref.dbxref_no,
+                        reference_no=make_secondary_for,
+                    )
+                    self.db.add(dbxref_ref)
+                    messages.append(
+                        f"Made {dbxref_id} secondary for reference {make_secondary_for}"
+                    )
+            elif dbxref:
+                # Mark as deleted
+                dbxref.dbxref_type = "CGDID Deleted"
+                messages.append(f"Marked {dbxref_id} as deleted")
+
+        # Add delete log entry
+        if delete_log_comment:
+            try:
+                delete_log = DeleteLog(
+                    tab_name="REFERENCE",
+                    primary_key=reference_no,
+                    description=delete_log_comment[:240],
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(delete_log)
+                messages.append("Added delete log entry")
+            except Exception:
+                pass  # Not critical
+
+        self.db.commit()
+
+        logger.info(
+            f"Deleted reference {reference_no} (PMID:{pubmed}) by {curator_userid}"
+        )
+
+        return {
+            "success": True,
+            "messages": messages,
+            "dbxref_id": dbxref_id,
+        }
+
+    def get_year_range(self) -> tuple[int, int]:
+        """Get min and max publication years in database."""
+        result = self.db.query(
+            func.min(Reference.year),
+            func.max(Reference.year),
+        ).first()
+
+        min_year = result[0] or 1900
+        max_year = result[1] or datetime.now().year
+
+        return min_year, max_year
