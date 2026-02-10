@@ -78,6 +78,8 @@ class LocusCurationService:
         aliases = []
         for feat_alias in feature.feat_alias:
             alias = feat_alias.alias
+            if not alias:
+                continue  # Skip if alias relationship is missing
             alias_refs = []
             # Get references for this alias link
             ref_links = (
@@ -121,6 +123,8 @@ class LocusCurationService:
         )
         for note_link in note_links:
             note = note_link.note
+            if not note:
+                continue  # Skip if note relationship is missing
             notes.append({
                 "note_link_no": note_link.note_link_no,
                 "note_no": note.note_no,
@@ -139,7 +143,7 @@ class LocusCurationService:
                     "feat_url_no": feat_url.feat_url_no,
                     "url_no": url.url_no,
                     "url_type": url.url_type,
-                    "link": url.link,
+                    "link": url.url,  # Field is named 'url' in the model
                 })
 
         return {
