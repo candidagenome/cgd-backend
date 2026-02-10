@@ -64,6 +64,7 @@ async def login(
             samesite="lax",
             max_age=int(timedelta(days=7).total_seconds()),
             path="/api/auth",  # Only sent to auth endpoints
+            domain=settings.cookie_domain,  # For cross-subdomain support
         )
 
         # Also set access token as cookie for browser convenience
@@ -75,6 +76,7 @@ async def login(
             samesite="lax",
             max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
+            domain=settings.cookie_domain,  # For cross-subdomain support
         )
 
         logger.info(f"Successful login for user: {user.userid}")
@@ -119,8 +121,8 @@ async def logout(
             pass  # Token already invalid, just clear cookies
 
     # Clear cookies
-    response.delete_cookie(key="access_token", path="/")
-    response.delete_cookie(key="refresh_token", path="/api/auth")
+    response.delete_cookie(key="access_token", path="/", domain=settings.cookie_domain)
+    response.delete_cookie(key="refresh_token", path="/api/auth", domain=settings.cookie_domain)
 
     logger.info(f"User logged out: {current_user.userid}")
 
@@ -175,6 +177,7 @@ async def refresh_token(
             samesite="lax",
             max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
+            domain=settings.cookie_domain,  # For cross-subdomain support
         )
 
         return TokenResponse(
@@ -185,7 +188,7 @@ async def refresh_token(
 
     except AuthenticationError as e:
         # Clear invalid refresh token
-        response.delete_cookie(key="refresh_token", path="/api/auth")
+        response.delete_cookie(key="refresh_token", path="/api/auth", domain=settings.cookie_domain)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),

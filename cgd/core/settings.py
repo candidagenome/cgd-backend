@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         validation_alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS",
         description="Refresh token expiration in days",
     )
+    cookie_domain: Optional[str] = Field(
+        default=None,
+        validation_alias="COOKIE_DOMAIN",
+        description="Domain for auth cookies (e.g., '.dev.candidagenome.org' for cross-subdomain)",
+    )
 
     # Path to CGD data files (default matches typical production setup)
     cgd_data_dir: str = "/data"
