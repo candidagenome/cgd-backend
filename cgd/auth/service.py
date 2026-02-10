@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 # JWT configuration
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+# Note: Token expiration values are read from settings below
+# ACCESS_TOKEN_EXPIRE_MINUTES: settings.jwt_access_token_expire_minutes (default 15)
+# REFRESH_TOKEN_EXPIRE_DAYS: settings.jwt_refresh_token_expire_days (default 7)
 
 
 class AuthenticationError(Exception):
@@ -104,7 +105,7 @@ class AuthService:
             # We need to replace user:pass with the provided credentials
             try:
                 # Parse the URL to extract connection details
-                from urllib.parse import urlparse, parse_qs
+                from urllib.parse import urlparse, parse_qs, quote
 
                 parsed = urlparse(base_url)
                 host = parsed.hostname
@@ -114,16 +115,20 @@ class AuthService:
                 query_params = parse_qs(parsed.query)
                 service_name = query_params.get("service_name", [""])[0]
 
+                # URL-encode credentials to handle special characters
+                encoded_userid = quote(userid, safe='')
+                encoded_password = quote(password, safe='')
+
                 if service_name:
                     user_url = (
-                        f"oracle+oracledb://{userid}:{password}@"
+                        f"oracle+oracledb://{encoded_userid}:{encoded_password}@"
                         f"{host}:{port}/?service_name={service_name}"
                     )
                 else:
                     # Assume SID is in the path
                     sid = parsed.path.strip("/")
                     user_url = (
-                        f"oracle+oracledb://{userid}:{password}@"
+                        f"oracle+oracledb://{encoded_userid}:{encoded_password}@"
                         f"{host}:{port}/{sid}"
                     )
 
@@ -188,7 +193,7 @@ class AuthService:
         """
         session_id = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+            minutes=settings.jwt_access_token_expire_minutes
         )
 
         payload = {
@@ -229,7 +234,7 @@ class AuthService:
             Tuple of (token string, expiration datetime)
         """
         expires_at = datetime.now(timezone.utc) + timedelta(
-            days=REFRESH_TOKEN_EXPIRE_DAYS
+            days=settings.jwt_refresh_token_expire_days
         )
 
         payload = {

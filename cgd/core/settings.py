@@ -29,14 +29,19 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing. MUST be set in production.",
     )
     jwt_access_token_expire_minutes: int = Field(
-        default=15,
+        default=240,
         validation_alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
-        description="Access token expiration in minutes",
+        description="Access token expiration in minutes (default 4 hours)",
     )
     jwt_refresh_token_expire_days: int = Field(
         default=7,
         validation_alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS",
         description="Refresh token expiration in days",
+    )
+    cookie_domain: Optional[str] = Field(
+        default=None,
+        validation_alias="COOKIE_DOMAIN",
+        description="Domain for auth cookies (e.g., '.dev.candidagenome.org' for cross-subdomain)",
     )
 
     # Path to CGD data files (default matches typical production setup)
