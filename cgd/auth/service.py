@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 # JWT configuration
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+# Note: Token expiration values are read from settings below
+# ACCESS_TOKEN_EXPIRE_MINUTES: settings.jwt_access_token_expire_minutes (default 15)
+# REFRESH_TOKEN_EXPIRE_DAYS: settings.jwt_refresh_token_expire_days (default 7)
 
 
 class AuthenticationError(Exception):
@@ -192,7 +193,7 @@ class AuthService:
         """
         session_id = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+            minutes=settings.jwt_access_token_expire_minutes
         )
 
         payload = {
@@ -233,7 +234,7 @@ class AuthService:
             Tuple of (token string, expiration datetime)
         """
         expires_at = datetime.now(timezone.utc) + timedelta(
-            days=REFRESH_TOKEN_EXPIRE_DAYS
+            days=settings.jwt_refresh_token_expire_days
         )
 
         payload = {

@@ -9,11 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from cgd.core.settings import settings
 from cgd.db.deps import get_db
 
 from .deps import CurrentUser, get_current_user
 from .schemas import LoginRequest, LogoutResponse, TokenResponse, UserInfo
-from .service import ACCESS_TOKEN_EXPIRE_MINUTES, AuthService, AuthenticationError
+from .service import AuthService, AuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def login(
             httponly=True,
             secure=True,
             samesite="lax",
-            max_age=int(timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES).total_seconds()),
+            max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
         )
 
@@ -81,7 +82,7 @@ async def login(
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",
-            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            expires_in=settings.jwt_access_token_expire_minutes * 60,
         )
 
     except AuthenticationError as e:
@@ -172,14 +173,14 @@ async def refresh_token(
             httponly=True,
             secure=True,
             samesite="lax",
-            max_age=int(timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES).total_seconds()),
+            max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
         )
 
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",
-            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            expires_in=settings.jwt_access_token_expire_minutes * 60,
         )
 
     except AuthenticationError as e:
