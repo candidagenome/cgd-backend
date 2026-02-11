@@ -128,7 +128,7 @@ def get_go_todo_list(
             GoAnnotation.feature_no,
             Feature.feature_name,
             Feature.gene_name,
-            Organism.display_name.label("organism_name"),
+            Organism.organism_name.label("organism_name"),
             Go.goid,
             Go.go_term,
             Go.go_aspect,
