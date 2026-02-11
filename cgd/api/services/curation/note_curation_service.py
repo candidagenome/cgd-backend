@@ -25,17 +25,21 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "CGD"
 
-# Note types from legacy CODE table
+# Note types from database CODE table (tab_name='NOTE', col_name='NOTE_TYPE')
 NOTE_TYPES = [
-    "Curator",
-    "History",
-    "Nomenclature",
-    "Sequence",
-    "Reference",
-    "Gene product",
-    "Literature guide",
-    "Standard",
+    "Alternative processing",
+    "Annotation change",
+    "Colleague",
+    "Curation note",
+    "Literature history",
+    "Mapping",
+    "Nomenclature conflict",
+    "Nomenclature history",
     "Other",
+    "Proposed annotation change",
+    "Proposed sequence change",
+    "Repeated",
+    "Sequence change",
 ]
 
 # Supported tables for linking
