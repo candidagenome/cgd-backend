@@ -436,6 +436,7 @@ class LocusCurationService:
 
         if not url:
             url = Url(
+                source="CGD",
                 url_type=url_type,
                 url=link,
                 created_by=curator_userid[:12],
