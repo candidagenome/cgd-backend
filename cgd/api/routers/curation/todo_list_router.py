@@ -252,7 +252,7 @@ def get_litguide_todo_list(
         # Use a subquery to find references that DO have a status
         refs_with_status = (
             db.query(RefProperty.reference_no)
-            .filter(RefProperty.property_type == "Curation status")
+            .filter(func.upper(RefProperty.property_type) == "CURATION STATUS")
             .subquery()
         )
 
@@ -299,8 +299,8 @@ def get_litguide_todo_list(
                 RefProperty.date_last_reviewed,
             )
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-            .filter(RefProperty.property_type == "Curation status")
-            .filter(RefProperty.property_value == status)
+            .filter(func.upper(RefProperty.property_type) == "CURATION STATUS")
+            .filter(func.upper(RefProperty.property_value) == status.upper())
         )
 
         if year:
