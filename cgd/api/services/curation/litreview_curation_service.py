@@ -180,8 +180,28 @@ class LitReviewCurationService:
             reference_no = self._create_reference_from_ref_temp(pubmed, curator_userid)
             messages.append(f"Created reference {reference_no} from PubMed {pubmed}")
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Failed to create reference from PubMed {pubmed}: {e}")
-            messages.append(f"Error creating reference: {str(e)}")
+            # Check if it's a unique constraint violation
+            error_str = str(e).lower()
+            if "unique" in error_str or "duplicate" in error_str or "ora-00001" in error_str:
+                # Check if reference exists by pubmed (re-query after rollback)
+                existing = (
+                    self.db.query(Reference)
+                    .filter(Reference.pubmed == pubmed)
+                    .first()
+                )
+                if existing:
+                    messages.append(f"Reference already exists: {existing.reference_no}")
+                    self._delete_from_ref_temp(pubmed)
+                    return {
+                        "success": True,
+                        "reference_no": existing.reference_no,
+                        "messages": messages,
+                    }
+                messages.append(f"Unique constraint violation - citation or dbxref_id may already exist")
+            else:
+                messages.append(f"Database error: {str(e)[:300]}")
             return {
                 "success": False,
                 "reference_no": None,
