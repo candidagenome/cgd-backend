@@ -305,23 +305,24 @@ def get_litguide_todo_list(
             .subquery()
         )
 
-        query = (
-            db.query(
-                Reference.reference_no,
-                Reference.pubmed,
-                Reference.citation,
-                Reference.year,
-            )
+        base_query = (
+            db.query(Reference)
             .filter(~Reference.reference_no.in_(db.query(refs_with_status.c.reference_no)))
         )
 
         if year:
-            query = query.filter(Reference.year == year)
+            base_query = base_query.filter(Reference.year == year)
 
-        # Order by year descending, then pubmed
-        query = query.order_by(Reference.year.desc(), Reference.pubmed)
+        # Get total count before applying limit
+        total_count = base_query.count()
 
-        results = query.limit(limit).all()
+        # Order and limit
+        results = (
+            base_query
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
 
         items = []
         for row in results:
@@ -338,7 +339,7 @@ def get_litguide_todo_list(
             )
     else:
         # For other statuses, query references with matching curation status property
-        query = (
+        base_query = (
             db.query(
                 Reference.reference_no,
                 Reference.pubmed,
@@ -353,12 +354,18 @@ def get_litguide_todo_list(
         )
 
         if year:
-            query = query.filter(Reference.year == year)
+            base_query = base_query.filter(Reference.year == year)
 
-        # Order by year descending, then pubmed
-        query = query.order_by(Reference.year.desc(), Reference.pubmed)
+        # Get total count before applying limit
+        total_count = base_query.count()
 
-        results = query.limit(limit).all()
+        # Order and limit
+        results = (
+            base_query
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
 
         items = []
         for row in results:
@@ -379,6 +386,6 @@ def get_litguide_todo_list(
     return LitGuideTodoResponse(
         year=year,
         status=status,
-        total_count=len(items),
+        total_count=total_count,
         items=items,
     )
