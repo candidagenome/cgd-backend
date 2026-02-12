@@ -259,9 +259,9 @@ def create_paragraph(
     - <feature:S000012345>ACT1</feature> for feature links
     - <go:1234>term</go> for GO term links
     """
-    service = ParagraphCurationService(db)
-
     try:
+        service = ParagraphCurationService(db)
+
         result = service.create_paragraph(
             paragraph_text=request.paragraph_text,
             feature_names=request.feature_names,
@@ -279,6 +279,12 @@ def create_paragraph(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except Exception as e:
+        logger.exception(f"Error creating paragraph: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
         )
 
 
