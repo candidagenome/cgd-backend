@@ -330,7 +330,7 @@ class ReferenceCurationService:
 
         reference = Reference(
             pubmed=None,
-            source="Curator non-PubMed reference",
+            source="CGD",  # Must match CODE table values
             status=reference_status,
             pdf_status=pdf_status,
             citation=citation[:500],
