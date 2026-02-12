@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
@@ -477,8 +477,13 @@ class LitReviewCurationService:
             except (IndexError, ValueError):
                 pass
 
-        # Create reference
+        # Get next reference_no from Oracle sequence
+        result = self.db.execute(text("SELECT MULTI.reference_seq.NEXTVAL FROM dual"))
+        reference_no = result.scalar()
+
+        # Create reference with explicit reference_no
         reference = Reference(
+            reference_no=reference_no,
             pubmed=pubmed,
             source=REF_SOURCE,
             status="Published",
