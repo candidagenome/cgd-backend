@@ -53,15 +53,23 @@ class ReferenceCurationService:
     # Valid reference status values
     VALID_STATUSES = ["Published", "Epub ahead of print", "In preparation", "Submitted"]
 
-    # Curation status values for literature guide
+    # Curation status values from database REF_PROPERTY table
     CURATION_STATUSES = [
-        "Not Yet Curated",
+        "Not yet curated",
         "High Priority",
-        "Partially Curated",
-        "Curated Todo",
-        "Done: No genes",
-        "Done: All genes HTP",
-        "Done: Curated",
+        "Abstract curated, full text not curated",
+        "Done:Abstract curated, full text not curated",
+        "Basic, lit guide, GO, Pheno curation done",
+        "Dataset to load",
+        "Gene model",
+        "Genomic sequence not identified",
+        "Pathways",
+        "Related species",
+        "cell biology",
+        "clinical",
+        "multiple",
+        "not gene specific",
+        "other",
     ]
 
     def __init__(self, db: Session):
@@ -674,7 +682,7 @@ class ReferenceCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Curation status",
+                RefProperty.property_type == "curation_status",
             )
             .first()
         )
@@ -689,7 +697,7 @@ class ReferenceCurationService:
         prop = RefProperty(
             reference_no=reference_no,
             source="CGD",
-            property_type="Curation status",
+            property_type="curation_status",
             property_value=curation_status,
             date_last_reviewed=datetime.now(),
             created_by=curator_userid[:12],
@@ -735,7 +743,7 @@ class ReferenceCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Topic",
+                RefProperty.property_type == "literature_topic",
                 RefProperty.property_value == topic,
             )
             .first()
@@ -745,7 +753,7 @@ class ReferenceCurationService:
             ref_prop = RefProperty(
                 reference_no=reference_no,
                 source="CGD",
-                property_type="Topic",
+                property_type="literature_topic",
                 property_value=topic,
                 date_last_reviewed=datetime.now(),
                 created_by=curator_userid[:12],
@@ -846,9 +854,9 @@ class ReferenceCurationService:
         topics = []
 
         for prop in properties:
-            if prop.property_type == "Curation status":
+            if prop.property_type == "curation_status":
                 curation_status = prop.property_value
-            elif prop.property_type == "Topic":
+            elif prop.property_type == "literature_topic":
                 # Get linked features
                 links = (
                     self.db.query(RefpropFeat, Feature)

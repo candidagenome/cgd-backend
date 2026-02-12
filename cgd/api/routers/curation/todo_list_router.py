@@ -189,15 +189,23 @@ def get_go_todo_list(
 # Literature Guide Todo List
 # ---------------------------
 
-# Curation status values matching legacy Perl
+# Curation status values from database REF_PROPERTY table
 LITGUIDE_STATUSES = [
-    "Not Yet Curated",
+    "Not yet curated",
     "High Priority",
-    "Partially Curated",
-    "Curated Todo",
-    "Done: No genes",
-    "Done: All genes HTP",
-    "Done: Curated",
+    "Abstract curated, full text not curated",
+    "Done:Abstract curated, full text not curated",
+    "Basic, lit guide, GO, Pheno curation done",
+    "Dataset to load",
+    "Gene model",
+    "Genomic sequence not identified",
+    "Pathways",
+    "Related species",
+    "cell biology",
+    "clinical",
+    "multiple",
+    "not gene specific",
+    "other",
 ]
 
 
@@ -229,11 +237,52 @@ def get_litguide_statuses(current_user: CurrentUser):
     return {"statuses": LITGUIDE_STATUSES}
 
 
+@router.get("/debug/ref-property-types")
+def get_ref_property_types(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Get distinct property_type values from REF_PROPERTY table.
+    """
+    types = (
+        db.query(RefProperty.property_type, func.count(RefProperty.ref_property_no))
+        .group_by(RefProperty.property_type)
+        .order_by(RefProperty.property_type)
+        .all()
+    )
+    return {"property_types": [{"type": t[0], "count": t[1]} for t in types]}
+
+
+@router.get("/debug/curation-status-values")
+def get_curation_status_values(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Get distinct curation status values from REF_PROPERTY table.
+    """
+    # Try various potential property_type values
+    results = (
+        db.query(RefProperty.property_type, RefProperty.property_value, func.count(RefProperty.ref_property_no))
+        .filter(
+            or_(
+                RefProperty.property_type.ilike("%curation%"),
+                RefProperty.property_type.ilike("%status%"),
+            )
+        )
+        .group_by(RefProperty.property_type, RefProperty.property_value)
+        .order_by(RefProperty.property_type, RefProperty.property_value)
+        .all()
+    )
+    return {"curation_statuses": [{"type": r[0], "value": r[1], "count": r[2]} for r in results]}
+
+
 @router.get("/litguide", response_model=LitGuideTodoResponse)
 def get_litguide_todo_list(
     current_user: CurrentUser,
     status: str = Query(
-        "Not Yet Curated",
+        "Not yet curated",
         description="Curation status to filter by",
     ),
     year: Optional[int] = Query(None, description="Year to filter by (optional)"),
@@ -244,50 +293,99 @@ def get_litguide_todo_list(
     Get literature references by curation status.
 
     Returns references with their curation status from REF_PROPERTY table.
+    References without a curation status property are treated as "Not Yet Curated".
     Mirrors legacy curateLitTodo.pl behavior.
     """
-    # Query references with their curation status property
-    query = (
-        db.query(
-            Reference.reference_no,
-            Reference.pubmed,
-            Reference.citation,
-            Reference.year,
-            RefProperty.property_value,
-            RefProperty.date_last_reviewed,
+    if status == "Not yet curated":
+        # For "Not yet curated", find references that DON'T have a curation status property
+        # Use a subquery to find references that DO have a status
+        refs_with_status = (
+            db.query(RefProperty.reference_no)
+            .filter(RefProperty.property_type == "curation_status")
+            .subquery()
         )
-        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-        .filter(RefProperty.property_type == "Curation status")
-        .filter(RefProperty.property_value == status)
-    )
 
-    if year:
-        query = query.filter(Reference.year == year)
+        base_query = (
+            db.query(Reference)
+            .filter(~Reference.reference_no.in_(db.query(refs_with_status.c.reference_no)))
+        )
 
-    # Order by year descending, then pubmed
-    query = query.order_by(Reference.year.desc(), Reference.pubmed)
+        if year:
+            base_query = base_query.filter(Reference.year == year)
 
-    results = query.limit(limit).all()
+        # Get total count before applying limit
+        total_count = base_query.count()
 
-    items = []
-    for row in results:
-        items.append(
-            LitGuideTodoItem(
-                reference_no=row.reference_no,
-                pubmed=row.pubmed,
-                citation=row.citation,
-                year=row.year,
-                curation_status=status,
-                property_value=row.property_value,
-                date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
-                if row.date_last_reviewed
-                else "",
+        # Order and limit
+        results = (
+            base_query
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
+
+        items = []
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=status,
+                    date_last_reviewed="",
+                )
             )
+    else:
+        # For other statuses, query references with matching curation status property
+        base_query = (
+            db.query(
+                Reference.reference_no,
+                Reference.pubmed,
+                Reference.citation,
+                Reference.year,
+                RefProperty.property_value,
+                RefProperty.date_last_reviewed,
+            )
+            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+            .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_value == status)
         )
+
+        if year:
+            base_query = base_query.filter(Reference.year == year)
+
+        # Get total count before applying limit
+        total_count = base_query.count()
+
+        # Order and limit
+        results = (
+            base_query
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
+
+        items = []
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=row.property_value,
+                    date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                    if row.date_last_reviewed
+                    else "",
+                )
+            )
 
     return LitGuideTodoResponse(
         year=year,
         status=status,
-        total_count=len(items),
+        total_count=total_count,
         items=items,
     )

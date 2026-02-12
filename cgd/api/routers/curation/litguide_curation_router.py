@@ -276,3 +276,101 @@ def search_references(
         page=page,
         page_size=page_size,
     )
+
+
+# ---------------------------
+# Reference-centric Endpoints
+# ---------------------------
+
+
+class FeatureTopicOut(BaseModel):
+    """Feature with topics in reference literature."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str]
+    feature_type: Optional[str]
+    topics: list[TopicOut]
+
+
+class ReferenceLiteratureResponse(BaseModel):
+    """Response for reference literature."""
+
+    reference_no: int
+    pubmed: Optional[int]
+    citation: Optional[str]
+    title: Optional[str]
+    year: Optional[int]
+    curation_status: Optional[str]
+    features: list[FeatureTopicOut]
+
+
+class AddFeatureRequest(BaseModel):
+    """Request to add feature-topic association to reference."""
+
+    feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
+    topic: str = Field(..., description="Literature topic")
+
+
+class AddFeatureResponse(BaseModel):
+    """Response for adding feature to reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str]
+    refprop_feat_no: int
+    message: str
+
+
+@router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
+def get_reference_literature(
+    reference_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get reference details with all associated features and topics.
+
+    Used for reference-centric literature guide curation (from todo list "Lit Guide" link).
+    """
+    service = LitGuideCurationService(db)
+
+    try:
+        return service.get_reference_literature(reference_no)
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+
+@router.post("/reference/{reference_no}/feature", response_model=AddFeatureResponse)
+def add_feature_to_reference(
+    reference_no: int,
+    request: AddFeatureRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Add a feature-topic association to a reference."""
+    service = LitGuideCurationService(db)
+
+    try:
+        result = service.add_feature_to_reference(
+            reference_no,
+            request.feature_identifier,
+            request.topic,
+            current_user.userid,
+        )
+
+        return AddFeatureResponse(
+            feature_no=result["feature_no"],
+            feature_name=result["feature_name"],
+            gene_name=result["gene_name"],
+            refprop_feat_no=result["refprop_feat_no"],
+            message=f"Feature '{result['feature_name']}' added with topic '{request.topic}'",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )

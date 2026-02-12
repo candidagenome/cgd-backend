@@ -112,7 +112,7 @@ class LitGuideCurationService:
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
             .filter(RefpropFeat.feature_no == feature_no)
-            .filter(RefProperty.property_type == "Topic")
+            .filter(RefProperty.property_type == "literature_topic")
             .order_by(Reference.year.desc(), Reference.pubmed)
         )
 
@@ -209,7 +209,7 @@ class LitGuideCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Topic",
+                RefProperty.property_type == "literature_topic",
                 RefProperty.property_value == topic,
             )
             .first()
@@ -219,7 +219,7 @@ class LitGuideCurationService:
             ref_prop = RefProperty(
                 reference_no=reference_no,
                 source=SOURCE,
-                property_type="Topic",
+                property_type="literature_topic",
                 property_value=topic,
                 date_last_reviewed=datetime.now(),
                 created_by=curator_userid[:12],
@@ -310,7 +310,7 @@ class LitGuideCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Curation status",
+                RefProperty.property_type == "curation_status",
             )
             .first()
         )
@@ -325,7 +325,7 @@ class LitGuideCurationService:
         prop = RefProperty(
             reference_no=reference_no,
             source=SOURCE,
-            property_type="Curation status",
+            property_type="curation_status",
             property_value=curation_status,
             date_last_reviewed=datetime.now(),
             created_by=curator_userid[:12],
@@ -346,7 +346,7 @@ class LitGuideCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Curation status",
+                RefProperty.property_type == "curation_status",
             )
             .first()
         )
@@ -398,3 +398,112 @@ class LitGuideCurationService:
             ],
             total,
         )
+
+    def get_reference_literature(self, reference_no: int) -> dict:
+        """
+        Get reference details with all associated features and topics.
+
+        Used for reference-centric literature guide curation.
+        """
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Get curation status
+        curation_status = self.get_reference_curation_status(reference_no)
+
+        # Get all feature-topic associations for this reference
+        feature_topic_query = (
+            self.db.query(
+                Feature.feature_no,
+                Feature.feature_name,
+                Feature.gene_name,
+                Feature.feature_type,
+                RefProperty.property_value.label("topic"),
+                RefProperty.ref_property_no,
+                RefpropFeat.refprop_feat_no,
+            )
+            .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
+            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .filter(RefProperty.reference_no == reference_no)
+            .filter(RefProperty.property_type == "literature_topic")
+            .order_by(Feature.feature_name, RefProperty.property_value)
+        )
+
+        results = feature_topic_query.all()
+
+        # Group by feature
+        features_dict = {}
+        for row in results:
+            feat_no = row.feature_no
+            if feat_no not in features_dict:
+                features_dict[feat_no] = {
+                    "feature_no": row.feature_no,
+                    "feature_name": row.feature_name,
+                    "gene_name": row.gene_name,
+                    "feature_type": row.feature_type,
+                    "topics": [],
+                }
+            features_dict[feat_no]["topics"].append({
+                "topic": row.topic,
+                "ref_property_no": row.ref_property_no,
+                "refprop_feat_no": row.refprop_feat_no,
+            })
+
+        return {
+            "reference_no": reference.reference_no,
+            "pubmed": reference.pubmed,
+            "citation": reference.citation,
+            "title": reference.title,
+            "year": reference.year,
+            "curation_status": curation_status,
+            "features": list(features_dict.values()),
+        }
+
+    def add_feature_to_reference(
+        self,
+        reference_no: int,
+        feature_identifier: str,
+        topic: str,
+        curator_userid: str,
+    ) -> dict:
+        """
+        Add a feature-topic association to a reference.
+
+        feature_identifier can be feature_no (int as string) or feature/gene name.
+        Returns dict with feature info and refprop_feat_no.
+        """
+        # Validate topic
+        if topic not in LITERATURE_TOPICS:
+            raise LitGuideCurationError(
+                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+            )
+
+        # Find feature
+        try:
+            feature_no = int(feature_identifier)
+            feature = self.get_feature_by_no(feature_no)
+        except ValueError:
+            feature = self.get_feature_by_name(feature_identifier)
+
+        if not feature:
+            raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")
+
+        # Use existing method to add association
+        refprop_feat_no = self.add_topic_association(
+            feature.feature_no,
+            reference_no,
+            topic,
+            curator_userid,
+        )
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "gene_name": feature.gene_name,
+            "refprop_feat_no": refprop_feat_no,
+        }
