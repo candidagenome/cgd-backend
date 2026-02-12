@@ -55,7 +55,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 Feature.feature_type.in_(["chromosome", "contig", "plasmid"]),
-                Seq.seq_type == "Genomic",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .order_by(Seq.source, Feature.feature_name)
@@ -104,7 +104,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                Seq.seq_type == "Genomic",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -166,7 +166,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                Seq.seq_type == "Genomic",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -381,7 +381,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                Seq.seq_type == "Genomic",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
