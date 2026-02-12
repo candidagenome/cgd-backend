@@ -460,7 +460,6 @@ class LitGuideCurationService:
             "citation": reference.citation,
             "title": reference.title,
             "year": reference.year,
-            "abstract": reference.abstract,
             "curation_status": curation_status,
             "features": list(features_dict.values()),
         }

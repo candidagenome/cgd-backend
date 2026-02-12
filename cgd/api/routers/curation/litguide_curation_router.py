@@ -301,7 +301,6 @@ class ReferenceLiteratureResponse(BaseModel):
     citation: Optional[str]
     title: Optional[str]
     year: Optional[int]
-    abstract: Optional[str]
     curation_status: Optional[str]
     features: list[FeatureTopicOut]
 
