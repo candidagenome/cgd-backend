@@ -481,26 +481,37 @@ class LitReviewCurationService:
         result = self.db.execute(text("SELECT MULTI.reference_seq.NEXTVAL FROM dual"))
         reference_no = result.scalar()
 
-        # Create reference with explicit reference_no
-        reference = Reference(
-            reference_no=reference_no,
-            pubmed=pubmed,
-            source=REF_SOURCE,
-            status="Published",
-            pdf_status="N",
-            dbxref_id=f"PMID:{pubmed}",
-            citation=citation[:480],  # Match column size
-            year=year,
-            created_by=curator_userid[:12],
-        )
+        # Use raw SQL to insert reference - avoids SQLAlchemy passing empty strings
+        # for optional coded columns which fail Oracle trigger validation
+        insert_sql = text("""
+            INSERT INTO MULTI.reference (
+                reference_no, pubmed, source, status, pdf_status,
+                dbxref_id, citation, year, created_by
+            ) VALUES (
+                :reference_no, :pubmed, :source, :status, :pdf_status,
+                :dbxref_id, :citation, :year, :created_by
+            )
+        """)
 
-        self.db.add(reference)
-        self.db.flush()
+        self.db.execute(
+            insert_sql,
+            {
+                "reference_no": reference_no,
+                "pubmed": pubmed,
+                "source": REF_SOURCE,
+                "status": "Published",
+                "pdf_status": "N",
+                "dbxref_id": f"PMID:{pubmed}",
+                "citation": citation[:480],
+                "year": year,
+                "created_by": curator_userid[:12],
+            },
+        )
 
         # Add abstract if available
         if ref_temp.abstract:
             abstract = Abstract(
-                reference_no=reference.reference_no,
+                reference_no=reference_no,
                 abstract=ref_temp.abstract[:4000],
             )
             self.db.add(abstract)
@@ -508,11 +519,11 @@ class LitReviewCurationService:
         self.db.commit()
 
         logger.info(
-            f"Created reference {reference.reference_no} from REF_TEMP "
+            f"Created reference {reference_no} from REF_TEMP "
             f"PubMed {pubmed} by {curator_userid}"
         )
 
-        return reference.reference_no
+        return reference_no
 
     def _set_curation_status(
         self,
