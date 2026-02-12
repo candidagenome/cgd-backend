@@ -40,7 +40,7 @@ class CoordinateCurationService:
             self.db.query(Seq.source)
             .filter(
                 Seq.is_seq_current == "Y",
-                Seq.seq_type == "Genomic",
+                func.upper(Seq.seq_type) == "GENOMIC",
             )
             .distinct()
             .order_by(Seq.source)
