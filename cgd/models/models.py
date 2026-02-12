@@ -1250,7 +1250,7 @@ class PdbAlignment(Base):
     pdb_alignment_sequence: Mapped[list['PdbAlignmentSequence']] = relationship('PdbAlignmentSequence', back_populates='pdb_alignment')
 
 
-class Abstract(Reference):
+class Abstract(Base):
     __tablename__ = 'abstract'
     __table_args__ = (
         ForeignKeyConstraint(['reference_no'], ['MULTI.reference.reference_no'], ondelete='CASCADE', name='abstract_ref_fk'),
