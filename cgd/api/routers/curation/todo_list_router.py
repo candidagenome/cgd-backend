@@ -128,7 +128,7 @@ def get_go_todo_list(
             GoAnnotation.feature_no,
             Feature.feature_name,
             Feature.gene_name,
-            Organism.display_name.label("organism_name"),
+            Organism.organism_name.label("organism_name"),
             Go.goid,
             Go.go_term,
             Go.go_aspect,
@@ -145,13 +145,13 @@ def get_go_todo_list(
         query = query.filter(
             or_(
                 func.upper(Organism.abbreviation) == organism.upper(),
-                func.upper(Organism.display_name) == organism.upper(),
+                func.upper(Organism.organism_name) == organism.upper(),
             )
         )
 
     # Order by organism, then feature name
     query = query.order_by(
-        Organism.display_name,
+        Organism.organism_name,
         Feature.feature_name,
         Go.go_aspect,
     )

@@ -189,39 +189,48 @@ def get_phenotype_annotations(
     Returns annotations with phenotype details, experiment info, properties,
     and references.
     """
-    service = PhenotypeCurationService(db)
+    try:
+        service = PhenotypeCurationService(db)
 
-    feature = service.get_feature_by_name(feature_name)
-    if not feature:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Feature '{feature_name}' not found",
-        )
-
-    annotations = service.get_annotations_for_feature(feature.feature_no)
-
-    return FeaturePhenotypeResponse(
-        feature_no=feature.feature_no,
-        feature_name=feature.feature_name,
-        gene_name=feature.gene_name,
-        annotations=[
-            PhenotypeAnnotationOut(
-                pheno_annotation_no=ann["pheno_annotation_no"],
-                feature_no=ann["feature_no"],
-                phenotype_no=ann["phenotype_no"],
-                experiment_type=ann["experiment_type"],
-                mutant_type=ann["mutant_type"],
-                observable=ann["observable"],
-                qualifier=ann["qualifier"],
-                experiment=ExperimentOut(**ann["experiment"]) if ann["experiment"] else None,
-                properties=[PropertyOut(**p) for p in ann["properties"]],
-                references=[ReferenceOut(**r) for r in ann["references"]],
-                date_created=ann["date_created"],
-                created_by=ann["created_by"],
+        feature = service.get_feature_by_name(feature_name)
+        if not feature:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Feature '{feature_name}' not found",
             )
-            for ann in annotations
-        ],
-    )
+
+        annotations = service.get_annotations_for_feature(feature.feature_no)
+
+        return FeaturePhenotypeResponse(
+            feature_no=feature.feature_no,
+            feature_name=feature.feature_name,
+            gene_name=feature.gene_name,
+            annotations=[
+                PhenotypeAnnotationOut(
+                    pheno_annotation_no=ann["pheno_annotation_no"],
+                    feature_no=ann["feature_no"],
+                    phenotype_no=ann["phenotype_no"],
+                    experiment_type=ann["experiment_type"],
+                    mutant_type=ann["mutant_type"],
+                    observable=ann["observable"],
+                    qualifier=ann["qualifier"],
+                    experiment=ExperimentOut(**ann["experiment"]) if ann["experiment"] else None,
+                    properties=[PropertyOut(**p) for p in ann["properties"]],
+                    references=[ReferenceOut(**r) for r in ann["references"]],
+                    date_created=ann["date_created"],
+                    created_by=ann["created_by"],
+                )
+                for ann in annotations
+            ],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error retrieving phenotype annotations for {feature_name}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
 
 
 @router.post("/{feature_name}", response_model=CreateAnnotationResponse)
@@ -237,16 +246,16 @@ def create_phenotype_annotation(
     Creates phenotype, experiment (if comment/properties provided), and links
     to reference.
     """
-    service = PhenotypeCurationService(db)
-
-    feature = service.get_feature_by_name(feature_name)
-    if not feature:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Feature '{feature_name}' not found",
-        )
-
     try:
+        service = PhenotypeCurationService(db)
+
+        feature = service.get_feature_by_name(feature_name)
+        if not feature:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Feature '{feature_name}' not found",
+            )
+
         properties = None
         if request.properties:
             properties = [
@@ -275,10 +284,18 @@ def create_phenotype_annotation(
             message="Phenotype annotation created successfully",
         )
 
+    except HTTPException:
+        raise
     except PhenotypeCurationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except Exception as e:
+        logger.exception(f"Error creating phenotype annotation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
         )
 
 
@@ -293,9 +310,8 @@ def delete_phenotype_annotation(
 
     Removes the annotation and its reference links.
     """
-    service = PhenotypeCurationService(db)
-
     try:
+        service = PhenotypeCurationService(db)
         service.delete_annotation(annotation_no, current_user.userid)
 
         return DeleteAnnotationResponse(
@@ -307,4 +323,10 @@ def delete_phenotype_annotation(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except Exception as e:
+        logger.exception(f"Error deleting phenotype annotation {annotation_no}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
         )

@@ -447,7 +447,8 @@ class GoCurationService:
         """
         Delete a GO annotation and all associated records.
 
-        Cascading deletes handle go_ref, go_qualifier, goref_dbxref.
+        Explicitly deletes child records (go_ref -> go_qualifier, goref_dbxref)
+        to avoid SQLAlchemy/database cascade conflicts.
         """
         annotation = (
             self.db.query(GoAnnotation)
@@ -465,6 +466,27 @@ class GoCurationService:
             f"by {curator_userid}"
         )
 
+        # Explicitly delete child records to avoid cascade conflicts
+        # Get all go_ref records for this annotation
+        go_refs = self.db.query(GoRef).filter(
+            GoRef.go_annotation_no == go_annotation_no
+        ).all()
+
+        for go_ref in go_refs:
+            # Delete qualifiers for this go_ref
+            self.db.query(GoQualifier).filter(
+                GoQualifier.go_ref_no == go_ref.go_ref_no
+            ).delete()
+
+            # Delete dbxref links for this go_ref
+            self.db.query(GorefDbxref).filter(
+                GorefDbxref.go_ref_no == go_ref.go_ref_no
+            ).delete()
+
+            # Delete the go_ref itself
+            self.db.delete(go_ref)
+
+        # Now delete the annotation
         self.db.delete(annotation)
         self.db.commit()
 

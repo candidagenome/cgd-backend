@@ -219,31 +219,6 @@ def sample_phenotypes():
     ]
 
 
-class TestConstants:
-    """Tests for service constants."""
-
-    def test_experiment_types(self, mock_db):
-        """Should have standard experiment types."""
-        service = PhenotypeCurationService(mock_db)
-        assert "classical genetics" in service.EXPERIMENT_TYPES
-        assert "RNAi" in service.EXPERIMENT_TYPES
-        assert "overexpression" in service.EXPERIMENT_TYPES
-
-    def test_mutant_types(self, mock_db):
-        """Should have standard mutant types."""
-        service = PhenotypeCurationService(mock_db)
-        assert "null" in service.MUTANT_TYPES
-        assert "loss of function" in service.MUTANT_TYPES
-        assert "gain of function" in service.MUTANT_TYPES
-
-    def test_qualifiers(self, mock_db):
-        """Should have standard qualifiers."""
-        service = PhenotypeCurationService(mock_db)
-        assert "increased" in service.QUALIFIERS
-        assert "decreased" in service.QUALIFIERS
-        assert "abnormal" in service.QUALIFIERS
-
-
 class TestGetFeatureByName:
     """Tests for feature lookup."""
 
@@ -471,16 +446,14 @@ class TestDeleteAnnotation:
 class TestGetCvTerms:
     """Tests for CV term retrieval."""
 
-    def test_returns_experiment_types_from_code(self, mock_db):
-        """Should return experiment types from Code table."""
-        codes = [
-            MockCode(1, "EXPERIMENT", "EXPERIMENT_TYPE", "classical genetics"),
-            MockCode(2, "EXPERIMENT", "EXPERIMENT_TYPE", "RNAi"),
+    def test_returns_experiment_types_from_cv_term(self, mock_db):
+        """Should return experiment types from Cv/CvTerm tables."""
+        cv = MockCv(1, "experiment_type")
+
+        mock_db.query.side_effect = [
+            MockQuery([cv]),  # Cv lookup
+            MockQuery([("classical genetics",), ("RNAi",)]),  # CvTerm lookup
         ]
-        mock_db.query.return_value = MockQuery([
-            ("classical genetics",),
-            ("RNAi",),
-        ])
 
         service = PhenotypeCurationService(mock_db)
         results = service.get_cv_terms("experiment_type")
@@ -488,28 +461,29 @@ class TestGetCvTerms:
         assert "classical genetics" in results
         assert "RNAi" in results
 
-    def test_fallback_to_hardcoded_experiment_types(self, mock_db):
-        """Should use hardcoded values if DB returns nothing."""
-        mock_db.query.return_value = MockQuery([])
+    def test_returns_mutant_types_from_cv_term(self, mock_db):
+        """Should return mutant types from Cv/CvTerm tables."""
+        cv = MockCv(2, "mutant_type")
 
-        service = PhenotypeCurationService(mock_db)
-        results = service.get_cv_terms("experiment_type")
-
-        # Falls back to EXPERIMENT_TYPES constant
-        assert "classical genetics" in results
-
-    def test_fallback_to_hardcoded_mutant_types(self, mock_db):
-        """Should use hardcoded mutant types if DB returns nothing."""
-        mock_db.query.return_value = MockQuery([])
+        mock_db.query.side_effect = [
+            MockQuery([cv]),  # Cv lookup
+            MockQuery([("null",), ("conditional",)]),  # CvTerm lookup
+        ]
 
         service = PhenotypeCurationService(mock_db)
         results = service.get_cv_terms("mutant_type")
 
         assert "null" in results
+        assert "conditional" in results
 
-    def test_fallback_to_hardcoded_qualifiers(self, mock_db):
-        """Should use hardcoded qualifiers if DB returns nothing."""
-        mock_db.query.return_value = MockQuery([])
+    def test_returns_qualifiers_from_cv_term(self, mock_db):
+        """Should return qualifiers from Cv/CvTerm tables."""
+        cv = MockCv(3, "qualifier")
+
+        mock_db.query.side_effect = [
+            MockQuery([cv]),  # Cv lookup
+            MockQuery([("increased",), ("decreased",)]),  # CvTerm lookup
+        ]
 
         service = PhenotypeCurationService(mock_db)
         results = service.get_cv_terms("qualifier")
@@ -517,11 +491,10 @@ class TestGetCvTerms:
         assert "increased" in results
         assert "decreased" in results
 
-    def test_returns_cv_terms_for_ontology(self, mock_db):
-        """Should return terms from Cv/CvTerm tables for ontologies."""
-        cv = MockCv(1, "observable")
+    def test_returns_cv_terms_for_observable(self, mock_db):
+        """Should return terms from Cv/CvTerm tables for observable."""
+        cv = MockCv(4, "observable")
 
-        # "observable" is not in code_mapping, so it goes directly to Cv lookup
         mock_db.query.side_effect = [
             MockQuery([cv]),  # Cv lookup
             MockQuery([("cell morphology",), ("biofilm formation",)]),  # CvTerm lookup
