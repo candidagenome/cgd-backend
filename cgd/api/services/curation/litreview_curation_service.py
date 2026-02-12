@@ -483,8 +483,8 @@ class LitReviewCurationService:
             source=REF_SOURCE,
             status="Published",
             pdf_status="N",
-            dbxref_id=f"CGD_REF:{pubmed}",
-            citation=citation[:500],
+            dbxref_id=f"PMID:{pubmed}",
+            citation=citation[:480],  # Match column size
             year=year,
             created_by=curator_userid[:12],
         )
