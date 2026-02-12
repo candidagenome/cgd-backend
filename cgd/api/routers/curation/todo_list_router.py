@@ -244,46 +244,88 @@ def get_litguide_todo_list(
     Get literature references by curation status.
 
     Returns references with their curation status from REF_PROPERTY table.
+    References without a curation status property are treated as "Not Yet Curated".
     Mirrors legacy curateLitTodo.pl behavior.
     """
-    # Query references with their curation status property
-    query = (
-        db.query(
-            Reference.reference_no,
-            Reference.pubmed,
-            Reference.citation,
-            Reference.year,
-            RefProperty.property_value,
-            RefProperty.date_last_reviewed,
+    if status == "Not Yet Curated":
+        # For "Not Yet Curated", find references that DON'T have a curation status property
+        # Use a subquery to find references that DO have a status
+        refs_with_status = (
+            db.query(RefProperty.reference_no)
+            .filter(RefProperty.property_type == "Curation status")
+            .subquery()
         )
-        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-        .filter(RefProperty.property_type == "Curation status")
-        .filter(RefProperty.property_value == status)
-    )
 
-    if year:
-        query = query.filter(Reference.year == year)
-
-    # Order by year descending, then pubmed
-    query = query.order_by(Reference.year.desc(), Reference.pubmed)
-
-    results = query.limit(limit).all()
-
-    items = []
-    for row in results:
-        items.append(
-            LitGuideTodoItem(
-                reference_no=row.reference_no,
-                pubmed=row.pubmed,
-                citation=row.citation,
-                year=row.year,
-                curation_status=status,
-                property_value=row.property_value,
-                date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
-                if row.date_last_reviewed
-                else "",
+        query = (
+            db.query(
+                Reference.reference_no,
+                Reference.pubmed,
+                Reference.citation,
+                Reference.year,
             )
+            .filter(~Reference.reference_no.in_(db.query(refs_with_status.c.reference_no)))
         )
+
+        if year:
+            query = query.filter(Reference.year == year)
+
+        # Order by year descending, then pubmed
+        query = query.order_by(Reference.year.desc(), Reference.pubmed)
+
+        results = query.limit(limit).all()
+
+        items = []
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=status,
+                    date_last_reviewed="",
+                )
+            )
+    else:
+        # For other statuses, query references with matching curation status property
+        query = (
+            db.query(
+                Reference.reference_no,
+                Reference.pubmed,
+                Reference.citation,
+                Reference.year,
+                RefProperty.property_value,
+                RefProperty.date_last_reviewed,
+            )
+            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+            .filter(RefProperty.property_type == "Curation status")
+            .filter(RefProperty.property_value == status)
+        )
+
+        if year:
+            query = query.filter(Reference.year == year)
+
+        # Order by year descending, then pubmed
+        query = query.order_by(Reference.year.desc(), Reference.pubmed)
+
+        results = query.limit(limit).all()
+
+        items = []
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=row.property_value,
+                    date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                    if row.date_last_reviewed
+                    else "",
+                )
+            )
 
     return LitGuideTodoResponse(
         year=year,
