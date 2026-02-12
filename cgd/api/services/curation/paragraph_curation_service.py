@@ -244,6 +244,7 @@ class ParagraphCurationService:
             paragraph = Paragraph(
                 paragraph_text=paragraph_text,
                 date_edited=datetime.now(),
+                created_by=curator_userid[:12],
             )
             self.db.add(paragraph)
             self.db.flush()
