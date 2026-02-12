@@ -15,16 +15,11 @@ from sqlalchemy import desc, func, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
-    Abstract,
-    Author,
-    AuthorEditor,
     Feature,
-    Journal,
     Organism,
     RefBad,
     RefProperty,
     RefTemp,
-    Reference,
     RefpropFeat,
 )
 
@@ -508,13 +503,20 @@ class LitReviewCurationService:
             },
         )
 
-        # Add abstract if available
+        # Add abstract if available - use raw SQL since Abstract inherits from
+        # Reference and ORM would try to insert into Reference table again
         if ref_temp.abstract:
-            abstract = Abstract(
-                reference_no=reference_no,
-                abstract=ref_temp.abstract[:4000],
+            abstract_sql = text("""
+                INSERT INTO MULTI.abstract (reference_no, abstract)
+                VALUES (:reference_no, :abstract)
+            """)
+            self.db.execute(
+                abstract_sql,
+                {
+                    "reference_no": reference_no,
+                    "abstract": ref_temp.abstract[:4000],
+                },
             )
-            self.db.add(abstract)
 
         self.db.commit()
 
