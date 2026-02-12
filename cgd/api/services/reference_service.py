@@ -139,11 +139,11 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
 
 def _get_reference_by_identifier(db: Session, identifier: str) -> Reference:
     """
-    Get a reference by PubMed ID or DBXREF_ID, raise 404 if not found.
+    Get a reference by reference_no, PubMed ID, or DBXREF_ID, raise 404 if not found.
 
     Args:
         db: Database session
-        identifier: Either a PubMed ID (numeric string) or a DBXREF_ID (e.g., 'CGD_REF:xxx')
+        identifier: Either a reference_no/PubMed ID (numeric string) or a DBXREF_ID (e.g., 'CGD_REF:xxx')
     """
     base_query = (
         db.query(Reference)
@@ -159,15 +159,19 @@ def _get_reference_by_identifier(db: Session, identifier: str) -> Reference:
 
     ref = None
 
-    # Try to parse as integer (PubMed ID) first
+    # Try to parse as integer (could be reference_no or PubMed ID)
     try:
-        pubmed_id = int(identifier)
-        ref = base_query.filter(Reference.pubmed == pubmed_id).first()
+        num_id = int(identifier)
+        # Try reference_no first (primary key)
+        ref = base_query.filter(Reference.reference_no == num_id).first()
+        # If not found, try PubMed ID
+        if ref is None:
+            ref = base_query.filter(Reference.pubmed == num_id).first()
     except ValueError:
         # Not an integer, treat as DBXREF_ID
         pass
 
-    # If not found by PubMed ID, try DBXREF_ID
+    # If not found by numeric ID, try DBXREF_ID
     if ref is None:
         ref = base_query.filter(Reference.dbxref_id == identifier).first()
 
