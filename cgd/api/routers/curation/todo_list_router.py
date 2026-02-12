@@ -229,6 +229,47 @@ def get_litguide_statuses(current_user: CurrentUser):
     return {"statuses": LITGUIDE_STATUSES}
 
 
+@router.get("/debug/ref-property-types")
+def get_ref_property_types(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Get distinct property_type values from REF_PROPERTY table.
+    """
+    types = (
+        db.query(RefProperty.property_type, func.count(RefProperty.ref_property_no))
+        .group_by(RefProperty.property_type)
+        .order_by(RefProperty.property_type)
+        .all()
+    )
+    return {"property_types": [{"type": t[0], "count": t[1]} for t in types]}
+
+
+@router.get("/debug/curation-status-values")
+def get_curation_status_values(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Get distinct curation status values from REF_PROPERTY table.
+    """
+    # Try various potential property_type values
+    results = (
+        db.query(RefProperty.property_type, RefProperty.property_value, func.count(RefProperty.ref_property_no))
+        .filter(
+            or_(
+                RefProperty.property_type.ilike("%curation%"),
+                RefProperty.property_type.ilike("%status%"),
+            )
+        )
+        .group_by(RefProperty.property_type, RefProperty.property_value)
+        .order_by(RefProperty.property_type, RefProperty.property_value)
+        .all()
+    )
+    return {"curation_statuses": [{"type": r[0], "value": r[1], "count": r[2]} for r in results]}
+
+
 @router.get("/litguide", response_model=LitGuideTodoResponse)
 def get_litguide_todo_list(
     current_user: CurrentUser,
