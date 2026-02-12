@@ -599,14 +599,16 @@ class LitReviewCurationService:
         curator_userid: str,
     ) -> dict:
         """Link reference to a feature via REFPROP_FEAT table."""
-        # Look up feature
+        # Look up feature - need to join with Organism to filter by abbrev
         query = self.db.query(Feature).filter(
             func.upper(Feature.feature_name) == feature_name.upper()
         )
 
         if organism_abbrev:
-            # Join with organism to filter by organism
-            query = query.filter(Feature.organism_abbrev == organism_abbrev)
+            # Join with organism to filter by organism abbreviation
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                Organism.organism_abbrev == organism_abbrev
+            )
 
         feature = query.first()
 
@@ -616,7 +618,9 @@ class LitReviewCurationService:
                 func.upper(Feature.gene_name) == feature_name.upper()
             )
             if organism_abbrev:
-                query = query.filter(Feature.organism_abbrev == organism_abbrev)
+                query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                    Organism.organism_abbrev == organism_abbrev
+                )
             feature = query.first()
 
         if not feature:
