@@ -45,54 +45,6 @@ class PhenotypeCurationError(Exception):
 class PhenotypeCurationService:
     """Service for phenotype annotation curation operations."""
 
-    # Valid experiment types (from CV)
-    EXPERIMENT_TYPES = [
-        "classical genetics",
-        "systematic deletion",
-        "systematic mutation set",
-        "large-scale survey",
-        "gene trap mutagenesis",
-        "insertional mutagenesis",
-        "RNAi",
-        "overexpression",
-    ]
-
-    # Valid mutant types (from CV)
-    MUTANT_TYPES = [
-        "null",
-        "reduction of function",
-        "loss of function",
-        "gain of function",
-        "conditional",
-        "overexpression",
-        "repressible",
-        "unspecified",
-    ]
-
-    # Valid qualifiers (from CV)
-    QUALIFIERS = [
-        "increased",
-        "decreased",
-        "absent",
-        "present",
-        "normal",
-        "abnormal",
-    ]
-
-    # Property types that require CV lookup
-    CV_PROPERTY_TYPES = [
-        "strain_background",
-        "chebi_ontology",
-    ]
-
-    # Property types that allow multiple values
-    MULTI_VALUE_PROPERTY_TYPES = [
-        "Allele",
-        "chebi_ontology",
-        "Chemical_pending",
-        "Reporter",
-    ]
-
     def __init__(self, db: Session):
         self.db = db
 
@@ -565,44 +517,11 @@ class PhenotypeCurationService:
         Get CV terms for a given CV name.
 
         Used for experiment_type, mutant_type, observable, qualifier dropdowns.
-        Queries the Code table for simple coded values, or Cv/CvTerm tables
-        for ontology-based terms.
+        Queries the Cv/CvTerm tables since Oracle triggers validate against cv_term.
         """
         cv_lower = cv_name.lower()
 
-        # Map CV names to Code table lookup parameters
-        code_mapping = {
-            "experiment_type": ("EXPERIMENT", "EXPERIMENT_TYPE"),
-            "mutant_type": ("PHENOTYPE", "MUTANT_TYPE"),
-            "qualifier": ("PHENOTYPE", "QUALIFIER"),
-        }
-
-        if cv_lower in code_mapping:
-            tab_name, col_name = code_mapping[cv_lower]
-            result = (
-                self.db.query(Code.code_value)
-                .filter(
-                    Code.tab_name == tab_name,
-                    Code.col_name == col_name,
-                )
-                .order_by(Code.code_value)
-                .all()
-            )
-            terms = [r[0] for r in result]
-
-            # Fall back to hardcoded if database returns nothing
-            if terms:
-                return terms
-
-            # Use hardcoded fallbacks
-            if cv_lower == "experiment_type":
-                return self.EXPERIMENT_TYPES
-            elif cv_lower == "mutant_type":
-                return self.MUTANT_TYPES
-            elif cv_lower == "qualifier":
-                return self.QUALIFIERS
-
-        # For observable and other ontology-based terms, query Cv/CvTerm tables
+        # Query Cv/CvTerm tables - Oracle triggers validate against cv_term
         cv = (
             self.db.query(Cv)
             .filter(func.lower(Cv.cv_name) == cv_lower)
