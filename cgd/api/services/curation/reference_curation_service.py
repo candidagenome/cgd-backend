@@ -330,7 +330,7 @@ class ReferenceCurationService:
 
         reference = Reference(
             pubmed=None,
-            source="Curator non-PubMed reference",
+            source="Curator PubMed reference",  # Must match CODE table values
             status=reference_status,
             pdf_status=pdf_status,
             citation=citation[:500],
@@ -496,7 +496,7 @@ class ReferenceCurationService:
 
         reference = Reference(
             pubmed=pubmed,
-            source="PubMed",
+            source="Curator PubMed reference",  # Must match CODE table values
             status=reference_status,
             pdf_status="N",  # Default: no PDF
             dbxref_id=f"PMID:{pubmed}",

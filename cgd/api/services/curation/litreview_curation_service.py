@@ -11,15 +11,11 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
-    Abstract,
-    Author,
-    AuthorEditor,
     Feature,
-    Journal,
     Organism,
     RefBad,
     RefProperty,
@@ -34,7 +30,7 @@ logger = logging.getLogger(__name__)
 PROPERTY_TYPE = "curation_status"
 HIGH_PRIORITY = "High Priority"
 NOT_YET_CURATED = "Not yet curated"
-REF_SOURCE = "Curator Triage"
+REF_SOURCE = "Curator PubMed reference"  # Must match CODE table values
 
 
 class LitReviewError(Exception):
@@ -180,8 +176,28 @@ class LitReviewCurationService:
             reference_no = self._create_reference_from_ref_temp(pubmed, curator_userid)
             messages.append(f"Created reference {reference_no} from PubMed {pubmed}")
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Failed to create reference from PubMed {pubmed}: {e}")
-            messages.append(f"Error creating reference: {str(e)}")
+            # Check if it's a unique constraint violation
+            error_str = str(e).lower()
+            if "unique" in error_str or "duplicate" in error_str or "ora-00001" in error_str:
+                # Check if reference exists by pubmed (re-query after rollback)
+                existing = (
+                    self.db.query(Reference)
+                    .filter(Reference.pubmed == pubmed)
+                    .first()
+                )
+                if existing:
+                    messages.append(f"Reference already exists: {existing.reference_no}")
+                    self._delete_from_ref_temp(pubmed)
+                    return {
+                        "success": True,
+                        "reference_no": existing.reference_no,
+                        "messages": messages,
+                    }
+                messages.append(f"Unique constraint violation - citation or dbxref_id may already exist")
+            else:
+                messages.append(f"Database error: {str(e)[:500]}")
             return {
                 "success": False,
                 "reference_no": None,
@@ -457,37 +473,60 @@ class LitReviewCurationService:
             except (IndexError, ValueError):
                 pass
 
-        # Create reference
-        reference = Reference(
-            pubmed=pubmed,
-            source=REF_SOURCE,
-            status="Published",
-            pdf_status="N",
-            dbxref_id=f"CGD_REF:{pubmed}",
-            citation=citation[:500],
-            year=year,
-            created_by=curator_userid[:12],
+        # Get next reference_no from Oracle sequence
+        result = self.db.execute(text("SELECT MULTI.reference_seq.NEXTVAL FROM dual"))
+        reference_no = result.scalar()
+
+        # Use raw SQL to insert reference - avoids SQLAlchemy passing empty strings
+        # for optional coded columns which fail Oracle trigger validation
+        insert_sql = text("""
+            INSERT INTO MULTI.reference (
+                reference_no, pubmed, source, status, pdf_status,
+                dbxref_id, citation, year, created_by
+            ) VALUES (
+                :reference_no, :pubmed, :source, :status, :pdf_status,
+                :dbxref_id, :citation, :year, :created_by
+            )
+        """)
+
+        self.db.execute(
+            insert_sql,
+            {
+                "reference_no": reference_no,
+                "pubmed": pubmed,
+                "source": REF_SOURCE,
+                "status": "Published",
+                "pdf_status": "N",
+                "dbxref_id": f"PMID:{pubmed}",
+                "citation": citation[:480],
+                "year": year,
+                "created_by": curator_userid[:12],
+            },
         )
 
-        self.db.add(reference)
-        self.db.flush()
-
-        # Add abstract if available
+        # Add abstract if available - use raw SQL since Abstract inherits from
+        # Reference and ORM would try to insert into Reference table again
         if ref_temp.abstract:
-            abstract = Abstract(
-                reference_no=reference.reference_no,
-                abstract=ref_temp.abstract[:4000],
+            abstract_sql = text("""
+                INSERT INTO MULTI.abstract (reference_no, abstract)
+                VALUES (:reference_no, :abstract)
+            """)
+            self.db.execute(
+                abstract_sql,
+                {
+                    "reference_no": reference_no,
+                    "abstract": ref_temp.abstract[:4000],
+                },
             )
-            self.db.add(abstract)
 
         self.db.commit()
 
         logger.info(
-            f"Created reference {reference.reference_no} from REF_TEMP "
+            f"Created reference {reference_no} from REF_TEMP "
             f"PubMed {pubmed} by {curator_userid}"
         )
 
-        return reference.reference_no
+        return reference_no
 
     def _set_curation_status(
         self,
@@ -508,24 +547,48 @@ class LitReviewCurationService:
         )
 
         if existing:
-            existing.property_value = status
-            existing.date_last_reviewed = datetime.now()
+            # Update existing property
+            update_sql = text("""
+                UPDATE MULTI.ref_property
+                SET property_value = :status,
+                    date_last_reviewed = SYSDATE
+                WHERE ref_property_no = :ref_property_no
+            """)
+            self.db.execute(
+                update_sql,
+                {"status": status, "ref_property_no": existing.ref_property_no},
+            )
             self.db.commit()
             return existing.ref_property_no
 
-        # Create new property
-        prop = RefProperty(
-            reference_no=reference_no,
-            source="CGD",
-            property_type=PROPERTY_TYPE,
-            property_value=status,
-            date_last_reviewed=datetime.now(),
-            created_by=curator_userid[:12],
+        # Get next ref_property_no from Oracle sequence
+        result = self.db.execute(text("SELECT MULTI.ref_property_seq.NEXTVAL FROM dual"))
+        ref_property_no = result.scalar()
+
+        # Create new property using raw SQL
+        insert_sql = text("""
+            INSERT INTO MULTI.ref_property (
+                ref_property_no, reference_no, source, property_type,
+                property_value, created_by
+            ) VALUES (
+                :ref_property_no, :reference_no, :source, :property_type,
+                :property_value, :created_by
+            )
+        """)
+        self.db.execute(
+            insert_sql,
+            {
+                "ref_property_no": ref_property_no,
+                "reference_no": reference_no,
+                "source": "CGD",
+                "property_type": PROPERTY_TYPE,
+                "property_value": status,
+                "created_by": curator_userid[:12],
+            },
         )
-        self.db.add(prop)
         self.db.commit()
 
-        return prop.ref_property_no
+        return ref_property_no
 
     def _link_to_feature(
         self,
@@ -536,14 +599,16 @@ class LitReviewCurationService:
         curator_userid: str,
     ) -> dict:
         """Link reference to a feature via REFPROP_FEAT table."""
-        # Look up feature
+        # Look up feature - need to join with Organism to filter by abbrev
         query = self.db.query(Feature).filter(
             func.upper(Feature.feature_name) == feature_name.upper()
         )
 
         if organism_abbrev:
-            # Join with organism to filter by organism
-            query = query.filter(Feature.organism_abbrev == organism_abbrev)
+            # Join with organism to filter by organism abbreviation
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                Organism.organism_abbrev == organism_abbrev
+            )
 
         feature = query.first()
 
@@ -553,7 +618,9 @@ class LitReviewCurationService:
                 func.upper(Feature.gene_name) == feature_name.upper()
             )
             if organism_abbrev:
-                query = query.filter(Feature.organism_abbrev == organism_abbrev)
+                query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                    Organism.organism_abbrev == organism_abbrev
+                )
             feature = query.first()
 
         if not feature:
@@ -581,13 +648,22 @@ class LitReviewCurationService:
                 "message": f"Feature {feature.feature_name} already linked",
             }
 
-        # Create link
-        link = RefpropFeat(
-            ref_property_no=ref_property_no,
-            feature_no=feature.feature_no,
-            created_by=curator_userid[:12],
+        # Create link using raw SQL
+        insert_sql = text("""
+            INSERT INTO MULTI.refprop_feat (
+                refprop_feat_no, ref_property_no, feature_no, created_by
+            ) VALUES (
+                MULTI.refprop_feat_seq.NEXTVAL, :ref_property_no, :feature_no, :created_by
+            )
+        """)
+        self.db.execute(
+            insert_sql,
+            {
+                "ref_property_no": ref_property_no,
+                "feature_no": feature.feature_no,
+                "created_by": curator_userid[:12],
+            },
         )
-        self.db.add(link)
         self.db.commit()
 
         return {
