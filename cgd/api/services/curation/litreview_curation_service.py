@@ -201,7 +201,7 @@ class LitReviewCurationService:
                     }
                 messages.append(f"Unique constraint violation - citation or dbxref_id may already exist")
             else:
-                messages.append(f"Database error: {str(e)[:300]}")
+                messages.append(f"Database error: {str(e)[:500]}")
             return {
                 "success": False,
                 "reference_no": None,
