@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from cgd.auth import get_current_user
+from cgd.auth.deps import CurrentUser
 from cgd.db.deps import get_db
 from cgd.api.services.curation.litreview_curation_service import (
     LitReviewCurationService,
@@ -105,10 +105,10 @@ class OrganismListResponse(BaseModel):
 # Endpoints
 @router.get("/papers", response_model=PaperListResponse)
 async def get_pending_papers(
+    current_user: CurrentUser,
     limit: int = 200,
     offset: int = 0,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Get papers pending review from REF_TEMP.
@@ -122,8 +122,8 @@ async def get_pending_papers(
 @router.get("/papers/{pubmed}")
 async def get_paper(
     pubmed: int,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Get a single paper from review queue by PubMed ID."""
     service = LitReviewCurationService(db)
@@ -135,8 +135,8 @@ async def get_paper(
 
 @router.get("/organisms", response_model=OrganismListResponse)
 async def get_organisms(
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Get list of organisms for feature linking dropdown."""
     service = LitReviewCurationService(db)
@@ -146,8 +146,8 @@ async def get_organisms(
 @router.post("/triage/add", response_model=TriageResponse)
 async def triage_add(
     request: TriageAddRequest,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Add a paper to database with 'Not yet curated' status.
@@ -158,7 +158,7 @@ async def triage_add(
     try:
         result = service.triage_add(
             pubmed=request.pubmed,
-            curator_userid=current_user["username"],
+            curator_userid=current_user.userid,
         )
         return TriageResponse(**result)
     except LitReviewError as e:
@@ -168,8 +168,8 @@ async def triage_add(
 @router.post("/triage/high-priority", response_model=TriageResponse)
 async def triage_high_priority(
     request: TriageHighPriorityRequest,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Add a paper with 'High Priority' status and optionally link to genes.
@@ -180,7 +180,7 @@ async def triage_high_priority(
     try:
         result = service.triage_high_priority(
             pubmed=request.pubmed,
-            curator_userid=current_user["username"],
+            curator_userid=current_user.userid,
             feature_names=request.feature_names,
             organism_abbrev=request.organism_abbrev,
         )
@@ -192,8 +192,8 @@ async def triage_high_priority(
 @router.post("/triage/discard", response_model=TriageResponse)
 async def triage_discard(
     request: TriageDiscardRequest,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Discard a paper (add to REF_BAD).
@@ -204,7 +204,7 @@ async def triage_discard(
     try:
         result = service.triage_discard(
             pubmed=request.pubmed,
-            curator_userid=current_user["username"],
+            curator_userid=current_user.userid,
         )
         return TriageResponse(**result)
     except LitReviewError as e:
@@ -214,8 +214,8 @@ async def triage_discard(
 @router.post("/triage/batch", response_model=BatchTriageResponse)
 async def triage_batch(
     request: TriageBatchRequest,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """
     Process multiple triage actions in one request.
@@ -237,7 +237,7 @@ async def triage_batch(
 
     result = service.triage_batch(
         actions=actions,
-        curator_userid=current_user["username"],
+        curator_userid=current_user.userid,
     )
 
     return BatchTriageResponse(**result)
