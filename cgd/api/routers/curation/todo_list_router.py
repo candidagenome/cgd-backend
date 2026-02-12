@@ -189,15 +189,23 @@ def get_go_todo_list(
 # Literature Guide Todo List
 # ---------------------------
 
-# Curation status values matching legacy Perl
+# Curation status values from database REF_PROPERTY table
 LITGUIDE_STATUSES = [
-    "Not Yet Curated",
+    "Not yet curated",
     "High Priority",
-    "Partially Curated",
-    "Curated Todo",
-    "Done: No genes",
-    "Done: All genes HTP",
-    "Done: Curated",
+    "Abstract curated, full text not curated",
+    "Done:Abstract curated, full text not curated",
+    "Basic, lit guide, GO, Pheno curation done",
+    "Dataset to load",
+    "Gene model",
+    "Genomic sequence not identified",
+    "Pathways",
+    "Related species",
+    "cell biology",
+    "clinical",
+    "multiple",
+    "not gene specific",
+    "other",
 ]
 
 
@@ -274,7 +282,7 @@ def get_curation_status_values(
 def get_litguide_todo_list(
     current_user: CurrentUser,
     status: str = Query(
-        "Not Yet Curated",
+        "Not yet curated",
         description="Curation status to filter by",
     ),
     year: Optional[int] = Query(None, description="Year to filter by (optional)"),
@@ -288,12 +296,12 @@ def get_litguide_todo_list(
     References without a curation status property are treated as "Not Yet Curated".
     Mirrors legacy curateLitTodo.pl behavior.
     """
-    if status == "Not Yet Curated":
-        # For "Not Yet Curated", find references that DON'T have a curation status property
+    if status == "Not yet curated":
+        # For "Not yet curated", find references that DON'T have a curation status property
         # Use a subquery to find references that DO have a status
         refs_with_status = (
             db.query(RefProperty.reference_no)
-            .filter(func.upper(RefProperty.property_type) == "CURATION STATUS")
+            .filter(RefProperty.property_type == "curation_status")
             .subquery()
         )
 
@@ -340,8 +348,8 @@ def get_litguide_todo_list(
                 RefProperty.date_last_reviewed,
             )
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-            .filter(func.upper(RefProperty.property_type) == "CURATION STATUS")
-            .filter(func.upper(RefProperty.property_value) == status.upper())
+            .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_value == status)
         )
 
         if year:
