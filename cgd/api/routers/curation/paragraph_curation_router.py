@@ -182,9 +182,16 @@ def get_organisms(
     db: Session = Depends(get_db),
 ):
     """Get list of organisms for dropdown."""
-    service = ParagraphCurationService(db)
-    organisms = service.get_organisms()
-    return OrganismsResponse(organisms=[OrganismItem(**o) for o in organisms])
+    try:
+        service = ParagraphCurationService(db)
+        organisms = service.get_organisms()
+        return OrganismsResponse(organisms=[OrganismItem(**o) for o in organisms])
+    except Exception as e:
+        logger.exception(f"Error fetching organisms: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
 
 
 @router.get("/feature/{feature_name}", response_model=FeatureParagraphsResponse)
