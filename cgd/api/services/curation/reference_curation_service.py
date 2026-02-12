@@ -743,7 +743,7 @@ class ReferenceCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "Topic",
+                RefProperty.property_type == "literature_topic",
                 RefProperty.property_value == topic,
             )
             .first()
@@ -753,7 +753,7 @@ class ReferenceCurationService:
             ref_prop = RefProperty(
                 reference_no=reference_no,
                 source="CGD",
-                property_type="Topic",
+                property_type="literature_topic",
                 property_value=topic,
                 date_last_reviewed=datetime.now(),
                 created_by=curator_userid[:12],
@@ -856,7 +856,7 @@ class ReferenceCurationService:
         for prop in properties:
             if prop.property_type == "curation_status":
                 curation_status = prop.property_value
-            elif prop.property_type == "Topic":
+            elif prop.property_type == "literature_topic":
                 # Get linked features
                 links = (
                     self.db.query(RefpropFeat, Feature)
