@@ -547,24 +547,48 @@ class LitReviewCurationService:
         )
 
         if existing:
-            existing.property_value = status
-            existing.date_last_reviewed = datetime.now()
+            # Update existing property
+            update_sql = text("""
+                UPDATE MULTI.ref_property
+                SET property_value = :status,
+                    date_last_reviewed = SYSDATE
+                WHERE ref_property_no = :ref_property_no
+            """)
+            self.db.execute(
+                update_sql,
+                {"status": status, "ref_property_no": existing.ref_property_no},
+            )
             self.db.commit()
             return existing.ref_property_no
 
-        # Create new property
-        prop = RefProperty(
-            reference_no=reference_no,
-            source="CGD",
-            property_type=PROPERTY_TYPE,
-            property_value=status,
-            date_last_reviewed=datetime.now(),
-            created_by=curator_userid[:12],
+        # Get next ref_property_no from Oracle sequence
+        result = self.db.execute(text("SELECT MULTI.ref_property_seq.NEXTVAL FROM dual"))
+        ref_property_no = result.scalar()
+
+        # Create new property using raw SQL
+        insert_sql = text("""
+            INSERT INTO MULTI.ref_property (
+                ref_property_no, reference_no, source, property_type,
+                property_value, created_by
+            ) VALUES (
+                :ref_property_no, :reference_no, :source, :property_type,
+                :property_value, :created_by
+            )
+        """)
+        self.db.execute(
+            insert_sql,
+            {
+                "ref_property_no": ref_property_no,
+                "reference_no": reference_no,
+                "source": "CGD",
+                "property_type": PROPERTY_TYPE,
+                "property_value": status,
+                "created_by": curator_userid[:12],
+            },
         )
-        self.db.add(prop)
         self.db.commit()
 
-        return prop.ref_property_no
+        return ref_property_no
 
     def _link_to_feature(
         self,
@@ -620,13 +644,22 @@ class LitReviewCurationService:
                 "message": f"Feature {feature.feature_name} already linked",
             }
 
-        # Create link
-        link = RefpropFeat(
-            ref_property_no=ref_property_no,
-            feature_no=feature.feature_no,
-            created_by=curator_userid[:12],
+        # Create link using raw SQL
+        insert_sql = text("""
+            INSERT INTO MULTI.refprop_feat (
+                refprop_feat_no, ref_property_no, feature_no, created_by
+            ) VALUES (
+                MULTI.refprop_feat_seq.NEXTVAL, :ref_property_no, :feature_no, :created_by
+            )
+        """)
+        self.db.execute(
+            insert_sql,
+            {
+                "ref_property_no": ref_property_no,
+                "feature_no": feature.feature_no,
+                "created_by": curator_userid[:12],
+            },
         )
-        self.db.add(link)
         self.db.commit()
 
         return {
