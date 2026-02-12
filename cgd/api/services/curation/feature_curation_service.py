@@ -385,15 +385,26 @@ class FeatureCurationService:
         self.db.add(feat_location)
         self.db.flush()
 
-        # Create FEAT_RELATIONSHIP (child of chromosome)
-        feat_rel = FeatRelationship(
-            parent_feature_no=chromosome.feature_no,
-            child_feature_no=feature_no,
-            relationship_type="part of",
-            rank=1,
-            created_by=curator_userid,
+        # Create FEAT_RELATIONSHIP (child of chromosome) if it doesn't exist
+        existing_rel = (
+            self.db.query(FeatRelationship)
+            .filter(
+                FeatRelationship.parent_feature_no == chromosome.feature_no,
+                FeatRelationship.child_feature_no == feature_no,
+                FeatRelationship.relationship_type == "part of",
+            )
+            .first()
         )
-        self.db.add(feat_rel)
+
+        if not existing_rel:
+            feat_rel = FeatRelationship(
+                parent_feature_no=chromosome.feature_no,
+                child_feature_no=feature_no,
+                relationship_type="part of",
+                rank=1,
+                created_by=curator_userid,
+            )
+            self.db.add(feat_rel)
 
         logger.info(
             f"Added location for feature {feature_no}: "
