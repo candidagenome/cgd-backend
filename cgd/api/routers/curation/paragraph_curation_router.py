@@ -245,6 +245,7 @@ def get_paragraph_details(
 
 @router.post("", response_model=CreateParagraphResponse)
 @router.post("/", response_model=CreateParagraphResponse, include_in_schema=False)
+@router.post("/create", response_model=CreateParagraphResponse, include_in_schema=False)
 def create_paragraph(
     request: CreateParagraphRequest,
     current_user: CurrentUser,
