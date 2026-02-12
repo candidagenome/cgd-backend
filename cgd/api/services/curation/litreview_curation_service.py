@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 PROPERTY_TYPE = "curation_status"
 HIGH_PRIORITY = "High Priority"
 NOT_YET_CURATED = "Not yet curated"
-REF_SOURCE = "PubMed"
+REF_SOURCE = "Curator PubMed reference"  # Must match CODE table values
 
 
 class LitReviewError(Exception):
