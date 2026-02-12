@@ -291,9 +291,9 @@ def add_location(
     This is used when a feature needs to have coordinates added for
     an additional assembly/genome version.
     """
-    service = FeatureCurationService(db)
-
     try:
+        service = FeatureCurationService(db)
+
         result = service.add_location_to_feature(
             feature_name=request.feature_name,
             organism_abbrev=request.organism_abbrev,
@@ -315,6 +315,12 @@ def add_location(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except Exception as e:
+        logger.exception(f"Error adding location: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
         )
 
 
