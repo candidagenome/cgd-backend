@@ -20,6 +20,7 @@ from cgd.models.models import (
     RefBad,
     RefProperty,
     RefTemp,
+    Reference,
     RefpropFeat,
 )
 
