@@ -8,6 +8,8 @@ Scripts:
 - bulk_annotation.py: Load bulk annotation data (feature names, aliases, notes)
 - bulk_load_phenotype.py: Bulk load phenotype data with experiments
 - check_chebi.py: Compare CHEBI OBO files between versions
+- fix_trna_anticodons.py: Fix tRNA names (T -> U in anticodons)
+- generate_chibana_mapping.py: Generate Chibana to ORF mapping from GenBank
 - load_aliases.py: Load extra aliases from external sources
 - load_chibana_aliases.py: Load Chibana chromosome 7 aliases
 - load_curation_status.py: Load curation status into REFERENCE table
@@ -16,6 +18,7 @@ Scripts:
 - load_go_slim_terms.py: Load GO Slim terms into GO_SET table
 - load_ipf_aliases.py: Load IPF (Induced Protein Fragment) aliases
 - load_missing_feature_types.py: Add missing feature types for features
+- load_orf_aliases.py: Load ORF version aliases (orf4, orf6 mappings)
 - load_orthologs.py: Load ortholog/best hit information
 - load_trnas.py: Load tRNA loci into the database
 - update_pdf_status.py: Update PDF status for references by PMID
@@ -24,6 +27,8 @@ Usage:
     python scripts/load/bulk_annotation.py --help
     python scripts/load/bulk_load_phenotype.py --help
     python scripts/load/check_chebi.py --help
+    python scripts/load/fix_trna_anticodons.py --help
+    python scripts/load/generate_chibana_mapping.py --help
     python scripts/load/load_aliases.py --help
     python scripts/load/load_chibana_aliases.py --help
     python scripts/load/load_curation_status.py --help
@@ -32,6 +37,7 @@ Usage:
     python scripts/load/load_go_slim_terms.py --help
     python scripts/load/load_ipf_aliases.py --help
     python scripts/load/load_missing_feature_types.py --help
+    python scripts/load/load_orf_aliases.py --help
     python scripts/load/load_orthologs.py --help
     python scripts/load/load_trnas.py --help
     python scripts/load/update_pdf_status.py --help
