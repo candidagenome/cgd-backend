@@ -15,6 +15,7 @@ Scripts:
 - load_chibana_aliases.py: Load Chibana chromosome 7 aliases
 - load_chr_coords_trnas.py: Load chromosome coordinates for tRNAs
 - load_chromosome.py: Load chromosome sequences (supports Assembly 20/21)
+- load_contig_info.py: Load or update contig information for features
 - load_curation_status.py: Load curation status into REFERENCE table
 - load_external_ids_orthogroups.py: Load external IDs for orthogroup associations
 - load_external_links.py: Load external link information via DBXREF
@@ -26,8 +27,10 @@ Scripts:
 - load_mito_chr.py: Load mitochondrial chromosome data
 - load_module_info.py: Load module info (external IDs and template URLs)
 - load_orf_aliases.py: Load ORF version aliases (orf4, orf6 mappings)
+- load_ortholog_groups.py: Load ortholog groups from CGOB clusters
 - load_orthologs.py: Load ortholog/best hit information
 - load_trnas.py: Load tRNA loci into the database
+- load_trnascan_data.py: Load tRNA features from tRNAscan-SE output
 - update_pdf_status.py: Update PDF status for references by PMID
 
 Usage:
@@ -41,6 +44,7 @@ Usage:
     python scripts/load/load_chibana_aliases.py --help
     python scripts/load/load_chr_coords_trnas.py --help
     python scripts/load/load_chromosome.py --help
+    python scripts/load/load_contig_info.py --help
     python scripts/load/load_curation_status.py --help
     python scripts/load/load_external_ids_orthogroups.py --help
     python scripts/load/load_external_links.py --help
@@ -52,7 +56,9 @@ Usage:
     python scripts/load/load_mito_chr.py --help
     python scripts/load/load_module_info.py --help
     python scripts/load/load_orf_aliases.py --help
+    python scripts/load/load_ortholog_groups.py --help
     python scripts/load/load_orthologs.py --help
     python scripts/load/load_trnas.py --help
+    python scripts/load/load_trnascan_data.py --help
     python scripts/load/update_pdf_status.py --help
 """
