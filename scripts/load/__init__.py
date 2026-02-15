@@ -11,8 +11,11 @@ Scripts:
 - fix_trna_anticodons.py: Fix tRNA names (T -> U in anticodons)
 - generate_chibana_mapping.py: Generate Chibana to ORF mapping from GenBank
 - load_aliases.py: Load extra aliases from external sources
+- load_awg_orfs.py: Load Annotation Working Group ORFs from FASTA
 - load_chibana_aliases.py: Load Chibana chromosome 7 aliases
+- load_chr_coords_trnas.py: Load chromosome coordinates for tRNAs
 - load_curation_status.py: Load curation status into REFERENCE table
+- load_external_ids_orthogroups.py: Load external IDs for orthogroup associations
 - load_external_links.py: Load external link information via DBXREF
 - load_external_links_feat_url.py: Load external links via FEAT_URL
 - load_go_slim_terms.py: Load GO Slim terms into GO_SET table
@@ -30,8 +33,11 @@ Usage:
     python scripts/load/fix_trna_anticodons.py --help
     python scripts/load/generate_chibana_mapping.py --help
     python scripts/load/load_aliases.py --help
+    python scripts/load/load_awg_orfs.py --help
     python scripts/load/load_chibana_aliases.py --help
+    python scripts/load/load_chr_coords_trnas.py --help
     python scripts/load/load_curation_status.py --help
+    python scripts/load/load_external_ids_orthogroups.py --help
     python scripts/load/load_external_links.py --help
     python scripts/load/load_external_links_feat_url.py --help
     python scripts/load/load_go_slim_terms.py --help
