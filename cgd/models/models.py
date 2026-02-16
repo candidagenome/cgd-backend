@@ -1354,6 +1354,8 @@ class Feature(Base):
     refprop_feat: Mapped[list['RefpropFeat']] = relationship('RefpropFeat', back_populates='feature')
     seq: Mapped[list['Seq']] = relationship('Seq', back_populates='feature')
     feat_location: Mapped[list['FeatLocation']] = relationship('FeatLocation', back_populates='feature')
+    subfeature: Mapped[list['Subfeature']] = relationship('Subfeature', back_populates='feature')
+    feature_a21: Mapped[list['FeatureA21']] = relationship('FeatureA21', back_populates='feature')
 
 
 class GenomeVersion(Base):
@@ -2202,3 +2204,153 @@ class GorefDbxref(Base):
 
     dbxref: Mapped['Dbxref'] = relationship('Dbxref', back_populates='goref_dbxref')
     go_ref: Mapped['GoRef'] = relationship('GoRef', back_populates='goref_dbxref')
+
+
+class Chromosome(Base):
+    __tablename__ = 'chromosome'
+    __table_args__ = (
+        PrimaryKeyConstraint('chromosome', name='chromosome_pk'),
+        Index('chromosome_uk', 'chr_label', unique=True),
+        {'comment': 'Contains chromosome sequence and metadata.', 'schema': 'MULTI'}
+    )
+
+    chromosome: Mapped[str] = mapped_column(VARCHAR(10), primary_key=True, comment='Chromosome identifier (e.g., 1, 2, R, Mt).')
+    physical_length: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Physical length of the chromosome in base pairs.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+    chr_label: Mapped[Optional[str]] = mapped_column(VARCHAR(10), comment='Roman numeral label for the chromosome (e.g., I, II, III, Mt).')
+    chr_version: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, comment='Version date of the chromosome sequence.')
+    chr_seq: Mapped[Optional[str]] = mapped_column(Text, comment='The chromosome nucleotide sequence.')
+
+
+class ChromosomeA21(Base):
+    __tablename__ = 'chromosome_a21'
+    __table_args__ = (
+        PrimaryKeyConstraint('chromosome', name='chromosome_a21_pk'),
+        Index('chromosome_a21_uk', 'chr_label', unique=True),
+        {'comment': 'Contains Assembly 21 chromosome sequence and metadata.', 'schema': 'MULTI'}
+    )
+
+    chromosome: Mapped[str] = mapped_column(VARCHAR(10), primary_key=True, comment='Chromosome identifier (e.g., 1, 2, R, Mt).')
+    physical_length: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Physical length of the chromosome in base pairs.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+    chr_label: Mapped[Optional[str]] = mapped_column(VARCHAR(10), comment='Roman numeral label for the chromosome (e.g., I, II, III, Mt).')
+    chr_version: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, comment='Version date of the chromosome sequence.')
+    chr_seq: Mapped[Optional[str]] = mapped_column(Text, comment='The chromosome nucleotide sequence.')
+
+
+class Subfeature(Base):
+    __tablename__ = 'subfeature'
+    __table_args__ = (
+        ForeignKeyConstraint(['feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='subfeat_feat_fk'),
+        PrimaryKeyConstraint('subfeature_no', name='subfeature_pk'),
+        Index('subfeat_feat_fk_i', 'feature_no'),
+        {'comment': 'Contains subfeature coordinates (e.g., exons, introns) relative to their parent feature.', 'schema': 'MULTI'}
+    )
+
+    subfeature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a subfeature. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of the subfeature relative to the feature.')
+    stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of the subfeature relative to the feature.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+
+    feature: Mapped['Feature'] = relationship('Feature', back_populates='subfeature')
+    subfeature_type: Mapped[list['SubfeatureType']] = relationship('SubfeatureType', back_populates='subfeature')
+
+
+class SubfeatureType(Base):
+    __tablename__ = 'subfeature_type'
+    __table_args__ = (
+        ForeignKeyConstraint(['subfeature_no'], ['MULTI.subfeature.subfeature_no'], ondelete='CASCADE', name='subfeattype_subfeat_fk'),
+        PrimaryKeyConstraint('subfeature_no', 'subfeature_type', name='subfeature_type_pk'),
+        {'comment': 'Contains the type classification for subfeatures (e.g., Exon, Intron, Non-coding exon).', 'schema': 'MULTI'}
+    )
+
+    subfeature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a subfeature. Foreign key to the subfeature table.')
+    subfeature_type: Mapped[str] = mapped_column(VARCHAR(40), primary_key=True, comment='The type of subfeature (e.g., Exon, Intron, Non-coding exon).')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+
+    subfeature: Mapped['Subfeature'] = relationship('Subfeature', back_populates='subfeature_type')
+
+
+class FeatureA21(Base):
+    __tablename__ = 'feature_a21'
+    __table_args__ = (
+        CheckConstraint("strand in ('C','W')", name='feat_a21_strand_ck'),
+        ForeignKeyConstraint(['feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='feat_a21_feat_fk'),
+        PrimaryKeyConstraint('feature_a21_no', name='feature_a21_pk'),
+        Index('feat_a21_feat_fk_i', 'feature_no'),
+        Index('feature_a21_uk', 'feature_no', 'feature_a21_type', unique=True),
+        {'comment': 'Contains Assembly 21 chromosome coordinates for features.', 'schema': 'MULTI'}
+    )
+
+    feature_a21_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a feature A21 location. Oracle sequence generated number.')
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
+    chromosome: Mapped[str] = mapped_column(VARCHAR(10), nullable=False, comment='Chromosome where the feature is located.')
+    start_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Start coordinate of the feature on the chromosome.')
+    stop_coord: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Stop coordinate of the feature on the chromosome.')
+    strand: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='DNA strand on which the feature is located (W = Watson, C = Crick).')
+    feature_a21_type: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Type of the feature location (e.g., ORF, Exon, Intron).')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+    date_modified: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, comment='Date the record was last modified.')
+    feature_a21_version: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, comment='Version date of the feature location.')
+
+    feature: Mapped['Feature'] = relationship('Feature', back_populates='feature_a21')
+
+
+class TemplateUrl(Base):
+    __tablename__ = 'template_url'
+    __table_args__ = (
+        PrimaryKeyConstraint('template_url_no', name='template_url_pk'),
+        Index('template_url_uk', 'template_url', 'source', unique=True),
+        {'comment': 'Contains URL templates for external links with placeholder for substitution.', 'schema': 'MULTI'}
+    )
+
+    template_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a template URL. Oracle sequence generated number.')
+    template_url: Mapped[str] = mapped_column(VARCHAR(500), nullable=False, comment='URL template with _SUBSTITUTE_THIS_ placeholder for the external ID.')
+    source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source database or resource for this URL template.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+    description: Mapped[Optional[str]] = mapped_column(VARCHAR(240), comment='Description of the URL template.')
+
+    ei_tu: Mapped[list['EiTu']] = relationship('EiTu', back_populates='template_url')
+
+
+class ExternalId(Base):
+    __tablename__ = 'external_id'
+    __table_args__ = (
+        PrimaryKeyConstraint('external_id_no', name='external_id_pk'),
+        Index('external_id_uk', 'external_id', 'source', 'tab_name', 'primary_key', unique=True),
+        {'comment': 'Contains external identifiers that link database records to external resources.', 'schema': 'MULTI'}
+    )
+
+    external_id_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an external ID. Oracle sequence generated number.')
+    external_id: Mapped[str] = mapped_column(VARCHAR(100), nullable=False, comment='The external identifier value.')
+    source: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Source database or resource for this external ID.')
+    tab_name: Mapped[str] = mapped_column(VARCHAR(30), nullable=False, comment='Name of the table that this external ID is associated with.')
+    primary_key: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Primary key value in the associated table.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Userid of the person who entered the record into the database.')
+
+    ei_tu: Mapped[list['EiTu']] = relationship('EiTu', back_populates='external_id')
+
+
+class EiTu(Base):
+    __tablename__ = 'ei_tu'
+    __table_args__ = (
+        ForeignKeyConstraint(['external_id_no'], ['MULTI.external_id.external_id_no'], ondelete='CASCADE', name='eitu_extid_fk'),
+        ForeignKeyConstraint(['template_url_no'], ['MULTI.template_url.template_url_no'], ondelete='CASCADE', name='eitu_turl_fk'),
+        PrimaryKeyConstraint('external_id_no', 'template_url_no', name='ei_tu_pk'),
+        Index('eitu_turl_fk_i', 'template_url_no'),
+        {'comment': 'Linking table between external_id and template_url tables.', 'schema': 'MULTI'}
+    )
+
+    external_id_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for an external ID. Foreign key to the external_id table.')
+    template_url_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier for a template URL. Foreign key to the template_url table.')
+
+    external_id: Mapped['ExternalId'] = relationship('ExternalId', back_populates='ei_tu')
+    template_url: Mapped['TemplateUrl'] = relationship('TemplateUrl', back_populates='ei_tu')
