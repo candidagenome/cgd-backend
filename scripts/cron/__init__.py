@@ -99,6 +99,10 @@ Utility Scripts:
 - convert_logs_weekly_to_monthly.py: Convert log files
 - archive_website.py: Archive website snapshots
 - download_ncbi_journal_file.py: Download NCBI journal data
+- run_tests_prod.py: Run production tests
+- check_autosuggest.py: Check and restart autosuggest service
+- update_suggestions.py: Update autosuggest data
+- agenda_reminder.py: Send agenda item brief reminder email
 
 Subdirectories:
 - CGOB/: Candida Gene Order Browser scripts
