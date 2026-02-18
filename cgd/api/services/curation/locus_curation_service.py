@@ -24,6 +24,7 @@ from cgd.models.models import (
     Url,
     Reference,
     RefLink,
+    Organism,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,10 +164,17 @@ class LocusCurationService:
         }
 
     def search_features(
-        self, query: str, page: int = 1, page_size: int = 50
+        self, query: str, page: int = 1, page_size: int = 50,
+        organism_abbrev: Optional[str] = None
     ) -> Tuple[List[dict], int]:
         """
         Search features by name.
+
+        Args:
+            query: Search string for feature_name or gene_name
+            page: Page number (1-indexed)
+            page_size: Results per page
+            organism_abbrev: Optional organism abbreviation filter
 
         Returns:
             Tuple of (list of feature dicts, total count)
@@ -176,7 +184,15 @@ class LocusCurationService:
                 Feature.feature_name.ilike(f"%{query}%"),
                 Feature.gene_name.ilike(f"%{query}%"),
             )
-        ).order_by(Feature.feature_name)
+        )
+
+        # Filter by organism if specified
+        if organism_abbrev:
+            base_query = base_query.join(
+                Organism, Feature.organism_no == Organism.organism_no
+            ).filter(Organism.organism_abbrev == organism_abbrev)
+
+        base_query = base_query.order_by(Feature.feature_name)
 
         total = base_query.count()
         features = base_query.offset((page - 1) * page_size).limit(page_size).all()

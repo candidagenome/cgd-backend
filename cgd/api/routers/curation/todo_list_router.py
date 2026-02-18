@@ -2,6 +2,14 @@
 Todo List Router - Endpoints for curator todo lists.
 
 Provides GO and Literature Guide todo lists filtered by year/status.
+
+Legacy Perl Implementation Notes (LitGuideTodoList.pm + Database::LiteratureGuide.pm):
+- "Not yet curated": References with no literature_topic CV term properties
+  (only status properties like "Not yet curated" or "High Priority")
+- "Partially Curated": References with BOTH literature_topic properties AND
+  "High Priority" or "Not yet curated" status
+- "Curated Todo": References with topics under "Curation to-do" parent term
+- Other statuses: Filter out references where Done:X exists for every X topic
 """
 
 import logging
@@ -9,12 +17,15 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import distinct, extract, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, distinct, exists, extract, func, not_, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from cgd.auth.deps import CurrentUser
 from cgd.db.deps import get_db
 from cgd.models.models import (
+    Cv,
+    CvTerm,
+    CvtermRelationship,
     Feature,
     Go,
     GoAnnotation,
@@ -144,7 +155,7 @@ def get_go_todo_list(
     if organism:
         query = query.filter(
             or_(
-                func.upper(Organism.abbreviation) == organism.upper(),
+                func.upper(Organism.organism_abbrev) == organism.upper(),
                 func.upper(Organism.organism_name) == organism.upper(),
             )
         )
@@ -189,23 +200,21 @@ def get_go_todo_list(
 # Literature Guide Todo List
 # ---------------------------
 
+# Constants matching legacy Perl implementation
+NOT_YET_CURATED = "Not yet curated"
+HIGH_PRIORITY = "High Priority"
+PARTIALLY_CURATED = "Partially Curated"
+CURATED_TODO = "Curated Todo"
+LIT_TOPIC_CV_NAME = "literature_topic"
+CURATION_TODO_PARENT = "Curation to-do"
+
 # Curation status values from database REF_PROPERTY table
+# Order matches legacy LitGuideTodoList.pm
 LITGUIDE_STATUSES = [
-    "Not yet curated",
-    "High Priority",
-    "Abstract curated, full text not curated",
-    "Done:Abstract curated, full text not curated",
-    "Basic, lit guide, GO, Pheno curation done",
-    "Dataset to load",
-    "Gene model",
-    "Genomic sequence not identified",
-    "Pathways",
-    "Related species",
-    "cell biology",
-    "clinical",
-    "multiple",
-    "not gene specific",
-    "other",
+    NOT_YET_CURATED,
+    HIGH_PRIORITY,
+    PARTIALLY_CURATED,
+    CURATED_TODO,
 ]
 
 
@@ -230,11 +239,39 @@ def get_litguide_todo_years(
 
 
 @router.get("/statuses/litguide")
-def get_litguide_statuses(current_user: CurrentUser):
+def get_litguide_statuses(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
     """
     Get valid curation status values for Literature Guide todo list.
+
+    Returns the standard statuses plus "Done:" statuses dynamically loaded
+    from the literature_topic CV terms in the database.
+    Matches legacy LitGuideTodoList.pm behavior.
     """
-    return {"statuses": LITGUIDE_STATUSES}
+    # Start with the standard statuses
+    statuses = list(LITGUIDE_STATUSES)
+
+    # Load "Done:" statuses from database - these are literature_topic CV terms
+    # that have been completed (the legacy system shows them with "Done:" prefix removed)
+    try:
+        done_terms = (
+            db.query(CvTerm.term_name)
+            .join(Cv, CvTerm.cv_no == Cv.cv_no)
+            .filter(Cv.cv_name == LIT_TOPIC_CV_NAME)
+            .filter(CvTerm.term_name.like("Done:%"))
+            .order_by(CvTerm.term_name)
+            .all()
+        )
+        # Add Done: statuses (keeping the Done: prefix)
+        for (term_name,) in done_terms:
+            if term_name not in statuses:
+                statuses.append(term_name)
+    except Exception as e:
+        logger.warning(f"Failed to load Done: statuses from database: {e}")
+
+    return {"statuses": statuses}
 
 
 @router.get("/debug/ref-property-types")
@@ -278,11 +315,74 @@ def get_curation_status_values(
     return {"curation_statuses": [{"type": r[0], "value": r[1], "count": r[2]} for r in results]}
 
 
+def _get_literature_topic_terms(db: Session) -> set:
+    """Get all term_names from the literature_topic CV."""
+    terms = (
+        db.query(CvTerm.term_name)
+        .join(Cv, CvTerm.cv_no == Cv.cv_no)
+        .filter(Cv.cv_name == LIT_TOPIC_CV_NAME)
+        .all()
+    )
+    return {t[0] for t in terms}
+
+
+def _get_curation_todo_child_terms(db: Session) -> set:
+    """Get all child term_names under 'Curation to-do' parent."""
+    # Find the parent term "Curation to-do"
+    parent_term = aliased(CvTerm)
+    child_term = aliased(CvTerm)
+
+    terms = (
+        db.query(child_term.term_name)
+        .join(CvtermRelationship, child_term.cv_term_no == CvtermRelationship.child_cv_term_no)
+        .join(parent_term, parent_term.cv_term_no == CvtermRelationship.parent_cv_term_no)
+        .filter(parent_term.term_name == CURATION_TODO_PARENT)
+        .all()
+    )
+    return {t[0] for t in terms}
+
+
+def _filter_done_states(db: Session, reference_nos: list[int]) -> list[int]:
+    """
+    Filter out references where all todo topics have corresponding Done: topics.
+
+    This implements the legacy filter_done_states logic:
+    - For each reference, get all its topics
+    - If a reference has "Done:X" for every "X" topic, exclude it
+    """
+    if not reference_nos:
+        return []
+
+    filtered_refs = []
+
+    for ref_no in reference_nos:
+        # Get all topics for this reference
+        topics = (
+            db.query(RefProperty.property_value)
+            .filter(RefProperty.reference_no == ref_no)
+            .filter(RefProperty.property_type == "literature_topic")
+            .all()
+        )
+        topic_set = {t[0] for t in topics}
+
+        # Check if all todo topics have a corresponding Done: topic
+        todo_topics = [t for t in topic_set if not t.startswith("Done:")]
+        done_topics = {t.replace("Done:", "") for t in topic_set if t.startswith("Done:")}
+
+        # If there are todo topics without corresponding Done: topics, include this reference
+        has_uncompleted = any(t not in done_topics for t in todo_topics)
+
+        if has_uncompleted or not todo_topics:
+            filtered_refs.append(ref_no)
+
+    return filtered_refs
+
+
 @router.get("/litguide", response_model=LitGuideTodoResponse)
 def get_litguide_todo_list(
     current_user: CurrentUser,
     status: str = Query(
-        "Not yet curated",
+        NOT_YET_CURATED,
         description="Curation status to filter by",
     ),
     year: Optional[int] = Query(None, description="Year to filter by (optional)"),
@@ -292,39 +392,50 @@ def get_litguide_todo_list(
     """
     Get literature references by curation status.
 
-    Returns references with their curation status from REF_PROPERTY table.
-    References without a curation status property are treated as "Not Yet Curated".
-    Mirrors legacy curateLitTodo.pl behavior.
+    Implements legacy LitGuideTodoList.pm + Database::LiteratureGuide.pm logic:
+    - "Not yet curated": References with no literature_topic CV term properties
+    - "High Priority": References with High Priority status property
+    - "Partially Curated": References with BOTH literature_topic AND status properties
+    - "Curated Todo": References with topics under "Curation to-do" parent
+    - "Done:X" statuses: References with that specific Done: topic, filtering out
+      references where all todo topics have corresponding Done: topics
     """
-    if status == "Not yet curated":
-        # For "Not yet curated", find references that DON'T have a curation status property
-        # Use a subquery to find references that DO have a status
-        refs_with_status = (
+    items = []
+    total_count = 0
+
+    if status == NOT_YET_CURATED:
+        # Legacy curated='No' logic:
+        # Find references that have NO literature_topic CV term properties
+        # (they may have status properties like "Not yet curated" or "High Priority")
+
+        # Get all literature_topic terms
+        lit_topic_terms = _get_literature_topic_terms(db)
+
+        # Find references that have any literature_topic property
+        refs_with_lit_topic = (
             db.query(RefProperty.reference_no)
-            .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_type == "literature_topic")
+            .filter(RefProperty.property_value.in_(lit_topic_terms))
+            .distinct()
             .subquery()
         )
 
-        base_query = (
-            db.query(Reference)
-            .filter(~Reference.reference_no.in_(db.query(refs_with_status.c.reference_no)))
+        # Get references WITHOUT any literature_topic properties
+        base_query = db.query(Reference).filter(
+            ~Reference.reference_no.in_(select(refs_with_lit_topic.c.reference_no))
         )
 
         if year:
             base_query = base_query.filter(Reference.year == year)
 
-        # Get total count before applying limit
         total_count = base_query.count()
 
-        # Order and limit
         results = (
-            base_query
-            .order_by(Reference.year.desc(), Reference.pubmed)
+            base_query.order_by(Reference.year.desc(), Reference.pubmed)
             .limit(limit)
             .all()
         )
 
-        items = []
         for row in results:
             items.append(
                 LitGuideTodoItem(
@@ -337,8 +448,9 @@ def get_litguide_todo_list(
                     date_last_reviewed="",
                 )
             )
-    else:
-        # For other statuses, query references with matching curation status property
+
+    elif status == HIGH_PRIORITY:
+        # References with High Priority status
         base_query = (
             db.query(
                 Reference.reference_no,
@@ -350,25 +462,183 @@ def get_litguide_todo_list(
             )
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
             .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_value == HIGH_PRIORITY)
+        )
+
+        if year:
+            base_query = base_query.filter(Reference.year == year)
+
+        total_count = base_query.count()
+
+        results = (
+            base_query.order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
+
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=row.property_value,
+                    date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                    if row.date_last_reviewed
+                    else "",
+                )
+            )
+
+    elif status == PARTIALLY_CURATED:
+        # Legacy curated='Partial' logic:
+        # References that have BOTH:
+        # 1. At least one literature_topic property (actual curation topics)
+        # 2. AND "High Priority" or "Not yet curated" status
+
+        lit_topic_terms = _get_literature_topic_terms(db)
+
+        # References with literature_topic properties
+        refs_with_lit_topic = (
+            db.query(RefProperty.reference_no)
+            .filter(RefProperty.property_type == "literature_topic")
+            .filter(RefProperty.property_value.in_(lit_topic_terms))
+            .distinct()
+            .subquery()
+        )
+
+        # References with HP or NYC status
+        refs_with_status = (
+            db.query(RefProperty.reference_no)
+            .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_value.in_([HIGH_PRIORITY, NOT_YET_CURATED]))
+            .distinct()
+            .subquery()
+        )
+
+        # Get references that match BOTH conditions
+        base_query = (
+            db.query(Reference)
+            .filter(Reference.reference_no.in_(select(refs_with_lit_topic.c.reference_no)))
+            .filter(Reference.reference_no.in_(select(refs_with_status.c.reference_no)))
+        )
+
+        if year:
+            base_query = base_query.filter(Reference.year == year)
+
+        # Apply filter_done_states
+        all_refs = base_query.all()
+        ref_nos = [r.reference_no for r in all_refs]
+        filtered_ref_nos = _filter_done_states(db, ref_nos)
+
+        total_count = len(filtered_ref_nos)
+
+        # Get final results with limit
+        results = (
+            db.query(Reference)
+            .filter(Reference.reference_no.in_(filtered_ref_nos))
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
+
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=status,
+                    date_last_reviewed="",
+                )
+            )
+
+    elif status == CURATED_TODO:
+        # Legacy P.term_name = 'Curation to-do' logic:
+        # References with topics that are children of "Curation to-do" parent term
+        # This includes "Not yet curated" and "High Priority"
+
+        curation_todo_terms = _get_curation_todo_child_terms(db)
+
+        if not curation_todo_terms:
+            # Fallback: use known status terms
+            curation_todo_terms = {NOT_YET_CURATED, HIGH_PRIORITY}
+
+        # Get references with these topics
+        base_query = (
+            db.query(Reference)
+            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+            .filter(RefProperty.property_value.in_(curation_todo_terms))
+            .distinct()
+        )
+
+        if year:
+            base_query = base_query.filter(Reference.year == year)
+
+        # Apply filter_done_states
+        all_refs = base_query.all()
+        ref_nos = [r.reference_no for r in all_refs]
+        filtered_ref_nos = _filter_done_states(db, ref_nos)
+
+        total_count = len(filtered_ref_nos)
+
+        results = (
+            db.query(Reference)
+            .filter(Reference.reference_no.in_(filtered_ref_nos))
+            .order_by(Reference.year.desc(), Reference.pubmed)
+            .limit(limit)
+            .all()
+        )
+
+        for row in results:
+            items.append(
+                LitGuideTodoItem(
+                    reference_no=row.reference_no,
+                    pubmed=row.pubmed,
+                    citation=row.citation or "",
+                    year=row.year or 0,
+                    curation_status=status,
+                    property_value=status,
+                    date_last_reviewed="",
+                )
+            )
+
+    else:
+        # For other statuses (typically "Done:X" statuses):
+        # Query references with matching topic and apply filter_done_states
+        base_query = (
+            db.query(
+                Reference.reference_no,
+                Reference.pubmed,
+                Reference.citation,
+                Reference.year,
+                RefProperty.property_value,
+                RefProperty.date_last_reviewed,
+            )
+            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
             .filter(RefProperty.property_value == status)
         )
 
         if year:
             base_query = base_query.filter(Reference.year == year)
 
-        # Get total count before applying limit
-        total_count = base_query.count()
+        # Get all matching references
+        all_results = base_query.all()
+        ref_nos = list({r.reference_no for r in all_results})
 
-        # Order and limit
-        results = (
-            base_query
-            .order_by(Reference.year.desc(), Reference.pubmed)
-            .limit(limit)
-            .all()
-        )
+        # Apply filter_done_states to exclude fully completed references
+        filtered_ref_nos = set(_filter_done_states(db, ref_nos))
 
-        items = []
-        for row in results:
+        # Filter results to only include those that passed the filter
+        filtered_results = [r for r in all_results if r.reference_no in filtered_ref_nos]
+
+        total_count = len(filtered_results)
+
+        # Apply limit
+        for row in filtered_results[:limit]:
             items.append(
                 LitGuideTodoItem(
                     reference_no=row.reference_no,
