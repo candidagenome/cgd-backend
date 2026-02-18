@@ -715,3 +715,90 @@ class PhenotypeCurationService:
             .all()
         )
         return [r[0] for r in result]
+
+    def get_cv_term_tree(self, cv_name: str) -> list[dict]:
+        """
+        Get hierarchical CV terms for a given CV name.
+
+        Returns tree structure with parent-child relationships.
+        Used for experiment_type, mutant_type, qualifier, observable trees.
+        """
+        from collections import defaultdict
+        from cgd.models.models import CvtermRelationship
+
+        cv_lower = cv_name.lower()
+
+        # Query Cv to get cv_no
+        cv = (
+            self.db.query(Cv)
+            .filter(func.lower(Cv.cv_name) == cv_lower)
+            .first()
+        )
+        if not cv:
+            return []
+
+        # Get all terms for this CV
+        cv_terms = (
+            self.db.query(CvTerm)
+            .filter(CvTerm.cv_no == cv.cv_no)
+            .all()
+        )
+
+        if not cv_terms:
+            return []
+
+        # Build maps
+        term_map = {t.cv_term_no: t for t in cv_terms}
+        term_no_map = {t.cv_term_no: t.term_name for t in cv_terms}
+
+        # Get all relationships for these terms
+        relationships = (
+            self.db.query(CvtermRelationship)
+            .filter(
+                or_(
+                    CvtermRelationship.parent_cv_term_no.in_(list(term_map.keys())),
+                    CvtermRelationship.child_cv_term_no.in_(list(term_map.keys())),
+                )
+            )
+            .all()
+        )
+
+        # Build parent -> children map
+        children_map: dict[int, list[int]] = defaultdict(list)
+        has_parent: set[int] = set()
+
+        for rel in relationships:
+            if rel.parent_cv_term_no in term_map and rel.child_cv_term_no in term_map:
+                children_map[rel.parent_cv_term_no].append(rel.child_cv_term_no)
+                has_parent.add(rel.child_cv_term_no)
+
+        # Find root terms (terms with no parent)
+        root_term_nos = [t.cv_term_no for t in cv_terms if t.cv_term_no not in has_parent]
+
+        # Recursively build tree
+        def build_tree_node(term_no: int, depth: int = 0) -> dict:
+            term = term_map[term_no]
+            children = []
+            for child_no in sorted(children_map.get(term_no, []),
+                                   key=lambda x: term_map[x].term_name.lower()):
+                children.append(build_tree_node(child_no, depth + 1))
+
+            return {
+                "term": term.term_name,
+                "depth": depth,
+                "children": children,
+            }
+
+        # Build tree from roots
+        tree = []
+        for root_no in sorted(root_term_nos, key=lambda x: term_map[x].term_name.lower()):
+            tree.append(build_tree_node(root_no, 0))
+
+        # If no tree structure (flat list), return all terms as roots
+        if not tree and cv_terms:
+            tree = [
+                {"term": t.term_name, "depth": 0, "children": []}
+                for t in sorted(cv_terms, key=lambda x: x.term_name.lower())
+            ]
+
+        return tree

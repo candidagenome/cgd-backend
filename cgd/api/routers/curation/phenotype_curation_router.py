@@ -133,6 +133,21 @@ class PropertyTypesResponse(BaseModel):
     property_types: list[str]
 
 
+class CVTermNode(BaseModel):
+    """A node in the CV term tree."""
+
+    term: str
+    depth: int
+    children: list["CVTermNode"] = []
+
+
+class CVTermTreeResponse(BaseModel):
+    """Response for hierarchical CV terms lookup."""
+
+    cv_name: str
+    tree: list[CVTermNode]
+
+
 # ---------------------------
 # Endpoints
 # ---------------------------
@@ -164,6 +179,32 @@ def get_cv_terms(
         )
 
     return CVTermsResponse(cv_name=cv_name, terms=terms)
+
+
+@router.get("/cv-tree/{cv_name}", response_model=CVTermTreeResponse)
+def get_cv_term_tree(
+    cv_name: str,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get hierarchical CV terms as a tree structure.
+
+    Returns tree with parent-child relationships for displaying in tree UI.
+
+    Args:
+        cv_name: experiment_type, mutant_type, qualifier, or observable
+    """
+    service = PhenotypeCurationService(db)
+    tree = service.get_cv_term_tree(cv_name)
+
+    if not tree:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown CV name or no terms found: {cv_name}",
+        )
+
+    return CVTermTreeResponse(cv_name=cv_name, tree=tree)
 
 
 @router.get("/property-types", response_model=PropertyTypesResponse)
