@@ -566,57 +566,68 @@ def get_litguide_todo_list(
             )
 
     elif status == CURATED_TODO:
-        # "Curated Todo" = ALL references that have ANY ref_property OR ref_link entry
-        # This is the total curation backlog - all papers that have been touched by curation
+        # "Curated Todo" = References with topics under "Curation to-do" parent term
+        # This matches the legacy LitGuideTodoList.pm behavior
 
-        # Get references with ref_property entries
-        refs_with_property = (
-            db.query(RefProperty.reference_no)
-            .distinct()
-            .subquery()
-        )
+        lit_topic_terms = _get_literature_topic_terms(db)
+        curation_todo_terms = _get_curation_todo_child_terms(db)
 
-        # Get references with ref_link entries
-        refs_with_link = (
-            db.query(RefLink.reference_no)
-            .distinct()
-            .subquery()
-        )
-
-        # Combine: references that have either ref_property OR ref_link
-        base_query = (
-            db.query(Reference)
-            .filter(
-                or_(
-                    Reference.reference_no.in_(select(refs_with_property.c.reference_no)),
-                    Reference.reference_no.in_(select(refs_with_link.c.reference_no)),
+        if not curation_todo_terms:
+            # No curation todo terms found, return empty
+            logger.warning("No child terms found under 'Curation to-do' parent")
+        else:
+            # Find references that have any of the curation todo child terms
+            base_query = (
+                db.query(
+                    Reference.reference_no,
+                    Reference.pubmed,
+                    Reference.citation,
+                    Reference.year,
+                    RefProperty.property_value,
+                    RefProperty.date_last_reviewed,
                 )
+                .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+                .filter(RefProperty.property_value.in_(curation_todo_terms))
             )
-        )
 
-        if year:
-            base_query = base_query.filter(Reference.year == year)
+            if year:
+                base_query = base_query.filter(Reference.year == year)
 
-        total_count = base_query.count()
+            # Get all matching references
+            all_results = base_query.all()
+            ref_nos = list({r.reference_no for r in all_results})
 
-        results = (
-            base_query.order_by(Reference.year.desc(), Reference.pubmed)
-            .limit(limit)
-            .all()
-        )
+            # Apply filter_done_states to exclude fully completed references
+            filtered_ref_nos = set(_filter_done_states(db, ref_nos, lit_topic_terms))
 
-        for row in results:
-            items.append(
-                LitGuideTodoItem(
-                    reference_no=row.reference_no,
-                    pubmed=row.pubmed,
-                    citation=row.citation or "",
-                    year=row.year or 0,
-                    curation_status=status,
-                    property_value=status,
-                    date_last_reviewed="",
+            # Filter results to only include those that passed the filter
+            filtered_results = [r for r in all_results if r.reference_no in filtered_ref_nos]
+
+            # Deduplicate by reference_no (a reference may have multiple todo terms)
+            seen_refs = set()
+            unique_results = []
+            for r in filtered_results:
+                if r.reference_no not in seen_refs:
+                    seen_refs.add(r.reference_no)
+                    unique_results.append(r)
+
+            total_count = len(unique_results)
+
+            # Apply limit
+            for row in unique_results[:limit]:
+                items.append(
+                    LitGuideTodoItem(
+                        reference_no=row.reference_no,
+                        pubmed=row.pubmed,
+                        citation=row.citation or "",
+                        year=row.year or 0,
+                        curation_status=status,
+                        property_value=row.property_value,
+                        date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                        if row.date_last_reviewed
+                        else "",
+                    )
                 )
-            )
 
     else:
         # For other statuses (typically "Done:X" statuses):
