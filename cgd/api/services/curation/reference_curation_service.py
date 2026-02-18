@@ -606,16 +606,16 @@ class ReferenceCurationService:
                 f"Valid statuses: {', '.join(self.VALID_STATUSES)}"
             )
 
-        if title:
-            reference.title = title
+        if title is not None:
+            reference.title = title or None
         if status:
             reference.status = status
-        if year:
-            reference.year = year
-        if volume:
-            reference.volume = volume
-        if pages:
-            reference.page = pages
+        if year is not None:
+            reference.year = year or None
+        if volume is not None:
+            reference.volume = volume or None
+        if pages is not None:
+            reference.page = pages or None
 
         self.db.commit()
 
