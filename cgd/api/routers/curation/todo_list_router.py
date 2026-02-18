@@ -318,29 +318,41 @@ def get_curation_status_values(
 
 def _get_literature_topic_terms(db: Session) -> set:
     """Get all term_names from the literature_topic CV."""
-    terms = (
-        db.query(CvTerm.term_name)
-        .join(Cv, CvTerm.cv_no == Cv.cv_no)
-        .filter(Cv.cv_name == LIT_TOPIC_CV_NAME)
-        .all()
-    )
-    return {t[0] for t in terms}
+    try:
+        terms = (
+            db.query(CvTerm.term_name)
+            .join(Cv, CvTerm.cv_no == Cv.cv_no)
+            .filter(Cv.cv_name == LIT_TOPIC_CV_NAME)
+            .all()
+        )
+        result = {t[0] for t in terms}
+        logger.info(f"Found {len(result)} literature topic terms")
+        return result
+    except Exception as e:
+        logger.error(f"Error getting literature topic terms: {e}")
+        return set()
 
 
-def _get_curation_todo_child_terms(db: Session) -> set:
+def _get_curation_todo_child_terms(db: Session) -> list:
     """Get all child term_names under 'Curation to-do' parent."""
     # Find the parent term "Curation to-do"
     parent_term = aliased(CvTerm)
     child_term = aliased(CvTerm)
 
-    terms = (
-        db.query(child_term.term_name)
-        .join(CvtermRelationship, child_term.cv_term_no == CvtermRelationship.child_cv_term_no)
-        .join(parent_term, parent_term.cv_term_no == CvtermRelationship.parent_cv_term_no)
-        .filter(parent_term.term_name == CURATION_TODO_PARENT)
-        .all()
-    )
-    return {t[0] for t in terms}
+    try:
+        terms = (
+            db.query(child_term.term_name)
+            .join(CvtermRelationship, child_term.cv_term_no == CvtermRelationship.child_cv_term_no)
+            .join(parent_term, parent_term.cv_term_no == CvtermRelationship.parent_cv_term_no)
+            .filter(parent_term.term_name == CURATION_TODO_PARENT)
+            .all()
+        )
+        result = [t[0] for t in terms]
+        logger.info(f"Found {len(result)} curation todo child terms")
+        return result
+    except Exception as e:
+        logger.error(f"Error getting curation todo child terms: {e}")
+        return []
 
 
 def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: set) -> list[int]:
@@ -402,8 +414,8 @@ def get_litguide_todo_list(
     Get literature references by curation status.
 
     Implements legacy LitGuideTodoList.pm + Database::LiteratureGuide.pm logic:
-    - "Not yet curated": References with no literature_topic CV term properties
-    - "High Priority": References with High Priority status property
+    - "Not yet curated": References with curation_status='Not yet curated'
+    - "High Priority": References with curation_status='High Priority'
     - "Partially Curated": References with BOTH literature_topic AND status properties
     - "Curated Todo": References with topics under "Curation to-do" parent
     - "Done:X" statuses: References with that specific Done: topic, filtering out
@@ -413,36 +425,20 @@ def get_litguide_todo_list(
     total_count = 0
 
     if status == NOT_YET_CURATED:
-        # Legacy curated='No' logic from LiteratureGuide.pm lines 366-371:
-        # The Perl code queries FROM REF_PROPERTY table with:
-        #   WHERE REF_PROPERTY.property_value NOT IN (literature_topic CV terms)
-        # This means it only considers references that HAVE at least one ref_property entry,
-        # and among those, finds the ones where NO property_value is a literature_topic term.
-
-        # Get all literature_topic terms
-        lit_topic_terms = _get_literature_topic_terms(db)
-
-        # Find references that have any property_value that's a literature_topic CV term
-        refs_with_lit_topic = (
-            db.query(RefProperty.reference_no)
-            .filter(RefProperty.property_value.in_(lit_topic_terms))
-            .distinct()
-            .subquery()
-        )
-
-        # Find references that have at least one ref_property entry
-        refs_with_any_property = (
-            db.query(RefProperty.reference_no)
-            .distinct()
-            .subquery()
-        )
-
-        # Get references that:
-        # 1. Have at least one ref_property entry (matching Perl's FROM REF_PROPERTY)
-        # 2. Do NOT have any literature_topic property values
-        base_query = db.query(Reference).filter(
-            Reference.reference_no.in_(select(refs_with_any_property.c.reference_no)),
-            ~Reference.reference_no.in_(select(refs_with_lit_topic.c.reference_no))
+        # "Not yet curated" is a curation_status property value, same as "High Priority"
+        # References with property_type='curation_status' and property_value='Not yet curated'
+        base_query = (
+            db.query(
+                Reference.reference_no,
+                Reference.pubmed,
+                Reference.citation,
+                Reference.year,
+                RefProperty.property_value,
+                RefProperty.date_last_reviewed,
+            )
+            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+            .filter(RefProperty.property_type == "curation_status")
+            .filter(RefProperty.property_value == NOT_YET_CURATED)
         )
 
         if year:
@@ -464,8 +460,10 @@ def get_litguide_todo_list(
                     citation=row.citation or "",
                     year=row.year or 0,
                     curation_status=status,
-                    property_value=status,
-                    date_last_reviewed="",
+                    property_value=row.property_value,
+                    date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                    if row.date_last_reviewed
+                    else "",
                 )
             )
 
@@ -579,65 +577,71 @@ def get_litguide_todo_list(
         # "Curated Todo" = References with topics under "Curation to-do" parent term
         # This matches the legacy LitGuideTodoList.pm behavior
 
-        lit_topic_terms = _get_literature_topic_terms(db)
-        curation_todo_terms = _get_curation_todo_child_terms(db)
+        try:
+            lit_topic_terms = _get_literature_topic_terms(db)
+            curation_todo_terms = _get_curation_todo_child_terms(db)
 
-        if not curation_todo_terms:
-            # No curation todo terms found, return empty
-            logger.warning("No child terms found under 'Curation to-do' parent")
-        else:
-            # Find references that have any of the curation todo child terms
-            base_query = (
-                db.query(
-                    Reference.reference_no,
-                    Reference.pubmed,
-                    Reference.citation,
-                    Reference.year,
-                    RefProperty.property_value,
-                    RefProperty.date_last_reviewed,
-                )
-                .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-                .filter(RefProperty.property_value.in_(curation_todo_terms))
-            )
-
-            if year:
-                base_query = base_query.filter(Reference.year == year)
-
-            # Get all matching references
-            all_results = base_query.all()
-            ref_nos = list({r.reference_no for r in all_results})
-
-            # Apply filter_done_states to exclude fully completed references
-            filtered_ref_nos = set(_filter_done_states(db, ref_nos, lit_topic_terms))
-
-            # Filter results to only include those that passed the filter
-            filtered_results = [r for r in all_results if r.reference_no in filtered_ref_nos]
-
-            # Deduplicate by reference_no (a reference may have multiple todo terms)
-            seen_refs = set()
-            unique_results = []
-            for r in filtered_results:
-                if r.reference_no not in seen_refs:
-                    seen_refs.add(r.reference_no)
-                    unique_results.append(r)
-
-            total_count = len(unique_results)
-
-            # Apply limit
-            for row in unique_results[:limit]:
-                items.append(
-                    LitGuideTodoItem(
-                        reference_no=row.reference_no,
-                        pubmed=row.pubmed,
-                        citation=row.citation or "",
-                        year=row.year or 0,
-                        curation_status=status,
-                        property_value=row.property_value,
-                        date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
-                        if row.date_last_reviewed
-                        else "",
+            if not curation_todo_terms:
+                # No curation todo terms found, return empty
+                logger.warning("No child terms found under 'Curation to-do' parent")
+            else:
+                # Find references that have any of the curation todo child terms
+                base_query = (
+                    db.query(
+                        Reference.reference_no,
+                        Reference.pubmed,
+                        Reference.citation,
+                        Reference.year,
+                        RefProperty.property_value,
+                        RefProperty.date_last_reviewed,
                     )
+                    .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+                    .filter(RefProperty.property_value.in_(curation_todo_terms))
                 )
+
+                if year:
+                    base_query = base_query.filter(Reference.year == year)
+
+                # Get all matching references
+                all_results = base_query.all()
+                ref_nos = list({r.reference_no for r in all_results})
+                logger.info(f"Found {len(ref_nos)} references with curation todo terms")
+
+                # Apply filter_done_states to exclude fully completed references
+                filtered_ref_nos = set(_filter_done_states(db, ref_nos, lit_topic_terms))
+                logger.info(f"After filter_done_states: {len(filtered_ref_nos)} references")
+
+                # Filter results to only include those that passed the filter
+                filtered_results = [r for r in all_results if r.reference_no in filtered_ref_nos]
+
+                # Deduplicate by reference_no (a reference may have multiple todo terms)
+                seen_refs = set()
+                unique_results = []
+                for r in filtered_results:
+                    if r.reference_no not in seen_refs:
+                        seen_refs.add(r.reference_no)
+                        unique_results.append(r)
+
+                total_count = len(unique_results)
+
+                # Apply limit
+                for row in unique_results[:limit]:
+                    items.append(
+                        LitGuideTodoItem(
+                            reference_no=row.reference_no,
+                            pubmed=row.pubmed,
+                            citation=row.citation or "",
+                            year=row.year or 0,
+                            curation_status=status,
+                            property_value=row.property_value,
+                            date_last_reviewed=row.date_last_reviewed.strftime("%Y-%m-%d")
+                            if row.date_last_reviewed
+                            else "",
+                        )
+                    )
+        except Exception as e:
+            logger.error(f"Error processing Curated Todo: {e}")
+            raise HTTPException(status_code=500, detail=f"Error processing Curated Todo: {str(e)}")
 
     else:
         # For other statuses (typically "Done:X" statuses):
