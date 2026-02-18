@@ -883,6 +883,8 @@ class ReferenceCurationService:
             "title": reference.title,
             "citation": reference.citation,
             "year": reference.year,
+            "volume": reference.volume,
+            "pages": reference.page,
             "status": reference.status,
             "source": reference.source,
             "curation_status": curation_status,
