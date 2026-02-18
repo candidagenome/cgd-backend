@@ -378,37 +378,54 @@ def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: 
     if not reference_nos:
         return []
 
-    # Bulk query: get all topics for all references at once
-    all_topics = (
-        db.query(RefProperty.reference_no, RefProperty.property_value)
-        .filter(RefProperty.reference_no.in_(reference_nos))
-        .filter(RefProperty.property_value.in_(lit_topic_terms))
-        .all()
-    )
+    if not lit_topic_terms:
+        return reference_nos
 
-    # Group topics by reference_no
-    ref_topics = {}
-    for ref_no, prop_value in all_topics:
-        if ref_no not in ref_topics:
-            ref_topics[ref_no] = set()
-        ref_topics[ref_no].add(prop_value)
+    try:
+        # Convert set to list for SQLAlchemy compatibility
+        lit_topic_list = list(lit_topic_terms)
 
-    filtered_refs = []
+        # Bulk query: get all topics for all references at once
+        # Process in batches if list is too large
+        all_topics = []
+        batch_size = 1000
+        for i in range(0, len(reference_nos), batch_size):
+            batch = reference_nos[i:i + batch_size]
+            batch_topics = (
+                db.query(RefProperty.reference_no, RefProperty.property_value)
+                .filter(RefProperty.reference_no.in_(batch))
+                .filter(RefProperty.property_value.in_(lit_topic_list))
+                .all()
+            )
+            all_topics.extend(batch_topics)
 
-    for ref_no in reference_nos:
-        topic_set = ref_topics.get(ref_no, set())
+        # Group topics by reference_no
+        ref_topics = {}
+        for ref_no, prop_value in all_topics:
+            if ref_no not in ref_topics:
+                ref_topics[ref_no] = set()
+            ref_topics[ref_no].add(prop_value)
 
-        # Check if all todo topics have a corresponding Done: topic
-        todo_topics = [t for t in topic_set if not t.startswith("Done:")]
-        done_topics = {t.replace("Done:", "") for t in topic_set if t.startswith("Done:")}
+        filtered_refs = []
 
-        # If there are todo topics without corresponding Done: topics, include this reference
-        has_uncompleted = any(t not in done_topics for t in todo_topics)
+        for ref_no in reference_nos:
+            topic_set = ref_topics.get(ref_no, set())
 
-        if has_uncompleted or not todo_topics:
-            filtered_refs.append(ref_no)
+            # Check if all todo topics have a corresponding Done: topic
+            todo_topics = [t for t in topic_set if not t.startswith("Done:")]
+            done_topics = {t.replace("Done:", "") for t in topic_set if t.startswith("Done:")}
 
-    return filtered_refs
+            # If there are todo topics without corresponding Done: topics, include this reference
+            has_uncompleted = any(t not in done_topics for t in todo_topics)
+
+            if has_uncompleted or not todo_topics:
+                filtered_refs.append(ref_no)
+
+        return filtered_refs
+    except Exception as e:
+        logger.error(f"Error in _filter_done_states: {e}")
+        # On error, return all references (don't filter)
+        return reference_nos
 
 
 @router.get("/litguide", response_model=LitGuideTodoResponse)
