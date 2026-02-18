@@ -411,14 +411,16 @@ def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: 
         for ref_no in reference_nos:
             topic_set = ref_topics.get(ref_no, set())
 
-            # Check if all todo topics have a corresponding Done: topic
-            todo_topics = [t for t in topic_set if not t.startswith("Done:")]
-            done_topics = {t.replace("Done:", "") for t in topic_set if t.startswith("Done:")}
+            # Perl logic: Extract base topic names from Done:X topics
+            # Then check if any of those base topics also exist as non-Done topics
+            # If so, $pass = 1 and EXCLUDE the reference
+            done_base_topics = {t.replace("Done:", "") for t in topic_set if t.startswith("Done:")}
 
-            # If there are todo topics without corresponding Done: topics, include this reference
-            has_uncompleted = any(t not in done_topics for t in todo_topics)
+            # Check if any Done:X has a matching X topic
+            pass_flag = any(base_topic in topic_set for base_topic in done_base_topics)
 
-            if has_uncompleted or not todo_topics:
+            # Include reference only if pass_flag is False (no Done:X has matching X)
+            if not pass_flag:
                 filtered_refs.append(ref_no)
 
         return filtered_refs
