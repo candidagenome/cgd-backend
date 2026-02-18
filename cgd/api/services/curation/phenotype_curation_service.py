@@ -50,7 +50,7 @@ class PhenotypeCurationService:
 
     def get_feature_by_name(self, name: str) -> Optional[Feature]:
         """Look up feature by name or gene_name."""
-        return (
+        feature = (
             self.db.query(Feature)
             .filter(
                 or_(
@@ -60,6 +60,14 @@ class PhenotypeCurationService:
             )
             .first()
         )
+        if feature:
+            logger.info(
+                f"Found feature: name={name} -> feature_no={feature.feature_no}, "
+                f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
+            )
+        else:
+            logger.warning(f"Feature not found: name={name}")
+        return feature
 
     def validate_reference(
         self, reference_no: int, feature_no: Optional[int] = None
@@ -251,11 +259,15 @@ class PhenotypeCurationService:
 
         Returns structured data including phenotype details, experiment, and references.
         """
+        logger.info(f"Querying phenotype annotations for feature_no={feature_no}")
+
         annotations = (
             self.db.query(PhenoAnnotation)
             .filter(PhenoAnnotation.feature_no == feature_no)
             .all()
         )
+
+        logger.info(f"Found {len(annotations)} phenotype annotations for feature_no={feature_no}")
 
         results = []
         for ann in annotations:

@@ -9,6 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from cgd.auth.deps import CurrentUser
@@ -172,6 +173,88 @@ def get_property_types(
     property_types = service.get_property_types()
 
     return PropertyTypesResponse(property_types=property_types)
+
+
+@router.get("/debug/count/{feature_name}")
+def debug_phenotype_count(
+    feature_name: str,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Check raw phenotype annotation counts for a feature.
+
+    Runs direct queries to diagnose why annotations might not be showing.
+    """
+    from sqlalchemy import text
+    from cgd.models.models import Feature, PhenoAnnotation, Phenotype
+
+    results = {}
+
+    # Find feature
+    feature = (
+        db.query(Feature)
+        .filter(
+            or_(
+                func.upper(Feature.feature_name) == feature_name.upper(),
+                func.upper(Feature.gene_name) == feature_name.upper(),
+            )
+        )
+        .first()
+    )
+
+    if not feature:
+        return {"error": f"Feature '{feature_name}' not found"}
+
+    results["feature"] = {
+        "feature_no": feature.feature_no,
+        "feature_name": feature.feature_name,
+        "gene_name": feature.gene_name,
+        "organism_no": feature.organism_no,
+    }
+
+    # Count pheno_annotations via ORM
+    orm_count = (
+        db.query(PhenoAnnotation)
+        .filter(PhenoAnnotation.feature_no == feature.feature_no)
+        .count()
+    )
+    results["orm_pheno_annotation_count"] = orm_count
+
+    # Get some sample annotations if any
+    sample_annotations = (
+        db.query(PhenoAnnotation)
+        .filter(PhenoAnnotation.feature_no == feature.feature_no)
+        .limit(5)
+        .all()
+    )
+    results["sample_annotations"] = [
+        {
+            "pheno_annotation_no": a.pheno_annotation_no,
+            "phenotype_no": a.phenotype_no,
+            "experiment_no": a.experiment_no,
+        }
+        for a in sample_annotations
+    ]
+
+    # Try raw SQL query to bypass ORM
+    try:
+        raw_sql = text("""
+            SELECT COUNT(*) FROM MULTI.pheno_annotation WHERE feature_no = :fno
+        """)
+        raw_result = db.execute(raw_sql, {"fno": feature.feature_no}).scalar()
+        results["raw_sql_count"] = raw_result
+    except Exception as e:
+        results["raw_sql_error"] = str(e)
+
+    # Check total phenotypes in database
+    total_phenotypes = db.query(Phenotype).count()
+    results["total_phenotypes_in_db"] = total_phenotypes
+
+    total_annotations = db.query(PhenoAnnotation).count()
+    results["total_pheno_annotations_in_db"] = total_annotations
+
+    return results
 
 
 # Parameterized routes below
