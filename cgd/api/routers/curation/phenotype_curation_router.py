@@ -264,6 +264,7 @@ def debug_phenotype_count(
 def get_phenotype_annotations(
     feature_name: str,
     current_user: CurrentUser,
+    organism: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -271,11 +272,14 @@ def get_phenotype_annotations(
 
     Returns annotations with phenotype details, experiment info, properties,
     and references.
+
+    If multiple features match the name, prefers features with phenotype annotations.
+    Use the 'organism' query parameter to filter by organism abbreviation.
     """
     try:
         service = PhenotypeCurationService(db)
 
-        feature = service.get_feature_by_name(feature_name)
+        feature = service.get_feature_by_name(feature_name, organism)
         if not feature:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

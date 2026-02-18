@@ -48,25 +48,64 @@ class PhenotypeCurationService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_feature_by_name(self, name: str) -> Optional[Feature]:
-        """Look up feature by name or gene_name."""
-        feature = (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == name.upper(),
-                    func.upper(Feature.gene_name) == name.upper(),
-                )
+    def get_feature_by_name(
+        self, name: str, organism_abbrev: Optional[str] = None
+    ) -> Optional[Feature]:
+        """
+        Look up feature by name or gene_name.
+
+        If organism_abbrev is provided, filter by organism.
+        If multiple features match, prefer ones with phenotype annotations.
+        """
+        from cgd.models.models import Organism
+
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
             )
-            .first()
         )
-        if feature:
-            logger.info(
-                f"Found feature: name={name} -> feature_no={feature.feature_no}, "
-                f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
+
+        if organism_abbrev:
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                func.upper(Organism.organism_abbrev) == organism_abbrev.upper()
             )
+
+        features = query.all()
+
+        if not features:
+            logger.warning(f"Feature not found: name={name}, organism={organism_abbrev}")
+            return None
+
+        if len(features) == 1:
+            feature = features[0]
         else:
-            logger.warning(f"Feature not found: name={name}")
+            # Multiple matches - prefer feature with phenotype annotations
+            for f in features:
+                ann_count = (
+                    self.db.query(PhenoAnnotation)
+                    .filter(PhenoAnnotation.feature_no == f.feature_no)
+                    .count()
+                )
+                if ann_count > 0:
+                    feature = f
+                    logger.info(
+                        f"Multiple features for {name}, selected {f.feature_name} "
+                        f"with {ann_count} annotations"
+                    )
+                    break
+            else:
+                # No feature has annotations, return first match
+                feature = features[0]
+                logger.info(
+                    f"Multiple features for {name}, none have annotations, "
+                    f"using first: {feature.feature_name}"
+                )
+
+        logger.info(
+            f"Found feature: name={name} -> feature_no={feature.feature_no}, "
+            f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
+        )
         return feature
 
     def validate_reference(
