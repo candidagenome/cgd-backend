@@ -353,17 +353,25 @@ def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: 
     if not reference_nos:
         return []
 
+    # Bulk query: get all topics for all references at once
+    all_topics = (
+        db.query(RefProperty.reference_no, RefProperty.property_value)
+        .filter(RefProperty.reference_no.in_(reference_nos))
+        .filter(RefProperty.property_value.in_(lit_topic_terms))
+        .all()
+    )
+
+    # Group topics by reference_no
+    ref_topics = {}
+    for ref_no, prop_value in all_topics:
+        if ref_no not in ref_topics:
+            ref_topics[ref_no] = set()
+        ref_topics[ref_no].add(prop_value)
+
     filtered_refs = []
 
     for ref_no in reference_nos:
-        # Get all property_values for this reference that are literature_topic CV terms
-        topics = (
-            db.query(RefProperty.property_value)
-            .filter(RefProperty.reference_no == ref_no)
-            .filter(RefProperty.property_value.in_(lit_topic_terms))
-            .all()
-        )
-        topic_set = {t[0] for t in topics}
+        topic_set = ref_topics.get(ref_no, set())
 
         # Check if all todo topics have a corresponding Done: topic
         todo_topics = [t for t in topic_set if not t.startswith("Done:")]
@@ -557,39 +565,25 @@ def get_litguide_todo_list(
             )
 
     elif status == CURATED_TODO:
-        # Legacy P.term_name = 'Curation to-do' logic:
-        # References with topics that are children of "Curation to-do" parent term
-        # This includes "Not yet curated" and "High Priority"
-
-        curation_todo_terms = _get_curation_todo_child_terms(db)
+        # "Curated Todo" = ALL references that have ANY literature_topic CV term property
+        # This is the total curation backlog - all papers with any topic assignment
         lit_topic_terms = _get_literature_topic_terms(db)
 
-        if not curation_todo_terms:
-            # Fallback: use known status terms
-            curation_todo_terms = {NOT_YET_CURATED, HIGH_PRIORITY}
-
-        # Get references with these topics
+        # Get ALL references with any literature_topic property
         base_query = (
             db.query(Reference)
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-            .filter(RefProperty.property_value.in_(curation_todo_terms))
+            .filter(RefProperty.property_value.in_(lit_topic_terms))
             .distinct()
         )
 
         if year:
             base_query = base_query.filter(Reference.year == year)
 
-        # Apply filter_done_states
-        all_refs = base_query.all()
-        ref_nos = [r.reference_no for r in all_refs]
-        filtered_ref_nos = _filter_done_states(db, ref_nos, lit_topic_terms)
-
-        total_count = len(filtered_ref_nos)
+        total_count = base_query.count()
 
         results = (
-            db.query(Reference)
-            .filter(Reference.reference_no.in_(filtered_ref_nos))
-            .order_by(Reference.year.desc(), Reference.pubmed)
+            base_query.order_by(Reference.year.desc(), Reference.pubmed)
             .limit(limit)
             .all()
         )
