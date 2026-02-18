@@ -21,3 +21,6 @@ elasticsearch>=8.0.0
 # Statistics
 scipy>=1.11
 pytest>=7.0
+
+# Bioinformatics
+biopython>=1.83

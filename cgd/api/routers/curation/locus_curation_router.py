@@ -154,6 +154,7 @@ class AddItemResponse(BaseModel):
 def search_features(
     current_user: CurrentUser,
     query: str = Query(..., min_length=1, description="Search query"),
+    organism_abbrev: Optional[str] = Query(None, description="Filter by organism abbreviation"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Results per page"),
     db: Session = Depends(get_db),
@@ -162,10 +163,11 @@ def search_features(
     Search features by name.
 
     Searches both feature_name and gene_name.
+    Optionally filter by organism_abbrev.
     """
     service = LocusCurationService(db)
 
-    features, total = service.search_features(query, page, page_size)
+    features, total = service.search_features(query, page, page_size, organism_abbrev)
 
     return FeatureSearchResponse(
         features=[FeatureSearchItem(**f) for f in features],

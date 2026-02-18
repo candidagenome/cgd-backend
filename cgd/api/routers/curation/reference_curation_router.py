@@ -151,6 +151,7 @@ class ReferenceSearchRequest(BaseModel):
     volume: Optional[str] = Field(None, description="Journal volume")
     page: Optional[str] = Field(None, description="Page number/range")
     author: Optional[str] = Field(None, description="Author name (partial match)")
+    author2: Optional[str] = Field(None, description="Second author name (partial match)")
     keyword: Optional[str] = Field(None, description="Keyword in title/abstract")
     min_year: Optional[int] = Field(None, description="Minimum publication year")
     max_year: Optional[int] = Field(None, description="Maximum publication year")
@@ -220,9 +221,12 @@ class ReferenceCurationDetailsResponse(BaseModel):
 
     reference_no: int
     pubmed: Optional[int]
+    dbxref_id: Optional[str]
     title: Optional[str]
     citation: str
     year: int
+    volume: Optional[str]
+    pages: Optional[str]
     status: str
     source: str
     curation_status: Optional[str]
@@ -358,6 +362,7 @@ def search_references(
         request.dbxref_id,
         request.volume and request.page,
         request.author,
+        request.author2,
         request.keyword,
     ]):
         raise HTTPException(
@@ -372,6 +377,7 @@ def search_references(
         volume=request.volume,
         page=request.page,
         author=request.author,
+        author2=request.author2,
         keyword=request.keyword,
         min_year=request.min_year,
         max_year=request.max_year,
