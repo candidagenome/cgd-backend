@@ -413,11 +413,11 @@ def get_litguide_todo_list(
     total_count = 0
 
     if status == NOT_YET_CURATED:
-        # Legacy curated='No' logic:
-        # Find references that have NO literature_topic CV term properties
-        # (they may have status properties like "Not yet curated" or "High Priority")
-        # Note: Legacy system checks property_value against CV terms without requiring
-        # property_type to match, so we do the same here.
+        # Legacy curated='No' logic from LiteratureGuide.pm lines 366-371:
+        # The Perl code queries FROM REF_PROPERTY table with:
+        #   WHERE REF_PROPERTY.property_value NOT IN (literature_topic CV terms)
+        # This means it only considers references that HAVE at least one ref_property entry,
+        # and among those, finds the ones where NO property_value is a literature_topic term.
 
         # Get all literature_topic terms
         lit_topic_terms = _get_literature_topic_terms(db)
@@ -430,8 +430,18 @@ def get_litguide_todo_list(
             .subquery()
         )
 
-        # Get references WITHOUT any literature_topic properties
+        # Find references that have at least one ref_property entry
+        refs_with_any_property = (
+            db.query(RefProperty.reference_no)
+            .distinct()
+            .subquery()
+        )
+
+        # Get references that:
+        # 1. Have at least one ref_property entry (matching Perl's FROM REF_PROPERTY)
+        # 2. Do NOT have any literature_topic property values
         base_query = db.query(Reference).filter(
+            Reference.reference_no.in_(select(refs_with_any_property.c.reference_no)),
             ~Reference.reference_no.in_(select(refs_with_lit_topic.c.reference_no))
         )
 
