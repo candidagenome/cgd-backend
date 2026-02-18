@@ -283,82 +283,52 @@ def get_phenotype_annotations(
     try:
         service = PhenotypeCurationService(db)
 
-        if organism:
-            # Single organism - get one feature
-            feature = service.get_feature_by_name(feature_name, organism)
-            if not feature:
+        # Always get ALL matching features (there can be multiple features
+        # with the same gene_name even within a single organism)
+        features = service.get_features_by_name(feature_name, organism)
+        if not features:
+            if organism:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Feature '{feature_name}' not found in organism '{organism}'",
                 )
-
-            annotations = service.get_annotations_for_feature(feature.feature_no)
-
-            return FeaturePhenotypeResponse(
-                feature_no=feature.feature_no,
-                feature_name=feature.feature_name,
-                gene_name=feature.gene_name,
-                features_searched=1,
-                annotations=[
-                    PhenotypeAnnotationOut(
-                        pheno_annotation_no=ann["pheno_annotation_no"],
-                        feature_no=ann["feature_no"],
-                        feature_name=ann.get("feature_name"),
-                        gene_name=ann.get("gene_name"),
-                        phenotype_no=ann["phenotype_no"],
-                        experiment_type=ann["experiment_type"],
-                        mutant_type=ann["mutant_type"],
-                        observable=ann["observable"],
-                        qualifier=ann["qualifier"],
-                        experiment=ExperimentOut(**ann["experiment"]) if ann["experiment"] else None,
-                        properties=[PropertyOut(**p) for p in ann["properties"]],
-                        references=[ReferenceOut(**r) for r in ann["references"]],
-                        date_created=ann["date_created"],
-                        created_by=ann["created_by"],
-                    )
-                    for ann in annotations
-                ],
-            )
-        else:
-            # All species - get ALL matching features and combine their annotations
-            features = service.get_features_by_name(feature_name)
-            if not features:
+            else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Feature '{feature_name}' not found",
                 )
 
-            feature_nos = [f.feature_no for f in features]
-            annotations = service.get_annotations_for_features(feature_nos)
+        feature_nos = [f.feature_no for f in features]
+        annotations = service.get_annotations_for_features(feature_nos)
 
-            # Use first feature's info for display, but note we searched multiple
-            primary_feature = features[0]
+        # Use first feature's info for display
+        primary_feature = features[0]
 
-            return FeaturePhenotypeResponse(
-                feature_no=None,  # Multiple features, so no single feature_no
-                feature_name=feature_name,  # Use search term
-                gene_name=primary_feature.gene_name,
-                features_searched=len(features),
-                annotations=[
-                    PhenotypeAnnotationOut(
-                        pheno_annotation_no=ann["pheno_annotation_no"],
-                        feature_no=ann["feature_no"],
-                        feature_name=ann.get("feature_name"),
-                        gene_name=ann.get("gene_name"),
-                        phenotype_no=ann["phenotype_no"],
-                        experiment_type=ann["experiment_type"],
-                        mutant_type=ann["mutant_type"],
-                        observable=ann["observable"],
-                        qualifier=ann["qualifier"],
-                        experiment=ExperimentOut(**ann["experiment"]) if ann["experiment"] else None,
-                        properties=[PropertyOut(**p) for p in ann["properties"]],
-                        references=[ReferenceOut(**r) for r in ann["references"]],
-                        date_created=ann["date_created"],
-                        created_by=ann["created_by"],
-                    )
-                    for ann in annotations
-                ],
-            )
+        return FeaturePhenotypeResponse(
+            feature_no=primary_feature.feature_no if len(features) == 1 else None,
+            feature_name=feature_name,  # Use search term
+            gene_name=primary_feature.gene_name,
+            features_searched=len(features),
+            annotations=[
+                PhenotypeAnnotationOut(
+                    pheno_annotation_no=ann["pheno_annotation_no"],
+                    feature_no=ann["feature_no"],
+                    feature_name=ann.get("feature_name"),
+                    gene_name=ann.get("gene_name"),
+                    phenotype_no=ann["phenotype_no"],
+                    experiment_type=ann["experiment_type"],
+                    mutant_type=ann["mutant_type"],
+                    observable=ann["observable"],
+                    qualifier=ann["qualifier"],
+                    experiment=ExperimentOut(**ann["experiment"]) if ann["experiment"] else None,
+                    properties=[PropertyOut(**p) for p in ann["properties"]],
+                    references=[ReferenceOut(**r) for r in ann["references"]],
+                    date_created=ann["date_created"],
+                    created_by=ann["created_by"],
+                )
+                for ann in annotations
+            ],
+        )
     except HTTPException:
         raise
     except Exception as e:
