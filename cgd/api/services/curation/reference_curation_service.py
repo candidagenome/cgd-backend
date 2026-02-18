@@ -880,6 +880,7 @@ class ReferenceCurationService:
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
+            "dbxref_id": reference.dbxref_id,
             "title": reference.title,
             "citation": reference.citation,
             "year": reference.year,
@@ -907,6 +908,7 @@ class ReferenceCurationService:
         volume: Optional[str] = None,
         page: Optional[str] = None,
         author: Optional[str] = None,
+        author2: Optional[str] = None,
         keyword: Optional[str] = None,
         min_year: Optional[int] = None,
         max_year: Optional[int] = None,
@@ -922,6 +924,7 @@ class ReferenceCurationService:
             volume: Journal volume
             page: Page number/range
             author: Author name (partial match)
+            author2: Second author name (partial match)
             keyword: Keyword in title or abstract
             min_year: Minimum publication year
             max_year: Maximum publication year
@@ -961,17 +964,29 @@ class ReferenceCurationService:
                 Reference.page.like(f"{page}%"),
             )
 
-        if author:
+        if author or author2:
             # Join with author tables for author search
-            author_pattern = f"%{author}%"
-            author_refs = (
-                self.db.query(AuthorEditor.reference_no)
-                .join(Author, AuthorEditor.author_no == Author.author_no)
-                .filter(Author.author_name.ilike(author_pattern))
-                .distinct()
-                .subquery()
-            )
-            query = query.filter(Reference.reference_no.in_(author_refs))
+            if author:
+                author_pattern = f"%{author}%"
+                author_refs = (
+                    self.db.query(AuthorEditor.reference_no)
+                    .join(Author, AuthorEditor.author_no == Author.author_no)
+                    .filter(Author.author_name.ilike(author_pattern))
+                    .distinct()
+                    .subquery()
+                )
+                query = query.filter(Reference.reference_no.in_(author_refs))
+
+            if author2:
+                author2_pattern = f"%{author2}%"
+                author2_refs = (
+                    self.db.query(AuthorEditor.reference_no)
+                    .join(Author, AuthorEditor.author_no == Author.author_no)
+                    .filter(Author.author_name.ilike(author2_pattern))
+                    .distinct()
+                    .subquery()
+                )
+                query = query.filter(Reference.reference_no.in_(author2_refs))
 
         if keyword:
             # Search in title and abstract
