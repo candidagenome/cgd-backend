@@ -56,24 +56,26 @@ async def login(
         refresh_token, refresh_expires = auth_service.create_refresh_token(user)
 
         # Set refresh token as HttpOnly cookie
+        # samesite="none" is required for cross-origin requests (frontend.dev -> backend.dev)
         response.set_cookie(
             key="refresh_token",
             value=refresh_token,
             httponly=True,
-            secure=True,  # Only send over HTTPS
-            samesite="lax",
+            secure=True,  # Required when samesite="none"
+            samesite="none",
             max_age=int(timedelta(days=7).total_seconds()),
             path="/api/auth",  # Only sent to auth endpoints
             domain=settings.cookie_domain,  # For cross-subdomain support
         )
 
         # Also set access token as cookie for browser convenience
+        # samesite="none" is required for cross-origin POST requests to work
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=True,
-            samesite="lax",
+            secure=True,  # Required when samesite="none"
+            samesite="none",
             max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
             domain=settings.cookie_domain,  # For cross-subdomain support
@@ -169,12 +171,13 @@ async def refresh_token(
         )
 
         # Set new access token cookie
+        # samesite="none" required for cross-origin POST requests
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=True,
-            samesite="lax",
+            secure=True,  # Required when samesite="none"
+            samesite="none",
             max_age=int(timedelta(minutes=settings.jwt_access_token_expire_minutes).total_seconds()),
             path="/",
             domain=settings.cookie_domain,  # For cross-subdomain support
