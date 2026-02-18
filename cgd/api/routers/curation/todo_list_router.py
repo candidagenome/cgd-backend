@@ -30,6 +30,7 @@ from cgd.models.models import (
     Go,
     GoAnnotation,
     Organism,
+    RefLink,
     RefProperty,
     Reference,
 )
@@ -565,14 +566,32 @@ def get_litguide_todo_list(
             )
 
     elif status == CURATED_TODO:
-        # "Curated Todo" = ALL references that have ANY ref_property entry
+        # "Curated Todo" = ALL references that have ANY ref_property OR ref_link entry
         # This is the total curation backlog - all papers that have been touched by curation
 
-        # Get ALL references with any ref_property entry
+        # Get references with ref_property entries
+        refs_with_property = (
+            db.query(RefProperty.reference_no)
+            .distinct()
+            .subquery()
+        )
+
+        # Get references with ref_link entries
+        refs_with_link = (
+            db.query(RefLink.reference_no)
+            .distinct()
+            .subquery()
+        )
+
+        # Combine: references that have either ref_property OR ref_link
         base_query = (
             db.query(Reference)
-            .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-            .distinct()
+            .filter(
+                or_(
+                    Reference.reference_no.in_(select(refs_with_property.c.reference_no)),
+                    Reference.reference_no.in_(select(refs_with_link.c.reference_no)),
+                )
+            )
         )
 
         if year:
