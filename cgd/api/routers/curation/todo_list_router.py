@@ -369,23 +369,18 @@ def _get_curation_todo_child_terms(db: Session) -> list:
 
 def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: set) -> list[int]:
     """
-    Filter out references where all todo topics have corresponding Done: topics.
+    Filter out references where any Done:X topic has a matching X topic.
 
-    This implements the legacy filter_done_states logic:
-    - For each reference, get all its topics (property_values that are lit_topic CV terms)
-    - If a reference has "Done:X" for every "X" topic, exclude it
+    This implements the legacy filter_done_states logic from LiteratureGuide.pm:
+    - For each reference, get ALL its property_values (not just lit_topic terms)
+    - If any Done:X has a matching X in the property_values, exclude the reference
     """
     if not reference_nos:
         return []
 
-    if not lit_topic_terms:
-        return reference_nos
-
     try:
-        # Convert set to list for SQLAlchemy compatibility
-        lit_topic_list = list(lit_topic_terms)
-
-        # Bulk query: get all topics for all references at once
+        # Bulk query: get ALL property_values for all references
+        # (Perl's topic_info gets all property_values, not filtered by lit_topic_terms)
         # Process in batches if list is too large
         all_topics = []
         batch_size = 1000
@@ -394,7 +389,6 @@ def _filter_done_states(db: Session, reference_nos: list[int], lit_topic_terms: 
             batch_topics = (
                 db.query(RefProperty.reference_no, RefProperty.property_value)
                 .filter(RefProperty.reference_no.in_(batch))
-                .filter(RefProperty.property_value.in_(lit_topic_list))
                 .all()
             )
             all_topics.extend(batch_topics)
