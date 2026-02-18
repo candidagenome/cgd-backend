@@ -335,20 +335,32 @@ def _get_literature_topic_terms(db: Session) -> set:
 
 def _get_curation_todo_child_terms(db: Session) -> list:
     """Get all child term_names under 'Curation to-do' parent."""
-    # Find the parent term "Curation to-do"
-    parent_term = aliased(CvTerm)
-    child_term = aliased(CvTerm)
-
     try:
+        # First find the parent term "Curation to-do"
+        parent = (
+            db.query(CvTerm.cv_term_no)
+            .filter(CvTerm.term_name == CURATION_TODO_PARENT)
+            .first()
+        )
+
+        if not parent:
+            logger.warning(f"Parent term '{CURATION_TODO_PARENT}' not found")
+            return []
+
+        parent_cv_term_no = parent[0]
+
+        # Find all child terms
         terms = (
-            db.query(child_term.term_name)
-            .join(CvtermRelationship, child_term.cv_term_no == CvtermRelationship.child_cv_term_no)
-            .join(parent_term, parent_term.cv_term_no == CvtermRelationship.parent_cv_term_no)
-            .filter(parent_term.term_name == CURATION_TODO_PARENT)
+            db.query(CvTerm.term_name)
+            .join(
+                CvtermRelationship,
+                CvTerm.cv_term_no == CvtermRelationship.child_cv_term_no
+            )
+            .filter(CvtermRelationship.parent_cv_term_no == parent_cv_term_no)
             .all()
         )
         result = [t[0] for t in terms]
-        logger.info(f"Found {len(result)} curation todo child terms")
+        logger.info(f"Found {len(result)} curation todo child terms under parent {parent_cv_term_no}")
         return result
     except Exception as e:
         logger.error(f"Error getting curation todo child terms: {e}")
