@@ -55,7 +55,42 @@ class PhenotypeCurationService:
         Look up feature by name or gene_name.
 
         If organism_abbrev is provided, filter by organism.
-        If multiple features match, prefer ones with phenotype annotations.
+        Returns the first matching feature (use get_features_by_name for all matches).
+        """
+        from cgd.models.models import Organism
+
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
+            )
+        )
+
+        if organism_abbrev:
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no).filter(
+                func.upper(Organism.organism_abbrev) == organism_abbrev.upper()
+            )
+
+        feature = query.first()
+
+        if feature:
+            logger.info(
+                f"Found feature: name={name} -> feature_no={feature.feature_no}, "
+                f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
+            )
+        else:
+            logger.warning(f"Feature not found: name={name}, organism={organism_abbrev}")
+
+        return feature
+
+    def get_features_by_name(
+        self, name: str, organism_abbrev: Optional[str] = None
+    ) -> list[Feature]:
+        """
+        Look up ALL features by name or gene_name.
+
+        If organism_abbrev is provided, filter by organism.
+        Returns all matching features.
         """
         from cgd.models.models import Organism
 
@@ -72,41 +107,122 @@ class PhenotypeCurationService:
             )
 
         features = query.all()
+        logger.info(f"Found {len(features)} features for name={name}, organism={organism_abbrev}")
+        return features
 
-        if not features:
-            logger.warning(f"Feature not found: name={name}, organism={organism_abbrev}")
-            return None
+    def get_annotations_for_features(self, feature_nos: list[int]) -> list[dict]:
+        """
+        Get all phenotype annotations for multiple features.
 
-        if len(features) == 1:
-            feature = features[0]
-        else:
-            # Multiple matches - prefer feature with phenotype annotations
-            for f in features:
-                ann_count = (
-                    self.db.query(PhenoAnnotation)
-                    .filter(PhenoAnnotation.feature_no == f.feature_no)
-                    .count()
-                )
-                if ann_count > 0:
-                    feature = f
-                    logger.info(
-                        f"Multiple features for {name}, selected {f.feature_name} "
-                        f"with {ann_count} annotations"
-                    )
-                    break
-            else:
-                # No feature has annotations, return first match
-                feature = features[0]
-                logger.info(
-                    f"Multiple features for {name}, none have annotations, "
-                    f"using first: {feature.feature_name}"
-                )
+        Returns structured data including phenotype details, experiment, and references.
+        """
+        if not feature_nos:
+            return []
 
-        logger.info(
-            f"Found feature: name={name} -> feature_no={feature.feature_no}, "
-            f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
+        logger.info(f"Querying phenotype annotations for feature_nos={feature_nos}")
+
+        annotations = (
+            self.db.query(PhenoAnnotation)
+            .filter(PhenoAnnotation.feature_no.in_(feature_nos))
+            .all()
         )
-        return feature
+
+        logger.info(f"Found {len(annotations)} phenotype annotations for {len(feature_nos)} features")
+
+        results = []
+        for ann in annotations:
+            phenotype = (
+                self.db.query(Phenotype)
+                .filter(Phenotype.phenotype_no == ann.phenotype_no)
+                .first()
+            )
+
+            # Get the feature for this annotation
+            feature = (
+                self.db.query(Feature)
+                .filter(Feature.feature_no == ann.feature_no)
+                .first()
+            )
+
+            # Get experiment and properties
+            experiment_data = None
+            properties = []
+            if ann.experiment_no:
+                experiment = (
+                    self.db.query(Experiment)
+                    .filter(Experiment.experiment_no == ann.experiment_no)
+                    .first()
+                )
+                if experiment:
+                    experiment_data = {
+                        "experiment_no": experiment.experiment_no,
+                        "experiment_comment": experiment.experiment_comment,
+                    }
+
+                    # Get properties
+                    prop_links = (
+                        self.db.query(ExptExptprop)
+                        .filter(ExptExptprop.experiment_no == ann.experiment_no)
+                        .all()
+                    )
+                    for link in prop_links:
+                        prop = (
+                            self.db.query(ExptProperty)
+                            .filter(
+                                ExptProperty.expt_property_no == link.expt_property_no
+                            )
+                            .first()
+                        )
+                        if prop:
+                            properties.append({
+                                "property_type": prop.property_type,
+                                "property_value": prop.property_value,
+                                "property_description": prop.property_description,
+                            })
+
+            # Get references
+            references = []
+            ref_links = (
+                self.db.query(RefLink)
+                .filter(
+                    RefLink.tab_name == "PHENO_ANNOTATION",
+                    RefLink.col_name == "PHENO_ANNOTATION_NO",
+                    RefLink.primary_key == ann.pheno_annotation_no,
+                )
+                .all()
+            )
+            for ref_link in ref_links:
+                ref = (
+                    self.db.query(Reference)
+                    .filter(Reference.reference_no == ref_link.reference_no)
+                    .first()
+                )
+                if ref:
+                    references.append({
+                        "reference_no": ref.reference_no,
+                        "pubmed": ref.pubmed,
+                        "citation": ref.citation,
+                    })
+
+            results.append({
+                "pheno_annotation_no": ann.pheno_annotation_no,
+                "feature_no": ann.feature_no,
+                "feature_name": feature.feature_name if feature else None,
+                "gene_name": feature.gene_name if feature else None,
+                "phenotype_no": ann.phenotype_no,
+                "experiment_type": phenotype.experiment_type if phenotype else None,
+                "mutant_type": phenotype.mutant_type if phenotype else None,
+                "observable": phenotype.observable if phenotype else None,
+                "qualifier": phenotype.qualifier if phenotype else None,
+                "experiment": experiment_data,
+                "properties": properties,
+                "references": references,
+                "date_created": ann.date_created.isoformat()
+                if ann.date_created else None,
+                "created_by": ann.created_by,
+            })
+
+        return results
 
     def validate_reference(
         self, reference_no: int, feature_no: Optional[int] = None
