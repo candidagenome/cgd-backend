@@ -565,15 +565,13 @@ def get_litguide_todo_list(
             )
 
     elif status == CURATED_TODO:
-        # "Curated Todo" = ALL references that have ANY literature_topic CV term property
-        # This is the total curation backlog - all papers with any topic assignment
-        lit_topic_terms = _get_literature_topic_terms(db)
+        # "Curated Todo" = ALL references that have ANY ref_property entry
+        # This is the total curation backlog - all papers that have been touched by curation
 
-        # Get ALL references with any literature_topic property
+        # Get ALL references with any ref_property entry
         base_query = (
             db.query(Reference)
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-            .filter(RefProperty.property_value.in_(lit_topic_terms))
             .distinct()
         )
 
