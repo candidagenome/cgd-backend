@@ -99,6 +99,24 @@ class GoCurationService:
         """Look up GO term by GO ID."""
         return self.db.query(Go).filter(Go.goid == goid).first()
 
+    def get_reference_no_by_pubmed(self, pubmed: int) -> Optional[int]:
+        """Look up reference_no by PubMed ID."""
+        ref = (
+            self.db.query(Reference)
+            .filter(Reference.pubmed == pubmed)
+            .first()
+        )
+        return ref.reference_no if ref else None
+
+    def get_reference_no_by_dbxref_id(self, dbxref_id: str) -> Optional[int]:
+        """Look up reference_no by dbxref_id (CGDID like CAL0080735)."""
+        ref = (
+            self.db.query(Reference)
+            .filter(Reference.dbxref_id == dbxref_id)
+            .first()
+        )
+        return ref.reference_no if ref else None
+
     def validate_goid(self, goid: int, expected_aspect: Optional[str] = None) -> Go:
         """
         Validate GO ID exists and optionally matches expected aspect.
