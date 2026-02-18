@@ -16,6 +16,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
+    Dbxref,
     Feature,
     Go,
     GoAnnotation,
@@ -242,7 +243,7 @@ class GoCurationService:
         for ann in annotations:
             go = self.db.query(Go).filter(Go.go_no == ann.go_no).first()
 
-            # Get references and qualifiers
+            # Get references, qualifiers, and evidence support
             refs = []
             for go_ref in ann.go_ref:
                 ref = self.db.query(Reference).filter(
@@ -250,6 +251,25 @@ class GoCurationService:
                 ).first()
 
                 qualifiers = [q.qualifier for q in go_ref.go_qualifier]
+
+                # Get evidence support (with/from) from goref_dbxref
+                evidence_support = []
+                goref_dbxrefs = (
+                    self.db.query(GorefDbxref)
+                    .filter(GorefDbxref.go_ref_no == go_ref.go_ref_no)
+                    .all()
+                )
+                for gd in goref_dbxrefs:
+                    dbxref = self.db.query(Dbxref).filter(
+                        Dbxref.dbxref_no == gd.dbxref_no
+                    ).first()
+                    if dbxref:
+                        evidence_support.append({
+                            "support_type": gd.support_type,  # "With" or "From"
+                            "source": dbxref.source,
+                            "dbxref_type": dbxref.dbxref_type,
+                            "dbxref_id": dbxref.dbxref_id,
+                        })
 
                 refs.append({
                     "go_ref_no": go_ref.go_ref_no,
@@ -259,6 +279,7 @@ class GoCurationService:
                     "has_qualifier": go_ref.has_qualifier,
                     "has_supporting_evidence": go_ref.has_supporting_evidence,
                     "qualifiers": qualifiers,
+                    "evidence_support": evidence_support,
                 })
 
             results.append({

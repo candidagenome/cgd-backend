@@ -28,6 +28,15 @@ router = APIRouter(prefix="/api/curation/go", tags=["curation-go"])
 # ---------------------------
 
 
+class EvidenceSupportOut(BaseModel):
+    """Evidence support (with/from) in GO reference response."""
+
+    support_type: str  # "With" or "From"
+    source: str  # e.g., "SGD", "CGD", "GO Consortium"
+    dbxref_type: str  # e.g., "GOID", "ORF"
+    dbxref_id: str  # The actual ID
+
+
 class GoReferenceOut(BaseModel):
     """GO reference in annotation response."""
 
@@ -38,6 +47,7 @@ class GoReferenceOut(BaseModel):
     has_qualifier: str
     has_supporting_evidence: str
     qualifiers: list[str]
+    evidence_support: list[EvidenceSupportOut] = []
 
 
 class GoAnnotationOut(BaseModel):
