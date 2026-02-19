@@ -28,6 +28,15 @@ router = APIRouter(prefix="/api/curation/go", tags=["curation-go"])
 # ---------------------------
 
 
+class EvidenceSupportOut(BaseModel):
+    """Evidence support (with/from) in GO reference response."""
+
+    support_type: str  # "With" or "From"
+    source: str  # e.g., "SGD", "CGD", "GO Consortium"
+    dbxref_type: str  # e.g., "GOID", "ORF"
+    dbxref_id: str  # The actual ID
+
+
 class GoReferenceOut(BaseModel):
     """GO reference in annotation response."""
 
@@ -38,6 +47,7 @@ class GoReferenceOut(BaseModel):
     has_qualifier: str
     has_supporting_evidence: str
     qualifiers: list[str]
+    evidence_support: list[EvidenceSupportOut] = []
 
 
 class GoAnnotationOut(BaseModel):
@@ -71,7 +81,18 @@ class CreateAnnotationRequest(BaseModel):
 
     goid: int = Field(..., description="GO ID (without GO: prefix)")
     evidence: str = Field(..., description="Evidence code (e.g., IDA, IMP, IC)")
-    reference_no: int = Field(..., description="Reference number")
+    reference_no: Optional[int] = Field(
+        default=None,
+        description="Reference number (provide this OR pubmed OR dbxref_id)",
+    )
+    pubmed: Optional[int] = Field(
+        default=None,
+        description="PubMed ID (alternative to reference_no)",
+    )
+    dbxref_id: Optional[str] = Field(
+        default=None,
+        description="CGDID/dbxref_id like CAL0080735 (alternative to reference_no)",
+    )
     annotation_type: str = Field(
         default="manually curated",
         description="Annotation type",
@@ -225,6 +246,8 @@ def create_go_annotation(
 
     Validates GO ID, evidence code, reference, and qualifiers according to
     GO annotation rules.
+
+    Reference can be specified via reference_no, pubmed, or dbxref_id (CGDID).
     """
     service = GoCurationService(db)
 
@@ -235,12 +258,39 @@ def create_go_annotation(
             detail=f"Feature '{feature_name}' not found",
         )
 
+    # Resolve reference_no from pubmed or dbxref_id if not provided directly
+    reference_no = request.reference_no
+    if not reference_no:
+        if request.pubmed:
+            reference_no = service.get_reference_no_by_pubmed(request.pubmed)
+            if not reference_no:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"PubMed {request.pubmed} not found in database",
+                )
+        elif request.dbxref_id:
+            # Remove any CGD_REF: prefix if present
+            dbxref_id = request.dbxref_id
+            if dbxref_id.upper().startswith("CGD_REF:"):
+                dbxref_id = dbxref_id[8:]
+            reference_no = service.get_reference_no_by_dbxref_id(dbxref_id)
+            if not reference_no:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"CGDID {request.dbxref_id} not found in database",
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Must provide reference_no, pubmed, or dbxref_id",
+            )
+
     try:
         annotation_no = service.create_annotation(
             feature_no=feature.feature_no,
             goid=request.goid,
             evidence=request.evidence,
-            reference_no=request.reference_no,
+            reference_no=reference_no,
             curator_userid=current_user.userid,
             annotation_type=request.annotation_type,
             source=request.source,
