@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
@@ -359,55 +360,96 @@ class GoCurationService:
         if qualifiers:
             self.validate_qualifiers(qualifiers, go.go_aspect)
 
-        # Check for existing annotation
-        existing = (
+        # Get feature name for error messages
+        feature = self.db.query(Feature).filter(
+            Feature.feature_no == feature_no
+        ).first()
+        feature_name = feature.feature_name if feature else str(feature_no)
+
+        # Check for existing annotation with same GO ID (any evidence/type/source)
+        existing_any = (
             self.db.query(GoAnnotation)
             .filter(
                 GoAnnotation.feature_no == feature_no,
                 GoAnnotation.go_no == go.go_no,
-                GoAnnotation.go_evidence == evidence,
-                GoAnnotation.annotation_type == annotation_type,
-                GoAnnotation.source == source,
             )
             .first()
         )
 
-        if existing:
-            # Add reference to existing annotation instead
+        # Check for exact match (same GO ID + evidence + type + source)
+        existing_exact = None
+        if existing_any:
+            existing_exact = (
+                self.db.query(GoAnnotation)
+                .filter(
+                    GoAnnotation.feature_no == feature_no,
+                    GoAnnotation.go_no == go.go_no,
+                    GoAnnotation.go_evidence == evidence,
+                    GoAnnotation.annotation_type == annotation_type,
+                    GoAnnotation.source == source,
+                )
+                .first()
+            )
+
+        if existing_exact:
+            # Exact match - add reference to existing annotation
             logger.info(
-                f"Adding reference to existing annotation {existing.go_annotation_no}"
+                f"Adding reference to existing annotation {existing_exact.go_annotation_no}"
             )
             self._add_reference_to_annotation(
-                existing.go_annotation_no, reference_no, qualifiers, curator_userid
+                existing_exact.go_annotation_no, reference_no, qualifiers, curator_userid
             )
-            return existing.go_annotation_no
+            return existing_exact.go_annotation_no
+
+        if existing_any:
+            # Same GO ID but different evidence/type/source - warn user about conflict
+            raise GoCurationError(
+                f"Feature '{feature_name}' already has GO annotation GO:{goid:07d} "
+                f"with evidence '{existing_any.go_evidence}'. "
+                f"Cannot create duplicate annotation with different evidence '{evidence}'."
+            )
 
         # Create new annotation
-        annotation = GoAnnotation(
-            go_no=go.go_no,
-            feature_no=feature_no,
-            go_evidence=evidence,
-            annotation_type=annotation_type,
-            source=source,
-            date_last_reviewed=datetime.now(),
-            created_by=curator_userid[:12],
-        )
-        self.db.add(annotation)
-        self.db.flush()  # Get the annotation_no
+        try:
+            annotation = GoAnnotation(
+                go_no=go.go_no,
+                feature_no=feature_no,
+                go_evidence=evidence,
+                annotation_type=annotation_type,
+                source=source,
+                date_last_reviewed=datetime.now(),
+                created_by=curator_userid[:12],
+            )
+            self.db.add(annotation)
+            self.db.flush()  # Get the annotation_no
 
-        # Add reference
-        self._add_reference_to_annotation(
-            annotation.go_annotation_no, reference_no, qualifiers, curator_userid
-        )
+            # Add reference
+            self._add_reference_to_annotation(
+                annotation.go_annotation_no, reference_no, qualifiers, curator_userid
+            )
 
-        self.db.commit()
+            self.db.commit()
 
-        logger.info(
-            f"Created GO annotation {annotation.go_annotation_no} "
-            f"for feature {feature_no}, GO:{goid}"
-        )
+            logger.info(
+                f"Created GO annotation {annotation.go_annotation_no} "
+                f"for feature {feature_no}, GO:{goid}"
+            )
 
-        return annotation.go_annotation_no
+            return annotation.go_annotation_no
+
+        except IntegrityError as e:
+            self.db.rollback()
+            # Handle database constraint violations
+            error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+            if 'duplicate' in error_msg.lower() or 'unique' in error_msg.lower():
+                raise GoCurationError(
+                    f"Feature '{feature_name}' already has GO annotation GO:{goid:07d}. "
+                    f"Duplicate annotations are not allowed."
+                )
+            # Re-raise other integrity errors with context
+            raise GoCurationError(
+                f"Database error while creating annotation for '{feature_name}': {error_msg}"
+            )
 
     def _add_reference_to_annotation(
         self,
@@ -429,31 +471,43 @@ class GoCurationService:
 
         if existing_ref:
             raise GoCurationError(
-                f"Reference {reference_no} already linked to annotation {go_annotation_no}"
+                f"Reference {reference_no} already linked to this GO annotation"
             )
 
-        has_qualifier = "Y" if qualifiers else "N"
+        try:
+            has_qualifier = "Y" if qualifiers else "N"
 
-        go_ref = GoRef(
-            go_annotation_no=go_annotation_no,
-            reference_no=reference_no,
-            has_qualifier=has_qualifier,
-            has_supporting_evidence="N",  # Default
-            created_by=curator_userid[:12],
-        )
-        self.db.add(go_ref)
-        self.db.flush()
+            go_ref = GoRef(
+                go_annotation_no=go_annotation_no,
+                reference_no=reference_no,
+                has_qualifier=has_qualifier,
+                has_supporting_evidence="N",  # Default
+                created_by=curator_userid[:12],
+            )
+            self.db.add(go_ref)
+            self.db.flush()
 
-        # Add qualifiers
-        if qualifiers:
-            for q in qualifiers:
-                qualifier = GoQualifier(
-                    go_ref_no=go_ref.go_ref_no,
-                    qualifier=q,
+            # Add qualifiers
+            if qualifiers:
+                for q in qualifiers:
+                    qualifier = GoQualifier(
+                        go_ref_no=go_ref.go_ref_no,
+                        qualifier=q,
+                    )
+                    self.db.add(qualifier)
+
+            return go_ref.go_ref_no
+
+        except IntegrityError as e:
+            self.db.rollback()
+            error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+            if 'duplicate' in error_msg.lower() or 'unique' in error_msg.lower():
+                raise GoCurationError(
+                    f"Reference {reference_no} is already linked to this annotation"
                 )
-                self.db.add(qualifier)
-
-        return go_ref.go_ref_no
+            raise GoCurationError(
+                f"Database error while adding reference: {error_msg}"
+            )
 
     def update_date_last_reviewed(
         self, go_annotation_no: int, curator_userid: str
