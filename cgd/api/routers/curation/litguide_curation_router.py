@@ -322,6 +322,22 @@ class AddFeatureResponse(BaseModel):
     message: str
 
 
+class UnlinkFeatureRequest(BaseModel):
+    """Request to unlink feature from reference."""
+
+    feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
+
+
+class UnlinkFeatureResponse(BaseModel):
+    """Response for unlinking feature from reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str]
+    removed_topics: int
+    message: str
+
+
 @router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
 def get_reference_literature(
     reference_no: int,
@@ -368,6 +384,42 @@ def add_feature_to_reference(
             gene_name=result["gene_name"],
             refprop_feat_no=result["refprop_feat_no"],
             message=f"Feature '{result['feature_name']}' added with topic '{request.topic}'",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/reference/{reference_no}/feature", response_model=UnlinkFeatureResponse)
+def unlink_feature_from_reference(
+    reference_no: int,
+    request: UnlinkFeatureRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Unlink a feature from a reference.
+
+    Removes the link between the feature and reference, as well as
+    any topic associations for this feature-reference pair.
+    """
+    service = LitGuideCurationService(db)
+
+    try:
+        result = service.unlink_feature_from_reference(
+            reference_no,
+            request.feature_identifier,
+            current_user.userid,
+        )
+
+        return UnlinkFeatureResponse(
+            feature_no=result["feature_no"],
+            feature_name=result["feature_name"],
+            gene_name=result["gene_name"],
+            removed_topics=result["removed_topics"],
+            message=f"Feature '{result['feature_name']}' unlinked from reference {reference_no}",
         )
     except LitGuideCurationError as e:
         raise HTTPException(

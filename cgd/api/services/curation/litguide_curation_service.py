@@ -507,3 +507,100 @@ class LitGuideCurationService:
             "gene_name": feature.gene_name,
             "refprop_feat_no": refprop_feat_no,
         }
+
+    def unlink_feature_from_reference(
+        self,
+        reference_no: int,
+        feature_identifier: str,
+        curator_userid: str,
+    ) -> dict:
+        """
+        Unlink a feature from a reference.
+
+        Removes the RefLink entry connecting the feature to the reference.
+        Also removes any topic associations (RefpropFeat) for this feature-reference pair.
+
+        Args:
+            reference_no: Reference number
+            feature_identifier: Feature name, gene name, or feature_no
+            curator_userid: Curator user ID for logging
+
+        Returns:
+            Dict with feature info and status
+        """
+        # Find feature
+        try:
+            feature_no = int(feature_identifier)
+            feature = self.get_feature_by_no(feature_no)
+        except ValueError:
+            feature = self.get_feature_by_name(feature_identifier)
+
+        if not feature:
+            raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")
+
+        # Verify reference exists
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Find the RefLink entry
+        ref_link = (
+            self.db.query(RefLink)
+            .filter(
+                RefLink.reference_no == reference_no,
+                RefLink.tab_name == "FEATURE",
+                RefLink.col_name == "FEATURE_NO",
+                RefLink.primary_key == feature.feature_no,
+            )
+            .first()
+        )
+
+        if not ref_link:
+            raise LitGuideCurationError(
+                f"Feature '{feature.feature_name}' is not linked to reference {reference_no}"
+            )
+
+        # Remove any topic associations for this feature-reference pair
+        # Find all ref_property entries for this reference with literature_topic
+        topic_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+            )
+            .all()
+        )
+
+        removed_topics = 0
+        for prop in topic_props:
+            # Delete any RefpropFeat entries linking this property to the feature
+            deleted = (
+                self.db.query(RefpropFeat)
+                .filter(
+                    RefpropFeat.ref_property_no == prop.ref_property_no,
+                    RefpropFeat.feature_no == feature.feature_no,
+                )
+                .delete()
+            )
+            removed_topics += deleted
+
+        # Delete the RefLink entry
+        self.db.delete(ref_link)
+        self.db.commit()
+
+        logger.info(
+            f"Unlinked feature {feature.feature_name} (no={feature.feature_no}) "
+            f"from reference {reference_no} by {curator_userid}. "
+            f"Removed {removed_topics} topic associations."
+        )
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "gene_name": feature.gene_name,
+            "removed_topics": removed_topics,
+        }
