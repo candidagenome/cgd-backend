@@ -18,6 +18,7 @@ from cgd.models.models import (
     Feature,
     Note,
     NoteLink,
+    Organism,
     RefLink,
     RefProperty,
     Reference,
@@ -401,11 +402,49 @@ class LitGuideCurationService:
             total,
         )
 
-    def get_reference_literature(self, reference_no: int) -> dict:
+    def get_available_organisms(self) -> list[dict]:
+        """Get list of organisms that have features in the database."""
+        organisms = (
+            self.db.query(Organism)
+            .join(Feature, Organism.organism_no == Feature.organism_no)
+            .distinct()
+            .order_by(Organism.organism_order, Organism.organism_name)
+            .all()
+        )
+
+        return [
+            {
+                "organism_no": org.organism_no,
+                "organism_abbrev": org.organism_abbrev,
+                "organism_name": org.organism_name,
+                "common_name": org.common_name,
+            }
+            for org in organisms
+        ]
+
+    def get_organism_by_abbrev(self, abbrev: str) -> Optional[Organism]:
+        """Get organism by abbreviation."""
+        return (
+            self.db.query(Organism)
+            .filter(func.upper(Organism.organism_abbrev) == abbrev.upper())
+            .first()
+        )
+
+    def get_reference_literature(
+        self,
+        reference_no: int,
+        organism_abbrev: Optional[str] = None,
+    ) -> dict:
         """
         Get reference details with all associated features and topics.
 
         Used for reference-centric literature guide curation.
+
+        If organism_abbrev is provided, features are grouped into:
+        - current_organism_features: features from the specified organism (editable)
+        - other_organisms: dict of organism_abbrev -> features (read-only)
+
+        If organism_abbrev is not provided, all features are returned in 'features'.
         """
         reference = (
             self.db.query(Reference)
@@ -418,27 +457,32 @@ class LitGuideCurationService:
         # Get curation status
         curation_status = self.get_reference_curation_status(reference_no)
 
-        # Get all feature-topic associations for this reference
+        # Get all feature-topic associations for this reference WITH organism info
         feature_topic_query = (
             self.db.query(
                 Feature.feature_no,
                 Feature.feature_name,
                 Feature.gene_name,
                 Feature.feature_type,
+                Feature.organism_no,
+                Organism.organism_abbrev,
+                Organism.organism_name,
+                Organism.common_name,
                 RefProperty.property_value.label("topic"),
                 RefProperty.ref_property_no,
                 RefpropFeat.refprop_feat_no,
             )
             .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
             .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(RefProperty.reference_no == reference_no)
             .filter(RefProperty.property_type == "literature_topic")
-            .order_by(Feature.feature_name, RefProperty.property_value)
+            .order_by(Organism.organism_order, Feature.feature_name, RefProperty.property_value)
         )
 
         results = feature_topic_query.all()
 
-        # Group by feature
+        # Group by feature (and track organism)
         features_dict = {}
         for row in results:
             feat_no = row.feature_no
@@ -448,6 +492,8 @@ class LitGuideCurationService:
                     "feature_name": row.feature_name,
                     "gene_name": row.gene_name,
                     "feature_type": row.feature_type,
+                    "organism_abbrev": row.organism_abbrev,
+                    "organism_name": row.organism_name,
                     "topics": [],
                 }
             features_dict[feat_no]["topics"].append({
@@ -456,6 +502,49 @@ class LitGuideCurationService:
                 "refprop_feat_no": row.refprop_feat_no,
             })
 
+        all_features = list(features_dict.values())
+
+        # If no organism filter, return all features together
+        if not organism_abbrev:
+            return {
+                "reference_no": reference.reference_no,
+                "pubmed": reference.pubmed,
+                "citation": reference.citation,
+                "title": reference.title,
+                "year": reference.year,
+                "curation_status": curation_status,
+                "current_organism": None,
+                "features": all_features,
+                "other_organisms": {},
+            }
+
+        # Group features by organism
+        current_features = []
+        other_organisms = {}
+
+        for feat in all_features:
+            if feat["organism_abbrev"].upper() == organism_abbrev.upper():
+                current_features.append(feat)
+            else:
+                org_abbrev = feat["organism_abbrev"]
+                if org_abbrev not in other_organisms:
+                    other_organisms[org_abbrev] = {
+                        "organism_abbrev": org_abbrev,
+                        "organism_name": feat["organism_name"],
+                        "features": [],
+                    }
+                other_organisms[org_abbrev]["features"].append(feat)
+
+        # Get current organism info
+        current_org = self.get_organism_by_abbrev(organism_abbrev)
+        current_organism_info = None
+        if current_org:
+            current_organism_info = {
+                "organism_abbrev": current_org.organism_abbrev,
+                "organism_name": current_org.organism_name,
+                "common_name": current_org.common_name,
+            }
+
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
@@ -463,7 +552,9 @@ class LitGuideCurationService:
             "title": reference.title,
             "year": reference.year,
             "curation_status": curation_status,
-            "features": list(features_dict.values()),
+            "current_organism": current_organism_info,
+            "features": current_features,
+            "other_organisms": other_organisms,
         }
 
     def add_feature_to_reference(

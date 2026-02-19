@@ -291,7 +291,25 @@ class FeatureTopicOut(BaseModel):
     feature_name: str
     gene_name: Optional[str]
     feature_type: Optional[str]
+    organism_abbrev: Optional[str] = None
+    organism_name: Optional[str] = None
     topics: list[TopicOut]
+
+
+class OrganismOut(BaseModel):
+    """Organism info."""
+
+    organism_abbrev: str
+    organism_name: str
+    common_name: Optional[str] = None
+
+
+class OrganismFeaturesOut(BaseModel):
+    """Features grouped by organism."""
+
+    organism_abbrev: str
+    organism_name: str
+    features: list[FeatureTopicOut]
 
 
 class ReferenceLiteratureResponse(BaseModel):
@@ -303,7 +321,15 @@ class ReferenceLiteratureResponse(BaseModel):
     title: Optional[str]
     year: Optional[int]
     curation_status: Optional[str]
+    current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
+    other_organisms: dict[str, OrganismFeaturesOut] = {}
+
+
+class OrganismsResponse(BaseModel):
+    """Response for available organisms."""
+
+    organisms: list[OrganismOut]
 
 
 class AddFeatureRequest(BaseModel):
@@ -383,21 +409,70 @@ class AddNongeneTopicResponse(BaseModel):
     message: str
 
 
+@router.get("/organisms", response_model=OrganismsResponse)
+def get_available_organisms(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Get list of organisms that have features in the database."""
+    service = LitGuideCurationService(db)
+    organisms = service.get_available_organisms()
+
+    return OrganismsResponse(
+        organisms=[OrganismOut(**org) for org in organisms]
+    )
+
+
 @router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
 def get_reference_literature(
     reference_no: int,
     current_user: CurrentUser,
+    organism: Optional[str] = Query(
+        None,
+        description="Organism abbreviation to filter features. "
+        "If provided, features are grouped into current vs other organisms.",
+    ),
     db: Session = Depends(get_db),
 ):
     """
     Get reference details with all associated features and topics.
 
-    Used for reference-centric literature guide curation (from todo list "Lit Guide" link).
+    Used for reference-centric literature guide curation.
+
+    If 'organism' parameter is provided:
+    - 'features' contains only features from that organism (editable)
+    - 'other_organisms' contains features from other organisms (read-only)
+    - 'current_organism' contains info about the selected organism
+
+    If 'organism' is not provided:
+    - 'features' contains all features
+    - 'other_organisms' is empty
     """
     service = LitGuideCurationService(db)
 
     try:
-        return service.get_reference_literature(reference_no)
+        result = service.get_reference_literature(reference_no, organism)
+
+        # Convert other_organisms dict values to proper models
+        other_organisms = {}
+        for abbrev, org_data in result.get("other_organisms", {}).items():
+            other_organisms[abbrev] = OrganismFeaturesOut(
+                organism_abbrev=org_data["organism_abbrev"],
+                organism_name=org_data["organism_name"],
+                features=[FeatureTopicOut(**f) for f in org_data["features"]],
+            )
+
+        return ReferenceLiteratureResponse(
+            reference_no=result["reference_no"],
+            pubmed=result["pubmed"],
+            citation=result["citation"],
+            title=result["title"],
+            year=result["year"],
+            curation_status=result["curation_status"],
+            current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
+            features=[FeatureTopicOut(**f) for f in result["features"]],
+            other_organisms=other_organisms,
+        )
     except LitGuideCurationError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
