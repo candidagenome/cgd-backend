@@ -19,6 +19,7 @@ from cgd.api.services.curation.litguide_curation_service import (
     LITERATURE_TOPICS,
     CURATION_STATUSES,
 )
+from cgd.models.models import Reference
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,22 @@ class UnlinkFeatureResponse(BaseModel):
     message: str
 
 
+class NoteOut(BaseModel):
+    """Note in reference notes response."""
+
+    feature_name: Optional[str]
+    topic: str
+    note: str
+    note_type: str
+
+
+class ReferenceNotesResponse(BaseModel):
+    """Response for reference notes."""
+
+    reference_no: int
+    notes: list[NoteOut]
+
+
 @router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
 def get_reference_literature(
     reference_no: int,
@@ -426,3 +443,36 @@ def unlink_feature_from_reference(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+@router.get("/reference/{reference_no}/notes", response_model=ReferenceNotesResponse)
+def get_reference_notes(
+    reference_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get all curation notes associated with a reference.
+
+    Returns notes linked to features (via topics) and non-gene topic notes.
+    """
+    service = LitGuideCurationService(db)
+
+    # Verify reference exists
+    reference = (
+        db.query(Reference)
+        .filter(Reference.reference_no == reference_no)
+        .first()
+    )
+    if not reference:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Reference {reference_no} not found",
+        )
+
+    notes = service.get_reference_notes(reference_no)
+
+    return ReferenceNotesResponse(
+        reference_no=reference_no,
+        notes=[NoteOut(**n) for n in notes],
+    )

@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from cgd.models.models import (
     Feature,
+    Note,
+    NoteLink,
     RefLink,
     RefProperty,
     Reference,
@@ -604,3 +606,65 @@ class LitGuideCurationService:
             "gene_name": feature.gene_name,
             "removed_topics": removed_topics,
         }
+
+    def get_reference_notes(self, reference_no: int) -> list[dict]:
+        """
+        Get all curation notes associated with a reference.
+
+        Notes can be linked to:
+        1. Feature-specific topics (via REFPROP_FEAT table)
+        2. Non-gene topics (via REF_PROPERTY table)
+
+        Returns list of notes with feature, topic, note text, and note type.
+        """
+        notes = []
+
+        # Get feature-specific notes (linked via REFPROP_FEAT)
+        feature_notes_query = (
+            self.db.query(
+                Note.note,
+                Note.note_type,
+                RefProperty.property_value.label("topic"),
+                Feature.feature_name,
+                Feature.gene_name,
+            )
+            .join(NoteLink, Note.note_no == NoteLink.note_no)
+            .join(RefpropFeat, NoteLink.primary_key == RefpropFeat.refprop_feat_no)
+            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+            .filter(NoteLink.tab_name == "REFPROP_FEAT")
+            .filter(RefProperty.reference_no == reference_no)
+            .order_by(Feature.feature_name, RefProperty.property_value)
+        )
+
+        for row in feature_notes_query.all():
+            notes.append({
+                "feature_name": row.gene_name or row.feature_name,
+                "topic": row.topic,
+                "note": row.note,
+                "note_type": row.note_type,
+            })
+
+        # Get non-gene topic notes (linked via REF_PROPERTY)
+        nongene_notes_query = (
+            self.db.query(
+                Note.note,
+                Note.note_type,
+                RefProperty.property_value.label("topic"),
+            )
+            .join(NoteLink, Note.note_no == NoteLink.note_no)
+            .join(RefProperty, NoteLink.primary_key == RefProperty.ref_property_no)
+            .filter(NoteLink.tab_name == "REF_PROPERTY")
+            .filter(RefProperty.reference_no == reference_no)
+            .order_by(RefProperty.property_value)
+        )
+
+        for row in nongene_notes_query.all():
+            notes.append({
+                "feature_name": None,  # Non-gene topic
+                "topic": row.topic,
+                "note": row.note,
+                "note_type": row.note_type,
+            })
+
+        return notes
