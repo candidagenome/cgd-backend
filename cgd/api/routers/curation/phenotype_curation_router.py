@@ -96,7 +96,12 @@ class CreateAnnotationRequest(BaseModel):
     mutant_type: str = Field(..., description="Mutant type (CV term)")
     observable: str = Field(..., description="Observable (CV term)")
     qualifier: Optional[str] = Field(None, description="Qualifier (CV term)")
-    reference_no: int = Field(..., description="Reference number")
+    reference_no: Optional[int] = Field(
+        None, description="Reference number (provide this OR pubmed)"
+    )
+    pubmed: Optional[int] = Field(
+        None, description="PubMed ID (alternative to reference_no)"
+    )
     experiment_comment: Optional[str] = Field(
         None, description="Experiment comment/description"
     )
@@ -403,6 +408,22 @@ def create_phenotype_annotation(
                 detail=f"Feature '{feature_name}' not found",
             )
 
+        # Resolve reference_no from pubmed if not provided directly
+        reference_no = request.reference_no
+        if not reference_no:
+            if request.pubmed:
+                reference_no = service.get_reference_no_by_pubmed(request.pubmed)
+                if not reference_no:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"PubMed {request.pubmed} not found in database",
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Must provide reference_no or pubmed",
+                )
+
         properties = None
         if request.properties:
             properties = [
@@ -420,7 +441,7 @@ def create_phenotype_annotation(
             mutant_type=request.mutant_type,
             observable=request.observable,
             qualifier=request.qualifier,
-            reference_no=request.reference_no,
+            reference_no=reference_no,
             curator_userid=current_user.userid,
             experiment_comment=request.experiment_comment,
             properties=properties,

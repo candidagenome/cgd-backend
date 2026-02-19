@@ -83,6 +83,15 @@ class PhenotypeCurationService:
 
         return feature
 
+    def get_reference_no_by_pubmed(self, pubmed: int) -> Optional[int]:
+        """Look up reference_no by PubMed ID."""
+        ref = (
+            self.db.query(Reference)
+            .filter(Reference.pubmed == pubmed)
+            .first()
+        )
+        return ref.reference_no if ref else None
+
     def get_features_by_name(
         self, name: str, organism_abbrev: Optional[str] = None
     ) -> list[Feature]:
