@@ -1,8 +1,14 @@
 # cgd/main.py
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+import traceback
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 # Import auth router
 from cgd.auth import auth_router
@@ -74,6 +80,30 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Global exception handler to ensure all errors return proper JSON responses
+    # This allows CORS middleware to add headers to error responses
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        # Log the full traceback for debugging
+        logger.error(
+            f"Unhandled exception on {request.method} {request.url.path}: {exc}\n"
+            f"{traceback.format_exc()}"
+        )
+
+        # Return a JSON response with error details
+        # This ensures CORS headers are added by the middleware
+        error_message = str(exc)
+        if not error_message:
+            error_message = exc.__class__.__name__
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"Internal server error: {error_message}",
+                "error_type": exc.__class__.__name__,
+            },
+        )
 
     # Routers
     app.include_router(auth_router)
