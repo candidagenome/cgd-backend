@@ -355,6 +355,34 @@ class ReferenceNotesResponse(BaseModel):
     notes: list[NoteOut]
 
 
+class NongeneTopicOut(BaseModel):
+    """Non-gene topic in response."""
+
+    topic: str
+    ref_property_no: int
+
+
+class NongeneTopicsResponse(BaseModel):
+    """Response for non-gene topics."""
+
+    reference_no: int
+    public_topics: list[NongeneTopicOut]
+    internal_topics: list[NongeneTopicOut]
+
+
+class AddNongeneTopicRequest(BaseModel):
+    """Request to add non-gene topic."""
+
+    topic: str = Field(..., description="Literature topic")
+
+
+class AddNongeneTopicResponse(BaseModel):
+    """Response for adding non-gene topic."""
+
+    ref_property_no: int
+    message: str
+
+
 @router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
 def get_reference_literature(
     reference_no: int,
@@ -476,3 +504,89 @@ def get_reference_notes(
         reference_no=reference_no,
         notes=[NoteOut(**n) for n in notes],
     )
+
+
+@router.get("/reference/{reference_no}/nongene-topics", response_model=NongeneTopicsResponse)
+def get_nongene_topics(
+    reference_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get topics linked to reference but NOT associated with any feature.
+
+    Returns public topics (literature_topic) and internal topics (curation_status).
+    """
+    service = LitGuideCurationService(db)
+
+    # Verify reference exists
+    reference = (
+        db.query(Reference)
+        .filter(Reference.reference_no == reference_no)
+        .first()
+    )
+    if not reference:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Reference {reference_no} not found",
+        )
+
+    result = service.get_nongene_topics(reference_no)
+
+    return NongeneTopicsResponse(
+        reference_no=reference_no,
+        public_topics=[NongeneTopicOut(**t) for t in result["public_topics"]],
+        internal_topics=[NongeneTopicOut(**t) for t in result["internal_topics"]],
+    )
+
+
+@router.post("/reference/{reference_no}/nongene-topic", response_model=AddNongeneTopicResponse)
+def add_nongene_topic(
+    reference_no: int,
+    request: AddNongeneTopicRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Add a non-gene topic to a reference (topic not associated with any feature)."""
+    service = LitGuideCurationService(db)
+
+    try:
+        ref_property_no = service.add_nongene_topic(
+            reference_no,
+            request.topic,
+            current_user.userid,
+        )
+
+        return AddNongeneTopicResponse(
+            ref_property_no=ref_property_no,
+            message=f"Non-gene topic '{request.topic}' added to reference",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/reference/{reference_no}/nongene-topic/{ref_property_no}", response_model=SuccessResponse)
+def remove_nongene_topic(
+    reference_no: int,
+    ref_property_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Remove a non-gene topic from a reference."""
+    service = LitGuideCurationService(db)
+
+    try:
+        service.remove_nongene_topic(ref_property_no, current_user.userid)
+
+        return SuccessResponse(
+            success=True,
+            message="Non-gene topic removed",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )

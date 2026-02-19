@@ -668,3 +668,174 @@ class LitGuideCurationService:
             })
 
         return notes
+
+    def get_nongene_topics(self, reference_no: int) -> dict:
+        """
+        Get topics linked to reference but NOT associated with any feature.
+
+        These are ref_property entries with property_type='literature_topic'
+        that have no corresponding refprop_feat entries.
+
+        Returns dict with public_topics (literature_topic) and
+        internal_topics (curation_status).
+        """
+        # Get all literature_topic properties for this reference
+        all_topic_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+            )
+            .all()
+        )
+
+        # Find topics that have NO feature associations
+        public_topics = []
+        for prop in all_topic_props:
+            # Check if this property has any feature links
+            has_features = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == prop.ref_property_no)
+                .first()
+            )
+            if not has_features:
+                public_topics.append({
+                    "topic": prop.property_value,
+                    "ref_property_no": prop.ref_property_no,
+                })
+
+        # Get curation_status properties (internal topics) that have no features
+        # These are stored directly on ref_property without refprop_feat links
+        all_status_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "curation_status",
+            )
+            .all()
+        )
+
+        internal_topics = []
+        for prop in all_status_props:
+            internal_topics.append({
+                "topic": prop.property_value,
+                "ref_property_no": prop.ref_property_no,
+            })
+
+        return {
+            "public_topics": public_topics,
+            "internal_topics": internal_topics,
+        }
+
+    def add_nongene_topic(
+        self,
+        reference_no: int,
+        topic: str,
+        curator_userid: str,
+    ) -> int:
+        """
+        Add a non-gene topic to a reference (topic not associated with any feature).
+
+        Returns ref_property_no.
+        """
+        # Validate topic
+        if topic not in LITERATURE_TOPICS:
+            raise LitGuideCurationError(
+                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+            )
+
+        # Verify reference exists
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Check if this topic already exists for the reference
+        existing = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+                RefProperty.property_value == topic,
+            )
+            .first()
+        )
+
+        if existing:
+            # Check if it has feature associations
+            has_features = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == existing.ref_property_no)
+                .first()
+            )
+            if not has_features:
+                raise LitGuideCurationError(
+                    f"Non-gene topic '{topic}' already exists for this reference"
+                )
+            # Topic exists but is associated with features, so we can't add it as non-gene
+            raise LitGuideCurationError(
+                f"Topic '{topic}' already exists and is associated with features"
+            )
+
+        # Create new ref_property
+        ref_prop = RefProperty(
+            reference_no=reference_no,
+            source=SOURCE,
+            property_type="literature_topic",
+            property_value=topic,
+            date_last_reviewed=datetime.now(),
+            created_by=curator_userid[:12],
+        )
+        self.db.add(ref_prop)
+        self.db.commit()
+
+        logger.info(
+            f"Added non-gene topic '{topic}' to reference {reference_no} "
+            f"by {curator_userid}"
+        )
+
+        return ref_prop.ref_property_no
+
+    def remove_nongene_topic(
+        self,
+        ref_property_no: int,
+        curator_userid: str,
+    ) -> bool:
+        """
+        Remove a non-gene topic from a reference.
+
+        Only removes if the topic has no feature associations.
+        """
+        prop = (
+            self.db.query(RefProperty)
+            .filter(RefProperty.ref_property_no == ref_property_no)
+            .first()
+        )
+
+        if not prop:
+            raise LitGuideCurationError(f"Topic property {ref_property_no} not found")
+
+        # Check if it has feature associations
+        has_features = (
+            self.db.query(RefpropFeat)
+            .filter(RefpropFeat.ref_property_no == ref_property_no)
+            .first()
+        )
+
+        if has_features:
+            raise LitGuideCurationError(
+                "Cannot remove topic that has feature associations. "
+                "Remove the feature associations first."
+            )
+
+        self.db.delete(prop)
+        self.db.commit()
+
+        logger.info(
+            f"Removed non-gene topic property {ref_property_no} by {curator_userid}"
+        )
+
+        return True
