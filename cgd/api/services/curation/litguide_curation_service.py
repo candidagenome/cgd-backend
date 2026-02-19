@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 
 from cgd.models.models import (
     Feature,
+    Note,
+    NoteLink,
+    Organism,
     RefLink,
     RefProperty,
     Reference,
@@ -399,11 +402,49 @@ class LitGuideCurationService:
             total,
         )
 
-    def get_reference_literature(self, reference_no: int) -> dict:
+    def get_available_organisms(self) -> list[dict]:
+        """Get list of organisms that have features in the database."""
+        organisms = (
+            self.db.query(Organism)
+            .join(Feature, Organism.organism_no == Feature.organism_no)
+            .distinct()
+            .order_by(Organism.organism_order, Organism.organism_name)
+            .all()
+        )
+
+        return [
+            {
+                "organism_no": org.organism_no,
+                "organism_abbrev": org.organism_abbrev,
+                "organism_name": org.organism_name,
+                "common_name": org.common_name,
+            }
+            for org in organisms
+        ]
+
+    def get_organism_by_abbrev(self, abbrev: str) -> Optional[Organism]:
+        """Get organism by abbreviation."""
+        return (
+            self.db.query(Organism)
+            .filter(func.upper(Organism.organism_abbrev) == abbrev.upper())
+            .first()
+        )
+
+    def get_reference_literature(
+        self,
+        reference_no: int,
+        organism_abbrev: Optional[str] = None,
+    ) -> dict:
         """
         Get reference details with all associated features and topics.
 
         Used for reference-centric literature guide curation.
+
+        If organism_abbrev is provided, features are grouped into:
+        - current_organism_features: features from the specified organism (editable)
+        - other_organisms: dict of organism_abbrev -> features (read-only)
+
+        If organism_abbrev is not provided, all features are returned in 'features'.
         """
         reference = (
             self.db.query(Reference)
@@ -416,27 +457,32 @@ class LitGuideCurationService:
         # Get curation status
         curation_status = self.get_reference_curation_status(reference_no)
 
-        # Get all feature-topic associations for this reference
+        # Get all feature-topic associations for this reference WITH organism info
         feature_topic_query = (
             self.db.query(
                 Feature.feature_no,
                 Feature.feature_name,
                 Feature.gene_name,
                 Feature.feature_type,
+                Feature.organism_no,
+                Organism.organism_abbrev,
+                Organism.organism_name,
+                Organism.common_name,
                 RefProperty.property_value.label("topic"),
                 RefProperty.ref_property_no,
                 RefpropFeat.refprop_feat_no,
             )
             .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
             .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(RefProperty.reference_no == reference_no)
             .filter(RefProperty.property_type == "literature_topic")
-            .order_by(Feature.feature_name, RefProperty.property_value)
+            .order_by(Organism.organism_order, Feature.feature_name, RefProperty.property_value)
         )
 
         results = feature_topic_query.all()
 
-        # Group by feature
+        # Group by feature (and track organism)
         features_dict = {}
         for row in results:
             feat_no = row.feature_no
@@ -446,6 +492,8 @@ class LitGuideCurationService:
                     "feature_name": row.feature_name,
                     "gene_name": row.gene_name,
                     "feature_type": row.feature_type,
+                    "organism_abbrev": row.organism_abbrev,
+                    "organism_name": row.organism_name,
                     "topics": [],
                 }
             features_dict[feat_no]["topics"].append({
@@ -454,6 +502,49 @@ class LitGuideCurationService:
                 "refprop_feat_no": row.refprop_feat_no,
             })
 
+        all_features = list(features_dict.values())
+
+        # If no organism filter, return all features together
+        if not organism_abbrev:
+            return {
+                "reference_no": reference.reference_no,
+                "pubmed": reference.pubmed,
+                "citation": reference.citation,
+                "title": reference.title,
+                "year": reference.year,
+                "curation_status": curation_status,
+                "current_organism": None,
+                "features": all_features,
+                "other_organisms": {},
+            }
+
+        # Group features by organism
+        current_features = []
+        other_organisms = {}
+
+        for feat in all_features:
+            if feat["organism_abbrev"].upper() == organism_abbrev.upper():
+                current_features.append(feat)
+            else:
+                org_abbrev = feat["organism_abbrev"]
+                if org_abbrev not in other_organisms:
+                    other_organisms[org_abbrev] = {
+                        "organism_abbrev": org_abbrev,
+                        "organism_name": feat["organism_name"],
+                        "features": [],
+                    }
+                other_organisms[org_abbrev]["features"].append(feat)
+
+        # Get current organism info
+        current_org = self.get_organism_by_abbrev(organism_abbrev)
+        current_organism_info = None
+        if current_org:
+            current_organism_info = {
+                "organism_abbrev": current_org.organism_abbrev,
+                "organism_name": current_org.organism_name,
+                "common_name": current_org.common_name,
+            }
+
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
@@ -461,7 +552,9 @@ class LitGuideCurationService:
             "title": reference.title,
             "year": reference.year,
             "curation_status": curation_status,
-            "features": list(features_dict.values()),
+            "current_organism": current_organism_info,
+            "features": current_features,
+            "other_organisms": other_organisms,
         }
 
     def add_feature_to_reference(
@@ -507,3 +600,333 @@ class LitGuideCurationService:
             "gene_name": feature.gene_name,
             "refprop_feat_no": refprop_feat_no,
         }
+
+    def unlink_feature_from_reference(
+        self,
+        reference_no: int,
+        feature_identifier: str,
+        curator_userid: str,
+    ) -> dict:
+        """
+        Unlink a feature from a reference.
+
+        Removes the RefLink entry connecting the feature to the reference.
+        Also removes any topic associations (RefpropFeat) for this feature-reference pair.
+
+        Args:
+            reference_no: Reference number
+            feature_identifier: Feature name, gene name, or feature_no
+            curator_userid: Curator user ID for logging
+
+        Returns:
+            Dict with feature info and status
+        """
+        # Find feature
+        try:
+            feature_no = int(feature_identifier)
+            feature = self.get_feature_by_no(feature_no)
+        except ValueError:
+            feature = self.get_feature_by_name(feature_identifier)
+
+        if not feature:
+            raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")
+
+        # Verify reference exists
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Find the RefLink entry
+        ref_link = (
+            self.db.query(RefLink)
+            .filter(
+                RefLink.reference_no == reference_no,
+                RefLink.tab_name == "FEATURE",
+                RefLink.col_name == "FEATURE_NO",
+                RefLink.primary_key == feature.feature_no,
+            )
+            .first()
+        )
+
+        if not ref_link:
+            raise LitGuideCurationError(
+                f"Feature '{feature.feature_name}' is not linked to reference {reference_no}"
+            )
+
+        # Remove any topic associations for this feature-reference pair
+        # Find all ref_property entries for this reference with literature_topic
+        topic_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+            )
+            .all()
+        )
+
+        removed_topics = 0
+        for prop in topic_props:
+            # Delete any RefpropFeat entries linking this property to the feature
+            deleted = (
+                self.db.query(RefpropFeat)
+                .filter(
+                    RefpropFeat.ref_property_no == prop.ref_property_no,
+                    RefpropFeat.feature_no == feature.feature_no,
+                )
+                .delete()
+            )
+            removed_topics += deleted
+
+        # Delete the RefLink entry
+        self.db.delete(ref_link)
+        self.db.commit()
+
+        logger.info(
+            f"Unlinked feature {feature.feature_name} (no={feature.feature_no}) "
+            f"from reference {reference_no} by {curator_userid}. "
+            f"Removed {removed_topics} topic associations."
+        )
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "gene_name": feature.gene_name,
+            "removed_topics": removed_topics,
+        }
+
+    def get_reference_notes(self, reference_no: int) -> list[dict]:
+        """
+        Get all curation notes associated with a reference.
+
+        Notes can be linked to:
+        1. Feature-specific topics (via REFPROP_FEAT table)
+        2. Non-gene topics (via REF_PROPERTY table)
+
+        Returns list of notes with feature, topic, note text, and note type.
+        """
+        notes = []
+
+        # Get feature-specific notes (linked via REFPROP_FEAT)
+        feature_notes_query = (
+            self.db.query(
+                Note.note,
+                Note.note_type,
+                RefProperty.property_value.label("topic"),
+                Feature.feature_name,
+                Feature.gene_name,
+            )
+            .join(NoteLink, Note.note_no == NoteLink.note_no)
+            .join(RefpropFeat, NoteLink.primary_key == RefpropFeat.refprop_feat_no)
+            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+            .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+            .filter(NoteLink.tab_name == "REFPROP_FEAT")
+            .filter(RefProperty.reference_no == reference_no)
+            .order_by(Feature.feature_name, RefProperty.property_value)
+        )
+
+        for row in feature_notes_query.all():
+            notes.append({
+                "feature_name": row.gene_name or row.feature_name,
+                "topic": row.topic,
+                "note": row.note,
+                "note_type": row.note_type,
+            })
+
+        # Get non-gene topic notes (linked via REF_PROPERTY)
+        nongene_notes_query = (
+            self.db.query(
+                Note.note,
+                Note.note_type,
+                RefProperty.property_value.label("topic"),
+            )
+            .join(NoteLink, Note.note_no == NoteLink.note_no)
+            .join(RefProperty, NoteLink.primary_key == RefProperty.ref_property_no)
+            .filter(NoteLink.tab_name == "REF_PROPERTY")
+            .filter(RefProperty.reference_no == reference_no)
+            .order_by(RefProperty.property_value)
+        )
+
+        for row in nongene_notes_query.all():
+            notes.append({
+                "feature_name": None,  # Non-gene topic
+                "topic": row.topic,
+                "note": row.note,
+                "note_type": row.note_type,
+            })
+
+        return notes
+
+    def get_nongene_topics(self, reference_no: int) -> dict:
+        """
+        Get topics linked to reference but NOT associated with any feature.
+
+        These are ref_property entries with property_type='literature_topic'
+        that have no corresponding refprop_feat entries.
+
+        Returns dict with public_topics (literature_topic) and
+        internal_topics (curation_status).
+        """
+        # Get all literature_topic properties for this reference
+        all_topic_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+            )
+            .all()
+        )
+
+        # Find topics that have NO feature associations
+        public_topics = []
+        for prop in all_topic_props:
+            # Check if this property has any feature links
+            has_features = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == prop.ref_property_no)
+                .first()
+            )
+            if not has_features:
+                public_topics.append({
+                    "topic": prop.property_value,
+                    "ref_property_no": prop.ref_property_no,
+                })
+
+        # Get curation_status properties (internal topics) that have no features
+        # These are stored directly on ref_property without refprop_feat links
+        all_status_props = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "curation_status",
+            )
+            .all()
+        )
+
+        internal_topics = []
+        for prop in all_status_props:
+            internal_topics.append({
+                "topic": prop.property_value,
+                "ref_property_no": prop.ref_property_no,
+            })
+
+        return {
+            "public_topics": public_topics,
+            "internal_topics": internal_topics,
+        }
+
+    def add_nongene_topic(
+        self,
+        reference_no: int,
+        topic: str,
+        curator_userid: str,
+    ) -> int:
+        """
+        Add a non-gene topic to a reference (topic not associated with any feature).
+
+        Returns ref_property_no.
+        """
+        # Validate topic
+        if topic not in LITERATURE_TOPICS:
+            raise LitGuideCurationError(
+                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+            )
+
+        # Verify reference exists
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Check if this topic already exists for the reference
+        existing = (
+            self.db.query(RefProperty)
+            .filter(
+                RefProperty.reference_no == reference_no,
+                RefProperty.property_type == "literature_topic",
+                RefProperty.property_value == topic,
+            )
+            .first()
+        )
+
+        if existing:
+            # Check if it has feature associations
+            has_features = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == existing.ref_property_no)
+                .first()
+            )
+            if not has_features:
+                raise LitGuideCurationError(
+                    f"Non-gene topic '{topic}' already exists for this reference"
+                )
+            # Topic exists but is associated with features, so we can't add it as non-gene
+            raise LitGuideCurationError(
+                f"Topic '{topic}' already exists and is associated with features"
+            )
+
+        # Create new ref_property
+        ref_prop = RefProperty(
+            reference_no=reference_no,
+            source=SOURCE,
+            property_type="literature_topic",
+            property_value=topic,
+            date_last_reviewed=datetime.now(),
+            created_by=curator_userid[:12],
+        )
+        self.db.add(ref_prop)
+        self.db.commit()
+
+        logger.info(
+            f"Added non-gene topic '{topic}' to reference {reference_no} "
+            f"by {curator_userid}"
+        )
+
+        return ref_prop.ref_property_no
+
+    def remove_nongene_topic(
+        self,
+        ref_property_no: int,
+        curator_userid: str,
+    ) -> bool:
+        """
+        Remove a non-gene topic from a reference.
+
+        Only removes if the topic has no feature associations.
+        """
+        prop = (
+            self.db.query(RefProperty)
+            .filter(RefProperty.ref_property_no == ref_property_no)
+            .first()
+        )
+
+        if not prop:
+            raise LitGuideCurationError(f"Topic property {ref_property_no} not found")
+
+        # Check if it has feature associations
+        has_features = (
+            self.db.query(RefpropFeat)
+            .filter(RefpropFeat.ref_property_no == ref_property_no)
+            .first()
+        )
+
+        if has_features:
+            raise LitGuideCurationError(
+                "Cannot remove topic that has feature associations. "
+                "Remove the feature associations first."
+            )
+
+        self.db.delete(prop)
+        self.db.commit()
+
+        logger.info(
+            f"Removed non-gene topic property {ref_property_no} by {curator_userid}"
+        )
+
+        return True

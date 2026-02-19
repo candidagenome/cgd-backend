@@ -19,6 +19,7 @@ from cgd.api.services.curation.litguide_curation_service import (
     LITERATURE_TOPICS,
     CURATION_STATUSES,
 )
+from cgd.models.models import Reference
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +291,25 @@ class FeatureTopicOut(BaseModel):
     feature_name: str
     gene_name: Optional[str]
     feature_type: Optional[str]
+    organism_abbrev: Optional[str] = None
+    organism_name: Optional[str] = None
     topics: list[TopicOut]
+
+
+class OrganismOut(BaseModel):
+    """Organism info."""
+
+    organism_abbrev: str
+    organism_name: str
+    common_name: Optional[str] = None
+
+
+class OrganismFeaturesOut(BaseModel):
+    """Features grouped by organism."""
+
+    organism_abbrev: str
+    organism_name: str
+    features: list[FeatureTopicOut]
 
 
 class ReferenceLiteratureResponse(BaseModel):
@@ -302,7 +321,15 @@ class ReferenceLiteratureResponse(BaseModel):
     title: Optional[str]
     year: Optional[int]
     curation_status: Optional[str]
+    current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
+    other_organisms: dict[str, OrganismFeaturesOut] = {}
+
+
+class OrganismsResponse(BaseModel):
+    """Response for available organisms."""
+
+    organisms: list[OrganismOut]
 
 
 class AddFeatureRequest(BaseModel):
@@ -322,21 +349,130 @@ class AddFeatureResponse(BaseModel):
     message: str
 
 
+class UnlinkFeatureRequest(BaseModel):
+    """Request to unlink feature from reference."""
+
+    feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
+
+
+class UnlinkFeatureResponse(BaseModel):
+    """Response for unlinking feature from reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str]
+    removed_topics: int
+    message: str
+
+
+class NoteOut(BaseModel):
+    """Note in reference notes response."""
+
+    feature_name: Optional[str]
+    topic: str
+    note: str
+    note_type: str
+
+
+class ReferenceNotesResponse(BaseModel):
+    """Response for reference notes."""
+
+    reference_no: int
+    notes: list[NoteOut]
+
+
+class NongeneTopicOut(BaseModel):
+    """Non-gene topic in response."""
+
+    topic: str
+    ref_property_no: int
+
+
+class NongeneTopicsResponse(BaseModel):
+    """Response for non-gene topics."""
+
+    reference_no: int
+    public_topics: list[NongeneTopicOut]
+    internal_topics: list[NongeneTopicOut]
+
+
+class AddNongeneTopicRequest(BaseModel):
+    """Request to add non-gene topic."""
+
+    topic: str = Field(..., description="Literature topic")
+
+
+class AddNongeneTopicResponse(BaseModel):
+    """Response for adding non-gene topic."""
+
+    ref_property_no: int
+    message: str
+
+
+@router.get("/organisms", response_model=OrganismsResponse)
+def get_available_organisms(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Get list of organisms that have features in the database."""
+    service = LitGuideCurationService(db)
+    organisms = service.get_available_organisms()
+
+    return OrganismsResponse(
+        organisms=[OrganismOut(**org) for org in organisms]
+    )
+
+
 @router.get("/reference/{reference_no}", response_model=ReferenceLiteratureResponse)
 def get_reference_literature(
     reference_no: int,
     current_user: CurrentUser,
+    organism: Optional[str] = Query(
+        None,
+        description="Organism abbreviation to filter features. "
+        "If provided, features are grouped into current vs other organisms.",
+    ),
     db: Session = Depends(get_db),
 ):
     """
     Get reference details with all associated features and topics.
 
-    Used for reference-centric literature guide curation (from todo list "Lit Guide" link).
+    Used for reference-centric literature guide curation.
+
+    If 'organism' parameter is provided:
+    - 'features' contains only features from that organism (editable)
+    - 'other_organisms' contains features from other organisms (read-only)
+    - 'current_organism' contains info about the selected organism
+
+    If 'organism' is not provided:
+    - 'features' contains all features
+    - 'other_organisms' is empty
     """
     service = LitGuideCurationService(db)
 
     try:
-        return service.get_reference_literature(reference_no)
+        result = service.get_reference_literature(reference_no, organism)
+
+        # Convert other_organisms dict values to proper models
+        other_organisms = {}
+        for abbrev, org_data in result.get("other_organisms", {}).items():
+            other_organisms[abbrev] = OrganismFeaturesOut(
+                organism_abbrev=org_data["organism_abbrev"],
+                organism_name=org_data["organism_name"],
+                features=[FeatureTopicOut(**f) for f in org_data["features"]],
+            )
+
+        return ReferenceLiteratureResponse(
+            reference_no=result["reference_no"],
+            pubmed=result["pubmed"],
+            citation=result["citation"],
+            title=result["title"],
+            year=result["year"],
+            curation_status=result["curation_status"],
+            current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
+            features=[FeatureTopicOut(**f) for f in result["features"]],
+            other_organisms=other_organisms,
+        )
     except LitGuideCurationError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -368,6 +504,161 @@ def add_feature_to_reference(
             gene_name=result["gene_name"],
             refprop_feat_no=result["refprop_feat_no"],
             message=f"Feature '{result['feature_name']}' added with topic '{request.topic}'",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/reference/{reference_no}/feature", response_model=UnlinkFeatureResponse)
+def unlink_feature_from_reference(
+    reference_no: int,
+    request: UnlinkFeatureRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Unlink a feature from a reference.
+
+    Removes the link between the feature and reference, as well as
+    any topic associations for this feature-reference pair.
+    """
+    service = LitGuideCurationService(db)
+
+    try:
+        result = service.unlink_feature_from_reference(
+            reference_no,
+            request.feature_identifier,
+            current_user.userid,
+        )
+
+        return UnlinkFeatureResponse(
+            feature_no=result["feature_no"],
+            feature_name=result["feature_name"],
+            gene_name=result["gene_name"],
+            removed_topics=result["removed_topics"],
+            message=f"Feature '{result['feature_name']}' unlinked from reference {reference_no}",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/reference/{reference_no}/notes", response_model=ReferenceNotesResponse)
+def get_reference_notes(
+    reference_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get all curation notes associated with a reference.
+
+    Returns notes linked to features (via topics) and non-gene topic notes.
+    """
+    service = LitGuideCurationService(db)
+
+    # Verify reference exists
+    reference = (
+        db.query(Reference)
+        .filter(Reference.reference_no == reference_no)
+        .first()
+    )
+    if not reference:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Reference {reference_no} not found",
+        )
+
+    notes = service.get_reference_notes(reference_no)
+
+    return ReferenceNotesResponse(
+        reference_no=reference_no,
+        notes=[NoteOut(**n) for n in notes],
+    )
+
+
+@router.get("/reference/{reference_no}/nongene-topics", response_model=NongeneTopicsResponse)
+def get_nongene_topics(
+    reference_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Get topics linked to reference but NOT associated with any feature.
+
+    Returns public topics (literature_topic) and internal topics (curation_status).
+    """
+    service = LitGuideCurationService(db)
+
+    # Verify reference exists
+    reference = (
+        db.query(Reference)
+        .filter(Reference.reference_no == reference_no)
+        .first()
+    )
+    if not reference:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Reference {reference_no} not found",
+        )
+
+    result = service.get_nongene_topics(reference_no)
+
+    return NongeneTopicsResponse(
+        reference_no=reference_no,
+        public_topics=[NongeneTopicOut(**t) for t in result["public_topics"]],
+        internal_topics=[NongeneTopicOut(**t) for t in result["internal_topics"]],
+    )
+
+
+@router.post("/reference/{reference_no}/nongene-topic", response_model=AddNongeneTopicResponse)
+def add_nongene_topic(
+    reference_no: int,
+    request: AddNongeneTopicRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Add a non-gene topic to a reference (topic not associated with any feature)."""
+    service = LitGuideCurationService(db)
+
+    try:
+        ref_property_no = service.add_nongene_topic(
+            reference_no,
+            request.topic,
+            current_user.userid,
+        )
+
+        return AddNongeneTopicResponse(
+            ref_property_no=ref_property_no,
+            message=f"Non-gene topic '{request.topic}' added to reference",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/reference/{reference_no}/nongene-topic/{ref_property_no}", response_model=SuccessResponse)
+def remove_nongene_topic(
+    reference_no: int,
+    ref_property_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Remove a non-gene topic from a reference."""
+    service = LitGuideCurationService(db)
+
+    try:
+        service.remove_nongene_topic(ref_property_no, current_user.userid)
+
+        return SuccessResponse(
+            success=True,
+            message="Non-gene topic removed",
         )
     except LitGuideCurationError as e:
         raise HTTPException(
