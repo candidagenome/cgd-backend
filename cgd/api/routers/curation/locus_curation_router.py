@@ -47,11 +47,21 @@ class FeatureSearchResponse(BaseModel):
     page_size: int
 
 
+class RefUrlOut(BaseModel):
+    """URL for a reference (Full Text, Datasets, etc.)."""
+
+    url_type: str
+    url: str
+
+
 class AliasRefOut(BaseModel):
     """Reference for alias."""
 
     reference_no: int
+    dbxref_id: Optional[str]
     pubmed: Optional[int]
+    citation: Optional[str]
+    urls: List[RefUrlOut] = []
 
 
 class AliasOut(BaseModel):
@@ -88,8 +98,10 @@ class FieldRefOut(BaseModel):
 
     ref_link_no: int
     reference_no: int
+    dbxref_id: Optional[str]
     pubmed: Optional[int]
     citation: Optional[str]
+    urls: List[RefUrlOut] = []
 
 
 class FeatureDetailResponse(BaseModel):

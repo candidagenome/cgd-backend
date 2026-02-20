@@ -69,6 +69,25 @@ class LocusCurationService:
             .first()
         )
 
+    def _get_reference_urls(self, reference: Reference) -> list:
+        """
+        Get URLs for a reference (Full Text, Datasets, Web Supplement, etc.).
+
+        Args:
+            reference: Reference object
+
+        Returns:
+            List of URL dicts with url_type and url
+        """
+        urls = []
+        for ref_url in reference.ref_url:
+            if ref_url.url:
+                urls.append({
+                    "url_type": ref_url.url.url_type,
+                    "url": ref_url.url.url,
+                })
+        return urls
+
     def _get_field_references(self, feature_no: int, col_name: str) -> list:
         """
         Get references linked to a specific field of a feature.
@@ -78,7 +97,8 @@ class LocusCurationService:
             col_name: Column name (GENE_NAME, NAME_DESCRIPTION, HEADLINE)
 
         Returns:
-            List of reference dicts with ref_link_no, reference_no, pubmed, citation
+            List of reference dicts with ref_link_no, reference_no, dbxref_id,
+            pubmed, citation, and urls
         """
         refs = []
         ref_links = (
@@ -100,8 +120,10 @@ class LocusCurationService:
                 refs.append({
                     "ref_link_no": ref_link.ref_link_no,
                     "reference_no": ref.reference_no,
+                    "dbxref_id": ref.dbxref_id,
                     "pubmed": ref.pubmed,
                     "citation": ref.citation,
+                    "urls": self._get_reference_urls(ref),
                 })
         return refs
 
@@ -146,7 +168,10 @@ class LocusCurationService:
                 if ref:
                     alias_refs.append({
                         "reference_no": ref.reference_no,
+                        "dbxref_id": ref.dbxref_id,
                         "pubmed": ref.pubmed,
+                        "citation": ref.citation,
+                        "urls": self._get_reference_urls(ref),
                     })
 
             aliases.append({
