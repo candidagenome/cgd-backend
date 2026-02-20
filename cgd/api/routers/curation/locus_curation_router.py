@@ -47,11 +47,21 @@ class FeatureSearchResponse(BaseModel):
     page_size: int
 
 
+class RefUrlOut(BaseModel):
+    """URL for a reference (Full Text, Datasets, etc.)."""
+
+    url_type: str
+    url: str
+
+
 class AliasRefOut(BaseModel):
     """Reference for alias."""
 
     reference_no: int
+    dbxref_id: Optional[str]
     pubmed: Optional[int]
+    citation: Optional[str]
+    urls: List[RefUrlOut] = []
 
 
 class AliasOut(BaseModel):
@@ -83,15 +93,29 @@ class UrlOut(BaseModel):
     link: str
 
 
+class FieldRefOut(BaseModel):
+    """Reference linked to a field (gene_name, name_description, headline)."""
+
+    ref_link_no: int
+    reference_no: int
+    dbxref_id: Optional[str]
+    pubmed: Optional[int]
+    citation: Optional[str]
+    urls: List[RefUrlOut] = []
+
+
 class FeatureDetailResponse(BaseModel):
     """Full feature details for curation."""
 
     feature_no: int
     feature_name: str
     gene_name: Optional[str]
+    gene_name_refs: List[FieldRefOut] = []
     name_description: Optional[str]
+    name_description_refs: List[FieldRefOut] = []
     feature_type: str
     headline: Optional[str]
+    headline_refs: List[FieldRefOut] = []
     source: str
     date_created: Optional[str]
     created_by: str
@@ -104,8 +128,11 @@ class UpdateFeatureRequest(BaseModel):
     """Request to update feature."""
 
     gene_name: Optional[str] = Field(None, description="Standard gene name")
+    gene_name_pmids: Optional[str] = Field(None, description="Pipe-delimited PMIDs for gene name")
     name_description: Optional[str] = Field(None, description="Name description")
-    headline: Optional[str] = Field(None, description="Headline/short description")
+    name_description_pmids: Optional[str] = Field(None, description="Pipe-delimited PMIDs for name description")
+    headline: Optional[str] = Field(None, description="Headline/short description (max 240 chars)")
+    headline_pmids: Optional[str] = Field(None, description="Pipe-delimited PMIDs for headline")
     feature_type: Optional[str] = Field(None, description="Feature type")
 
 
@@ -391,6 +418,29 @@ def remove_url(
         return SuccessResponse(
             success=True,
             message="URL removed",
+        )
+    except LocusCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/field-ref/{ref_link_no}", response_model=SuccessResponse)
+def unlink_field_reference(
+    ref_link_no: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Unlink a reference from a feature field (gene_name, name_description, headline)."""
+    service = LocusCurationService(db)
+
+    try:
+        service.unlink_field_reference(ref_link_no, current_user.userid)
+
+        return SuccessResponse(
+            success=True,
+            message="Reference unlinked from field",
         )
     except LocusCurationError as e:
         raise HTTPException(

@@ -26,6 +26,10 @@ from cgd.models.models import (
     RefLink,
     Organism,
 )
+from cgd.api.services.curation.reference_curation_service import (
+    ReferenceCurationService,
+    ReferenceCurationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +69,78 @@ class LocusCurationService:
             .first()
         )
 
+    def _get_reference_urls(self, reference: Reference) -> list:
+        """
+        Get URLs for a reference (Full Text, Datasets, Web Supplement, etc.).
+
+        Args:
+            reference: Reference object
+
+        Returns:
+            List of URL dicts with url_type and url
+        """
+        urls = []
+        for ref_url in reference.ref_url:
+            if ref_url.url:
+                urls.append({
+                    "url_type": ref_url.url.url_type,
+                    "url": ref_url.url.url,
+                })
+        return urls
+
+    def _get_field_references(self, feature_no: int, col_name: str) -> list:
+        """
+        Get references linked to a specific field of a feature.
+
+        Args:
+            feature_no: Feature number (primary_key in ref_link)
+            col_name: Column name (GENE_NAME, NAME_DESCRIPTION, HEADLINE)
+
+        Returns:
+            List of reference dicts with ref_link_no, reference_no, dbxref_id,
+            pubmed, citation, and urls
+        """
+        refs = []
+        ref_links = (
+            self.db.query(RefLink)
+            .filter(
+                RefLink.tab_name == "FEATURE",
+                RefLink.col_name == col_name,
+                RefLink.primary_key == feature_no,
+            )
+            .all()
+        )
+        for ref_link in ref_links:
+            ref = (
+                self.db.query(Reference)
+                .filter(Reference.reference_no == ref_link.reference_no)
+                .first()
+            )
+            if ref:
+                refs.append({
+                    "ref_link_no": ref_link.ref_link_no,
+                    "reference_no": ref.reference_no,
+                    "dbxref_id": ref.dbxref_id,
+                    "pubmed": ref.pubmed,
+                    "citation": ref.citation,
+                    "urls": self._get_reference_urls(ref),
+                })
+        return refs
+
     def get_feature_details(self, feature_no: int) -> dict:
         """
         Get detailed feature info for curation.
 
-        Returns all feature fields plus aliases, notes, URLs.
+        Returns all feature fields plus aliases, notes, URLs, and field references.
         """
         feature = self.get_feature_by_no(feature_no)
         if not feature:
             raise LocusCurationError(f"Feature {feature_no} not found")
+
+        # Get references for each editable field
+        gene_name_refs = self._get_field_references(feature_no, "GENE_NAME")
+        name_description_refs = self._get_field_references(feature_no, "NAME_DESCRIPTION")
+        headline_refs = self._get_field_references(feature_no, "HEADLINE")
 
         # Get aliases through FeatAlias linking table
         aliases = []
@@ -101,7 +168,10 @@ class LocusCurationService:
                 if ref:
                     alias_refs.append({
                         "reference_no": ref.reference_no,
+                        "dbxref_id": ref.dbxref_id,
                         "pubmed": ref.pubmed,
+                        "citation": ref.citation,
+                        "urls": self._get_reference_urls(ref),
                     })
 
             aliases.append({
@@ -151,9 +221,12 @@ class LocusCurationService:
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
             "gene_name": feature.gene_name,
+            "gene_name_refs": gene_name_refs,
             "name_description": feature.name_description,
+            "name_description_refs": name_description_refs,
             "feature_type": feature.feature_type,
             "headline": feature.headline,
+            "headline_refs": headline_refs,
             "source": feature.source,
             "date_created": feature.date_created.isoformat()
             if feature.date_created else None,
@@ -211,17 +284,124 @@ class LocusCurationService:
             total,
         )
 
+    def _link_pmids_to_field(
+        self,
+        feature_no: int,
+        col_name: str,
+        pmids_str: str,
+        curator_userid: str,
+    ) -> list:
+        """
+        Link PMIDs to a feature field via ref_link table.
+
+        Args:
+            feature_no: Feature number
+            col_name: Column name (GENE_NAME, NAME_DESCRIPTION, HEADLINE)
+            pmids_str: Pipe-delimited PMIDs (e.g., "12345678|23456789")
+            curator_userid: Curator's userid
+
+        Returns:
+            List of created ref_link_no values
+        """
+        if not pmids_str or not pmids_str.strip():
+            return []
+
+        created = []
+        ref_service = ReferenceCurationService(self.db)
+
+        for pmid_str in pmids_str.split("|"):
+            pmid_str = pmid_str.strip()
+            if not pmid_str:
+                continue
+
+            try:
+                pmid = int(pmid_str)
+            except ValueError:
+                logger.warning(f"Invalid PMID '{pmid_str}', skipping")
+                continue
+
+            # Look up reference by PMID
+            reference = ref_service.get_reference_by_pubmed(pmid)
+
+            if not reference:
+                # Try to create reference from PubMed
+                try:
+                    reference_no = ref_service.create_reference_from_pubmed(
+                        pmid=pmid,
+                        reference_status="Published",
+                        curator_userid=curator_userid,
+                    )
+                    reference = ref_service.get_reference_by_no(reference_no)
+                    logger.info(f"Created reference from PMID:{pmid}")
+                except ReferenceCurationError as e:
+                    logger.warning(f"Failed to create reference for PMID:{pmid}: {e}")
+                    continue
+
+            if not reference:
+                continue
+
+            # Check if link already exists
+            existing = (
+                self.db.query(RefLink)
+                .filter(
+                    RefLink.tab_name == "FEATURE",
+                    RefLink.col_name == col_name,
+                    RefLink.primary_key == feature_no,
+                    RefLink.reference_no == reference.reference_no,
+                )
+                .first()
+            )
+
+            if existing:
+                logger.info(
+                    f"Reference {reference.reference_no} already linked to "
+                    f"{col_name} for feature {feature_no}"
+                )
+                continue
+
+            # Create ref_link
+            ref_link = RefLink(
+                reference_no=reference.reference_no,
+                tab_name="FEATURE",
+                col_name=col_name,
+                primary_key=feature_no,
+                created_by=curator_userid[:12],
+            )
+            self.db.add(ref_link)
+            self.db.flush()
+            created.append(ref_link.ref_link_no)
+            logger.info(
+                f"Linked reference {reference.reference_no} (PMID:{pmid}) to "
+                f"{col_name} for feature {feature_no}"
+            )
+
+        return created
+
     def update_feature(
         self,
         feature_no: int,
         curator_userid: str,
         gene_name: Optional[str] = None,
+        gene_name_pmids: Optional[str] = None,
         name_description: Optional[str] = None,
+        name_description_pmids: Optional[str] = None,
         headline: Optional[str] = None,
+        headline_pmids: Optional[str] = None,
         feature_type: Optional[str] = None,
     ) -> bool:
         """
         Update feature fields.
+
+        Args:
+            feature_no: Feature number
+            curator_userid: Curator's userid
+            gene_name: Standard gene name
+            gene_name_pmids: Pipe-delimited PMIDs for gene name references
+            name_description: Name description
+            name_description_pmids: Pipe-delimited PMIDs for name description references
+            headline: Headline/short description (max 240 chars)
+            headline_pmids: Pipe-delimited PMIDs for headline references
+            feature_type: Feature type
 
         Returns:
             True if successful
@@ -229,6 +409,13 @@ class LocusCurationService:
         feature = self.get_feature_by_no(feature_no)
         if not feature:
             raise LocusCurationError(f"Feature {feature_no} not found")
+
+        # Validate headline length
+        if headline is not None and len(headline) > 240:
+            raise LocusCurationError(
+                f"Headline exceeds maximum length of 240 characters "
+                f"(got {len(headline)})"
+            )
 
         # Update fields if provided
         if gene_name is not None:
@@ -239,6 +426,20 @@ class LocusCurationService:
             feature.headline = headline or None
         if feature_type is not None:
             feature.feature_type = feature_type
+
+        # Link PMIDs to fields
+        if gene_name_pmids:
+            self._link_pmids_to_field(
+                feature_no, "GENE_NAME", gene_name_pmids, curator_userid
+            )
+        if name_description_pmids:
+            self._link_pmids_to_field(
+                feature_no, "NAME_DESCRIPTION", name_description_pmids, curator_userid
+            )
+        if headline_pmids:
+            self._link_pmids_to_field(
+                feature_no, "HEADLINE", headline_pmids, curator_userid
+            )
 
         self.db.commit()
 
@@ -346,6 +547,38 @@ class LocusCurationService:
         self.db.commit()
 
         logger.info(f"Removed alias {feat_alias_no} by {curator_userid}")
+
+        return True
+
+    def unlink_field_reference(self, ref_link_no: int, curator_userid: str) -> bool:
+        """
+        Unlink a reference from a feature field.
+
+        Args:
+            ref_link_no: RefLink record ID
+            curator_userid: Curator's userid
+
+        Returns:
+            True if successful
+        """
+        ref_link = (
+            self.db.query(RefLink)
+            .filter(RefLink.ref_link_no == ref_link_no)
+            .first()
+        )
+        if not ref_link:
+            raise LocusCurationError(f"Reference link {ref_link_no} not found")
+
+        # Verify it's a FEATURE table link
+        if ref_link.tab_name != "FEATURE":
+            raise LocusCurationError(
+                f"Reference link {ref_link_no} is not a feature field reference"
+            )
+
+        self.db.delete(ref_link)
+        self.db.commit()
+
+        logger.info(f"Unlinked reference {ref_link_no} by {curator_userid}")
 
         return True
 
