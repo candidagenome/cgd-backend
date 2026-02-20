@@ -44,12 +44,21 @@ class ExperimentOut(BaseModel):
     experiment_comment: Optional[str]
 
 
+class RefUrlOut(BaseModel):
+    """URL for a reference (Full Text, Datasets, etc.)."""
+
+    url_type: str
+    url: str
+
+
 class ReferenceOut(BaseModel):
     """Reference in annotation response."""
 
     reference_no: int
+    dbxref_id: Optional[str] = None
     pubmed: Optional[int]
     citation: Optional[str]
+    urls: list[RefUrlOut] = []
 
 
 class PhenotypeAnnotationOut(BaseModel):

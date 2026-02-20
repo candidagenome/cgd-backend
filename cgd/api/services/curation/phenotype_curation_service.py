@@ -15,6 +15,8 @@ from typing import Optional
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
+from sqlalchemy.orm import joinedload
+
 from cgd.models.models import (
     Code,
     Cv,
@@ -28,6 +30,7 @@ from cgd.models.models import (
     RefLink,
     RefUnlink,
     Reference,
+    RefUrl,
 )
 
 logger = logging.getLogger(__name__)
@@ -203,14 +206,25 @@ class PhenotypeCurationService:
             for ref_link in ref_links:
                 ref = (
                     self.db.query(Reference)
+                    .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                     .filter(Reference.reference_no == ref_link.reference_no)
                     .first()
                 )
                 if ref:
+                    # Build urls list from ref_url relationship
+                    urls = []
+                    for ref_url in ref.ref_url:
+                        if ref_url.url:
+                            urls.append({
+                                "url_type": ref_url.url.url_type,
+                                "url": ref_url.url.url,
+                            })
                     references.append({
                         "reference_no": ref.reference_no,
+                        "dbxref_id": ref.dbxref_id,
                         "pubmed": ref.pubmed,
                         "citation": ref.citation,
+                        "urls": urls,
                     })
 
             results.append({
@@ -491,14 +505,25 @@ class PhenotypeCurationService:
             for ref_link in ref_links:
                 ref = (
                     self.db.query(Reference)
+                    .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                     .filter(Reference.reference_no == ref_link.reference_no)
                     .first()
                 )
                 if ref:
+                    # Build urls list from ref_url relationship
+                    urls = []
+                    for ref_url in ref.ref_url:
+                        if ref_url.url:
+                            urls.append({
+                                "url_type": ref_url.url.url_type,
+                                "url": ref_url.url.url,
+                            })
                     references.append({
                         "reference_no": ref.reference_no,
+                        "dbxref_id": ref.dbxref_id,
                         "pubmed": ref.pubmed,
                         "citation": ref.citation,
+                        "urls": urls,
                     })
 
             results.append({
