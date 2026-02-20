@@ -341,16 +341,15 @@ class PhenotypeCurationService:
         self,
         experiment_comment: Optional[str],
         curator_userid: str,
-    ) -> Optional[int]:
+    ) -> int:
         """
-        Create experiment entry if comment provided.
+        Create experiment entry.
+
+        An experiment is needed to link properties, even without a comment.
 
         Returns:
-            experiment_no or None
+            experiment_no
         """
-        if not experiment_comment:
-            return None
-
         experiment = Experiment(
             source=SOURCE,
             experiment_comment=experiment_comment,
