@@ -44,12 +44,21 @@ class ExperimentOut(BaseModel):
     experiment_comment: Optional[str]
 
 
+class RefUrlOut(BaseModel):
+    """URL for a reference (Full Text, Datasets, etc.)."""
+
+    url_type: str
+    url: str
+
+
 class ReferenceOut(BaseModel):
     """Reference in annotation response."""
 
     reference_no: int
+    dbxref_id: Optional[str] = None
     pubmed: Optional[int]
     citation: Optional[str]
+    urls: list[RefUrlOut] = []
 
 
 class PhenotypeAnnotationOut(BaseModel):
@@ -352,7 +361,7 @@ def get_phenotype_annotations(
 
         return FeaturePhenotypeResponse(
             feature_no=primary_feature.feature_no if len(features) == 1 else None,
-            feature_name=feature_name,  # Use search term
+            feature_name=primary_feature.feature_name,  # Use actual feature name
             gene_name=primary_feature.gene_name,
             features_searched=len(features),
             annotations=[
