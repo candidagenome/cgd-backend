@@ -352,7 +352,7 @@ def get_phenotype_annotations(
 
         return FeaturePhenotypeResponse(
             feature_no=primary_feature.feature_no if len(features) == 1 else None,
-            feature_name=feature_name,  # Use search term
+            feature_name=primary_feature.feature_name,  # Use actual feature name
             gene_name=primary_feature.gene_name,
             features_searched=len(features),
             annotations=[
