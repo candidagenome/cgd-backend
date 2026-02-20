@@ -12,7 +12,7 @@ import logging
 from typing import Optional, List, Tuple
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
     Feature,
@@ -24,6 +24,7 @@ from cgd.models.models import (
     Url,
     Reference,
     RefLink,
+    RefUrl,
     Organism,
 )
 from cgd.api.services.curation.reference_curation_service import (
@@ -113,6 +114,7 @@ class LocusCurationService:
         for ref_link in ref_links:
             ref = (
                 self.db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                 .filter(Reference.reference_no == ref_link.reference_no)
                 .first()
             )
@@ -162,6 +164,7 @@ class LocusCurationService:
             for ref_link in ref_links:
                 ref = (
                     self.db.query(Reference)
+                    .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
                     .filter(Reference.reference_no == ref_link.reference_no)
                     .first()
                 )
