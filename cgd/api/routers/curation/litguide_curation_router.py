@@ -588,6 +588,11 @@ def batch_assign_topics(
     Assigns all specified literature_topics and curation_statuses to all
     specified features. This mirrors the Perl version's multi-row form submission.
     """
+    logger = logging.getLogger(__name__)
+    logger.info(f"batch_assign_topics: reference_no={reference_no}, features={request.features}, "
+                f"lit_topics={request.literature_topics}, curation_statuses={request.curation_statuses}, "
+                f"organism={request.organism}")
+
     service = LitGuideCurationService(db)
     results = []
     successful = 0
