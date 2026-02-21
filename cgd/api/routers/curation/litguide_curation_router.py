@@ -487,6 +487,8 @@ def get_reference_literature(
             citation=result["citation"],
             title=result["title"],
             year=result["year"],
+            dbxref_id=result.get("dbxref_id"),
+            abstract=result.get("abstract"),
             curation_status=result["curation_status"],
             current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
             features=[FeatureTopicOut(**f) for f in result["features"]],
