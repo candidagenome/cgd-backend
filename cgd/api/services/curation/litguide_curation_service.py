@@ -307,11 +307,8 @@ class LitGuideCurationService:
 
         Returns refprop_feat_no.
         """
-        # Validate topic against CV terms from database
-        if not self.is_valid_topic(topic):
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         feature = self.get_feature_by_no(feature_no)
         if not feature:
@@ -751,11 +748,8 @@ class LitGuideCurationService:
         feature_identifier can be feature_no (int as string) or feature/gene name.
         Returns dict with feature info and refprop_feat_no.
         """
-        # Validate topic against CV terms from database
-        if not self.is_valid_topic(topic):
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         # Find feature
         try:
@@ -1010,11 +1004,8 @@ class LitGuideCurationService:
 
         Returns ref_property_no.
         """
-        # Validate topic against CV terms from database
-        if not self.is_valid_topic(topic):
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         # Verify reference exists
         reference = (
