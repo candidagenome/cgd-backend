@@ -913,7 +913,7 @@ class ReferenceCurationService:
                     "url_no": url.url_no,
                     "url": url.url,
                     "url_type": url.url_type,
-                    "source": ref_url.source,
+                    "source": url.source,
                 }
                 for ref_url, url in urls
             ],
