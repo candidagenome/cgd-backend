@@ -750,6 +750,7 @@ class LitGuideCurationService:
         topic: str,
         curator_userid: str,
         property_type: str = "literature_topic",
+        organism_abbrev: Optional[str] = None,
     ) -> dict:
         """
         Add a feature-topic association to a reference.
@@ -760,6 +761,7 @@ class LitGuideCurationService:
             topic: Topic value
             curator_userid: Curator user ID
             property_type: Either "literature_topic" or "curation_status"
+            organism_abbrev: Optional organism to filter feature lookup
 
         Returns dict with feature info and refprop_feat_no.
         """
@@ -771,7 +773,7 @@ class LitGuideCurationService:
             feature_no = int(feature_identifier)
             feature = self.get_feature_by_no(feature_no)
         except ValueError:
-            feature = self.get_feature_by_name(feature_identifier)
+            feature = self.get_feature_by_name(feature_identifier, organism_abbrev)
 
         if not feature:
             raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")

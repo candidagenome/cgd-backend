@@ -376,6 +376,7 @@ class BatchAssignTopicsRequest(BaseModel):
     features: list[str] = Field(..., description="List of feature names/identifiers")
     literature_topics: list[str] = Field(default=[], description="Literature topics to assign")
     curation_statuses: list[str] = Field(default=[], description="Curation statuses to assign")
+    organism: Optional[str] = Field(default=None, description="Organism abbreviation to filter feature lookup")
 
 
 class BatchAssignResult(BaseModel):
@@ -622,6 +623,7 @@ def batch_assign_topics(
                     topic,
                     current_user.userid,
                     property_type="literature_topic",
+                    organism_abbrev=request.organism,
                 )
                 results.append(BatchAssignResult(
                     feature=feature,
@@ -653,6 +655,7 @@ def batch_assign_topics(
                     status_val,
                     current_user.userid,
                     property_type="curation_status",
+                    organism_abbrev=request.organism,
                 )
                 results.append(BatchAssignResult(
                     feature=feature,
