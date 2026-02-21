@@ -1131,8 +1131,24 @@ class ReferenceCurationService:
         pubmed = reference.pubmed
         dbxref_id = reference.dbxref_id
 
-        # Delete the reference
+        # Delete related records first (to avoid foreign key constraint errors)
         try:
+            # Delete author_editor records
+            self.db.query(AuthorEditor).filter(
+                AuthorEditor.reference_no == reference_no
+            ).delete()
+
+            # Delete ref_url records
+            self.db.query(RefUrl).filter(
+                RefUrl.reference_no == reference_no
+            ).delete()
+
+            # Delete abstract
+            self.db.query(Abstract).filter(
+                Abstract.reference_no == reference_no
+            ).delete()
+
+            # Delete the reference
             self.db.delete(reference)
             self.db.flush()
             messages.append(f"Reference {reference_no} deleted")
