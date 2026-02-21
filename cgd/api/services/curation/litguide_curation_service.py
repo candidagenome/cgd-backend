@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
     Abstract,
+    Cv,
+    CvTerm,
     Feature,
     Note,
     NoteLink,
@@ -72,6 +74,40 @@ class LitGuideCurationService:
 
     def __init__(self, db: Session):
         self.db = db
+        # Cache for CV terms
+        self._cv_terms_cache: dict[str, set[str]] = {}
+
+    def get_valid_cv_terms(self, cv_name: str) -> set[str]:
+        """
+        Get all valid terms for a CV from the database.
+
+        Caches results to avoid repeated queries.
+        """
+        if cv_name in self._cv_terms_cache:
+            return self._cv_terms_cache[cv_name]
+
+        cv = (
+            self.db.query(Cv)
+            .filter(func.lower(Cv.cv_name) == cv_name.lower())
+            .first()
+        )
+        if not cv:
+            return set()
+
+        terms = (
+            self.db.query(CvTerm.term_name)
+            .filter(CvTerm.cv_no == cv.cv_no)
+            .all()
+        )
+        term_set = {t[0] for t in terms}
+        self._cv_terms_cache[cv_name] = term_set
+        return term_set
+
+    def is_valid_topic(self, topic: str) -> bool:
+        """Check if topic is valid (in literature_topic or curation_status CV)."""
+        lit_topics = self.get_valid_cv_terms("literature_topic")
+        curation_statuses = self.get_valid_cv_terms("curation_status")
+        return topic in lit_topics or topic in curation_statuses
 
     def get_feature_by_name(
         self, name: str, organism_abbrev: Optional[str] = None
@@ -271,10 +307,10 @@ class LitGuideCurationService:
 
         Returns refprop_feat_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
+        # Validate topic against CV terms from database
+        if not self.is_valid_topic(topic):
             raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
             )
 
         feature = self.get_feature_by_no(feature_no)
@@ -715,10 +751,10 @@ class LitGuideCurationService:
         feature_identifier can be feature_no (int as string) or feature/gene name.
         Returns dict with feature info and refprop_feat_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
+        # Validate topic against CV terms from database
+        if not self.is_valid_topic(topic):
             raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
             )
 
         # Find feature
@@ -974,10 +1010,10 @@ class LitGuideCurationService:
 
         Returns ref_property_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
+        # Validate topic against CV terms from database
+        if not self.is_valid_topic(topic):
             raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
+                f"Invalid topic '{topic}'. Topic must be a valid literature_topic or curation_status CV term."
             )
 
         # Verify reference exists
