@@ -35,8 +35,18 @@ class TopicOut(BaseModel):
     """Topic association in literature guide."""
 
     topic: str
+    property_type: Optional[str] = None
     ref_property_no: int
     refprop_feat_no: int
+
+
+class UnlinkedFeatureOut(BaseModel):
+    """Feature that has been unlinked from a reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str] = None
+    organism_abbrev: Optional[str] = None
 
 
 class RefUrlOut(BaseModel):
@@ -344,6 +354,7 @@ class ReferenceLiteratureResponse(BaseModel):
     current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
     other_organisms: dict[str, OrganismFeaturesOut] = {}
+    unlinked_features: list[UnlinkedFeatureOut] = []
 
 
 class OrganismsResponse(BaseModel):
@@ -495,6 +506,7 @@ def get_reference_literature(
             current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
             features=[FeatureTopicOut(**f) for f in result["features"]],
             other_organisms=other_organisms,
+            unlinked_features=[UnlinkedFeatureOut(**f) for f in result.get("unlinked_features", [])],
         )
     except LitGuideCurationError as e:
         raise HTTPException(

@@ -24,6 +24,7 @@ from cgd.models.models import (
     RefProperty,
     Reference,
     RefpropFeat,
+    RefUnlink,
     RefUrl,
     Url,
 )
@@ -558,6 +559,7 @@ class LitGuideCurationService:
         curation_status = self.get_reference_curation_status(reference_no)
 
         # Get all feature-topic associations for this reference WITH organism info
+        # Include both literature_topic (public) and curation_status (internal)
         feature_topic_query = (
             self.db.query(
                 Feature.feature_no,
@@ -569,6 +571,7 @@ class LitGuideCurationService:
                 Organism.organism_name,
                 Organism.common_name,
                 RefProperty.property_value.label("topic"),
+                RefProperty.property_type,
                 RefProperty.ref_property_no,
                 RefpropFeat.refprop_feat_no,
             )
@@ -576,7 +579,7 @@ class LitGuideCurationService:
             .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
             .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(RefProperty.reference_no == reference_no)
-            .filter(RefProperty.property_type == "literature_topic")
+            .filter(RefProperty.property_type.in_(["literature_topic", "curation_status"]))
             .order_by(Organism.organism_order, Feature.feature_name, RefProperty.property_value)
         )
 
@@ -598,11 +601,37 @@ class LitGuideCurationService:
                 }
             features_dict[feat_no]["topics"].append({
                 "topic": row.topic,
+                "property_type": row.property_type,
                 "ref_property_no": row.ref_property_no,
                 "refprop_feat_no": row.refprop_feat_no,
             })
 
         all_features = list(features_dict.values())
+
+        # Get unlinked features for this reference (via ref_unlink table)
+        unlinked_features = []
+        if reference.pubmed:
+            unlinked_query = (
+                self.db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    Feature.gene_name,
+                    Organism.organism_abbrev,
+                )
+                .join(RefUnlink, Feature.feature_no == RefUnlink.primary_key)
+                .join(Organism, Feature.organism_no == Organism.organism_no)
+                .filter(RefUnlink.pubmed == reference.pubmed)
+                .filter(RefUnlink.tab_name == "FEATURE")
+                .order_by(Feature.feature_name)
+            )
+            unlinked_results = unlinked_query.all()
+            for row in unlinked_results:
+                unlinked_features.append({
+                    "feature_no": row.feature_no,
+                    "feature_name": row.feature_name,
+                    "gene_name": row.gene_name,
+                    "organism_abbrev": row.organism_abbrev,
+                })
 
         # If no organism filter, return all features together
         if not organism_abbrev:
@@ -619,6 +648,7 @@ class LitGuideCurationService:
                 "current_organism": None,
                 "features": all_features,
                 "other_organisms": {},
+                "unlinked_features": unlinked_features,
             }
 
         # Group features by organism
@@ -648,6 +678,14 @@ class LitGuideCurationService:
                 "common_name": current_org.common_name,
             }
 
+        # Filter unlinked features by organism if specified
+        current_unlinked = unlinked_features
+        if organism_abbrev:
+            current_unlinked = [
+                f for f in unlinked_features
+                if f["organism_abbrev"].upper() == organism_abbrev.upper()
+            ]
+
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
@@ -661,6 +699,7 @@ class LitGuideCurationService:
             "current_organism": current_organism_info,
             "features": current_features,
             "other_organisms": other_organisms,
+            "unlinked_features": current_unlinked,
         }
 
     def add_feature_to_reference(
