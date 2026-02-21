@@ -31,8 +31,10 @@ from cgd.models.models import (
     RefLink,
     RefProperty,
     RefUnlink,
+    RefUrl,
     Reference,
     RefpropFeat,
+    Url,
 )
 
 logger = logging.getLogger(__name__)
@@ -877,6 +879,14 @@ class ReferenceCurationService:
                     ],
                 })
 
+        # Get URLs linked to this reference
+        urls = (
+            self.db.query(RefUrl, Url)
+            .join(Url, RefUrl.url_no == Url.url_no)
+            .filter(RefUrl.reference_no == reference_no)
+            .all()
+        )
+
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
@@ -897,6 +907,15 @@ class ReferenceCurationService:
                     "order": ae.author_order,
                 }
                 for ae in authors
+            ],
+            "urls": [
+                {
+                    "url_no": url.url_no,
+                    "url": url.url,
+                    "url_type": url.url_type,
+                    "source": ref_url.source,
+                }
+                for ref_url, url in urls
             ],
         }
 
@@ -1206,3 +1225,101 @@ class ReferenceCurationService:
         max_year = result[1] or datetime.now().year
 
         return min_year, max_year
+
+    def get_url_types(self) -> list[str]:
+        """Get list of valid URL types for references."""
+        # Based on legacy Database::Url->allowed_reference_url_type
+        return [
+            "Full-text",
+            "Abstract",
+            "Supplemental",
+            "Journal",
+            "Publisher",
+            "DOI",
+            "Other",
+        ]
+
+    def get_url_sources(self) -> list[str]:
+        """Get list of valid URL sources."""
+        return ["Author", "NCBI", "Publisher"]
+
+    def add_reference_url(
+        self,
+        reference_no: int,
+        url: str,
+        url_type: str,
+        source: str,
+        curator_userid: str,
+    ) -> dict:
+        """
+        Add a URL to a reference.
+
+        Creates a new URL entry if it doesn't exist, then links it to the reference.
+
+        Args:
+            reference_no: Reference number
+            url: The URL string
+            url_type: Type of URL (Full-text, Abstract, etc.)
+            source: Source of URL (Author, NCBI, Publisher)
+            curator_userid: Curator user ID
+
+        Returns:
+            dict with url_no, ref_url_no, and message
+        """
+        # Verify reference exists
+        reference = self.get_reference_by_no(reference_no)
+        if not reference:
+            raise ReferenceCurationError(f"Reference {reference_no} not found")
+
+        # Check if URL already exists
+        existing_url = (
+            self.db.query(Url)
+            .filter(Url.url == url)
+            .first()
+        )
+
+        if existing_url:
+            url_no = existing_url.url_no
+            # Check if already linked to this reference
+            existing_link = (
+                self.db.query(RefUrl)
+                .filter(
+                    RefUrl.reference_no == reference_no,
+                    RefUrl.url_no == url_no,
+                )
+                .first()
+            )
+            if existing_link:
+                raise ReferenceCurationError(
+                    f"URL is already linked to reference {reference_no}"
+                )
+        else:
+            # Create new URL entry
+            new_url = Url(
+                source=source,
+                url_type=url_type,
+                url=url,
+                created_by=curator_userid[:12],
+            )
+            self.db.add(new_url)
+            self.db.flush()
+            url_no = new_url.url_no
+            logger.info(f"Created new URL entry: url_no={url_no}, url={url}")
+
+        # Create RefUrl link
+        ref_url = RefUrl(
+            reference_no=reference_no,
+            url_no=url_no,
+        )
+        self.db.add(ref_url)
+        self.db.commit()
+
+        logger.info(
+            f"Linked URL {url_no} to reference {reference_no} by {curator_userid}"
+        )
+
+        return {
+            "url_no": url_no,
+            "ref_url_no": ref_url.ref_url_no,
+            "message": f"URL added to reference {reference_no}",
+        }

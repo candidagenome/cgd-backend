@@ -216,6 +216,38 @@ class YearRangeResponse(BaseModel):
     max_year: int
 
 
+class AddUrlRequest(BaseModel):
+    """Request to add a URL to a reference."""
+
+    url: str = Field(..., description="The URL to add")
+    url_type: str = Field(..., description="Type of URL (Full-text, Abstract, etc.)")
+    source: str = Field(..., description="Source of URL (Author, NCBI, Publisher)")
+
+
+class AddUrlResponse(BaseModel):
+    """Response for adding a URL."""
+
+    url_no: int
+    ref_url_no: int
+    message: str
+
+
+class UrlOptionsResponse(BaseModel):
+    """Response for URL type and source options."""
+
+    url_types: list[str]
+    url_sources: list[str]
+
+
+class UrlOut(BaseModel):
+    """URL information."""
+
+    url_no: int
+    url: str
+    url_type: str
+    source: str
+
+
 class ReferenceCurationDetailsResponse(BaseModel):
     """Full curation details for a reference."""
 
@@ -233,6 +265,7 @@ class ReferenceCurationDetailsResponse(BaseModel):
     topics: list[TopicOut]
     abstract: Optional[str]
     authors: list[dict]
+    urls: list[UrlOut] = []
 
 
 # ---------------------------
@@ -265,6 +298,19 @@ def get_reference_statuses(current_user: CurrentUser):
 def get_curation_statuses(current_user: CurrentUser):
     """Get list of valid curation status values."""
     return {"statuses": ReferenceCurationService.CURATION_STATUSES}
+
+
+@router.get("/url-options", response_model=UrlOptionsResponse)
+def get_url_options(
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """Get available URL types and sources for adding reference URLs."""
+    service = ReferenceCurationService(db)
+    return UrlOptionsResponse(
+        url_types=service.get_url_types(),
+        url_sources=service.get_url_sources(),
+    )
 
 
 @router.post("/pubmed", response_model=CreateReferenceResponse)
@@ -599,6 +645,38 @@ def link_to_literature_guide(
             refprop_feat_nos=refprop_feat_nos,
             message=f"Linked {len(refprop_feat_nos)} features to reference {reference_no}",
         )
+
+    except ReferenceCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/{reference_no}/url", response_model=AddUrlResponse)
+def add_reference_url(
+    reference_no: int,
+    request: AddUrlRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Add a URL to a reference.
+
+    Creates a new URL entry if it doesn't exist, then links it to the reference.
+    """
+    service = ReferenceCurationService(db)
+
+    try:
+        result = service.add_reference_url(
+            reference_no=reference_no,
+            url=request.url,
+            url_type=request.url_type,
+            source=request.source,
+            curator_userid=current_user.userid,
+        )
+
+        return AddUrlResponse(**result)
 
     except ReferenceCurationError as e:
         raise HTTPException(
