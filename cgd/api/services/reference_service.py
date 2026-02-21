@@ -109,16 +109,20 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
         if url_obj and url_obj.url:
             url_type = (url_obj.url_type or "").lower()
 
-            # Skip Reference supplement (displayed separately)
+            # Reference Supplement
             if "supplement" in url_type:
                 links.append(CitationLink(
                     name="Reference Supplement",
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # Skip Reference Data (not shown as full text)
+            # Reference Data
             elif "reference data" in url_type:
-                continue
+                links.append(CitationLink(
+                    name="Reference Data",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
             # Download Datasets
             elif any(kw in url_type for kw in ["download", "dataset"]):
                 links.append(CitationLink(
@@ -126,10 +130,17 @@ def _build_citation_links(ref, ref_urls) -> list[CitationLink]:
                     url=url_obj.url,
                     link_type="external"
                 ))
-            # All other URL types are shown as Full Text (matching Perl default behavior)
-            else:
+            # Reference full text / LINKOUT
+            elif "full text" in url_type or "linkout" in url_type:
                 links.append(CitationLink(
                     name="Full Text",
+                    url=url_obj.url,
+                    link_type="external"
+                ))
+            # All other URL types - use the url_type as the name
+            else:
+                links.append(CitationLink(
+                    name=url_obj.url_type or "Link",
                     url=url_obj.url,
                     link_type="external"
                 ))
