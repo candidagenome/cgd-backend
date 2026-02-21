@@ -12,9 +12,12 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
+    Abstract,
+    Cv,
+    CvTerm,
     Feature,
     Note,
     NoteLink,
@@ -23,6 +26,9 @@ from cgd.models.models import (
     RefProperty,
     Reference,
     RefpropFeat,
+    RefUnlink,
+    RefUrl,
+    Url,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,19 +74,59 @@ class LitGuideCurationService:
 
     def __init__(self, db: Session):
         self.db = db
+        # Cache for CV terms
+        self._cv_terms_cache: dict[str, set[str]] = {}
 
-    def get_feature_by_name(self, name: str) -> Optional[Feature]:
-        """Look up feature by name or gene_name."""
-        return (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == name.upper(),
-                    func.upper(Feature.gene_name) == name.upper(),
-                )
-            )
+    def get_valid_cv_terms(self, cv_name: str) -> set[str]:
+        """
+        Get all valid terms for a CV from the database.
+
+        Caches results to avoid repeated queries.
+        """
+        if cv_name in self._cv_terms_cache:
+            return self._cv_terms_cache[cv_name]
+
+        cv = (
+            self.db.query(Cv)
+            .filter(func.lower(Cv.cv_name) == cv_name.lower())
             .first()
         )
+        if not cv:
+            return set()
+
+        terms = (
+            self.db.query(CvTerm.term_name)
+            .filter(CvTerm.cv_no == cv.cv_no)
+            .all()
+        )
+        term_set = {t[0] for t in terms}
+        self._cv_terms_cache[cv_name] = term_set
+        return term_set
+
+    def is_valid_topic(self, topic: str) -> bool:
+        """Check if topic is valid (in literature_topic or curation_status CV)."""
+        lit_topics = self.get_valid_cv_terms("literature_topic")
+        curation_statuses = self.get_valid_cv_terms("curation_status")
+        return topic in lit_topics or topic in curation_statuses
+
+    def get_feature_by_name(
+        self, name: str, organism_abbrev: Optional[str] = None
+    ) -> Optional[Feature]:
+        """Look up feature by name or gene_name, optionally filtered by organism."""
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
+            )
+        )
+
+        if organism_abbrev:
+            # Join with organism table to filter by abbreviation
+            query = query.join(
+                Organism, Feature.organism_no == Organism.organism_no
+            ).filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
+
+        return query.first()
 
     def get_feature_by_no(self, feature_no: int) -> Optional[Feature]:
         """Get feature by feature_no."""
@@ -95,10 +141,28 @@ class LitGuideCurationService:
         Get all literature for a feature.
 
         Returns curated (with topics) and uncurated references.
+
+        Note: If the feature has a gene_name, we include literature from ALL
+        features with the same gene_name in the same organism. This matches
+        the legacy Perl behavior where literature is aggregated by gene.
         """
         feature = self.get_feature_by_no(feature_no)
         if not feature:
             raise LitGuideCurationError(f"Feature {feature_no} not found")
+
+        # Get all feature_nos to query - include all features with same gene_name
+        # in the same organism (to match Perl behavior)
+        feature_nos = [feature_no]
+        if feature.gene_name:
+            related_features = (
+                self.db.query(Feature.feature_no)
+                .filter(
+                    func.upper(Feature.gene_name) == feature.gene_name.upper(),
+                    Feature.organism_no == feature.organism_no,
+                )
+                .all()
+            )
+            feature_nos = [f.feature_no for f in related_features]
 
         # Get curated literature (references with topics via RefpropFeat)
         curated_query = (
@@ -114,24 +178,50 @@ class LitGuideCurationService:
             )
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
-            .filter(RefpropFeat.feature_no == feature_no)
+            .filter(RefpropFeat.feature_no.in_(feature_nos))
             .filter(RefProperty.property_type == "literature_topic")
             .order_by(Reference.year.desc(), Reference.pubmed)
         )
 
         curated_results = curated_query.all()
 
+        # Get unique reference_nos from curated results
+        curated_ref_nos = list(set(row.reference_no for row in curated_results))
+
+        # Load full Reference objects with ref_url relationships for curated refs
+        curated_refs_with_urls = {}
+        if curated_ref_nos:
+            refs_with_urls = (
+                self.db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
+                .filter(Reference.reference_no.in_(curated_ref_nos))
+                .all()
+            )
+            curated_refs_with_urls = {r.reference_no: r for r in refs_with_urls}
+
         # Group by reference
         curated_refs = {}
         for row in curated_results:
             ref_no = row.reference_no
             if ref_no not in curated_refs:
+                # Get urls from the loaded reference
+                ref_obj = curated_refs_with_urls.get(ref_no)
+                urls = []
+                if ref_obj and ref_obj.ref_url:
+                    for ref_url in ref_obj.ref_url:
+                        if ref_url.url:
+                            urls.append({
+                                "url": ref_url.url.url,
+                                "url_type": ref_url.url.url_type,
+                            })
                 curated_refs[ref_no] = {
                     "reference_no": row.reference_no,
                     "pubmed": row.pubmed,
                     "citation": row.citation,
                     "title": row.title,
                     "year": row.year,
+                    "dbxref_id": ref_obj.dbxref_id if ref_obj else None,
+                    "urls": urls,
                     "topics": [],
                 }
             curated_refs[ref_no]["topics"].append({
@@ -153,28 +243,56 @@ class LitGuideCurationService:
             .join(RefLink, Reference.reference_no == RefLink.reference_no)
             .filter(RefLink.tab_name == "FEATURE")
             .filter(RefLink.col_name == "FEATURE_NO")
-            .filter(RefLink.primary_key == feature_no)
+            .filter(RefLink.primary_key.in_(feature_nos))
             .filter(~Reference.reference_no.in_(curated_refs.keys()) if curated_refs else True)
             .order_by(Reference.year.desc(), Reference.pubmed)
+            .distinct()
         )
 
         uncurated_results = uncurated_query.all()
+
+        # Get unique reference_nos from uncurated results
+        uncurated_ref_nos = [row.reference_no for row in uncurated_results]
+
+        # Load full Reference objects with ref_url relationships for uncurated refs
+        uncurated_refs_with_urls = {}
+        if uncurated_ref_nos:
+            refs_with_urls = (
+                self.db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
+                .filter(Reference.reference_no.in_(uncurated_ref_nos))
+                .all()
+            )
+            uncurated_refs_with_urls = {r.reference_no: r for r in refs_with_urls}
+
+        # Build uncurated list with urls
+        uncurated_list = []
+        for row in uncurated_results:
+            ref_obj = uncurated_refs_with_urls.get(row.reference_no)
+            urls = []
+            if ref_obj and ref_obj.ref_url:
+                for ref_url in ref_obj.ref_url:
+                    if ref_url.url:
+                        urls.append({
+                            "url": ref_url.url.url,
+                            "url_type": ref_url.url.url_type,
+                        })
+            uncurated_list.append({
+                "reference_no": row.reference_no,
+                "pubmed": row.pubmed,
+                "citation": row.citation,
+                "title": row.title,
+                "year": row.year,
+                "dbxref_id": ref_obj.dbxref_id if ref_obj else None,
+                "urls": urls,
+            })
 
         return {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
             "gene_name": feature.gene_name,
             "curated": list(curated_refs.values()),
-            "uncurated": [
-                {
-                    "reference_no": row.reference_no,
-                    "pubmed": row.pubmed,
-                    "citation": row.citation,
-                    "title": row.title,
-                    "year": row.year,
-                }
-                for row in uncurated_results
-            ],
+            "uncurated": uncurated_list,
         }
 
     def add_topic_association(
@@ -183,17 +301,22 @@ class LitGuideCurationService:
         reference_no: int,
         topic: str,
         curator_userid: str,
+        property_type: str = "literature_topic",
     ) -> int:
         """
         Add a topic association between a feature and reference.
 
+        Args:
+            feature_no: Feature number
+            reference_no: Reference number
+            topic: Topic value
+            curator_userid: Curator user ID
+            property_type: Either "literature_topic" or "curation_status"
+
         Returns refprop_feat_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         feature = self.get_feature_by_no(feature_no)
         if not feature:
@@ -212,7 +335,7 @@ class LitGuideCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "literature_topic",
+                RefProperty.property_type == property_type,
                 RefProperty.property_value == topic,
             )
             .first()
@@ -222,7 +345,7 @@ class LitGuideCurationService:
             ref_prop = RefProperty(
                 reference_no=reference_no,
                 source=SOURCE,
-                property_type="literature_topic",
+                property_type=property_type,
                 property_value=topic,
                 date_last_reviewed=datetime.now(),
                 created_by=curator_userid[:12],
@@ -448,16 +571,36 @@ class LitGuideCurationService:
         """
         reference = (
             self.db.query(Reference)
+            .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
             .filter(Reference.reference_no == reference_no)
             .first()
         )
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
+        # Build urls list
+        urls = []
+        if reference.ref_url:
+            for ref_url in reference.ref_url:
+                if ref_url.url:
+                    urls.append({
+                        "url": ref_url.url.url,
+                        "url_type": ref_url.url.url_type,
+                    })
+
+        # Get abstract
+        abstract_obj = (
+            self.db.query(Abstract)
+            .filter(Abstract.reference_no == reference_no)
+            .first()
+        )
+        abstract_text = abstract_obj.abstract if abstract_obj else None
+
         # Get curation status
         curation_status = self.get_reference_curation_status(reference_no)
 
         # Get all feature-topic associations for this reference WITH organism info
+        # Include both literature_topic (public) and curation_status (internal)
         feature_topic_query = (
             self.db.query(
                 Feature.feature_no,
@@ -469,6 +612,7 @@ class LitGuideCurationService:
                 Organism.organism_name,
                 Organism.common_name,
                 RefProperty.property_value.label("topic"),
+                RefProperty.property_type,
                 RefProperty.ref_property_no,
                 RefpropFeat.refprop_feat_no,
             )
@@ -476,7 +620,7 @@ class LitGuideCurationService:
             .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
             .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(RefProperty.reference_no == reference_no)
-            .filter(RefProperty.property_type == "literature_topic")
+            .filter(RefProperty.property_type.in_(["literature_topic", "curation_status"]))
             .order_by(Organism.organism_order, Feature.feature_name, RefProperty.property_value)
         )
 
@@ -498,11 +642,37 @@ class LitGuideCurationService:
                 }
             features_dict[feat_no]["topics"].append({
                 "topic": row.topic,
+                "property_type": row.property_type,
                 "ref_property_no": row.ref_property_no,
                 "refprop_feat_no": row.refprop_feat_no,
             })
 
         all_features = list(features_dict.values())
+
+        # Get unlinked features for this reference (via ref_unlink table)
+        unlinked_features = []
+        if reference.pubmed:
+            unlinked_query = (
+                self.db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    Feature.gene_name,
+                    Organism.organism_abbrev,
+                )
+                .join(RefUnlink, Feature.feature_no == RefUnlink.primary_key)
+                .join(Organism, Feature.organism_no == Organism.organism_no)
+                .filter(RefUnlink.pubmed == reference.pubmed)
+                .filter(RefUnlink.tab_name == "FEATURE")
+                .order_by(Feature.feature_name)
+            )
+            unlinked_results = unlinked_query.all()
+            for row in unlinked_results:
+                unlinked_features.append({
+                    "feature_no": row.feature_no,
+                    "feature_name": row.feature_name,
+                    "gene_name": row.gene_name,
+                    "organism_abbrev": row.organism_abbrev,
+                })
 
         # If no organism filter, return all features together
         if not organism_abbrev:
@@ -512,10 +682,14 @@ class LitGuideCurationService:
                 "citation": reference.citation,
                 "title": reference.title,
                 "year": reference.year,
+                "dbxref_id": reference.dbxref_id,
+                "abstract": abstract_text,
+                "urls": urls,
                 "curation_status": curation_status,
                 "current_organism": None,
                 "features": all_features,
                 "other_organisms": {},
+                "unlinked_features": unlinked_features,
             }
 
         # Group features by organism
@@ -545,16 +719,28 @@ class LitGuideCurationService:
                 "common_name": current_org.common_name,
             }
 
+        # Filter unlinked features by organism if specified
+        current_unlinked = unlinked_features
+        if organism_abbrev:
+            current_unlinked = [
+                f for f in unlinked_features
+                if f["organism_abbrev"].upper() == organism_abbrev.upper()
+            ]
+
         return {
             "reference_no": reference.reference_no,
             "pubmed": reference.pubmed,
             "citation": reference.citation,
             "title": reference.title,
             "year": reference.year,
+            "dbxref_id": reference.dbxref_id,
+            "abstract": abstract_text,
+            "urls": urls,
             "curation_status": curation_status,
             "current_organism": current_organism_info,
             "features": current_features,
             "other_organisms": other_organisms,
+            "unlinked_features": current_unlinked,
         }
 
     def add_feature_to_reference(
@@ -563,25 +749,31 @@ class LitGuideCurationService:
         feature_identifier: str,
         topic: str,
         curator_userid: str,
+        property_type: str = "literature_topic",
+        organism_abbrev: Optional[str] = None,
     ) -> dict:
         """
         Add a feature-topic association to a reference.
 
-        feature_identifier can be feature_no (int as string) or feature/gene name.
+        Args:
+            reference_no: Reference number
+            feature_identifier: feature_no (int as string) or feature/gene name
+            topic: Topic value
+            curator_userid: Curator user ID
+            property_type: Either "literature_topic" or "curation_status"
+            organism_abbrev: Optional organism to filter feature lookup
+
         Returns dict with feature info and refprop_feat_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         # Find feature
         try:
             feature_no = int(feature_identifier)
             feature = self.get_feature_by_no(feature_no)
         except ValueError:
-            feature = self.get_feature_by_name(feature_identifier)
+            feature = self.get_feature_by_name(feature_identifier, organism_abbrev)
 
         if not feature:
             raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")
@@ -592,6 +784,7 @@ class LitGuideCurationService:
             reference_no,
             topic,
             curator_userid,
+            property_type,
         )
 
         return {
@@ -829,11 +1022,8 @@ class LitGuideCurationService:
 
         Returns ref_property_no.
         """
-        # Validate topic
-        if topic not in LITERATURE_TOPICS:
-            raise LitGuideCurationError(
-                f"Invalid topic '{topic}'. Valid topics: {', '.join(LITERATURE_TOPICS)}"
-            )
+        # Topics come from CV tree selector, no validation needed
+        # (matching Perl behavior which accepts any selected term)
 
         # Verify reference exists
         reference = (

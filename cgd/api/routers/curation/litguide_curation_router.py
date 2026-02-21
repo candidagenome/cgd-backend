@@ -35,8 +35,25 @@ class TopicOut(BaseModel):
     """Topic association in literature guide."""
 
     topic: str
+    property_type: Optional[str] = None
     ref_property_no: int
     refprop_feat_no: int
+
+
+class UnlinkedFeatureOut(BaseModel):
+    """Feature that has been unlinked from a reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str] = None
+    organism_abbrev: Optional[str] = None
+
+
+class RefUrlOut(BaseModel):
+    """URL associated with a reference."""
+
+    url: str
+    url_type: str
 
 
 class ReferenceOut(BaseModel):
@@ -47,6 +64,8 @@ class ReferenceOut(BaseModel):
     citation: Optional[str]
     title: Optional[str]
     year: Optional[int]
+    dbxref_id: Optional[str] = None
+    urls: list[RefUrlOut] = []
 
 
 class CuratedReferenceOut(ReferenceOut):
@@ -145,6 +164,7 @@ def get_curation_statuses(current_user: CurrentUser):
 def get_feature_literature(
     identifier: str,
     current_user: CurrentUser,
+    organism: Optional[str] = Query(None, description="Filter by organism abbreviation"),
     db: Session = Depends(get_db),
 ):
     """
@@ -152,6 +172,8 @@ def get_feature_literature(
 
     identifier can be feature_no (int) or feature_name/gene_name (str).
     Returns curated (with topics) and uncurated references.
+
+    If organism is provided, only returns the feature from that organism.
     """
     service = LitGuideCurationService(db)
 
@@ -160,10 +182,15 @@ def get_feature_literature(
         feature_no = int(identifier)
         feature = service.get_feature_by_no(feature_no)
     except ValueError:
-        # Treat as name
-        feature = service.get_feature_by_name(identifier)
+        # Treat as name, with optional organism filter
+        feature = service.get_feature_by_name(identifier, organism)
 
     if not feature:
+        if organism:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Feature '{identifier}' not found in organism '{organism}'",
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Feature '{identifier}' not found",
@@ -320,10 +347,14 @@ class ReferenceLiteratureResponse(BaseModel):
     citation: Optional[str]
     title: Optional[str]
     year: Optional[int]
+    dbxref_id: Optional[str] = None
+    abstract: Optional[str] = None
+    urls: list[RefUrlOut] = []
     curation_status: Optional[str]
     current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
     other_organisms: dict[str, OrganismFeaturesOut] = {}
+    unlinked_features: list[UnlinkedFeatureOut] = []
 
 
 class OrganismsResponse(BaseModel):
@@ -337,6 +368,34 @@ class AddFeatureRequest(BaseModel):
 
     feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
     topic: str = Field(..., description="Literature topic")
+
+
+class BatchAssignTopicsRequest(BaseModel):
+    """Request to batch assign topics to multiple features."""
+
+    features: list[str] = Field(..., description="List of feature names/identifiers")
+    literature_topics: list[str] = Field(default=[], description="Literature topics to assign")
+    curation_statuses: list[str] = Field(default=[], description="Curation statuses to assign")
+    organism: Optional[str] = Field(default=None, description="Organism abbreviation to filter feature lookup")
+
+
+class BatchAssignResult(BaseModel):
+    """Result of a single feature-topic assignment."""
+
+    feature: str
+    topic: str
+    success: bool
+    message: str
+    refprop_feat_no: Optional[int] = None
+
+
+class BatchAssignTopicsResponse(BaseModel):
+    """Response for batch topic assignment."""
+
+    total_requested: int
+    successful: int
+    failed: int
+    results: list[BatchAssignResult]
 
 
 class AddFeatureResponse(BaseModel):
@@ -468,10 +527,14 @@ def get_reference_literature(
             citation=result["citation"],
             title=result["title"],
             year=result["year"],
+            dbxref_id=result.get("dbxref_id"),
+            abstract=result.get("abstract"),
+            urls=[RefUrlOut(**u) for u in result.get("urls", [])],
             curation_status=result["curation_status"],
             current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
             features=[FeatureTopicOut(**f) for f in result["features"]],
             other_organisms=other_organisms,
+            unlinked_features=[UnlinkedFeatureOut(**f) for f in result.get("unlinked_features", [])],
         )
     except LitGuideCurationError as e:
         raise HTTPException(
@@ -510,6 +573,114 @@ def add_feature_to_reference(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+@router.post("/reference/{reference_no}/batch-assign", response_model=BatchAssignTopicsResponse)
+def batch_assign_topics(
+    reference_no: int,
+    request: BatchAssignTopicsRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Batch assign topics to multiple features for a reference.
+
+    Assigns all specified literature_topics and curation_statuses to all
+    specified features. This mirrors the Perl version's multi-row form submission.
+    """
+    service = LitGuideCurationService(db)
+    results = []
+    successful = 0
+    failed = 0
+
+    if not request.features:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one feature is required",
+        )
+
+    if not request.literature_topics and not request.curation_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one topic or curation status is required",
+        )
+
+    for feature in request.features:
+        feature = feature.strip()
+        if not feature:
+            continue
+
+        # Process literature topics with property_type="literature_topic"
+        for topic in request.literature_topics:
+            topic = topic.strip()
+            if not topic:
+                continue
+
+            try:
+                result = service.add_feature_to_reference(
+                    reference_no,
+                    feature,
+                    topic,
+                    current_user.userid,
+                    property_type="literature_topic",
+                    organism_abbrev=request.organism,
+                )
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=topic,
+                    success=True,
+                    message=f"Added {topic} to {result['feature_name']}",
+                    refprop_feat_no=result["refprop_feat_no"],
+                ))
+                successful += 1
+            except LitGuideCurationError as e:
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=topic,
+                    success=False,
+                    message=str(e),
+                ))
+                failed += 1
+
+        # Process curation statuses with property_type="curation_status"
+        for status_val in request.curation_statuses:
+            status_val = status_val.strip()
+            if not status_val:
+                continue
+
+            try:
+                result = service.add_feature_to_reference(
+                    reference_no,
+                    feature,
+                    status_val,
+                    current_user.userid,
+                    property_type="curation_status",
+                    organism_abbrev=request.organism,
+                )
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=status_val,
+                    success=True,
+                    message=f"Added {status_val} to {result['feature_name']}",
+                    refprop_feat_no=result["refprop_feat_no"],
+                ))
+                successful += 1
+            except LitGuideCurationError as e:
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=status_val,
+                    success=False,
+                    message=str(e),
+                ))
+                failed += 1
+
+    total_topics = len(request.literature_topics) + len(request.curation_statuses)
+    return BatchAssignTopicsResponse(
+        total_requested=len(request.features) * total_topics,
+        successful=successful,
+        failed=failed,
+        results=results,
+    )
 
 
 @router.delete("/reference/{reference_no}/feature", response_model=UnlinkFeatureResponse)
