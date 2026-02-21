@@ -101,10 +101,28 @@ class LitGuideCurationService:
         Get all literature for a feature.
 
         Returns curated (with topics) and uncurated references.
+
+        Note: If the feature has a gene_name, we include literature from ALL
+        features with the same gene_name in the same organism. This matches
+        the legacy Perl behavior where literature is aggregated by gene.
         """
         feature = self.get_feature_by_no(feature_no)
         if not feature:
             raise LitGuideCurationError(f"Feature {feature_no} not found")
+
+        # Get all feature_nos to query - include all features with same gene_name
+        # in the same organism (to match Perl behavior)
+        feature_nos = [feature_no]
+        if feature.gene_name:
+            related_features = (
+                self.db.query(Feature.feature_no)
+                .filter(
+                    func.upper(Feature.gene_name) == feature.gene_name.upper(),
+                    Feature.organism_no == feature.organism_no,
+                )
+                .all()
+            )
+            feature_nos = [f.feature_no for f in related_features]
 
         # Get curated literature (references with topics via RefpropFeat)
         curated_query = (
@@ -120,7 +138,7 @@ class LitGuideCurationService:
             )
             .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
             .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
-            .filter(RefpropFeat.feature_no == feature_no)
+            .filter(RefpropFeat.feature_no.in_(feature_nos))
             .filter(RefProperty.property_type == "literature_topic")
             .order_by(Reference.year.desc(), Reference.pubmed)
         )
@@ -159,9 +177,10 @@ class LitGuideCurationService:
             .join(RefLink, Reference.reference_no == RefLink.reference_no)
             .filter(RefLink.tab_name == "FEATURE")
             .filter(RefLink.col_name == "FEATURE_NO")
-            .filter(RefLink.primary_key == feature_no)
+            .filter(RefLink.primary_key.in_(feature_nos))
             .filter(~Reference.reference_no.in_(curated_refs.keys()) if curated_refs else True)
             .order_by(Reference.year.desc(), Reference.pubmed)
+            .distinct()
         )
 
         uncurated_results = uncurated_query.all()
