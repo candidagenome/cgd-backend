@@ -592,16 +592,13 @@ def batch_assign_topics(
     successful = 0
     failed = 0
 
-    # Combine all topics (both literature_topics and curation_statuses)
-    all_topics = request.literature_topics + request.curation_statuses
-
     if not request.features:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one feature is required",
         )
 
-    if not all_topics:
+    if not request.literature_topics and not request.curation_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one topic or curation status is required",
@@ -612,7 +609,8 @@ def batch_assign_topics(
         if not feature:
             continue
 
-        for topic in all_topics:
+        # Process literature topics with property_type="literature_topic"
+        for topic in request.literature_topics:
             topic = topic.strip()
             if not topic:
                 continue
@@ -623,6 +621,7 @@ def batch_assign_topics(
                     feature,
                     topic,
                     current_user.userid,
+                    property_type="literature_topic",
                 )
                 results.append(BatchAssignResult(
                     feature=feature,
@@ -641,8 +640,40 @@ def batch_assign_topics(
                 ))
                 failed += 1
 
+        # Process curation statuses with property_type="curation_status"
+        for status_val in request.curation_statuses:
+            status_val = status_val.strip()
+            if not status_val:
+                continue
+
+            try:
+                result = service.add_feature_to_reference(
+                    reference_no,
+                    feature,
+                    status_val,
+                    current_user.userid,
+                    property_type="curation_status",
+                )
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=status_val,
+                    success=True,
+                    message=f"Added {status_val} to {result['feature_name']}",
+                    refprop_feat_no=result["refprop_feat_no"],
+                ))
+                successful += 1
+            except LitGuideCurationError as e:
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=status_val,
+                    success=False,
+                    message=str(e),
+                ))
+                failed += 1
+
+    total_topics = len(request.literature_topics) + len(request.curation_statuses)
     return BatchAssignTopicsResponse(
-        total_requested=len(request.features) * len(all_topics),
+        total_requested=len(request.features) * total_topics,
         successful=successful,
         failed=failed,
         results=results,

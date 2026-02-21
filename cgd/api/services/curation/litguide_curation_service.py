@@ -301,9 +301,17 @@ class LitGuideCurationService:
         reference_no: int,
         topic: str,
         curator_userid: str,
+        property_type: str = "literature_topic",
     ) -> int:
         """
         Add a topic association between a feature and reference.
+
+        Args:
+            feature_no: Feature number
+            reference_no: Reference number
+            topic: Topic value
+            curator_userid: Curator user ID
+            property_type: Either "literature_topic" or "curation_status"
 
         Returns refprop_feat_no.
         """
@@ -327,7 +335,7 @@ class LitGuideCurationService:
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "literature_topic",
+                RefProperty.property_type == property_type,
                 RefProperty.property_value == topic,
             )
             .first()
@@ -337,7 +345,7 @@ class LitGuideCurationService:
             ref_prop = RefProperty(
                 reference_no=reference_no,
                 source=SOURCE,
-                property_type="literature_topic",
+                property_type=property_type,
                 property_value=topic,
                 date_last_reviewed=datetime.now(),
                 created_by=curator_userid[:12],
@@ -741,11 +749,18 @@ class LitGuideCurationService:
         feature_identifier: str,
         topic: str,
         curator_userid: str,
+        property_type: str = "literature_topic",
     ) -> dict:
         """
         Add a feature-topic association to a reference.
 
-        feature_identifier can be feature_no (int as string) or feature/gene name.
+        Args:
+            reference_no: Reference number
+            feature_identifier: feature_no (int as string) or feature/gene name
+            topic: Topic value
+            curator_userid: Curator user ID
+            property_type: Either "literature_topic" or "curation_status"
+
         Returns dict with feature info and refprop_feat_no.
         """
         # Topics come from CV tree selector, no validation needed
@@ -767,6 +782,7 @@ class LitGuideCurationService:
             reference_no,
             topic,
             curator_userid,
+            property_type,
         )
 
         return {
