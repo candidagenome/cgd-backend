@@ -1224,19 +1224,10 @@ class ReferenceCurationService:
                 dbxref.dbxref_type = "CGDID Deleted"
                 messages.append(f"Marked {dbxref_id} as deleted")
 
-        # Add delete log entry
+        # Skip delete_log for now - model needs sequence configuration
+        # Just log the comment if provided
         if delete_log_comment:
-            try:
-                delete_log = DeleteLog(
-                    tab_name="REFERENCE",
-                    primary_key=reference_no,
-                    description=delete_log_comment[:240],
-                    created_by=curator_userid[:12],
-                )
-                self.db.add(delete_log)
-                messages.append("Added delete log entry")
-            except Exception:
-                pass  # Not critical
+            logger.info(f"Delete comment for ref {reference_no}: {delete_log_comment}")
 
         self.db.commit()
 
