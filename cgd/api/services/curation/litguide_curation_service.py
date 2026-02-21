@@ -529,11 +529,22 @@ class LitGuideCurationService:
         """
         reference = (
             self.db.query(Reference)
+            .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
             .filter(Reference.reference_no == reference_no)
             .first()
         )
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        # Build urls list
+        urls = []
+        if reference.ref_url:
+            for ref_url in reference.ref_url:
+                if ref_url.url:
+                    urls.append({
+                        "url": ref_url.url.url,
+                        "url_type": ref_url.url.url_type,
+                    })
 
         # Get abstract
         abstract_obj = (
@@ -603,6 +614,7 @@ class LitGuideCurationService:
                 "year": reference.year,
                 "dbxref_id": reference.dbxref_id,
                 "abstract": abstract_text,
+                "urls": urls,
                 "curation_status": curation_status,
                 "current_organism": None,
                 "features": all_features,
@@ -644,6 +656,7 @@ class LitGuideCurationService:
             "year": reference.year,
             "dbxref_id": reference.dbxref_id,
             "abstract": abstract_text,
+            "urls": urls,
             "curation_status": curation_status,
             "current_organism": current_organism_info,
             "features": current_features,

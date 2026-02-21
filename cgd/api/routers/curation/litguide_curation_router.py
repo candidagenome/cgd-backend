@@ -339,6 +339,7 @@ class ReferenceLiteratureResponse(BaseModel):
     year: Optional[int]
     dbxref_id: Optional[str] = None
     abstract: Optional[str] = None
+    urls: list[RefUrlOut] = []
     curation_status: Optional[str]
     current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
@@ -489,6 +490,7 @@ def get_reference_literature(
             year=result["year"],
             dbxref_id=result.get("dbxref_id"),
             abstract=result.get("abstract"),
+            urls=[RefUrlOut(**u) for u in result.get("urls", [])],
             curation_status=result["curation_status"],
             current_organism=OrganismOut(**result["current_organism"]) if result.get("current_organism") else None,
             features=[FeatureTopicOut(**f) for f in result["features"]],
