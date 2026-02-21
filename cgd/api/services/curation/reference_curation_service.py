@@ -1148,6 +1148,11 @@ class ReferenceCurationService:
                 Abstract.reference_no == reference_no
             ).delete()
 
+            # Delete dbxref_ref records
+            self.db.query(DbxrefRef).filter(
+                DbxrefRef.reference_no == reference_no
+            ).delete()
+
             # Delete the reference
             self.db.delete(reference)
             self.db.flush()
