@@ -15,6 +15,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
+    Abstract,
     Feature,
     Note,
     NoteLink,
@@ -534,6 +535,14 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
+        # Get abstract
+        abstract_obj = (
+            self.db.query(Abstract)
+            .filter(Abstract.reference_no == reference_no)
+            .first()
+        )
+        abstract_text = abstract_obj.abstract if abstract_obj else None
+
         # Get curation status
         curation_status = self.get_reference_curation_status(reference_no)
 
@@ -592,6 +601,8 @@ class LitGuideCurationService:
                 "citation": reference.citation,
                 "title": reference.title,
                 "year": reference.year,
+                "dbxref_id": reference.dbxref_id,
+                "abstract": abstract_text,
                 "curation_status": curation_status,
                 "current_organism": None,
                 "features": all_features,
@@ -631,6 +642,8 @@ class LitGuideCurationService:
             "citation": reference.citation,
             "title": reference.title,
             "year": reference.year,
+            "dbxref_id": reference.dbxref_id,
+            "abstract": abstract_text,
             "curation_status": curation_status,
             "current_organism": current_organism_info,
             "features": current_features,

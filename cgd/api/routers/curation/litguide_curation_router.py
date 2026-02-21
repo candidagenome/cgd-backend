@@ -337,6 +337,8 @@ class ReferenceLiteratureResponse(BaseModel):
     citation: Optional[str]
     title: Optional[str]
     year: Optional[int]
+    dbxref_id: Optional[str] = None
+    abstract: Optional[str] = None
     curation_status: Optional[str]
     current_organism: Optional[OrganismOut] = None
     features: list[FeatureTopicOut]
