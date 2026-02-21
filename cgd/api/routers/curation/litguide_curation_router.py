@@ -370,6 +370,33 @@ class AddFeatureRequest(BaseModel):
     topic: str = Field(..., description="Literature topic")
 
 
+class BatchAssignTopicsRequest(BaseModel):
+    """Request to batch assign topics to multiple features."""
+
+    features: list[str] = Field(..., description="List of feature names/identifiers")
+    literature_topics: list[str] = Field(default=[], description="Literature topics to assign")
+    curation_statuses: list[str] = Field(default=[], description="Curation statuses to assign")
+
+
+class BatchAssignResult(BaseModel):
+    """Result of a single feature-topic assignment."""
+
+    feature: str
+    topic: str
+    success: bool
+    message: str
+    refprop_feat_no: Optional[int] = None
+
+
+class BatchAssignTopicsResponse(BaseModel):
+    """Response for batch topic assignment."""
+
+    total_requested: int
+    successful: int
+    failed: int
+    results: list[BatchAssignResult]
+
+
 class AddFeatureResponse(BaseModel):
     """Response for adding feature to reference."""
 
@@ -545,6 +572,81 @@ def add_feature_to_reference(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+@router.post("/reference/{reference_no}/batch-assign", response_model=BatchAssignTopicsResponse)
+def batch_assign_topics(
+    reference_no: int,
+    request: BatchAssignTopicsRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Batch assign topics to multiple features for a reference.
+
+    Assigns all specified literature_topics and curation_statuses to all
+    specified features. This mirrors the Perl version's multi-row form submission.
+    """
+    service = LitGuideCurationService(db)
+    results = []
+    successful = 0
+    failed = 0
+
+    # Combine all topics (both literature_topics and curation_statuses)
+    all_topics = request.literature_topics + request.curation_statuses
+
+    if not request.features:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one feature is required",
+        )
+
+    if not all_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one topic or curation status is required",
+        )
+
+    for feature in request.features:
+        feature = feature.strip()
+        if not feature:
+            continue
+
+        for topic in all_topics:
+            topic = topic.strip()
+            if not topic:
+                continue
+
+            try:
+                result = service.add_feature_to_reference(
+                    reference_no,
+                    feature,
+                    topic,
+                    current_user.userid,
+                )
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=topic,
+                    success=True,
+                    message=f"Added {topic} to {result['feature_name']}",
+                    refprop_feat_no=result["refprop_feat_no"],
+                ))
+                successful += 1
+            except LitGuideCurationError as e:
+                results.append(BatchAssignResult(
+                    feature=feature,
+                    topic=topic,
+                    success=False,
+                    message=str(e),
+                ))
+                failed += 1
+
+    return BatchAssignTopicsResponse(
+        total_requested=len(request.features) * len(all_topics),
+        successful=successful,
+        failed=failed,
+        results=results,
+    )
 
 
 @router.delete("/reference/{reference_no}/feature", response_model=UnlinkFeatureResponse)
