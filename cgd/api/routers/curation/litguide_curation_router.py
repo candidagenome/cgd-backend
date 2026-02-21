@@ -145,6 +145,7 @@ def get_curation_statuses(current_user: CurrentUser):
 def get_feature_literature(
     identifier: str,
     current_user: CurrentUser,
+    organism: Optional[str] = Query(None, description="Filter by organism abbreviation"),
     db: Session = Depends(get_db),
 ):
     """
@@ -152,6 +153,8 @@ def get_feature_literature(
 
     identifier can be feature_no (int) or feature_name/gene_name (str).
     Returns curated (with topics) and uncurated references.
+
+    If organism is provided, only returns the feature from that organism.
     """
     service = LitGuideCurationService(db)
 
@@ -160,10 +163,15 @@ def get_feature_literature(
         feature_no = int(identifier)
         feature = service.get_feature_by_no(feature_no)
     except ValueError:
-        # Treat as name
-        feature = service.get_feature_by_name(identifier)
+        # Treat as name, with optional organism filter
+        feature = service.get_feature_by_name(identifier, organism)
 
     if not feature:
+        if organism:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Feature '{identifier}' not found in organism '{organism}'",
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Feature '{identifier}' not found",

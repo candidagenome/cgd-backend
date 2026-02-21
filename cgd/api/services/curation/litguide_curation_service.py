@@ -69,18 +69,24 @@ class LitGuideCurationService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_feature_by_name(self, name: str) -> Optional[Feature]:
-        """Look up feature by name or gene_name."""
-        return (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == name.upper(),
-                    func.upper(Feature.gene_name) == name.upper(),
-                )
+    def get_feature_by_name(
+        self, name: str, organism_abbrev: Optional[str] = None
+    ) -> Optional[Feature]:
+        """Look up feature by name or gene_name, optionally filtered by organism."""
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
             )
-            .first()
         )
+
+        if organism_abbrev:
+            # Join with organism table to filter by abbreviation
+            query = query.join(
+                Organism, Feature.organism_no == Organism.organism_no
+            ).filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
+
+        return query.first()
 
     def get_feature_by_no(self, feature_no: int) -> Optional[Feature]:
         """Get feature by feature_no."""
