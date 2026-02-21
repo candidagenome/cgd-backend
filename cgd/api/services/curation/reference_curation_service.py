@@ -1153,6 +1153,21 @@ class ReferenceCurationService:
                 DbxrefRef.reference_no == reference_no
             ).delete()
 
+            # Delete ref_reftype records
+            from cgd.models.models import RefReftype
+            self.db.query(RefReftype).filter(
+                RefReftype.reference_no == reference_no
+            ).delete()
+
+            # Delete ref_relationship records (both directions)
+            from cgd.models.models import RefRelationship
+            self.db.query(RefRelationship).filter(
+                RefRelationship.reference_no == reference_no
+            ).delete()
+            self.db.query(RefRelationship).filter(
+                RefRelationship.related_ref_no == reference_no
+            ).delete()
+
             # Delete the reference
             self.db.delete(reference)
             self.db.flush()
