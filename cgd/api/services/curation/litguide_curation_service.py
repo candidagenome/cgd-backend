@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
     Feature,
@@ -23,6 +23,8 @@ from cgd.models.models import (
     RefProperty,
     Reference,
     RefpropFeat,
+    RefUrl,
+    Url,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,17 +147,43 @@ class LitGuideCurationService:
 
         curated_results = curated_query.all()
 
+        # Get unique reference_nos from curated results
+        curated_ref_nos = list(set(row.reference_no for row in curated_results))
+
+        # Load full Reference objects with ref_url relationships for curated refs
+        curated_refs_with_urls = {}
+        if curated_ref_nos:
+            refs_with_urls = (
+                self.db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
+                .filter(Reference.reference_no.in_(curated_ref_nos))
+                .all()
+            )
+            curated_refs_with_urls = {r.reference_no: r for r in refs_with_urls}
+
         # Group by reference
         curated_refs = {}
         for row in curated_results:
             ref_no = row.reference_no
             if ref_no not in curated_refs:
+                # Get urls from the loaded reference
+                ref_obj = curated_refs_with_urls.get(ref_no)
+                urls = []
+                if ref_obj and ref_obj.ref_url:
+                    for ref_url in ref_obj.ref_url:
+                        if ref_url.url:
+                            urls.append({
+                                "url": ref_url.url.url,
+                                "url_type": ref_url.url.url_type,
+                            })
                 curated_refs[ref_no] = {
                     "reference_no": row.reference_no,
                     "pubmed": row.pubmed,
                     "citation": row.citation,
                     "title": row.title,
                     "year": row.year,
+                    "dbxref_id": ref_obj.dbxref_id if ref_obj else None,
+                    "urls": urls,
                     "topics": [],
                 }
             curated_refs[ref_no]["topics"].append({
@@ -185,21 +213,48 @@ class LitGuideCurationService:
 
         uncurated_results = uncurated_query.all()
 
+        # Get unique reference_nos from uncurated results
+        uncurated_ref_nos = [row.reference_no for row in uncurated_results]
+
+        # Load full Reference objects with ref_url relationships for uncurated refs
+        uncurated_refs_with_urls = {}
+        if uncurated_ref_nos:
+            refs_with_urls = (
+                self.db.query(Reference)
+                .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
+                .filter(Reference.reference_no.in_(uncurated_ref_nos))
+                .all()
+            )
+            uncurated_refs_with_urls = {r.reference_no: r for r in refs_with_urls}
+
+        # Build uncurated list with urls
+        uncurated_list = []
+        for row in uncurated_results:
+            ref_obj = uncurated_refs_with_urls.get(row.reference_no)
+            urls = []
+            if ref_obj and ref_obj.ref_url:
+                for ref_url in ref_obj.ref_url:
+                    if ref_url.url:
+                        urls.append({
+                            "url": ref_url.url.url,
+                            "url_type": ref_url.url.url_type,
+                        })
+            uncurated_list.append({
+                "reference_no": row.reference_no,
+                "pubmed": row.pubmed,
+                "citation": row.citation,
+                "title": row.title,
+                "year": row.year,
+                "dbxref_id": ref_obj.dbxref_id if ref_obj else None,
+                "urls": urls,
+            })
+
         return {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
             "gene_name": feature.gene_name,
             "curated": list(curated_refs.values()),
-            "uncurated": [
-                {
-                    "reference_no": row.reference_no,
-                    "pubmed": row.pubmed,
-                    "citation": row.citation,
-                    "title": row.title,
-                    "year": row.year,
-                }
-                for row in uncurated_results
-            ],
+            "uncurated": uncurated_list,
         }
 
     def add_topic_association(
