@@ -39,6 +39,13 @@ class TopicOut(BaseModel):
     refprop_feat_no: int
 
 
+class RefUrlOut(BaseModel):
+    """URL associated with a reference."""
+
+    url: str
+    url_type: str
+
+
 class ReferenceOut(BaseModel):
     """Reference in literature guide."""
 
@@ -47,6 +54,8 @@ class ReferenceOut(BaseModel):
     citation: Optional[str]
     title: Optional[str]
     year: Optional[int]
+    dbxref_id: Optional[str] = None
+    urls: list[RefUrlOut] = []
 
 
 class CuratedReferenceOut(ReferenceOut):
