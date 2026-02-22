@@ -251,7 +251,7 @@ class TestHtmlStructure:
             generate_gene_list()
 
         content = output_file.read_text()
-        assert "/cgi-bin/locus.pl?dbid=CAL0001" in content
+        assert "/locus/orf19.1" in content
 
 
 class TestEdgeCases:

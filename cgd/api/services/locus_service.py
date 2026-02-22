@@ -1285,7 +1285,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     ))
 
         # Build literature guide URL
-        literature_guide_url = f"http://www.candidagenome.org/cgi-bin/litGuide.pl?dbid={f.dbxref_id}"
+        literature_guide_url = f"/locus/{f.feature_name}#literature"
 
         # Get Assembly 21 identifier (if this is Assembly 22, find the Assembly 21 child)
         assembly_21_identifier = None
@@ -2289,7 +2289,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
             ))
 
         # BLAST URL for homologs
-        blast_url = f"/cgi-bin/compute/blast-sgd.pl?protein={protein_standard_name or systematic_name}"
+        blast_url = f"/blast?protein={protein_standard_name or systematic_name}"
 
         # Section 10: External Sequence Database links
         external_links = []
@@ -2405,7 +2405,7 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                     ))
 
         # Literature guide URL
-        literature_guide_url = f"/cgi-bin/reference/referenceTab.pl?locus={f.feature_name}"
+        literature_guide_url = f"/locus/{f.feature_name}#literature"
 
         # PBrowse URL for domain visualization
         # URL structure: /jbrowse/index.html?data=cgd_data/{strain}_prot&loc={feature}:1..{len}&tracklist=0&nav=0&overview=0&tracks=...
@@ -3098,19 +3098,19 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 download_links = [
                     DownloadLinkOut(
                         label="Proteins (multi-FASTA format)",
-                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=protein"
+                        url=f"/api/homolog-sequences?cluster={cluster_id}&type=protein"
                     ),
                     DownloadLinkOut(
                         label="Coding (multi-FASTA format)",
-                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=cds"
+                        url=f"/api/homolog-sequences?cluster={cluster_id}&type=cds"
                     ),
                     DownloadLinkOut(
                         label="Genomic (multi-FASTA format)",
-                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=genomic"
+                        url=f"/api/homolog-sequences?cluster={cluster_id}&type=genomic"
                     ),
                     DownloadLinkOut(
                         label="Genomic +/- 1000 BP (multi-FASTA format)",
-                        url=f"/cgi-bin/compute/get_homolog_seqs.pl?cluster={cluster_id}&type=genomic_extended"
+                        url=f"/api/homolog-sequences?cluster={cluster_id}&type=genomic_extended"
                     ),
                 ]
 
@@ -3178,8 +3178,8 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
             'SGD_BEST_HIT': 'https://www.yeastgenome.org/locus/{id}',
             'POMBASE': 'https://www.pombase.org/gene/{id}',
             'POMBASE_BEST_HIT': 'https://www.pombase.org/gene/{id}',
-            'AspGD': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
-            'AspGD_BEST_HIT': 'http://www.aspergillusgenome.org/cgi-bin/locus.pl?locus={id}',
+            'AspGD': 'https://fungidb.org/fungidb/app/record/gene/{id}',
+            'AspGD_BEST_HIT': 'https://fungidb.org/fungidb/app/record/gene/{id}',
             'BROAD_NEUROSPORA': 'https://fungidb.org/fungidb/app/record/gene/{id}',
             'BROAD_NEUROSPORA_BEST_HIT': 'https://fungidb.org/fungidb/app/record/gene/{id}',
             'dictyBase': 'http://dictybase.org/gene/{id}',

@@ -324,7 +324,7 @@ def generate_html_report(
             date_str = cand.date_last_reviewed.strftime("%Y-%m-%d") if cand.date_last_reviewed else "N/A"
 
             f.write(f"""        <tr style="background-color: {bg}">
-            <td><a href="{PROJECT_URL}/cgi-bin/locus.pl?locus={cand.feature_name}">{cand.feature_name}</a></td>
+            <td><a href="{PROJECT_URL}/locus/{cand.feature_name}">{cand.feature_name}</a></td>
             <td>{format_goid(cand.goid)}</td>
             <td>{cand.go_term}</td>
             <td>{cand.go_evidence}</td>

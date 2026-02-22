@@ -107,8 +107,8 @@ def generate_gene_list() -> bool:
 
                 f.write(
                     f"<tr>"
-                    f"<td><a href='/cgi-bin/locus.pl?dbid={dbxref_id}'>{feature_name}</a></td>"
-                    f"<td><a href='/cgi-bin/locus.pl?dbid={dbxref_id}'>{gene_name}</a></td>"
+                    f"<td><a href='/locus/{feature_name}'>{feature_name}</a></td>"
+                    f"<td><a href='/locus/{feature_name}'>{gene_name}</a></td>"
                     f"<td>{organism_name}</td>"
                     f"<td>{headline}</td>"
                     f"</tr>\n"

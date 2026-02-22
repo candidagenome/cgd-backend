@@ -62,15 +62,15 @@ VALID_TYPES = {
 URL_TEMPLATES = {
     "SGD": "https://www.yeastgenome.org/locus/_SUBSTITUTE_THIS_",
     "SGD_BEST_HIT": "https://www.yeastgenome.org/locus/_SUBSTITUTE_THIS_",
-    "C. dubliniensis GeneDB": "http://www.genedb.org/genedb/Search?name=_SUBSTITUTE_THIS_&organism=cdubliniensis",
-    "POMBASE": "https://www.pombase.org/spombe/result/_SUBSTITUTE_THIS_",
-    "POMBASE_BEST_HIT": "https://www.pombase.org/spombe/result/_SUBSTITUTE_THIS_",
-    "CGD": "http://www.candidagenome.org/cgi-bin/locus.pl?dbid=_SUBSTITUTE_THIS_",
-    "CGD_BEST_HIT": "http://www.candidagenome.org/cgi-bin/locus.pl?dbid=_SUBSTITUTE_THIS_",
-    "AspGD": "http://www.aspergillusgenome.org/cgi-bin/locus.pl?dbid=_SUBSTITUTE_THIS_",
-    "AspGD_BEST_HIT": "http://www.aspergillusgenome.org/cgi-bin/locus.pl?dbid=_SUBSTITUTE_THIS_",
-    "BROAD_NEUROSPORA": "http://www.broadinstitute.org/annotation/genome/neurospora/GeneDetails.html?sp=S_SUBSTITUTE_THIS_",
-    "BROAD_NEUROSPORA_BEST_HIT": "http://www.broadinstitute.org/annotation/genome/neurospora/GeneDetails.html?sp=S_SUBSTITUTE_THIS_",
+    "C. dubliniensis GeneDB": "https://fungidb.org/fungidb/app/record/gene/_SUBSTITUTE_THIS_",
+    "POMBASE": "https://www.pombase.org/gene/_SUBSTITUTE_THIS_",
+    "POMBASE_BEST_HIT": "https://www.pombase.org/gene/_SUBSTITUTE_THIS_",
+    "CGD": "https://www.candidagenome.org/locus/_SUBSTITUTE_THIS_",
+    "CGD_BEST_HIT": "https://www.candidagenome.org/locus/_SUBSTITUTE_THIS_",
+    "AspGD": "https://fungidb.org/fungidb/app/record/gene/_SUBSTITUTE_THIS_",
+    "AspGD_BEST_HIT": "https://fungidb.org/fungidb/app/record/gene/_SUBSTITUTE_THIS_",
+    "BROAD_NEUROSPORA": "https://fungidb.org/fungidb/app/record/gene/_SUBSTITUTE_THIS_",
+    "BROAD_NEUROSPORA_BEST_HIT": "https://fungidb.org/fungidb/app/record/gene/_SUBSTITUTE_THIS_",
 }
 
 
