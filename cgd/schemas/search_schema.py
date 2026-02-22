@@ -10,7 +10,7 @@ from pydantic import BaseModel
 TextSearchCategory = Literal[
     "genes", "descriptions", "go_terms", "colleagues", "authors",
     "pathways", "paragraphs", "abstracts", "name_descriptions",
-    "phenotypes", "notes", "external_ids", "orthologs"
+    "phenotypes", "notes", "external_ids", "orthologs", "literature_topics"
 ]
 
 

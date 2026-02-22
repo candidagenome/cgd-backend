@@ -42,6 +42,7 @@ from cgd.models.models import (
     HomologyGroup,
     DbxrefHomology,
     FeatHomology,
+    RefProperty,
 )
 
 
@@ -60,13 +61,14 @@ CATEGORY_DISPLAY_NAMES = {
     "notes": "History Notes",
     "external_ids": "External Database IDs",
     "orthologs": "Orthologs / Best Hits",
+    "literature_topics": "Literature Topics",
 }
 
 # Order in which categories are displayed
 CATEGORY_ORDER = [
     "genes", "descriptions", "go_terms", "colleagues", "authors",
     "pathways", "paragraphs", "abstracts", "name_descriptions",
-    "phenotypes", "notes", "external_ids", "orthologs"
+    "phenotypes", "notes", "external_ids", "orthologs", "literature_topics"
 ]
 
 # Ortholog sources (from other MODs)
@@ -1014,6 +1016,74 @@ def _count_orthologs(db: Session, query: str) -> int:
     )
 
 
+# =============================================================================
+# Literature Topics Search
+# =============================================================================
+
+def search_literature_topics(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+    """
+    Search literature topics (RefProperty with property_type='literature_topic').
+    Returns TextSearchResult list with category="literature_topics".
+    """
+    results = []
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Find literature topics matching the query
+    topic_query = (
+        db.query(RefProperty, Reference)
+        .join(Reference, RefProperty.reference_no == Reference.reference_no)
+        .filter(
+            RefProperty.property_type == "literature_topic",
+            func.upper(RefProperty.property_value).like(upper_pattern)
+        )
+        .order_by(RefProperty.property_value, Reference.year.desc())
+        .limit(limit)
+    )
+
+    seen_refs = set()
+
+    for prop, ref in topic_query:
+        if ref.reference_no in seen_refs:
+            continue
+        seen_refs.add(ref.reference_no)
+
+        name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+        description = f"Topic: {prop.property_value}"
+        if ref.citation:
+            description += f" - {_truncate_text(ref.citation, 150)}"
+
+        results.append(TextSearchResult(
+            category="literature_topics",
+            id=ref.dbxref_id,
+            name=name,
+            description=description,
+            link=f"/reference/{ref.dbxref_id}",
+            highlighted_name=_highlight_text(name, query),
+            highlighted_description=_highlight_text(description, query),
+        ))
+
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+def _count_literature_topics(db: Session, query: str) -> int:
+    """Count total literature topics matching the query."""
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    return (
+        db.query(func.count(RefProperty.ref_property_no))
+        .filter(
+            RefProperty.property_type == "literature_topic",
+            func.upper(RefProperty.property_value).like(upper_pattern)
+        )
+        .scalar()
+    )
+
+
 # Mapping of category to search and count functions
 CATEGORY_SEARCH_FUNCTIONS = {
     "genes": search_genes,
@@ -1029,6 +1099,7 @@ CATEGORY_SEARCH_FUNCTIONS = {
     "notes": search_notes,
     "external_ids": search_external_ids,
     "orthologs": search_orthologs,
+    "literature_topics": search_literature_topics,
 }
 
 CATEGORY_COUNT_FUNCTIONS = {
@@ -1045,6 +1116,7 @@ CATEGORY_COUNT_FUNCTIONS = {
     "notes": _count_notes,
     "external_ids": _count_external_ids,
     "orthologs": _count_orthologs,
+    "literature_topics": _count_literature_topics,
 }
 
 
