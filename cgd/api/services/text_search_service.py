@@ -589,9 +589,12 @@ def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearc
     )
 
     for abstract, ref in abstract_query:
-        # Use citation as name, truncated abstract as description
+        # Use citation as name (plain text, no link), truncated abstract as description
         name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
         description = _truncate_text(abstract.abstract, 250)
+
+        # Use PMID as ID if available, otherwise use dbxref_id
+        display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
         # Get ref_url for building links
         ref_urls = (
@@ -603,10 +606,10 @@ def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearc
 
         results.append(TextSearchResult(
             category="abstracts",
-            id=ref.dbxref_id,
+            id=display_id,
             name=name,
             description=description,
-            link=f"/reference/{ref.dbxref_id}",
+            link=None,  # No link on citation - use links array instead
             links=links,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=_highlight_text(description, query),
@@ -1112,9 +1115,12 @@ def search_literature_topics(db: Session, query: str, limit: int = 20) -> list[T
             continue
         seen_refs.add(ref.reference_no)
 
-        # Use citation as name, topic as description
+        # Use citation as name (plain text, no link), topic as description
         name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
         description = f"Topic: {prop.property_value}"
+
+        # Use PMID as ID if available, otherwise use dbxref_id
+        display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
         # Get ref_url for building links
         ref_urls = (
@@ -1126,10 +1132,10 @@ def search_literature_topics(db: Session, query: str, limit: int = 20) -> list[T
 
         results.append(TextSearchResult(
             category="literature_topics",
-            id=ref.dbxref_id,
+            id=display_id,
             name=name,
             description=description,
-            link=f"/reference/{ref.dbxref_id}",
+            link=None,  # No link on citation - use links array instead
             links=links,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=_highlight_text(description, query),

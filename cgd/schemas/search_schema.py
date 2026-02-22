@@ -97,7 +97,7 @@ class TextSearchResult(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    link: str
+    link: Optional[str] = None  # Optional - some results use links array instead
     organism: Optional[str] = None
     match_context: Optional[str] = None
     links: Optional[list[SearchResultLink]] = None  # Citation links for references
