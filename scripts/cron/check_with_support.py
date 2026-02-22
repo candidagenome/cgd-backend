@@ -70,11 +70,11 @@ IGNORE_SOURCES = {"refseq", "genbank", "cgsc"}
 
 # Source to URL mapping for external links
 SOURCE_URLS = {
-    "aspgd": "http://www.aspgd.org/cgi-bin/locus.pl?dbid=",
-    "cgd": "http://www.candidagenome.org/cgi-bin/locus.pl?dbid=",
-    "pombase": "http://www.pombase.org/spombe/result/",
+    "aspgd": "https://fungidb.org/fungidb/app/record/gene/",
+    "cgd": "https://www.candidagenome.org/locus/",
+    "pombase": "https://www.pombase.org/gene/",
     "sgd": "https://www.yeastgenome.org/locus/",
-    "ebi": "http://www.ebi.ac.uk/QuickGO/GSearch?query=",
+    "ebi": "https://www.ebi.ac.uk/QuickGO/GSearch?query=",
 }
 
 # Source to species name mapping
@@ -365,7 +365,7 @@ def generate_html_report(
             if annot.gene_name:
                 name = f"{annot.gene_name}/{annot.feature_name}"
             name += f" ({annot.organism_abbrev})"
-            feature_link = f'<a href="{PROJECT_URL}/cgi-bin/locus.pl?locus={annot.feature_name}">{name}</a>'
+            feature_link = f'<a href="{PROJECT_URL}/locus/{annot.feature_name}">{name}</a>'
 
             # Format citation
             citation = get_reference_citation(session, annot.reference_no)

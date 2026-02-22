@@ -632,7 +632,7 @@ def main():
     )
     parser.add_argument(
         "--internal-url",
-        default="/cgi-bin/locus.pl?locus=_SUBSTITUTE_THIS_",
+        default="/locus/_SUBSTITUTE_THIS_",
         help="Internal URL template for feature links",
     )
     parser.add_argument(

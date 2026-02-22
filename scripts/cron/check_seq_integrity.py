@@ -531,7 +531,7 @@ def generate_html_report(stats: IntegrityStats, output_file: Path):
         for i, error in enumerate(stats.errors):
             bg = "#f2f2f2" if i % 2 == 0 else "#ffffff"
             f.write(f"""        <tr style="background-color: {bg}">
-            <td><a href="{PROJECT_URL}/cgi-bin/locus.pl?locus={error['feature_name']}">{error['feature_name']}</a></td>
+            <td><a href="{PROJECT_URL}/locus/{error['feature_name']}">{error['feature_name']}</a></td>
             <td>{error['feature_type']}</td>
             <td>{error['message']}</td>
             <td>{error['tag']}</td>

@@ -171,7 +171,7 @@ def _build_restriction_map_link_for_locus(locus: str) -> str:
 
 def _build_primer_design_link(sequence: str) -> str:
     """Build primer design link for DNA sequence."""
-    return f"/cgi-bin/compute/web-primer?seq={quote(sequence)}"
+    return f"/webprimer?seq={quote(sequence)}"
 
 
 def _build_sequence_retrieval_links(
@@ -306,7 +306,7 @@ def get_tools_for_gene(
         }
         maps_tools.append(ToolLink(
             name="Batch Download Features",
-            url=f"/cgi-bin/batchDownload?{urlencode(batch_params)}",
+            url=f"/batch-download?{urlencode(batch_params)}",
             description="Download features in this region",
         ))
 
@@ -346,7 +346,7 @@ def get_tools_for_gene(
         if seq_len <= 20:
             analysis_tools.append(ToolLink(
                 name="Pattern Match",
-                url=f"/cgi-bin/PATMATCH/nph-patmatch?dnaPat={quote(seq_record.residues[:100])}",
+                url=f"/patmatch?dnaPat={quote(seq_record.residues[:100])}",
                 description="Search for this pattern in the genome",
             ))
 
@@ -361,7 +361,7 @@ def get_tools_for_gene(
         if seq_len > 15:
             analysis_tools.append(ToolLink(
                 name="Design Primers",
-                url=f"/cgi-bin/compute/web-primer?locus={feature.feature_name}",
+                url=f"/webprimer?locus={feature.feature_name}",
                 description="Design PCR primers for this sequence",
             ))
 
@@ -427,7 +427,7 @@ def get_tools_for_coordinates(
     }
     maps_tools.append(ToolLink(
         name="Batch Download Features",
-        url=f"/cgi-bin/batchDownload?{urlencode(batch_params)}",
+        url=f"/batch-download?{urlencode(batch_params)}",
         description="Download features in this region",
     ))
 

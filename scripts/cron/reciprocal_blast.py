@@ -55,9 +55,9 @@ SOURCE_URLS = {
 
 # URL templates for external links
 URL_TEMPLATES = {
-    "dictyBase": "http://dictybase.org/db/cgi-bin/search/results.pl?class=dicty::UI::Search::Primary_id&query=_SUBSTITUTE_THIS_",
-    "RGD": "http://rgd.mcw.edu/tools/genes/genes_view.cgi?id=_SUBSTITUTE_THIS_",
-    "MGD": "http://www.informatics.jax.org/searchtool/Search.do?query=_SUBSTITUTE_THIS_",
+    "dictyBase": "http://dictybase.org/gene/_SUBSTITUTE_THIS_",
+    "RGD": "https://rgd.mcw.edu/rgdweb/report/gene/main.html?id=_SUBSTITUTE_THIS_",
+    "MGD": "http://www.informatics.jax.org/marker/_SUBSTITUTE_THIS_",
 }
 
 # BLAST executables

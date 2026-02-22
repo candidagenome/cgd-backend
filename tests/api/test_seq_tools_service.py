@@ -320,7 +320,7 @@ class TestBuildPrimerDesignLink:
         """Should build primer design link."""
         result = _build_primer_design_link("ATGCATGC")
 
-        assert "/cgi-bin/compute/web-primer" in result
+        assert "/webprimer" in result
         assert "seq=ATGCATGC" in result
 
 
