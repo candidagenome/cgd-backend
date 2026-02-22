@@ -606,7 +606,8 @@ def search_paragraphs(db: Session, query: str, limit: int = 20) -> list[TextSear
 
     for para, feat in para_query:
         display_name = feat.gene_name or feat.feature_name
-        description = _truncate_text(para.paragraph_text, 250)
+        # Extract context around matching keyword
+        description = _extract_context_around_match(para.paragraph_text, query, 120)
 
         results.append(TextSearchResult(
             category="paragraphs",
@@ -773,7 +774,8 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 link_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
         if link:
-            description = _truncate_text(note.note, 200)
+            # Extract context around matching keyword
+            description = _extract_context_around_match(note.note, query, 120)
             results.append(TextSearchResult(
                 category="notes",
                 id=str(note.note_no),
