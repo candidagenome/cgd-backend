@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -6,11 +8,14 @@ from cgd.core.settings import settings
 from cgd.db.deps import get_db
 from cgd.api.crud.search_crud import dispatch
 from cgd.api.services import search_service
+from cgd.api.services import text_search_service
 from cgd.schemas.search_schema import (
     SearchResponse,
     ResolveResponse,
     AutocompleteResponse,
     CategorySearchResponse,
+    TextSearchResponse,
+    TextSearchCategoryPagedResponse,
 )
 
 
@@ -96,6 +101,48 @@ def search_category(
     Use this endpoint for navigating through large result sets.
     """
     return search_service.search_category_paginated(db, query, category, page, page_size)
+
+
+@router.get("/text", response_model=TextSearchResponse)
+def text_search(
+    query: str = Query(..., min_length=1, description="Search query string"),
+    limit: int = Query(10, ge=1, le=50, description="Max results per category"),
+    type: Optional[str] = Query(
+        None,
+        description="Filter: 'homolog' for orthologs only"
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Full text search across all CGD categories.
+
+    Searches 13 categories: genes, descriptions, go_terms, colleagues, authors,
+    pathways, paragraphs, abstracts, name_descriptions, phenotypes, notes,
+    external_ids, orthologs.
+
+    Use type=homolog to search only orthologs/best hits.
+    """
+    category_filter = "orthologs" if type == "homolog" else None
+    return text_search_service.text_search(db, query, limit, category_filter)
+
+
+@router.get("/text/category", response_model=TextSearchCategoryPagedResponse)
+def text_search_category(
+    query: str = Query(..., min_length=1, description="Search query string"),
+    category: str = Query(..., description="Category to search"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Paginated text search within a specific category.
+
+    Returns paginated results for a single category with pagination metadata.
+    Use this endpoint for navigating through large result sets within a category.
+    """
+    return text_search_service.text_search_category_paginated(
+        db, query, category, page, page_size
+    )
 
 
 @router.get("", response_model=SearchDispatchResponse)

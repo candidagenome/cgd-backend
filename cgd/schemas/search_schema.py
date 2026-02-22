@@ -1,8 +1,17 @@
 """Search schema definitions for quick search endpoint."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
+
+
+# --- Text Search Types ---
+
+TextSearchCategory = Literal[
+    "genes", "descriptions", "go_terms", "colleagues", "authors",
+    "pathways", "paragraphs", "abstracts", "name_descriptions",
+    "phenotypes", "notes", "external_ids", "orthologs"
+]
 
 
 class SearchResultLink(BaseModel):
@@ -78,3 +87,43 @@ class AutocompleteResponse(BaseModel):
     """Response for /api/search/autocomplete endpoint."""
     query: str
     suggestions: list[AutocompleteSuggestion]
+
+
+# --- Text Search Schemas ---
+
+class TextSearchResult(BaseModel):
+    """Single text search result item."""
+    category: str
+    id: str
+    name: str
+    description: Optional[str] = None
+    link: str
+    organism: Optional[str] = None
+    match_context: Optional[str] = None
+    # Highlighted versions with <mark> tags around matching text
+    highlighted_name: Optional[str] = None
+    highlighted_description: Optional[str] = None
+
+
+class TextSearchCategoryResult(BaseModel):
+    """Results for a single category in text search."""
+    category: str
+    display_name: str
+    count: int
+    results: list[TextSearchResult]
+
+
+class TextSearchResponse(BaseModel):
+    """Response for /api/search/text endpoint."""
+    query: str
+    total_results: int
+    categories: list[TextSearchCategoryResult]
+    redirect_url: Optional[str] = None
+
+
+class TextSearchCategoryPagedResponse(BaseModel):
+    """Response for /api/search/text/category endpoint with pagination."""
+    query: str
+    category: str
+    results: list[TextSearchResult]
+    pagination: PaginationInfo
