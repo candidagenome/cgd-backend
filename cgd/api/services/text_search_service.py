@@ -137,6 +137,56 @@ def _truncate_text(text: Optional[str], max_length: int = 300) -> Optional[str]:
     return text[:max_length] + "..."
 
 
+def _extract_context_around_match(
+    text: Optional[str],
+    query: str,
+    context_chars: int = 100
+) -> Optional[str]:
+    """
+    Extract text context around the matching keyword.
+
+    Finds the first occurrence of the query in the text and extracts
+    characters before and after it, adding ellipsis if truncated.
+
+    Args:
+        text: The full text to search in
+        query: The search query
+        context_chars: Number of characters to show before and after match
+
+    Returns:
+        Extracted context with ellipsis, or truncated text if no match found
+    """
+    if not text or not query:
+        return _truncate_text(text, context_chars * 2)
+
+    # Clean the query (remove wildcards)
+    clean_query = query.strip().replace('*', '').replace('%', '')
+    if not clean_query:
+        return _truncate_text(text, context_chars * 2)
+
+    # Find the match position (case-insensitive)
+    text_lower = text.lower()
+    query_lower = clean_query.lower()
+    match_pos = text_lower.find(query_lower)
+
+    if match_pos == -1:
+        # No match found, just truncate from beginning
+        return _truncate_text(text, context_chars * 2)
+
+    # Calculate start and end positions for context
+    start = max(0, match_pos - context_chars)
+    end = min(len(text), match_pos + len(clean_query) + context_chars)
+
+    # Extract the context
+    context = text[start:end]
+
+    # Add ellipsis if we truncated
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+
+    return f"{prefix}{context}{suffix}"
+
+
 def _build_citation_links_for_search(ref, ref_urls=None) -> list[SearchResultLink]:
     """
     Build citation links for a reference in text search results.
@@ -589,9 +639,10 @@ def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearc
     )
 
     for abstract, ref in abstract_query:
-        # Use citation as name (plain text, no link), truncated abstract as description
+        # Use citation as name (plain text, no link)
         name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
-        description = _truncate_text(abstract.abstract, 250)
+        # Extract context around matching keyword
+        description = _extract_context_around_match(abstract.abstract, query, 120)
 
         # Use PMID as ID if available, otherwise use dbxref_id
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
