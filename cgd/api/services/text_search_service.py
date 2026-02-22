@@ -18,6 +18,7 @@ from cgd.schemas.search_schema import (
     TextSearchResponse,
     TextSearchCategoryPagedResponse,
     PaginationInfo,
+    SearchResultLink,
 )
 from cgd.models.models import (
     Feature,
@@ -43,6 +44,7 @@ from cgd.models.models import (
     DbxrefHomology,
     FeatHomology,
     RefProperty,
+    RefUrl,
 )
 
 
@@ -133,6 +135,58 @@ def _truncate_text(text: Optional[str], max_length: int = 300) -> Optional[str]:
     if len(text) <= max_length:
         return text
     return text[:max_length] + "..."
+
+
+def _build_citation_links_for_search(ref, ref_urls=None) -> list[SearchResultLink]:
+    """
+    Build citation links for a reference in text search results.
+
+    Generates links for:
+    - CGD Paper (internal link to reference page)
+    - PubMed (external link to NCBI PubMed)
+    - Full Text (if available)
+
+    Args:
+        ref: Reference object with pubmed and dbxref_id
+        ref_urls: List of RefUrl objects linked to this reference
+
+    Returns:
+        List of SearchResultLink objects
+    """
+    links = []
+
+    # CGD Paper link (always present)
+    links.append(SearchResultLink(
+        name="CGD Paper",
+        url=f"/reference/{ref.dbxref_id}",
+        link_type="internal"
+    ))
+
+    # PubMed link (if pubmed ID exists)
+    if ref.pubmed:
+        links.append(SearchResultLink(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}",
+            link_type="external"
+        ))
+
+    # Process URLs from ref_url relationship
+    if ref_urls:
+        for ref_url in ref_urls:
+            url_obj = ref_url.url
+            if url_obj and url_obj.url:
+                url_type = (url_obj.url_type or "").lower()
+
+                # Full Text / LINKOUT
+                if "full text" in url_type or "linkout" in url_type:
+                    links.append(SearchResultLink(
+                        name="Full Text",
+                        url=url_obj.url,
+                        link_type="external"
+                    ))
+                    break  # Only add one full text link
+
+    return links
 
 
 # =============================================================================
@@ -535,8 +589,17 @@ def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearc
     )
 
     for abstract, ref in abstract_query:
-        name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+        # Use citation as name, truncated abstract as description
+        name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
         description = _truncate_text(abstract.abstract, 250)
+
+        # Get ref_url for building links
+        ref_urls = (
+            db.query(RefUrl)
+            .filter(RefUrl.reference_no == ref.reference_no)
+            .all()
+        )
+        links = _build_citation_links_for_search(ref, ref_urls)
 
         results.append(TextSearchResult(
             category="abstracts",
@@ -544,6 +607,7 @@ def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearc
             name=name,
             description=description,
             link=f"/reference/{ref.dbxref_id}",
+            links=links,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=_highlight_text(description, query),
         ))
@@ -1048,10 +1112,17 @@ def search_literature_topics(db: Session, query: str, limit: int = 20) -> list[T
             continue
         seen_refs.add(ref.reference_no)
 
-        name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+        # Use citation as name, topic as description
+        name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
         description = f"Topic: {prop.property_value}"
-        if ref.citation:
-            description += f" - {_truncate_text(ref.citation, 150)}"
+
+        # Get ref_url for building links
+        ref_urls = (
+            db.query(RefUrl)
+            .filter(RefUrl.reference_no == ref.reference_no)
+            .all()
+        )
+        links = _build_citation_links_for_search(ref, ref_urls)
 
         results.append(TextSearchResult(
             category="literature_topics",
@@ -1059,6 +1130,7 @@ def search_literature_topics(db: Session, query: str, limit: int = 20) -> list[T
             name=name,
             description=description,
             link=f"/reference/{ref.dbxref_id}",
+            links=links,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=_highlight_text(description, query),
         ))

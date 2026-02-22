@@ -100,6 +100,7 @@ class TextSearchResult(BaseModel):
     link: str
     organism: Optional[str] = None
     match_context: Optional[str] = None
+    links: Optional[list[SearchResultLink]] = None  # Citation links for references
     # Highlighted versions with <mark> tags around matching text
     highlighted_name: Optional[str] = None
     highlighted_description: Optional[str] = None
