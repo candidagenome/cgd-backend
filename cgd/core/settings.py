@@ -29,9 +29,9 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing. MUST be set in production.",
     )
     jwt_access_token_expire_minutes: int = Field(
-        default=240,
+        default=10080,
         validation_alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
-        description="Access token expiration in minutes (default 4 hours)",
+        description="Access token expiration in minutes (default 1 week)",
     )
     jwt_refresh_token_expire_days: int = Field(
         default=7,
