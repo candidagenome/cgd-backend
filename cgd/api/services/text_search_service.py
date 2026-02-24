@@ -22,6 +22,7 @@ from cgd.schemas.search_schema import (
 )
 from cgd.models.models import (
     Feature,
+    FeatRelationship,
     Go,
     GoSynonym,
     GoGosyn,
@@ -240,6 +241,48 @@ def _build_citation_links_for_search(ref, ref_urls=None) -> list[SearchResultLin
 
 
 # =============================================================================
+# Assembly 21/22 Deduplication Helper
+# =============================================================================
+
+def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
+    """
+    Identify Assembly 21 features that have Assembly 22 equivalents.
+
+    In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
+    Assembly 22 (C7_XXXXX_A) feature records. We prefer Assembly 22.
+
+    The relationship is stored in FeatRelationship where:
+    - child_feature_no = Assembly 21 feature
+    - parent_feature_no = Assembly 22 feature
+    - relationship_type = 'Assembly 21 Primary Allele'
+    - rank = 3
+
+    Args:
+        db: Database session
+        feature_nos: Set of feature_no values to check
+
+    Returns:
+        Set of feature_no values that are Assembly 21 versions with
+        Assembly 22 equivalents (these should be excluded from results)
+    """
+    if not feature_nos:
+        return set()
+
+    # Find Assembly 21 features that have Assembly 22 parents
+    a21_relationships = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.child_feature_no.in_(feature_nos),
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .all()
+    )
+
+    return {rel[0] for rel in a21_relationships}
+
+
+# =============================================================================
 # Individual Category Search Functions
 # =============================================================================
 
@@ -247,10 +290,16 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     """
     Search genes/loci by gene_name, feature_name, dbxref_id, or aliases.
     Returns TextSearchResult list with category="genes".
+
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
+
+    # Fetch more than limit to account for Assembly 21 filtering
+    fetch_limit = limit * 2
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     feature_query = (
@@ -263,11 +312,37 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
-        .limit(limit)
+        .limit(fetch_limit)
     )
 
-    found_feature_nos = set()
-    for feat in feature_query:
+    # Collect features from direct match
+    direct_features = list(feature_query)
+    found_feature_nos = {f.feature_no for f in direct_features}
+
+    # Search aliases
+    alias_query = (
+        db.query(Feature, Alias)
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .limit(fetch_limit)
+    )
+
+    # Collect alias matches (feature + alias pairs)
+    alias_features = []
+    for feat, alias in alias_query:
+        if feat.feature_no not in found_feature_nos:
+            alias_features.append((feat, alias))
+            found_feature_nos.add(feat.feature_no)
+
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, found_feature_nos)
+
+    # Build results from direct matches (excluding Assembly 21 duplicates)
+    for feat in direct_features:
+        if feat.feature_no in a21_to_exclude:
+            continue
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="genes",
@@ -279,39 +354,29 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(feat.headline, query),
         ))
-        found_feature_nos.add(feat.feature_no)
+        if len(results) >= limit:
+            break
 
-    # Search aliases if we have room
-    remaining = limit - len(results)
-    if remaining > 0:
-        alias_query = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-            .filter(func.upper(Alias.alias_name).like(upper_pattern))
-            .limit(remaining + len(found_feature_nos))
-        )
-
-        for feat, alias in alias_query:
-            if feat.feature_no not in found_feature_nos:
-                display_name = feat.gene_name or feat.feature_name
-                description = f"Alias: {alias.alias_name}"
-                if feat.headline:
-                    description += f" - {feat.headline}"
-                results.append(TextSearchResult(
-                    category="genes",
-                    id=feat.dbxref_id,
-                    name=display_name,
-                    description=description,
-                    link=f"/locus/{feat.feature_name}",
-                    organism=_get_organism_name(feat.organism),
-                    highlighted_name=_highlight_text(display_name, query),
-                    highlighted_description=_highlight_text(description, query),
-                ))
-                found_feature_nos.add(feat.feature_no)
-                if len(results) >= limit:
-                    break
+    # Add alias matches if we have room (excluding Assembly 21 duplicates)
+    for feat, alias in alias_features:
+        if len(results) >= limit:
+            break
+        if feat.feature_no in a21_to_exclude:
+            continue
+        display_name = feat.gene_name or feat.feature_name
+        description = f"Alias: {alias.alias_name}"
+        if feat.headline:
+            description += f" - {feat.headline}"
+        results.append(TextSearchResult(
+            category="genes",
+            id=feat.dbxref_id,
+            name=display_name,
+            description=description,
+            link=f"/locus/{feat.feature_name}",
+            organism=_get_organism_name(feat.organism),
+            highlighted_name=_highlight_text(display_name, query),
+            highlighted_description=_highlight_text(description, query),
+        ))
 
     return results[:limit]
 
@@ -320,19 +385,34 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
     """
     Search locus descriptions (headline field).
     Returns TextSearchResult list with category="descriptions".
+
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
+    # Fetch more than limit to account for Assembly 21 filtering
+    fetch_limit = limit * 2
+
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
         .filter(func.upper(Feature.headline).like(upper_pattern))
-        .limit(limit)
+        .limit(fetch_limit)
     )
 
-    for feat in feature_query:
+    # Collect all features
+    features = list(feature_query)
+    feature_nos = {f.feature_no for f in features}
+
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, feature_nos)
+
+    for feat in features:
+        if feat.feature_no in a21_to_exclude:
+            continue
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="descriptions",
@@ -344,6 +424,8 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(feat.headline, query),
         ))
+        if len(results) >= limit:
+            break
 
     return results
 
@@ -883,11 +965,26 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
 # =============================================================================
 
 def _count_genes(db: Session, query: str) -> int:
-    """Count total genes matching the query."""
+    """
+    Count total genes matching the query.
+
+    Note: Excludes Assembly 21 features that have Assembly 22 equivalents
+    to avoid counting duplicates.
+    """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Count features matching directly
+    # Subquery to get Assembly 21 feature_nos to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
+    # Count features matching directly (excluding Assembly 21 duplicates)
     feature_count = (
         db.query(func.count(Feature.feature_no))
         .filter(
@@ -895,12 +992,13 @@ def _count_genes(db: Session, query: str) -> int:
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
+            ),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
         )
         .scalar()
     )
 
-    # Count features matching via aliases (excluding already counted)
+    # Count features matching via aliases (excluding already counted and Assembly 21)
     alias_subq = (
         db.query(FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
@@ -917,7 +1015,8 @@ def _count_genes(db: Session, query: str) -> int:
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
+            ),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
         )
         .scalar()
     )
@@ -926,13 +1025,31 @@ def _count_genes(db: Session, query: str) -> int:
 
 
 def _count_descriptions(db: Session, query: str) -> int:
-    """Count total description matches."""
+    """
+    Count total description matches.
+
+    Note: Excludes Assembly 21 features that have Assembly 22 equivalents
+    to avoid counting duplicates.
+    """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
+    # Subquery to get Assembly 21 feature_nos to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
     return (
         db.query(func.count(Feature.feature_no))
-        .filter(func.upper(Feature.headline).like(upper_pattern))
+        .filter(
+            func.upper(Feature.headline).like(upper_pattern),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+        )
         .scalar()
     )
 
