@@ -63,7 +63,7 @@ async def login(
             httponly=True,
             secure=True,  # Required when samesite="none"
             samesite="none",
-            max_age=int(timedelta(days=7).total_seconds()),
+            max_age=int(timedelta(days=settings.jwt_refresh_token_expire_days).total_seconds()),
             path="/api/auth",  # Only sent to auth endpoints
             domain=settings.cookie_domain,  # For cross-subdomain support
         )
