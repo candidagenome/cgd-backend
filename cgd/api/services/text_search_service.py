@@ -978,8 +978,9 @@ def _count_genes(db: Session, query: str) -> int:
     upper_pattern = like_pattern.upper()
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Use label() to ensure column name is consistent in UNION
     direct_subq = (
-        db.query(Feature.feature_no)
+        db.query(Feature.feature_no.label('fno'))
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -991,7 +992,7 @@ def _count_genes(db: Session, query: str) -> int:
 
     # Subquery for features matching via aliases
     alias_subq = (
-        db.query(Feature.feature_no)
+        db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(func.upper(Alias.alias_name).like(upper_pattern))
@@ -1011,10 +1012,11 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Count distinct feature_nos, excluding Assembly 21 duplicates
+    # Use labeled column name 'fno' from the UNION subquery
     total_count = (
-        db.query(func.count(all_matches.c.feature_no))
+        db.query(func.count(all_matches.c.fno))
         .filter(
-            ~all_matches.c.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~all_matches.c.fno.in_(db.query(a21_subq.c.child_feature_no))
         )
         .scalar()
     )
