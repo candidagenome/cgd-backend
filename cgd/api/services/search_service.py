@@ -718,13 +718,18 @@ def get_autocomplete_suggestions(
 
 
 def _count_genes(db: Session, query: str) -> int:
-    """Count total genes matching the query."""
+    """
+    Count total genes matching the query.
+
+    Uses UNION of direct and alias matches to ensure consistent counting
+    with the search function.
+    """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Count features matching directly
-    feature_count = (
-        db.query(func.count(Feature.feature_no))
+    # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    direct_subq = (
+        db.query(Feature.feature_no)
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -732,32 +737,26 @@ def _count_genes(db: Session, query: str) -> int:
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
-        .scalar()
     )
 
-    # Count features matching via aliases (excluding already counted)
+    # Subquery for features matching via aliases
     alias_subq = (
-        db.query(FeatAlias.feature_no)
+        db.query(Feature.feature_no)
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(func.upper(Alias.alias_name).like(upper_pattern))
-        .distinct()
-        .subquery()
     )
 
-    alias_count = (
-        db.query(func.count(Feature.feature_no))
-        .filter(
-            Feature.feature_no.in_(db.query(alias_subq.c.feature_no)),
-            ~or_(
-                func.upper(Feature.gene_name).like(upper_pattern),
-                func.upper(Feature.feature_name).like(upper_pattern),
-                func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
-        )
+    # Union of both to get all matching feature_nos (distinct)
+    all_matches = direct_subq.union(alias_subq).subquery()
+
+    # Count distinct feature_nos
+    total_count = (
+        db.query(func.count(all_matches.c.feature_no))
         .scalar()
     )
 
-    return feature_count + alias_count
+    return total_count or 0
 
 
 def _count_go_terms(db: Session, query: str) -> int:

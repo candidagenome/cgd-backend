@@ -165,6 +165,9 @@ class MockQuery:
     def distinct(self):
         return self
 
+    def union(self, other):
+        return self
+
     def offset(self, n):
         return self
 
