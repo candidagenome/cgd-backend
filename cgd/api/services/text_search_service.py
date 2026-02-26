@@ -244,9 +244,9 @@ def _build_citation_links_for_search(ref, ref_urls=None) -> list[SearchResultLin
 # Assembly 21/22 Deduplication Helper
 # =============================================================================
 
-def _get_assembly21_to_a22_mapping(db: Session, feature_nos: set[int]) -> dict[int, "Feature"]:
+def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
     """
-    Get mapping from Assembly 21 features to their Assembly 22 equivalents.
+    Identify Assembly 21 features that have Assembly 22 equivalents.
 
     In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
     Assembly 22 (C7_XXXXX_A) feature records. We prefer Assembly 22.
@@ -256,39 +256,6 @@ def _get_assembly21_to_a22_mapping(db: Session, feature_nos: set[int]) -> dict[i
     - parent_feature_no = Assembly 22 feature
     - relationship_type = 'Assembly 21 Primary Allele'
     - rank = 3
-
-    Args:
-        db: Database session
-        feature_nos: Set of feature_no values to check
-
-    Returns:
-        Dict mapping Assembly 21 feature_no -> Assembly 22 Feature object
-    """
-    if not feature_nos:
-        return {}
-
-    # Find Assembly 21 features and their Assembly 22 parents
-    a21_relationships = (
-        db.query(FeatRelationship.child_feature_no, Feature)
-        .join(Feature, FeatRelationship.parent_feature_no == Feature.feature_no)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(
-            FeatRelationship.child_feature_no.in_(feature_nos),
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .all()
-    )
-
-    return {a21_feature_no: a22_feature for a21_feature_no, a22_feature in a21_relationships}
-
-
-def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
-    """
-    Identify Assembly 21 features that have Assembly 22 equivalents.
-
-    This is a convenience wrapper for counting - returns just the feature_nos
-    to exclude without fetching the Assembly 22 features.
 
     Args:
         db: Database session
@@ -324,14 +291,14 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     Search genes/loci by gene_name, feature_name, dbxref_id, or aliases.
     Returns TextSearchResult list with category="genes".
 
-    Note: When an Assembly 21 feature is found, it is replaced with its
-    Assembly 22 equivalent to show the preferred version.
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Fetch more than limit to account for Assembly 21 replacements
+    # Fetch more than limit to account for Assembly 21 filtering
     fetch_limit = limit * 2
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
@@ -369,23 +336,13 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             alias_features.append((feat, alias))
             found_feature_nos.add(feat.feature_no)
 
-    # Get mapping from Assembly 21 -> Assembly 22 features
-    a21_to_a22 = _get_assembly21_to_a22_mapping(db, found_feature_nos)
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, found_feature_nos)
 
-    # Track which features we've added (by feature_no) to avoid duplicates
-    added_feature_nos = set()
-
-    # Build results from direct matches (replacing Assembly 21 with Assembly 22)
+    # Build results from direct matches (excluding Assembly 21 duplicates)
     for feat in direct_features:
-        # If this is an Assembly 21 feature, use the Assembly 22 equivalent
-        if feat.feature_no in a21_to_a22:
-            feat = a21_to_a22[feat.feature_no]
-
-        # Skip if we've already added this feature
-        if feat.feature_no in added_feature_nos:
+        if feat.feature_no in a21_to_exclude:
             continue
-        added_feature_nos.add(feat.feature_no)
-
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="genes",
@@ -400,20 +357,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
         if len(results) >= limit:
             break
 
-    # Add alias matches if we have room (replacing Assembly 21 with Assembly 22)
+    # Add alias matches if we have room (excluding Assembly 21 duplicates)
     for feat, alias in alias_features:
         if len(results) >= limit:
             break
-
-        # If this is an Assembly 21 feature, use the Assembly 22 equivalent
-        if feat.feature_no in a21_to_a22:
-            feat = a21_to_a22[feat.feature_no]
-
-        # Skip if we've already added this feature
-        if feat.feature_no in added_feature_nos:
+        if feat.feature_no in a21_to_exclude:
             continue
-        added_feature_nos.add(feat.feature_no)
-
         display_name = feat.gene_name or feat.feature_name
         description = f"Alias: {alias.alias_name}"
         if feat.headline:
@@ -437,14 +386,14 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
     Search locus descriptions (headline field).
     Returns TextSearchResult list with category="descriptions".
 
-    Note: When an Assembly 21 feature is found, it is replaced with its
-    Assembly 22 equivalent to show the preferred version.
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Fetch more than limit to account for Assembly 21 replacements
+    # Fetch more than limit to account for Assembly 21 filtering
     fetch_limit = limit * 2
 
     feature_query = (
@@ -458,22 +407,12 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
     features = list(feature_query)
     feature_nos = {f.feature_no for f in features}
 
-    # Get mapping from Assembly 21 -> Assembly 22 features
-    a21_to_a22 = _get_assembly21_to_a22_mapping(db, feature_nos)
-
-    # Track which features we've added to avoid duplicates
-    added_feature_nos = set()
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, feature_nos)
 
     for feat in features:
-        # If this is an Assembly 21 feature, use the Assembly 22 equivalent
-        if feat.feature_no in a21_to_a22:
-            feat = a21_to_a22[feat.feature_no]
-
-        # Skip if we've already added this feature
-        if feat.feature_no in added_feature_nos:
+        if feat.feature_no in a21_to_exclude:
             continue
-        added_feature_nos.add(feat.feature_no)
-
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="descriptions",
