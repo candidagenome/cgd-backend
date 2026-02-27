@@ -7,16 +7,6 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 
 
-class PaginationInfo(BaseModel):
-    """Pagination metadata."""
-    page: int = Field(..., description="Current page (1-indexed)")
-    page_size: int = Field(..., description="Items per page")
-    total_items: int = Field(..., description="Total number of items")
-    total_pages: int = Field(..., description="Total number of pages")
-    has_next: bool = Field(..., description="Whether there's a next page")
-    has_prev: bool = Field(..., description="Whether there's a previous page")
-
-
 class FeatureSearchRequest(BaseModel):
     """Request for feature search."""
     organism: str = Field(
@@ -68,9 +58,7 @@ class FeatureSearchRequest(BaseModel):
         default_factory=list,
         description="GO evidence codes (IDA, IEA, etc.)"
     )
-    # Pagination and sorting
-    page: int = Field(1, ge=1, description="Page number (1-indexed)")
-    page_size: int = Field(30, ge=1, le=50000, description="Results per page (max 50000 for downloads)")
+    # Sorting
     sort_by: str = Field("orf", description="Sort field (orf, gene, feature_type)")
 
 
@@ -131,9 +119,7 @@ class FeatureSearchResponse(BaseModel):
     success: bool
     query_summary: Optional[QuerySummary] = None
     features: List[FeatureSearchResult] = Field(default_factory=list)
-    pagination: Optional[PaginationInfo] = None
     total_count: int = Field(0, description="Total number of matching features")
-    total_pages: int = Field(0, description="Total number of pages")
     show_position: bool = Field(False, description="Whether to show position columns")
     show_go_terms: bool = Field(False, description="Whether to show GO term columns")
     filter_counts: Optional[Dict[str, Dict[str, int]]] = Field(

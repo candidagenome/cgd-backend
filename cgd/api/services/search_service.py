@@ -17,10 +17,10 @@ from cgd.schemas.search_schema import (
     AutocompleteSuggestion,
     AutocompleteResponse,
     CategorySearchResponse,
-    PaginationInfo,
 )
 from cgd.models.models import (
     Feature,
+    FeatRelationship,
     Go,
     Phenotype,
     Reference,
@@ -238,20 +238,59 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     )
 
 
+def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
+    """
+    Identify Assembly 21 features that have Assembly 22 equivalents.
+
+    In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
+    Assembly 22 (C7_XXXXX_A) feature records. We prefer Assembly 22.
+
+    Args:
+        db: Database session
+        feature_nos: Set of feature_no values to check
+
+    Returns:
+        Set of feature_no values that are Assembly 21 versions with
+        Assembly 22 equivalents (these should be excluded from results)
+    """
+    if not feature_nos:
+        return set()
+
+    # Find Assembly 21 features that have Assembly 22 parents
+    a21_relationships = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.child_feature_no.in_(feature_nos),
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .all()
+    )
+
+    return {rel[0] for rel in a21_relationships}
+
+
 def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
     """
     Search genes/loci by gene_name, feature_name, or aliases.
 
     Returns SearchResult list with category="gene".
+
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
+    # Fetch more than limit to account for Assembly 21 filtering
+    fetch_limit = limit * 2
+
     # Search in Feature table: gene_name, feature_name, dbxref_id
+    # Use inner join to only include features with a valid organism
     feature_query = (
         db.query(Feature)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -259,10 +298,38 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
-        .limit(limit)
+        .limit(fetch_limit)
     )
 
-    for feat in feature_query:
+    # Collect features from direct match
+    direct_features = list(feature_query)
+    found_feature_nos = {f.feature_no for f in direct_features}
+
+    # Search aliases
+    # Use inner join to only include features with a valid organism
+    alias_query = (
+        db.query(Feature, Alias)
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .limit(fetch_limit)
+    )
+
+    # Collect alias matches (feature + alias pairs)
+    alias_features = []
+    for feat, alias in alias_query:
+        if feat.feature_no not in found_feature_nos:
+            alias_features.append((feat, alias))
+            found_feature_nos.add(feat.feature_no)
+
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, found_feature_nos)
+
+    # Build results from direct matches (excluding Assembly 21 duplicates)
+    for feat in direct_features:
+        if feat.feature_no in a21_to_exclude:
+            continue
         display_name = feat.gene_name or feat.feature_name
         results.append(SearchResult(
             category="gene",
@@ -274,39 +341,27 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(feat.headline, query),
         ))
+        if len(results) >= limit:
+            break
 
-    # If we have room, also search aliases
-    remaining = limit - len(results)
-    if remaining > 0:
-        # Get feature_nos already in results to avoid duplicates
-        found_feature_nos = {feat.feature_no for feat in feature_query}
-
-        alias_query = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-            .filter(func.upper(Alias.alias_name).like(upper_pattern))
-            .limit(remaining + len(found_feature_nos))  # Extra to account for potential duplicates
-        )
-
-        for feat, alias in alias_query:
-            if feat.feature_no not in found_feature_nos:
-                display_name = feat.gene_name or feat.feature_name
-                description = f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}"
-                results.append(SearchResult(
-                    category="gene",
-                    id=feat.dbxref_id,
-                    name=display_name,
-                    description=description,
-                    link=f"/locus/{feat.feature_name}",
-                    organism=_get_organism_name(feat.organism),
-                    highlighted_name=_highlight_text(display_name, query),
-                    highlighted_description=_highlight_text(description, query),
-                ))
-                found_feature_nos.add(feat.feature_no)
-                if len(results) >= limit:
-                    break
+    # Add alias matches if we have room (excluding Assembly 21 duplicates)
+    for feat, alias in alias_features:
+        if len(results) >= limit:
+            break
+        if feat.feature_no in a21_to_exclude:
+            continue
+        display_name = feat.gene_name or feat.feature_name
+        description = f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}"
+        results.append(SearchResult(
+            category="gene",
+            id=feat.dbxref_id,
+            name=display_name,
+            description=description,
+            link=f"/locus/{feat.feature_name}",
+            organism=_get_organism_name(feat.organism),
+            highlighted_name=_highlight_text(display_name, query),
+            highlighted_description=_highlight_text(description, query),
+        ))
 
     return results[:limit]
 
@@ -505,7 +560,7 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     """
     Search all categories (genes, GO terms, phenotypes, references).
 
-    Returns results grouped by category.
+    Returns results grouped by category with actual total counts.
     """
     # Search all categories with the same limit per category
     genes = search_genes(db, query, limit)
@@ -513,23 +568,36 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     phenotypes = search_phenotypes(db, query, limit)
     references = search_references(db, query, limit)
 
+    # Get actual total counts for each category
+    genes_count = _count_genes(db, query)
+    go_terms_count = _count_go_terms(db, query)
+    phenotypes_count = _count_phenotypes(db, query)
+    references_count = _count_references(db, query)
+
     # Build response
     results_by_category = {}
-    if genes:
-        results_by_category["genes"] = genes
-    if go_terms:
-        results_by_category["go_terms"] = go_terms
-    if phenotypes:
-        results_by_category["phenotypes"] = phenotypes
-    if references:
-        results_by_category["references"] = references
+    counts_by_category = {}
 
-    total = len(genes) + len(go_terms) + len(phenotypes) + len(references)
+    if genes or genes_count > 0:
+        results_by_category["genes"] = genes
+        counts_by_category["genes"] = genes_count
+    if go_terms or go_terms_count > 0:
+        results_by_category["go_terms"] = go_terms
+        counts_by_category["go_terms"] = go_terms_count
+    if phenotypes or phenotypes_count > 0:
+        results_by_category["phenotypes"] = phenotypes
+        counts_by_category["phenotypes"] = phenotypes_count
+    if references or references_count > 0:
+        results_by_category["references"] = references
+        counts_by_category["references"] = references_count
+
+    total = genes_count + go_terms_count + phenotypes_count + references_count
 
     return SearchResponse(
         query=query,
         total_results=total,
         results_by_category=results_by_category,
+        counts_by_category=counts_by_category,
     )
 
 
@@ -718,46 +786,133 @@ def get_autocomplete_suggestions(
 
 
 def _count_genes(db: Session, query: str) -> int:
-    """Count total genes matching the query."""
+    """
+    Count total genes matching the query.
+
+    Uses UNION of direct and alias matches to ensure consistent counting
+    with the search function. Only counts features that have a valid organism
+    and excludes Assembly 21 features that have Assembly 22 equivalents.
+    """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Count features matching directly
-    feature_count = (
-        db.query(func.count(Feature.feature_no))
+    # Subquery to identify Assembly 21 features to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
         .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
+    # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Use label() to ensure column name is consistent in UNION
+    # Filter to only include features with a valid organism and exclude Assembly 21
+    direct_subq = (
+        db.query(Feature.feature_no.label('fno'))
+        .filter(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
+    )
+
+    # Subquery for features matching via aliases
+    # Filter to only include features with a valid organism and exclude Assembly 21
+    alias_subq = (
+        db.query(Feature.feature_no.label('fno'))
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
+    )
+
+    # Union of both to get all matching feature_nos (distinct)
+    all_matches = direct_subq.union(alias_subq).subquery()
+
+    # Count distinct feature_nos using the labeled column name
+    total_count = (
+        db.query(func.count(all_matches.c.fno))
         .scalar()
     )
 
-    # Count features matching via aliases (excluding already counted)
-    alias_subq = (
-        db.query(FeatAlias.feature_no)
-        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
-        .distinct()
+    return total_count or 0
+
+
+def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
+    """
+    Count genes matching the query grouped by organism.
+
+    Returns a dict mapping organism name to count.
+    """
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery to identify Assembly 21 features to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
         .subquery()
     )
 
-    alias_count = (
-        db.query(func.count(Feature.feature_no))
+    # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    direct_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
         .filter(
-            Feature.feature_no.in_(db.query(alias_subq.c.feature_no)),
-            ~or_(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             )
         )
-        .scalar()
     )
 
-    return feature_count + alias_count
+    # Subquery for features matching via aliases
+    alias_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
+    )
+
+    # Union of both to get all matching features with their organism_no
+    all_matches = direct_subq.union(alias_subq).subquery()
+
+    # Join with Organism to get organism names and count by organism
+    organism_counts = (
+        db.query(
+            Organism.organism_name,
+            func.count(func.distinct(all_matches.c.fno))
+        )
+        .join(Organism, all_matches.c.org_no == Organism.organism_no)
+        .group_by(Organism.organism_name)
+        .all()
+    )
+
+    return {name: count for name, count in organism_counts if name}
 
 
 def _count_go_terms(db: Session, query: str) -> int:
@@ -855,88 +1010,88 @@ def _count_references(db: Session, query: str) -> int:
     return count
 
 
-def search_category_paginated(
+def search_category(
     db: Session,
     query: str,
     category: str,
-    page: int = 1,
-    page_size: int = 20,
 ) -> CategorySearchResponse:
     """
-    Search within a specific category with pagination.
+    Search within a specific category, returning all results.
 
     Args:
         db: Database session
         query: Search query string
         category: Category to search (genes, go_terms, phenotypes, references)
-        page: Page number (1-indexed)
-        page_size: Number of results per page
 
     Returns:
-        CategorySearchResponse with paginated results and metadata
+        CategorySearchResponse with all results
     """
-    offset = (page - 1) * page_size
+    organism_counts = None
 
-    # Get total count and results based on category
+    # Get total count and all results based on category
     if category == "genes":
         total_count = _count_genes(db, query)
-        results = _search_genes_paginated(db, query, offset, page_size)
+        results = _search_genes_all(db, query)
+        organism_counts = _count_genes_by_organism(db, query)
     elif category == "go_terms":
         total_count = _count_go_terms(db, query)
-        results = _search_go_terms_paginated(db, query, offset, page_size)
+        results = _search_go_terms_all(db, query)
     elif category == "phenotypes":
         total_count = _count_phenotypes(db, query)
-        results = _search_phenotypes_paginated(db, query, offset, page_size)
+        results = _search_phenotypes_all(db, query)
     elif category == "references":
         total_count = _count_references(db, query)
-        results = _search_references_paginated(db, query, offset, page_size)
+        results = _search_references_all(db, query)
     else:
         total_count = 0
         results = []
-
-    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
-
-    pagination = PaginationInfo(
-        page=page,
-        page_size=page_size,
-        total_items=total_count,
-        total_pages=total_pages,
-        has_next=page < total_pages,
-        has_prev=page > 1,
-    )
 
     return CategorySearchResponse(
         query=query,
         category=category,
         results=results,
-        pagination=pagination,
+        total_count=total_count,
+        organism_counts=organism_counts,
     )
 
 
-def _search_genes_paginated(
-    db: Session, query: str, offset: int, limit: int
-) -> list[SearchResult]:
-    """Search genes with pagination."""
+def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
+    """Search all genes matching query.
+
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
+    """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Get features matching directly
+    # Subquery to get Assembly 21 feature_nos to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
+    # Get all features matching directly (excluding Assembly 21)
     feature_query = (
         db.query(Feature)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
+            ),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
         )
-        .offset(offset)
-        .limit(limit)
     )
 
+    found_feature_nos = set()
     for feat in feature_query:
+        found_feature_nos.add(feat.feature_no)
         display_name = feat.gene_name or feat.feature_name
         results.append(SearchResult(
             category="gene",
@@ -949,28 +1104,21 @@ def _search_genes_paginated(
             highlighted_description=_highlight_text(feat.headline, query),
         ))
 
-    # If we need more results, search aliases
-    remaining = limit - len(results)
-    if remaining > 0 and len(results) < limit:
-        found_feature_nos = {feat.feature_no for feat in feature_query}
-
-        # Adjust offset for alias search
-        alias_offset = max(0, offset - len(found_feature_nos)) if offset > 0 else 0
-
-        alias_query = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-            .filter(
-                func.upper(Alias.alias_name).like(upper_pattern),
-                ~Feature.feature_no.in_(found_feature_nos) if found_feature_nos else True
-            )
-            .offset(alias_offset)
-            .limit(remaining)
+    # Also search aliases
+    alias_query = (
+        db.query(Feature, Alias)
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            func.upper(Alias.alias_name).like(upper_pattern),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
         )
+    )
 
-        for feat, alias in alias_query:
+    for feat, alias in alias_query:
+        if feat.feature_no not in found_feature_nos:
+            found_feature_nos.add(feat.feature_no)
             display_name = feat.gene_name or feat.feature_name
             description = f"Alias: {alias.alias_name} - {feat.headline}" if feat.headline else f"Alias: {alias.alias_name}"
             results.append(SearchResult(
@@ -987,16 +1135,16 @@ def _search_genes_paginated(
     return results
 
 
-def _search_go_terms_paginated(
-    db: Session, query: str, offset: int, limit: int
-) -> list[SearchResult]:
-    """Search GO terms with pagination."""
+def _search_go_terms_all(db: Session, query: str) -> list[SearchResult]:
+    """Search all GO terms matching query."""
     results = []
     normalized = _normalize_query(query)
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Check for GO ID exact match first (only on first page)
+    found_goids = set()
+
+    # Check for GO ID exact match first
     goid_numeric = None
     if normalized.upper().startswith('GO:'):
         try:
@@ -1009,59 +1157,50 @@ def _search_go_terms_paginated(
         except ValueError:
             pass
 
-    if goid_numeric is not None and offset == 0:
+    if goid_numeric is not None:
         go_exact = db.query(Go).filter(Go.goid == goid_numeric).first()
         if go_exact:
+            formatted_goid = _format_goid(go_exact.goid)
+            found_goids.add(formatted_goid)
             description = go_exact.go_definition[:200] + "..." if go_exact.go_definition and len(go_exact.go_definition) > 200 else go_exact.go_definition
             results.append(SearchResult(
                 category="go_term",
-                id=_format_goid(go_exact.goid),
+                id=formatted_goid,
                 name=go_exact.go_term,
                 description=description,
-                link=f"/go/{_format_goid(go_exact.goid)}",
+                link=f"/go/{formatted_goid}",
                 organism=None,
                 highlighted_name=_highlight_text(go_exact.go_term, query),
                 highlighted_description=_highlight_text(description, query),
             ))
 
     # Search by term name
-    remaining = limit - len(results)
-    adjusted_offset = offset if offset == 0 else offset - (1 if goid_numeric else 0)
+    go_query = (
+        db.query(Go)
+        .filter(func.upper(Go.go_term).like(upper_pattern))
+    )
 
-    if remaining > 0:
-        found_goids = {r.id for r in results}
+    for go in go_query:
+        formatted_goid = _format_goid(go.goid)
+        if formatted_goid not in found_goids:
+            found_goids.add(formatted_goid)
+            description = go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition
+            results.append(SearchResult(
+                category="go_term",
+                id=formatted_goid,
+                name=go.go_term,
+                description=description,
+                link=f"/go/{formatted_goid}",
+                organism=None,
+                highlighted_name=_highlight_text(go.go_term, query),
+                highlighted_description=_highlight_text(description, query),
+            ))
 
-        go_query = (
-            db.query(Go)
-            .filter(func.upper(Go.go_term).like(upper_pattern))
-            .offset(max(0, adjusted_offset))
-            .limit(remaining + len(found_goids))
-        )
-
-        for go in go_query:
-            formatted_goid = _format_goid(go.goid)
-            if formatted_goid not in found_goids:
-                description = go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition
-                results.append(SearchResult(
-                    category="go_term",
-                    id=formatted_goid,
-                    name=go.go_term,
-                    description=description,
-                    link=f"/go/{formatted_goid}",
-                    organism=None,
-                    highlighted_name=_highlight_text(go.go_term, query),
-                    highlighted_description=_highlight_text(description, query),
-                ))
-                if len(results) >= limit:
-                    break
-
-    return results[:limit]
+    return results
 
 
-def _search_phenotypes_paginated(
-    db: Session, query: str, offset: int, limit: int
-) -> list[SearchResult]:
-    """Search phenotypes with pagination."""
+def _search_phenotypes_all(db: Session, query: str) -> list[SearchResult]:
+    """Search all phenotypes matching query."""
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
@@ -1070,8 +1209,6 @@ def _search_phenotypes_paginated(
         db.query(Phenotype.observable)
         .filter(func.upper(Phenotype.observable).like(upper_pattern))
         .distinct()
-        .offset(offset)
-        .limit(limit)
     )
 
     for (observable,) in pheno_query:
@@ -1089,84 +1226,75 @@ def _search_phenotypes_paginated(
     return results
 
 
-def _search_references_paginated(
-    db: Session, query: str, offset: int, limit: int
-) -> list[SearchResult]:
-    """Search references with pagination."""
+def _search_references_all(db: Session, query: str) -> list[SearchResult]:
+    """Search all references matching query."""
     results = []
     normalized = _normalize_query(query)
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Check for PubMed ID or dbxref exact match first (only on first page)
-    if offset == 0:
-        # PubMed ID match
-        try:
-            pubmed_id = int(normalized)
-            ref_exact = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
-            if ref_exact:
-                name = f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id
-                results.append(SearchResult(
-                    category="reference",
-                    id=ref_exact.dbxref_id,
-                    name=name,
-                    description=ref_exact.citation,
-                    link=f"/reference/{ref_exact.dbxref_id}",
-                    organism=None,
-                    links=_build_reference_links(db, ref_exact),
-                    highlighted_name=_highlight_text(name, query),
-                    highlighted_description=_highlight_text(ref_exact.citation, query),
-                ))
-        except ValueError:
-            pass
+    found_ref_ids = set()
 
-        # dbxref_id match
-        if not results:
-            ref_by_dbxref = db.query(Reference).filter(
-                func.upper(Reference.dbxref_id) == normalized.upper()
-            ).first()
-            if ref_by_dbxref:
-                name = f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id
-                results.append(SearchResult(
-                    category="reference",
-                    id=ref_by_dbxref.dbxref_id,
-                    name=name,
-                    description=ref_by_dbxref.citation,
-                    link=f"/reference/{ref_by_dbxref.dbxref_id}",
-                    organism=None,
-                    links=_build_reference_links(db, ref_by_dbxref),
-                    highlighted_name=_highlight_text(name, query),
-                    highlighted_description=_highlight_text(ref_by_dbxref.citation, query),
-                ))
+    # Check for PubMed ID exact match first
+    try:
+        pubmed_id = int(normalized)
+        ref_exact = db.query(Reference).filter(Reference.pubmed == pubmed_id).first()
+        if ref_exact:
+            found_ref_ids.add(ref_exact.dbxref_id)
+            name = f"PMID:{ref_exact.pubmed}" if ref_exact.pubmed else ref_exact.dbxref_id
+            results.append(SearchResult(
+                category="reference",
+                id=ref_exact.dbxref_id,
+                name=name,
+                description=ref_exact.citation,
+                link=f"/reference/{ref_exact.dbxref_id}",
+                organism=None,
+                links=_build_reference_links(db, ref_exact),
+                highlighted_name=_highlight_text(name, query),
+                highlighted_description=_highlight_text(ref_exact.citation, query),
+            ))
+    except ValueError:
+        pass
+
+    # Check for dbxref_id match
+    ref_by_dbxref = db.query(Reference).filter(
+        func.upper(Reference.dbxref_id) == normalized.upper()
+    ).first()
+    if ref_by_dbxref and ref_by_dbxref.dbxref_id not in found_ref_ids:
+        found_ref_ids.add(ref_by_dbxref.dbxref_id)
+        name = f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id
+        results.append(SearchResult(
+            category="reference",
+            id=ref_by_dbxref.dbxref_id,
+            name=name,
+            description=ref_by_dbxref.citation,
+            link=f"/reference/{ref_by_dbxref.dbxref_id}",
+            organism=None,
+            links=_build_reference_links(db, ref_by_dbxref),
+            highlighted_name=_highlight_text(name, query),
+            highlighted_description=_highlight_text(ref_by_dbxref.citation, query),
+        ))
 
     # Search by citation
-    remaining = limit - len(results)
-    found_ref_ids = {r.id for r in results}
-    adjusted_offset = offset if offset == 0 else offset - len(found_ref_ids)
+    ref_query = (
+        db.query(Reference)
+        .filter(func.upper(Reference.citation).like(upper_pattern))
+    )
 
-    if remaining > 0:
-        ref_query = (
-            db.query(Reference)
-            .filter(func.upper(Reference.citation).like(upper_pattern))
-            .offset(max(0, adjusted_offset))
-            .limit(remaining + len(found_ref_ids))
-        )
+    for ref in ref_query:
+        if ref.dbxref_id not in found_ref_ids:
+            found_ref_ids.add(ref.dbxref_id)
+            name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+            results.append(SearchResult(
+                category="reference",
+                id=ref.dbxref_id,
+                name=name,
+                description=ref.citation,
+                link=f"/reference/{ref.dbxref_id}",
+                links=_build_reference_links(db, ref),
+                organism=None,
+                highlighted_name=_highlight_text(name, query),
+                highlighted_description=_highlight_text(ref.citation, query),
+            ))
 
-        for ref in ref_query:
-            if ref.dbxref_id not in found_ref_ids:
-                name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
-                results.append(SearchResult(
-                    category="reference",
-                    id=ref.dbxref_id,
-                    name=name,
-                    description=ref.citation,
-                    link=f"/reference/{ref.dbxref_id}",
-                    links=_build_reference_links(db, ref),
-                    organism=None,
-                    highlighted_name=_highlight_text(name, query),
-                    highlighted_description=_highlight_text(ref.citation, query),
-                ))
-                if len(results) >= limit:
-                    break
-
-    return results[:limit]
+    return results

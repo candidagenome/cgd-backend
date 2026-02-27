@@ -59,12 +59,10 @@ def search(
     - `annotation_methods`: Filter by GO annotation method
     - `evidence_codes`: Filter by GO evidence codes
 
-    **Pagination:**
-    - `page`: Page number (1-indexed)
-    - `page_size`: Results per page (max 100)
+    **Sorting:**
     - `sort_by`: Sort field (orf, gene, feature_type)
 
-    Returns paginated results with optional position and GO term information.
+    Returns all matching results with optional position and GO term information.
     """
     try:
         return search_features(db, request)

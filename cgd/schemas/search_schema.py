@@ -51,14 +51,16 @@ class SearchResponse(BaseModel):
     total_results: int
     results_by_category: dict[str, list[SearchResult]]
     # e.g., {"genes": [...], "go_terms": [...], "phenotypes": [...], "references": [...]}
+    counts_by_category: Optional[dict[str, int]] = None  # Actual total counts per category
 
 
 class CategorySearchResponse(BaseModel):
-    """Response for paginated category-specific search."""
+    """Response for category-specific search."""
     query: str
     category: str
     results: list[SearchResult]
-    pagination: PaginationInfo
+    total_count: int
+    organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results
 
 
 class ResolveResponse(BaseModel):
@@ -123,8 +125,9 @@ class TextSearchResponse(BaseModel):
 
 
 class TextSearchCategoryPagedResponse(BaseModel):
-    """Response for /api/search/text/category endpoint with pagination."""
+    """Response for /api/search/text/category endpoint."""
     query: str
     category: str
     results: list[TextSearchResult]
-    pagination: PaginationInfo
+    total_count: int
+    organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results
