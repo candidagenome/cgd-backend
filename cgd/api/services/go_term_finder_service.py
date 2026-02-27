@@ -305,11 +305,11 @@ def _get_go_annotations_with_ancestors(
     # Build annotation filters
     ann_filters = _build_annotation_filters(evidence_codes, annotation_types)
 
-    # Aspect map for ontology filter
+    # Aspect map for ontology filter (database stores single letters)
     aspect_map = {
-        GoOntology.PROCESS: "Biological Process",
-        GoOntology.FUNCTION: "Molecular Function",
-        GoOntology.COMPONENT: "Cellular Component",
+        GoOntology.PROCESS: "P",
+        GoOntology.FUNCTION: "F",
+        GoOntology.COMPONENT: "C",
     }
 
     # Query direct annotations in batches (Oracle IN clause limit is 1000)
