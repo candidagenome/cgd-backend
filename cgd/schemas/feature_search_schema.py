@@ -7,16 +7,6 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 
 
-class PaginationInfo(BaseModel):
-    """Pagination metadata."""
-    page: int = Field(..., description="Current page (1-indexed)")
-    page_size: int = Field(..., description="Items per page")
-    total_items: int = Field(..., description="Total number of items")
-    total_pages: int = Field(..., description="Total number of pages")
-    has_next: bool = Field(..., description="Whether there's a next page")
-    has_prev: bool = Field(..., description="Whether there's a previous page")
-
-
 class FeatureSearchRequest(BaseModel):
     """Request for feature search."""
     organism: str = Field(
