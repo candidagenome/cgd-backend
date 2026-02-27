@@ -298,10 +298,18 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Fetch more than limit to account for Assembly 21 filtering
-    fetch_limit = limit * 2
+    # Subquery to get Assembly 21 feature_nos to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
+    # Exclude Assembly 21 features directly in SQL
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
@@ -310,39 +318,16 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
-            )
+            ),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
         )
-        .limit(fetch_limit)
+        .limit(limit)
     )
 
     # Collect features from direct match
-    direct_features = list(feature_query)
-    found_feature_nos = {f.feature_no for f in direct_features}
-
-    # Search aliases
-    alias_query = (
-        db.query(Feature, Alias)
-        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
-        .limit(fetch_limit)
-    )
-
-    # Collect alias matches (feature + alias pairs)
-    alias_features = []
-    for feat, alias in alias_query:
-        if feat.feature_no not in found_feature_nos:
-            alias_features.append((feat, alias))
-            found_feature_nos.add(feat.feature_no)
-
-    # Filter out Assembly 21 features that have Assembly 22 equivalents
-    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, found_feature_nos)
-
-    # Build results from direct matches (excluding Assembly 21 duplicates)
-    for feat in direct_features:
-        if feat.feature_no in a21_to_exclude:
-            continue
+    found_feature_nos = set()
+    for feat in feature_query:
+        found_feature_nos.add(feat.feature_no)
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="genes",
@@ -354,31 +339,43 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(feat.headline, query),
         ))
-        if len(results) >= limit:
-            break
 
-    # Add alias matches if we have room (excluding Assembly 21 duplicates)
-    for feat, alias in alias_features:
-        if len(results) >= limit:
-            break
-        if feat.feature_no in a21_to_exclude:
-            continue
-        display_name = feat.gene_name or feat.feature_name
-        description = f"Alias: {alias.alias_name}"
-        if feat.headline:
-            description += f" - {feat.headline}"
-        results.append(TextSearchResult(
-            category="genes",
-            id=feat.dbxref_id,
-            name=display_name,
-            description=description,
-            link=f"/locus/{feat.feature_name}",
-            organism=_get_organism_name(feat.organism),
-            highlighted_name=_highlight_text(display_name, query),
-            highlighted_description=_highlight_text(description, query),
-        ))
+    # Search aliases if we need more results
+    remaining = limit - len(results)
+    if remaining > 0:
+        alias_query = (
+            db.query(Feature, Alias)
+            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(
+                func.upper(Alias.alias_name).like(upper_pattern),
+                ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            )
+            .limit(remaining + len(found_feature_nos))  # Extra to account for duplicates
+        )
 
-    return results[:limit]
+        for feat, alias in alias_query:
+            if feat.feature_no not in found_feature_nos:
+                found_feature_nos.add(feat.feature_no)
+                display_name = feat.gene_name or feat.feature_name
+                description = f"Alias: {alias.alias_name}"
+                if feat.headline:
+                    description += f" - {feat.headline}"
+                results.append(TextSearchResult(
+                    category="genes",
+                    id=feat.dbxref_id,
+                    name=display_name,
+                    description=description,
+                    link=f"/locus/{feat.feature_name}",
+                    organism=_get_organism_name(feat.organism),
+                    highlighted_name=_highlight_text(display_name, query),
+                    highlighted_description=_highlight_text(description, query),
+                ))
+                if len(results) >= limit:
+                    break
+
+    return results
 
 
 def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
@@ -393,27 +390,28 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Fetch more than limit to account for Assembly 21 filtering
-    fetch_limit = limit * 2
+    # Subquery to get Assembly 21 feature_nos to exclude (same as count function)
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
 
+    # Query with Assembly 21 exclusion built into the SQL
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(func.upper(Feature.headline).like(upper_pattern))
-        .limit(fetch_limit)
+        .filter(
+            func.upper(Feature.headline).like(upper_pattern),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+        )
+        .limit(limit)
     )
 
-    # Collect all features
-    features = list(feature_query)
-    feature_nos = {f.feature_no for f in features}
-
-    # Filter out Assembly 21 features that have Assembly 22 equivalents
-    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, feature_nos)
-    print(f"DEBUG search_descriptions: query={query}, limit={limit}, features_found={len(features)}, a21_excluded={len(a21_to_exclude)}, remaining={len(features) - len(a21_to_exclude)}", flush=True)
-
-    for feat in features:
-        if feat.feature_no in a21_to_exclude:
-            continue
+    for feat in feature_query:
         display_name = feat.gene_name or feat.feature_name
         results.append(TextSearchResult(
             category="descriptions",
@@ -425,8 +423,6 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(feat.headline, query),
         ))
-        if len(results) >= limit:
-            break
 
     return results
 
@@ -1532,7 +1528,6 @@ def text_search_category_paginated(
     offset = (page - 1) * page_size
     # Fetch enough to satisfy the current page
     all_results = search_func(db, query, offset + page_size)
-    print(f"DEBUG text_search_category_paginated: category={category}, page={page}, offset={offset}, limit={offset + page_size}, all_results_len={len(all_results)}", flush=True)
     paginated_results = all_results[offset:offset + page_size]
 
     total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
