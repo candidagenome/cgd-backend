@@ -194,6 +194,7 @@ class GoEnrichmentGraphNode(BaseModel):
     fdr: Optional[float] = None
     query_count: int
     is_enriched: bool  # Whether this term is in the enriched results
+    genes: list[dict] = []  # List of genes annotated to this term
 
 
 class GoEnrichmentGraphEdge(BaseModel):
