@@ -405,7 +405,7 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
 
     # Collect all features
     features = list(feature_query)
-    print(f"DEBUG search_descriptions: query={query}, limit={limit}, fetch_limit={fetch_limit}, features_found={len(features)}")
+    print(f"DEBUG search_descriptions: query={query}, limit={limit}, fetch_limit={fetch_limit}, features_found={len(features)}", flush=True)
     feature_nos = {f.feature_no for f in features}
 
     # Filter out Assembly 21 features that have Assembly 22 equivalents
@@ -1532,7 +1532,7 @@ def text_search_category_paginated(
     offset = (page - 1) * page_size
     # Fetch enough to satisfy the current page
     all_results = search_func(db, query, offset + page_size)
-    print(f"DEBUG text_search_category_paginated: category={category}, page={page}, offset={offset}, limit={offset + page_size}, all_results_len={len(all_results)}")
+    print(f"DEBUG text_search_category_paginated: category={category}, page={page}, offset={offset}, limit={offset + page_size}, all_results_len={len(all_results)}", flush=True)
     paginated_results = all_results[offset:offset + page_size]
 
     total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
