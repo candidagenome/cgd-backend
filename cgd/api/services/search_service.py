@@ -288,9 +288,10 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
     fetch_limit = limit * 2
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
+    # Use inner join to only include features with a valid organism
     feature_query = (
         db.query(Feature)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -306,11 +307,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
     found_feature_nos = {f.feature_no for f in direct_features}
 
     # Search aliases
+    # Use inner join to only include features with a valid organism
     alias_query = (
         db.query(Feature, Alias)
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(func.upper(Alias.alias_name).like(upper_pattern))
         .limit(fetch_limit)
     )
@@ -776,16 +778,18 @@ def _count_genes(db: Session, query: str) -> int:
     Count total genes matching the query.
 
     Uses UNION of direct and alias matches to ensure consistent counting
-    with the search function.
+    with the search function. Only counts features that have a valid organism.
     """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
+    # Filter to only include features with a valid organism
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
+            Feature.organism_no.isnot(None),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -795,11 +799,15 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
+    # Filter to only include features with a valid organism
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.organism_no.isnot(None),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
     )
 
     # Union of both to get all matching feature_nos (distinct)
@@ -990,9 +998,10 @@ def _search_genes_paginated(
     )
 
     # Get features matching directly (excluding Assembly 21)
+    # Use inner join to only include features with a valid organism
     feature_query = (
         db.query(Feature)
-        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -1026,11 +1035,12 @@ def _search_genes_paginated(
         # Adjust offset for alias search
         alias_offset = max(0, offset - len(found_feature_nos)) if offset > 0 else 0
 
+        # Use inner join to only include features with a valid organism
         alias_query = (
             db.query(Feature, Alias)
             .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
             .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(
                 func.upper(Alias.alias_name).like(upper_pattern),
                 ~Feature.feature_no.in_(found_feature_nos) if found_feature_nos else True,
