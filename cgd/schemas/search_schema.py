@@ -59,6 +59,7 @@ class CategorySearchResponse(BaseModel):
     category: str
     results: list[SearchResult]
     pagination: PaginationInfo
+    organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results
 
 
 class ResolveResponse(BaseModel):
@@ -128,3 +129,4 @@ class TextSearchCategoryPagedResponse(BaseModel):
     category: str
     results: list[TextSearchResult]
     pagination: PaginationInfo
+    organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results

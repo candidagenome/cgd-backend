@@ -1024,6 +1024,70 @@ def _count_genes(db: Session, query: str) -> int:
     return total_count or 0
 
 
+def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
+    """
+    Count genes matching the query grouped by organism.
+
+    Returns a dict mapping organism name to count.
+    """
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    direct_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .filter(
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
+            )
+        )
+    )
+
+    # Subquery for features matching via aliases
+    alias_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+    )
+
+    # Union of both to get all matching features with their organism_no
+    all_matches = direct_subq.union(alias_subq).subquery()
+
+    # Subquery to get Assembly 21 feature_nos to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
+    # Join with Organism to get organism names and count by organism
+    # Exclude Assembly 21 duplicates
+    organism_counts = (
+        db.query(
+            Organism.organism_name,
+            func.count(func.distinct(all_matches.c.fno))
+        )
+        .join(Organism, all_matches.c.org_no == Organism.organism_no)
+        .filter(~all_matches.c.fno.in_(db.query(a21_subq.c.child_feature_no)))
+        .group_by(Organism.organism_name)
+        .all()
+    )
+
+    return {name: count for name, count in organism_counts if name}
+
+
 def _count_descriptions(db: Session, query: str) -> int:
     """
     Count total description matches.
@@ -1471,6 +1535,11 @@ def text_search_category_paginated(
 
     total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
 
+    # Get organism counts for genes category
+    organism_counts = None
+    if category == "genes":
+        organism_counts = _count_genes_by_organism(db, query)
+
     return TextSearchCategoryPagedResponse(
         query=query,
         category=category,
@@ -1483,4 +1552,5 @@ def text_search_category_paginated(
             has_next=page < total_pages,
             has_prev=page > 1,
         ),
+        organism_counts=organism_counts,
     )

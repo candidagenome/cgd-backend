@@ -778,18 +778,30 @@ def _count_genes(db: Session, query: str) -> int:
     Count total genes matching the query.
 
     Uses UNION of direct and alias matches to ensure consistent counting
-    with the search function. Only counts features that have a valid organism.
+    with the search function. Only counts features that have a valid organism
+    and excludes Assembly 21 features that have Assembly 22 equivalents.
     """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
+    # Subquery to identify Assembly 21 features to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
-    # Filter to only include features with a valid organism
+    # Filter to only include features with a valid organism and exclude Assembly 21
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
             Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -799,13 +811,14 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
-    # Filter to only include features with a valid organism
+    # Filter to only include features with a valid organism and exclude Assembly 21
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
     )
@@ -820,6 +833,74 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     return total_count or 0
+
+
+def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
+    """
+    Count genes matching the query grouped by organism.
+
+    Returns a dict mapping organism name to count.
+    """
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery to identify Assembly 21 features to exclude
+    a21_subq = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
+    # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    direct_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .filter(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Feature.dbxref_id).like(upper_pattern),
+            )
+        )
+    )
+
+    # Subquery for features matching via aliases
+    alias_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(
+            Feature.organism_no.isnot(None),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
+    )
+
+    # Union of both to get all matching features with their organism_no
+    all_matches = direct_subq.union(alias_subq).subquery()
+
+    # Join with Organism to get organism names and count by organism
+    organism_counts = (
+        db.query(
+            Organism.organism_name,
+            func.count(func.distinct(all_matches.c.fno))
+        )
+        .join(Organism, all_matches.c.org_no == Organism.organism_no)
+        .group_by(Organism.organism_name)
+        .all()
+    )
+
+    return {name: count for name, count in organism_counts if name}
 
 
 def _count_go_terms(db: Session, query: str) -> int:
@@ -938,11 +1019,14 @@ def search_category_paginated(
         CategorySearchResponse with paginated results and metadata
     """
     offset = (page - 1) * page_size
+    organism_counts = None
 
     # Get total count and results based on category
     if category == "genes":
         total_count = _count_genes(db, query)
         results = _search_genes_paginated(db, query, offset, page_size)
+        # Get organism counts for all matching genes (not just current page)
+        organism_counts = _count_genes_by_organism(db, query)
     elif category == "go_terms":
         total_count = _count_go_terms(db, query)
         results = _search_go_terms_paginated(db, query, offset, page_size)
@@ -972,6 +1056,7 @@ def search_category_paginated(
         category=category,
         results=results,
         pagination=pagination,
+        organism_counts=organism_counts,
     )
 
 
