@@ -17,7 +17,6 @@ from cgd.schemas.search_schema import (
     TextSearchCategoryResult,
     TextSearchResponse,
     TextSearchCategoryPagedResponse,
-    PaginationInfo,
     SearchResultLink,
 )
 from cgd.models.models import (
@@ -1483,54 +1482,36 @@ def text_search(
     )
 
 
-def text_search_category_paginated(
+def text_search_category(
     db: Session,
     query: str,
     category: str,
-    page: int = 1,
-    page_size: int = 20,
 ) -> TextSearchCategoryPagedResponse:
     """
-    Search within a specific category with pagination.
+    Search within a specific category, returning all results.
 
     Args:
         db: Database session
         query: Search query string
         category: Category to search
-        page: Page number (1-indexed)
-        page_size: Number of results per page
 
     Returns:
-        TextSearchCategoryPagedResponse with paginated results
+        TextSearchCategoryPagedResponse with all results
     """
     if category not in CATEGORY_SEARCH_FUNCTIONS:
         return TextSearchCategoryPagedResponse(
             query=query,
             category=category,
             results=[],
-            pagination=PaginationInfo(
-                page=page,
-                page_size=page_size,
-                total_items=0,
-                total_pages=0,
-                has_next=False,
-                has_prev=False,
-            ),
+            total_count=0,
         )
 
     count_func = CATEGORY_COUNT_FUNCTIONS[category]
     total_count = count_func(db, query)
 
-    # For pagination, we need to implement offset/limit
-    # For now, we'll fetch more and slice
-    # This is simpler but not optimal for large result sets
+    # Get all results (no limit)
     search_func = CATEGORY_SEARCH_FUNCTIONS[category]
-    offset = (page - 1) * page_size
-    # Fetch enough to satisfy the current page
-    all_results = search_func(db, query, offset + page_size)
-    paginated_results = all_results[offset:offset + page_size]
-
-    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+    all_results = search_func(db, query, limit=50000)  # High limit to get all
 
     # Get organism counts for genes category
     organism_counts = None
@@ -1540,14 +1521,7 @@ def text_search_category_paginated(
     return TextSearchCategoryPagedResponse(
         query=query,
         category=category,
-        results=paginated_results,
-        pagination=PaginationInfo(
-            page=page,
-            page_size=page_size,
-            total_items=total_count,
-            total_pages=total_pages,
-            has_next=page < total_pages,
-            has_prev=page > 1,
-        ),
+        results=all_results,
+        total_count=total_count,
         organism_counts=organism_counts,
     )

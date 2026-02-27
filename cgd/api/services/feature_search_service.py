@@ -12,7 +12,6 @@ Handles complex feature searching with multiple filter criteria including:
 from __future__ import annotations
 
 import logging
-import math
 from typing import Optional, List, Dict, Set, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, text
@@ -30,7 +29,6 @@ from cgd.schemas.feature_search_schema import (
     FeatureSearchConfigResponse,
     QuerySummary,
     FilterCount,
-    PaginationInfo,
     OrganismInfo,
     GoSlimTerms,
     GoSlimTerm,
@@ -262,15 +260,6 @@ def search_features(
             ),
             features=[],
             total_count=0,
-            total_pages=0,
-            pagination=PaginationInfo(
-                page=1,
-                page_size=request.page_size,
-                total_items=0,
-                total_pages=0,
-                has_next=False,
-                has_prev=False,
-            ),
             show_position=show_position,
             show_go_terms=do_go_search,
         )
@@ -282,16 +271,10 @@ def search_features(
         logger.error(f"Sort features error: {e}")
         raise Exception(f"Sort features failed: {e}")
 
-    # Paginate
-    total_pages = math.ceil(total_results / request.page_size)
-    start_idx = (request.page - 1) * request.page_size
-    end_idx = start_idx + request.page_size
-    page_feature_nos = sorted_feature_nos[start_idx:end_idx]
-
-    # Get feature details
+    # Get feature details for all results (no pagination - AgGrid handles display)
     try:
         results = _get_feature_details(
-            db, page_feature_nos, show_position, do_go_search, go_annotations
+            db, sorted_feature_nos, show_position, do_go_search, go_annotations
         )
     except Exception as e:
         logger.error(f"Get feature details error: {e}")
@@ -307,15 +290,6 @@ def search_features(
         ),
         features=results,
         total_count=total_results,
-        total_pages=total_pages,
-        pagination=PaginationInfo(
-            page=request.page,
-            page_size=request.page_size,
-            total_items=total_results,
-            total_pages=total_pages,
-            has_next=request.page < total_pages,
-            has_prev=request.page > 1,
-        ),
         show_position=show_position,
         show_go_terms=do_go_search,
     )
@@ -931,10 +905,7 @@ def generate_download_tsv(
     request: FeatureSearchRequest,
 ) -> str:
     """Generate TSV content for download."""
-    # Execute search without pagination
-    request.page = 1
-    request.page_size = 10000  # Large limit for download
-
+    # Execute search (returns all results)
     response = search_features(db, request)
 
     if not response.success or not response.features:

@@ -55,11 +55,11 @@ class SearchResponse(BaseModel):
 
 
 class CategorySearchResponse(BaseModel):
-    """Response for paginated category-specific search."""
+    """Response for category-specific search."""
     query: str
     category: str
     results: list[SearchResult]
-    pagination: PaginationInfo
+    total_count: int
     organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results
 
 
@@ -125,9 +125,9 @@ class TextSearchResponse(BaseModel):
 
 
 class TextSearchCategoryPagedResponse(BaseModel):
-    """Response for /api/search/text/category endpoint with pagination."""
+    """Response for /api/search/text/category endpoint."""
     query: str
     category: str
     results: list[TextSearchResult]
-    pagination: PaginationInfo
+    total_count: int
     organism_counts: Optional[dict[str, int]] = None  # Counts per organism for ALL results

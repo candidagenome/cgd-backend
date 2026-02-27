@@ -90,17 +90,14 @@ def search_category(
         description="Category to search",
         pattern="^(genes|go_terms|phenotypes|references)$"
     ),
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
-    Search within a specific category with pagination.
+    Search within a specific category.
 
-    Returns paginated results for a single category with pagination metadata.
-    Use this endpoint for navigating through large result sets.
+    Returns all results for a single category.
     """
-    return search_service.search_category_paginated(db, query, category, page, page_size)
+    return search_service.search_category(db, query, category)
 
 
 @router.get("/text", response_model=TextSearchResponse)
@@ -130,19 +127,14 @@ def text_search(
 def text_search_category(
     query: str = Query(..., min_length=1, description="Search query string"),
     category: str = Query(..., description="Category to search"),
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
-    Paginated text search within a specific category.
+    Text search within a specific category.
 
-    Returns paginated results for a single category with pagination metadata.
-    Use this endpoint for navigating through large result sets within a category.
+    Returns all results for a single category.
     """
-    return text_search_service.text_search_category_paginated(
-        db, query, category, page, page_size
-    )
+    return text_search_service.text_search_category(db, query, category)
 
 
 @router.get("", response_model=SearchDispatchResponse)
