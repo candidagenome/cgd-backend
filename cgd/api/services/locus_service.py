@@ -967,7 +967,10 @@ def _filter_features_by_preference(
 
 def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
     n = name.strip()
-    features = (
+    upper_n = func.upper(n)
+
+    # Query for direct matches (gene_name, feature_name, dbxref_id)
+    direct_features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
@@ -977,9 +980,9 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         )
         .filter(
             or_(
-                func.upper(Feature.gene_name) == func.upper(n),
-                func.upper(Feature.feature_name) == func.upper(n),
-                func.upper(Feature.dbxref_id) == func.upper(n),
+                func.upper(Feature.gene_name) == upper_n,
+                func.upper(Feature.feature_name) == upper_n,
+                func.upper(Feature.dbxref_id) == upper_n,
             )
         )
         # Exclude alleles - match Perl behavior where feature_type 'allele'
@@ -987,6 +990,32 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         .filter(func.lower(Feature.feature_type) != 'allele')
         .all()
     )
+
+    # Get feature_nos already found to avoid duplicates
+    found_feature_nos = {f.feature_no for f in direct_features}
+
+    # Also query for features with matching aliases (e.g., HOG1 alias for Cd36_18080)
+    alias_features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_alias).joinedload(FeatAlias.alias),
+            joinedload(Feature.feat_url).joinedload(FeatUrl.url),
+            joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
+        )
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(func.upper(Alias.alias_name) == upper_n)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+
+    # Combine results, avoiding duplicates
+    features = list(direct_features)
+    for feat in alias_features:
+        if feat.feature_no not in found_feature_nos:
+            features.append(feat)
+            found_feature_nos.add(feat.feature_no)
 
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
