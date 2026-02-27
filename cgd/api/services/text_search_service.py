@@ -405,11 +405,11 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
 
     # Collect all features
     features = list(feature_query)
-    print(f"DEBUG search_descriptions: query={query}, limit={limit}, fetch_limit={fetch_limit}, features_found={len(features)}", flush=True)
     feature_nos = {f.feature_no for f in features}
 
     # Filter out Assembly 21 features that have Assembly 22 equivalents
     a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, feature_nos)
+    print(f"DEBUG search_descriptions: query={query}, limit={limit}, features_found={len(features)}, a21_excluded={len(a21_to_exclude)}, remaining={len(features) - len(a21_to_exclude)}", flush=True)
 
     for feat in features:
         if feat.feature_no in a21_to_exclude:
