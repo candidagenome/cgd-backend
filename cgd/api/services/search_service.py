@@ -561,7 +561,7 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     """
     Search all categories (genes, GO terms, phenotypes, references).
 
-    Returns results grouped by category.
+    Returns results grouped by category with actual total counts.
     """
     # Search all categories with the same limit per category
     genes = search_genes(db, query, limit)
@@ -569,23 +569,36 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     phenotypes = search_phenotypes(db, query, limit)
     references = search_references(db, query, limit)
 
+    # Get actual total counts for each category
+    genes_count = _count_genes(db, query)
+    go_terms_count = _count_go_terms(db, query)
+    phenotypes_count = _count_phenotypes(db, query)
+    references_count = _count_references(db, query)
+
     # Build response
     results_by_category = {}
-    if genes:
-        results_by_category["genes"] = genes
-    if go_terms:
-        results_by_category["go_terms"] = go_terms
-    if phenotypes:
-        results_by_category["phenotypes"] = phenotypes
-    if references:
-        results_by_category["references"] = references
+    counts_by_category = {}
 
-    total = len(genes) + len(go_terms) + len(phenotypes) + len(references)
+    if genes or genes_count > 0:
+        results_by_category["genes"] = genes
+        counts_by_category["genes"] = genes_count
+    if go_terms or go_terms_count > 0:
+        results_by_category["go_terms"] = go_terms
+        counts_by_category["go_terms"] = go_terms_count
+    if phenotypes or phenotypes_count > 0:
+        results_by_category["phenotypes"] = phenotypes
+        counts_by_category["phenotypes"] = phenotypes_count
+    if references or references_count > 0:
+        results_by_category["references"] = references
+        counts_by_category["references"] = references_count
+
+    total = genes_count + go_terms_count + phenotypes_count + references_count
 
     return SearchResponse(
         query=query,
         total_results=total,
         results_by_category=results_by_category,
+        counts_by_category=counts_by_category,
     )
 
 

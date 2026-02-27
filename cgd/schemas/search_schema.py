@@ -51,6 +51,7 @@ class SearchResponse(BaseModel):
     total_results: int
     results_by_category: dict[str, list[SearchResult]]
     # e.g., {"genes": [...], "go_terms": [...], "phenotypes": [...], "references": [...]}
+    counts_by_category: Optional[dict[str, int]] = None  # Actual total counts per category
 
 
 class CategorySearchResponse(BaseModel):
