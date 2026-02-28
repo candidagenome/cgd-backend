@@ -765,7 +765,7 @@ def run_go_term_finder(
 def build_enrichment_graph(
     db: Session,
     enriched_terms: list[EnrichedGoTerm],
-    max_nodes: int = 50,
+    max_terms: int = 10,
 ) -> GoEnrichmentGraphResponse:
     """
     Build GO hierarchy graph for enriched terms visualization.
@@ -776,7 +776,7 @@ def build_enrichment_graph(
     Args:
         db: Database session
         enriched_terms: List of enriched GO terms
-        max_nodes: Maximum number of nodes to include
+        max_terms: Maximum number of enriched terms to include (default 10)
 
     Returns:
         GoEnrichmentGraphResponse with nodes and edges
@@ -784,8 +784,10 @@ def build_enrichment_graph(
     if not enriched_terms:
         return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
-    # Filter to terms with >1 gene and limit to max_nodes
-    terms_to_use = [t for t in enriched_terms if t.query_count > 1][:max_nodes]
+    # Filter to terms with >1 gene, sort by p-value, and take top max_terms
+    terms_with_genes = [t for t in enriched_terms if t.query_count > 1]
+    terms_sorted = sorted(terms_with_genes, key=lambda t: (t.p_value, -t.query_count))
+    terms_to_use = terms_sorted[:max_terms]
     if not terms_to_use:
         return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
@@ -886,7 +888,7 @@ def build_enrichment_graph(
         nodes_to_include.update(path_nodes)
 
     # Limit nodes if too many (keep enriched terms, root, and closest ancestors)
-    if len(nodes_to_include) > max_nodes * 2:
+    if len(nodes_to_include) > max_terms * 5:
         # Keep enriched terms and root, then add closest ancestors
         essential = enriched_go_nos.copy()
         if root_go:
