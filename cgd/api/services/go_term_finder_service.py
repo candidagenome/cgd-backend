@@ -765,7 +765,7 @@ def run_go_term_finder(
 def build_enrichment_graph(
     db: Session,
     enriched_terms: list[EnrichedGoTerm],
-    max_terms: int = 10,
+    max_terms: int = 5,
 ) -> GoEnrichmentGraphResponse:
     """
     Build GO hierarchy graph for enriched terms visualization.

@@ -204,7 +204,7 @@ def download_results(
 @router.post("/graph", response_model=GoEnrichmentGraphResponse)
 def get_enrichment_graph(
     request: GoTermFinderRequest,
-    max_terms: int = Query(10, ge=3, le=50, description="Maximum enriched terms to show in graph"),
+    max_terms: int = Query(5, ge=3, le=50, description="Maximum enriched terms to show in graph"),
     db: Session = Depends(get_db),
 ):
     """
