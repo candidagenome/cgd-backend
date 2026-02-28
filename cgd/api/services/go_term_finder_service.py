@@ -305,11 +305,11 @@ def _get_go_annotations_with_ancestors(
     # Build annotation filters
     ann_filters = _build_annotation_filters(evidence_codes, annotation_types)
 
-    # Aspect map for ontology filter
+    # Aspect map for ontology filter (database stores single letters)
     aspect_map = {
-        GoOntology.PROCESS: "Biological Process",
-        GoOntology.FUNCTION: "Molecular Function",
-        GoOntology.COMPONENT: "Cellular Component",
+        GoOntology.PROCESS: "P",
+        GoOntology.FUNCTION: "F",
+        GoOntology.COMPONENT: "C",
     }
 
     # Query direct annotations in batches (Oracle IN clause limit is 1000)
@@ -757,6 +757,9 @@ def build_enrichment_graph(
     """
     Build GO hierarchy graph for enriched terms visualization.
 
+    Builds a tree structure from the root term down to the enriched terms,
+    including intermediate ancestor terms that connect them.
+
     Args:
         db: Database session
         enriched_terms: List of enriched GO terms
@@ -768,47 +771,158 @@ def build_enrichment_graph(
     if not enriched_terms:
         return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
-    # Get go_nos for enriched terms
-    enriched_go_nos = {t.go_no for t in enriched_terms}
-    enriched_by_go_no = {t.go_no: t for t in enriched_terms}
+    # Filter to terms with >1 gene and limit to max_nodes
+    terms_to_use = [t for t in enriched_terms if t.query_count > 1][:max_nodes]
+    if not terms_to_use:
+        return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
-    # Query paths between enriched terms
-    # Find ancestors of enriched terms that are also enriched
-    paths = (
-        db.query(GoPath)
-        .filter(GoPath.child_go_no.in_(enriched_go_nos))
-        .filter(GoPath.ancestor_go_no.in_(enriched_go_nos))
-        .filter(GoPath.generation == 1)  # Direct relationships only
-        .all()
+    enriched_go_nos = {t.go_no for t in terms_to_use}
+    enriched_by_go_no = {t.go_no: t for t in terms_to_use}
+
+    # Get the aspect for these terms (should all be the same since we filter by ontology)
+    aspect = terms_to_use[0].go_aspect if terms_to_use else "P"
+
+    # Find the root term for this aspect
+    root_terms = {
+        "P": "biological_process",
+        "F": "molecular_function",
+        "C": "cellular_component",
+    }
+    root_term_name = root_terms.get(aspect, "biological_process")
+
+    # Get the root GO term
+    root_go = (
+        db.query(Go)
+        .filter(Go.go_term == root_term_name)
+        .first()
     )
+
+    # Find all paths from enriched terms to root, keeping intermediate nodes
+    # Get all ancestors of enriched terms with generation info
+    all_ancestor_paths = []
+    for chunk in _chunk_list(list(enriched_go_nos)):
+        paths = (
+            db.query(GoPath)
+            .filter(GoPath.child_go_no.in_(chunk))
+            .all()
+        )
+        all_ancestor_paths.extend(paths)
+
+    # Build set of all ancestor go_nos we need
+    ancestor_go_nos = set()
+    for path in all_ancestor_paths:
+        ancestor_go_nos.add(path.ancestor_go_no)
+
+    # Add root if found
+    if root_go:
+        ancestor_go_nos.add(root_go.go_no)
+
+    # Query all ancestor GO terms
+    all_go_nos = enriched_go_nos | ancestor_go_nos
+    go_records = []
+    for chunk in _chunk_list(list(all_go_nos)):
+        records = db.query(Go).filter(Go.go_no.in_(chunk)).all()
+        go_records.extend(records)
+
+    go_by_no = {go.go_no: go for go in go_records}
+
+    # Find direct (generation=1) relationships between all nodes
+    direct_paths = []
+    for chunk in _chunk_list(list(all_go_nos)):
+        paths = (
+            db.query(GoPath)
+            .filter(GoPath.child_go_no.in_(chunk))
+            .filter(GoPath.ancestor_go_no.in_(all_go_nos))
+            .filter(GoPath.generation == 1)
+            .all()
+        )
+        direct_paths.extend(paths)
+
+    # Build a set of nodes that are on paths between enriched terms
+    # Start with enriched terms and work up to find connecting ancestors
+    nodes_to_include = set(enriched_go_nos)
+
+    # Add root
+    if root_go:
+        nodes_to_include.add(root_go.go_no)
+
+    # For each enriched term, find ancestors that connect to other enriched terms or root
+    # Build parent-child map
+    child_to_parents: dict[int, set[int]] = defaultdict(set)
+    for path in direct_paths:
+        child_to_parents[path.child_go_no].add(path.ancestor_go_no)
+
+    # BFS from each enriched term to find common ancestors
+    def find_path_to_root(start_go_no: int) -> set[int]:
+        """Find all ancestors on path to root."""
+        visited = set()
+        queue = [start_go_no]
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            for parent in child_to_parents.get(current, []):
+                if parent in all_go_nos:
+                    queue.append(parent)
+        return visited
+
+    # Find paths from all enriched terms to root
+    for go_no in enriched_go_nos:
+        path_nodes = find_path_to_root(go_no)
+        nodes_to_include.update(path_nodes)
+
+    # Limit nodes if too many (keep enriched terms, root, and closest ancestors)
+    if len(nodes_to_include) > max_nodes * 2:
+        # Keep enriched terms and root, then add closest ancestors
+        essential = enriched_go_nos.copy()
+        if root_go:
+            essential.add(root_go.go_no)
+        nodes_to_include = essential
 
     # Build nodes
     nodes = []
-    for term in enriched_terms[:max_nodes]:
+    for go_no in nodes_to_include:
+        go = go_by_no.get(go_no)
+        if not go:
+            continue
+
+        enriched_term = enriched_by_go_no.get(go_no)
+        is_enriched = enriched_term is not None
+
+        # Get genes for enriched terms
+        genes = []
+        if enriched_term and enriched_term.genes:
+            genes = [
+                {"gene_name": g.gene_name, "systematic_name": g.systematic_name}
+                for g in enriched_term.genes
+            ]
+
         nodes.append(GoEnrichmentGraphNode(
-            goid=term.goid,
-            go_term=term.go_term,
-            go_aspect=term.go_aspect,
-            p_value=term.p_value,
-            fdr=term.fdr,
-            query_count=term.query_count,
-            is_enriched=True,
+            goid=_format_goid(go.goid),
+            go_term=go.go_term,
+            go_aspect=aspect,
+            p_value=enriched_term.p_value if enriched_term else 1.0,
+            fdr=enriched_term.fdr if enriched_term else None,
+            query_count=enriched_term.query_count if enriched_term else 0,
+            is_enriched=is_enriched,
+            genes=genes,
         ))
 
-    # Build edges
+    # Build edges (only between nodes we're including)
     edges = []
-    node_goids = {n.goid for n in nodes}
-    for path in paths:
-        ancestor = enriched_by_go_no.get(path.ancestor_go_no)
-        child = enriched_by_go_no.get(path.child_go_no)
-        if ancestor and child:
-            if ancestor.goid in node_goids and child.goid in node_goids:
+    node_go_nos = nodes_to_include
+    for path in direct_paths:
+        if path.ancestor_go_no in node_go_nos and path.child_go_no in node_go_nos:
+            ancestor_go = go_by_no.get(path.ancestor_go_no)
+            child_go = go_by_no.get(path.child_go_no)
+            if ancestor_go and child_go:
                 rel_type = "is_a"
                 if path.relationship_type:
                     rel_type = path.relationship_type.replace(" ", "_")
                 edges.append(GoEnrichmentGraphEdge(
-                    source=ancestor.goid,
-                    target=child.goid,
+                    source=_format_goid(ancestor_go.goid),
+                    target=_format_goid(child_go.goid),
                     relationship_type=rel_type,
                 ))
 
