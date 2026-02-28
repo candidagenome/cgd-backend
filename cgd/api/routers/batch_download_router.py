@@ -225,6 +225,69 @@ async def batch_download_upload(
     return batch_download(request, db)
 
 
+@router.post("/metadata", response_model=BatchDownloadResponse)
+def batch_download_metadata_post(
+    request: BatchDownloadRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Get metadata about what would be downloaded without actually downloading (POST).
+
+    Use this endpoint for large gene lists that exceed URL length limits.
+    """
+    if not request.genes and not request.regions:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'genes' or 'regions'"
+        )
+
+    results, features, not_found = process_batch_download(db, request)
+
+    # Build file metadata
+    files = []
+    for data_type, (filename, content) in results.items():
+        if request.compress:
+            content_type = "application/gzip"
+        elif data_type in (DataType.GENOMIC, DataType.GENOMIC_FLANKING,
+                           DataType.CODING, DataType.PROTEIN):
+            content_type = "text/plain"
+        elif data_type == DataType.GO:
+            content_type = "text/plain"
+        else:
+            content_type = "text/tab-separated-values"
+
+        # Count records (roughly - count newlines for text content)
+        if request.compress:
+            import gzip
+            import io
+            with gzip.GzipFile(fileobj=io.BytesIO(content), mode='rb') as f:
+                text_content = f.read().decode('utf-8')
+        else:
+            text_content = content.decode('utf-8')
+
+        if data_type in (DataType.GENOMIC, DataType.GENOMIC_FLANKING,
+                         DataType.CODING, DataType.PROTEIN):
+            record_count = text_content.count('>')
+        else:
+            record_count = max(0, text_content.count('\n') - 1)  # Subtract header
+
+        files.append(DownloadFile(
+            data_type=data_type,
+            filename=filename,
+            content_type=content_type,
+            size=len(content),
+            record_count=record_count,
+        ))
+
+    return BatchDownloadResponse(
+        success=True,
+        files=files,
+        total_requested=len(request.genes) if request.genes else 0,
+        total_found=len(features),
+        not_found=not_found,
+    )
+
+
 @router.get("/metadata", response_model=BatchDownloadResponse)
 def batch_download_metadata(
     genes: str = Query(
@@ -246,6 +309,8 @@ def batch_download_metadata(
 
     Returns information about the files that would be generated, including
     counts and any genes that were not found.
+
+    Note: For large gene lists (>500 genes), use POST /metadata instead.
     """
     gene_list = _parse_gene_list(genes)
     if not gene_list:
