@@ -151,18 +151,21 @@ def validate_genes(
             total_with_go=0,
         )
 
-    # Query features by feature_name or gene_name
-    features_by_name = (
-        db.query(Feature)
-        .filter(Feature.organism_no == request.organism_no)
-        .filter(
-            or_(
-                func.upper(Feature.feature_name).in_(genes_upper),
-                func.upper(Feature.gene_name).in_(genes_upper),
+    # Query features by feature_name or gene_name (chunked to avoid Oracle 1000 limit)
+    features_by_name = []
+    for chunk in _chunk_list(genes_upper):
+        chunk_results = (
+            db.query(Feature)
+            .filter(Feature.organism_no == request.organism_no)
+            .filter(
+                or_(
+                    func.upper(Feature.feature_name).in_(chunk),
+                    func.upper(Feature.gene_name).in_(chunk),
+                )
             )
+            .all()
         )
-        .all()
-    )
+        features_by_name.extend(chunk_results)
 
     # Build result
     found_map: dict[str, Feature] = {}  # input_upper -> Feature
@@ -175,33 +178,37 @@ def validate_genes(
         if gname_upper and gname_upper in genes_upper:
             found_map[gname_upper] = feature
 
-    # Query aliases for remaining genes
+    # Query aliases for remaining genes (chunked to avoid Oracle 1000 limit)
     remaining_genes = [g for g in genes_upper if g not in found_map]
     if remaining_genes:
-        alias_results = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
-            .join(Alias, Alias.alias_no == FeatAlias.alias_no)
-            .filter(Feature.organism_no == request.organism_no)
-            .filter(func.upper(Alias.alias_name).in_(remaining_genes))
-            .all()
-        )
+        alias_results = []
+        for chunk in _chunk_list(remaining_genes):
+            chunk_results = (
+                db.query(Feature, Alias)
+                .join(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
+                .join(Alias, Alias.alias_no == FeatAlias.alias_no)
+                .filter(Feature.organism_no == request.organism_no)
+                .filter(func.upper(Alias.alias_name).in_(chunk))
+                .all()
+            )
+            alias_results.extend(chunk_results)
         for feature, alias in alias_results:
             alias_upper = alias.alias_name.upper() if alias.alias_name else None
             if alias_upper and alias_upper in remaining_genes:
                 found_map[alias_upper] = feature
 
-    # Get GO annotation status for found features
+    # Get GO annotation status for found features (chunked to avoid Oracle 1000 limit)
     feature_nos = list(set(f.feature_no for f in found_map.values()))
     features_with_go = set()
     if feature_nos:
-        go_check = (
-            db.query(GoAnnotation.feature_no)
-            .filter(GoAnnotation.feature_no.in_(feature_nos))
-            .distinct()
-            .all()
-        )
-        features_with_go = {row.feature_no for row in go_check}
+        for chunk in _chunk_list(feature_nos):
+            go_check = (
+                db.query(GoAnnotation.feature_no)
+                .filter(GoAnnotation.feature_no.in_(chunk))
+                .distinct()
+                .all()
+            )
+            features_with_go.update(row.feature_no for row in go_check)
 
     # Build response
     found_genes = []

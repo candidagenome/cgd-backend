@@ -197,18 +197,21 @@ def _validate_genes(
     if not genes_upper:
         return {}, list(gene_input_map.values())
 
-    # Query features by feature_name or gene_name
-    features_by_name = (
-        db.query(Feature)
-        .filter(Feature.organism_no == organism_no)
-        .filter(
-            or_(
-                func.upper(Feature.feature_name).in_(genes_upper),
-                func.upper(Feature.gene_name).in_(genes_upper),
+    # Query features by feature_name or gene_name (chunked to avoid Oracle 1000 limit)
+    features_by_name = []
+    for chunk in _chunk_list(genes_upper):
+        chunk_results = (
+            db.query(Feature)
+            .filter(Feature.organism_no == organism_no)
+            .filter(
+                or_(
+                    func.upper(Feature.feature_name).in_(chunk),
+                    func.upper(Feature.gene_name).in_(chunk),
+                )
             )
+            .all()
         )
-        .all()
-    )
+        features_by_name.extend(chunk_results)
 
     # Build result
     found_map: dict[str, Feature] = {}  # input_upper -> Feature
