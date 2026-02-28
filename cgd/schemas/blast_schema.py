@@ -107,6 +107,10 @@ class BlastSearchRequest(BaseModel):
         None,
         description="Locus name to use as query (will fetch sequence)"
     )
+    locus_organism: Optional[str] = Field(
+        None,
+        description="Organism to use when looking up locus (e.g., 'C_albicans_SC5314_A22'). If not specified, returns first match."
+    )
     # BLAST settings
     program: BlastProgram = Field(
         BlastProgram.BLASTN,
