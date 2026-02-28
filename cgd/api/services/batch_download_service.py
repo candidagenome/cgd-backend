@@ -13,7 +13,7 @@ from sqlalchemy import func, or_
 from cgd.models.models import (
     Feature, Seq, FeatLocation, GoAnnotation,
     PhenoAnnotation, FeatHomology,
-    DbxrefFeat, Dbxref,
+    DbxrefFeat, Dbxref, Organism,
 )
 from cgd.schemas.batch_download_schema import (
     DataType,
@@ -55,11 +55,17 @@ def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
 def resolve_features(
     db: Session,
     queries: List[str],
+    organism: str = None,
 ) -> Tuple[List[ResolvedFeature], List[FeatureNotFound]]:
     """
     Resolve feature names/identifiers to Feature objects.
 
     Uses batch queries for efficiency with large gene lists.
+
+    Args:
+        db: Database session
+        queries: List of feature names/identifiers
+        organism: Optional organism abbreviation to filter by (e.g., 'C_albicans_SC5314')
 
     Returns:
         Tuple of (found features, not found queries)
@@ -80,7 +86,7 @@ def resolve_features(
     features_by_query: Dict[str, Feature] = {}
 
     for chunk in _chunk_list(queries_upper):
-        chunk_features = (
+        query = (
             db.query(Feature)
             .options(joinedload(Feature.organism))
             .filter(
@@ -90,8 +96,14 @@ def resolve_features(
                     func.upper(Feature.dbxref_id).in_(chunk),
                 )
             )
-            .all()
         )
+
+        # Filter by organism if specified
+        if organism:
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no)
+            query = query.filter(Organism.organism_abbrev == organism)
+
+        chunk_features = query.all()
 
         for feature in chunk_features:
             # Map by all possible identifiers
@@ -529,7 +541,7 @@ def process_batch_download(
     not_found = []
 
     if request.genes:
-        features, not_found = resolve_features(db, request.genes)
+        features, not_found = resolve_features(db, request.genes, request.organism)
 
     # Handle regions (if any) - convert to features
     if request.regions:
