@@ -47,6 +47,11 @@ NON_CGD_ORTHOLOG_SOURCES = {
 }
 
 
+def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
+    """Split a list into chunks of specified size (default 900 for Oracle's 1000 limit)."""
+    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
+
 def resolve_features(
     db: Session,
     queries: List[str],
@@ -258,13 +263,16 @@ def generate_go_gaf(
     feature_nos = [f.feature_no for f in features]
     feat_map = {f.feature_no: f for f in features}
 
-    # Query GO annotations
-    annotations = (
-        db.query(GoAnnotation)
-        .options(joinedload(GoAnnotation.go))
-        .filter(GoAnnotation.feature_no.in_(feature_nos))
-        .all()
-    )
+    # Query GO annotations (chunked to avoid Oracle 1000 limit)
+    annotations = []
+    for chunk in _chunk_list(feature_nos):
+        chunk_results = (
+            db.query(GoAnnotation)
+            .options(joinedload(GoAnnotation.go))
+            .filter(GoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        annotations.extend(chunk_results)
 
     for ga in annotations:
         feat = feat_map.get(ga.feature_no)
@@ -316,13 +324,16 @@ def generate_phenotype_tsv(
     feature_nos = [f.feature_no for f in features]
     feat_map = {f.feature_no: f for f in features}
 
-    # Query phenotype annotations
-    annotations = (
-        db.query(PhenoAnnotation)
-        .options(joinedload(PhenoAnnotation.phenotype))
-        .filter(PhenoAnnotation.feature_no.in_(feature_nos))
-        .all()
-    )
+    # Query phenotype annotations (chunked to avoid Oracle 1000 limit)
+    annotations = []
+    for chunk in _chunk_list(feature_nos):
+        chunk_results = (
+            db.query(PhenoAnnotation)
+            .options(joinedload(PhenoAnnotation.phenotype))
+            .filter(PhenoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        annotations.extend(chunk_results)
 
     for pa in annotations:
         feat = feat_map.get(pa.feature_no)
