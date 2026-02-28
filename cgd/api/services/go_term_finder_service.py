@@ -641,28 +641,34 @@ def run_go_term_finder(
 
     # Step 6: Build enriched term objects
     go_nos = [r[0] for r in corrected_results]
-    go_records = db.query(Go).filter(Go.go_no.in_(go_nos)).all()
+    go_records = []
+    for chunk in _chunk_list(go_nos):
+        go_records.extend(db.query(Go).filter(Go.go_no.in_(chunk)).all())
     go_no_to_go = {go.go_no: go for go in go_records}
 
-    # Get feature info for genes in query
-    feature_records = db.query(Feature).filter(Feature.feature_no.in_(query_genes_with_go)).all()
+    # Get feature info for genes in query (chunked to avoid Oracle 1000 limit)
+    feature_records = []
+    for chunk in _chunk_list(query_genes_with_go):
+        feature_records.extend(db.query(Feature).filter(Feature.feature_no.in_(chunk)).all())
     feature_no_to_feature = {f.feature_no: f for f in feature_records}
 
-    # Build gene-to-evidence mapping for enriched terms
-    gene_evidence_query = (
-        db.query(
-            GoAnnotation.feature_no,
-            GoAnnotation.go_no,
-            GoAnnotation.go_evidence,
-        )
-        .filter(GoAnnotation.feature_no.in_(query_genes_with_go))
-        .filter(GoAnnotation.go_no.in_(go_nos))
-    )
+    # Build gene-to-evidence mapping for enriched terms (chunked queries)
     ann_filters = _build_annotation_filters(request.evidence_codes, request.annotation_types)
-    for f in ann_filters:
-        gene_evidence_query = gene_evidence_query.filter(f)
-
-    gene_evidence_results = gene_evidence_query.all()
+    gene_evidence_results = []
+    for feature_chunk in _chunk_list(query_genes_with_go):
+        for go_chunk in _chunk_list(go_nos):
+            query = (
+                db.query(
+                    GoAnnotation.feature_no,
+                    GoAnnotation.go_no,
+                    GoAnnotation.go_evidence,
+                )
+                .filter(GoAnnotation.feature_no.in_(feature_chunk))
+                .filter(GoAnnotation.go_no.in_(go_chunk))
+            )
+            for f in ann_filters:
+                query = query.filter(f)
+            gene_evidence_results.extend(query.all())
 
     # Build mapping: go_no -> feature_no -> evidence_codes
     go_to_gene_evidence: dict[int, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
