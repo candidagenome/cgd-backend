@@ -59,44 +59,103 @@ def resolve_features(
     """
     Resolve feature names/identifiers to Feature objects.
 
+    Uses batch queries for efficiency with large gene lists.
+
     Returns:
         Tuple of (found features, not found queries)
     """
-    found: List[ResolvedFeature] = []
-    not_found: List[FeatureNotFound] = []
+    # Clean and dedupe queries
+    query_map = {}  # upper -> original
+    for q in queries:
+        q_clean = q.strip()
+        if q_clean:
+            query_map[q_clean.upper()] = q_clean
 
-    for query in queries:
-        query_upper = query.strip().upper()
-        if not query_upper:
-            continue
+    if not query_map:
+        return [], []
 
-        # Try gene_name, feature_name, dbxref_id
-        feature = (
+    queries_upper = list(query_map.keys())
+
+    # Batch query features by gene_name, feature_name, or dbxref_id
+    features_by_query: Dict[str, Feature] = {}
+
+    for chunk in _chunk_list(queries_upper):
+        chunk_features = (
             db.query(Feature)
             .options(joinedload(Feature.organism))
             .filter(
                 or_(
-                    func.upper(Feature.gene_name) == query_upper,
-                    func.upper(Feature.feature_name) == query_upper,
-                    func.upper(Feature.dbxref_id) == query_upper,
+                    func.upper(Feature.gene_name).in_(chunk),
+                    func.upper(Feature.feature_name).in_(chunk),
+                    func.upper(Feature.dbxref_id).in_(chunk),
                 )
             )
-            .first()
+            .all()
         )
 
-        if not feature:
-            not_found.append(FeatureNotFound(query=query, reason="not found"))
-            continue
+        for feature in chunk_features:
+            # Map by all possible identifiers
+            if feature.gene_name:
+                gn_upper = feature.gene_name.upper()
+                if gn_upper in query_map:
+                    features_by_query[gn_upper] = feature
+            if feature.feature_name:
+                fn_upper = feature.feature_name.upper()
+                if fn_upper in query_map:
+                    features_by_query[fn_upper] = feature
+            if feature.dbxref_id:
+                dx_upper = feature.dbxref_id.upper()
+                if dx_upper in query_map:
+                    features_by_query[dx_upper] = feature
 
-        # Get location info
-        location = (
-            db.query(FeatLocation)
-            .filter(
-                FeatLocation.feature_no == feature.feature_no,
-                FeatLocation.is_loc_current == "Y"
+    # Get unique features
+    unique_features = {f.feature_no: f for f in features_by_query.values()}
+    feature_nos = list(unique_features.keys())
+
+    # Batch query locations
+    locations_by_feature: Dict[int, FeatLocation] = {}
+    if feature_nos:
+        for chunk in _chunk_list(feature_nos):
+            chunk_locations = (
+                db.query(FeatLocation)
+                .filter(
+                    FeatLocation.feature_no.in_(chunk),
+                    FeatLocation.is_loc_current == "Y"
+                )
+                .all()
             )
-            .first()
-        )
+            for loc in chunk_locations:
+                locations_by_feature[loc.feature_no] = loc
+
+    # Get unique root_seq_nos for chromosome lookup
+    root_seq_nos = list(set(
+        loc.root_seq_no for loc in locations_by_feature.values()
+        if loc.root_seq_no
+    ))
+
+    # Batch query chromosome names
+    chromosome_by_seq: Dict[int, str] = {}
+    if root_seq_nos:
+        for chunk in _chunk_list(root_seq_nos):
+            chunk_seqs = (
+                db.query(Seq)
+                .join(Feature, Seq.feature_no == Feature.feature_no)
+                .filter(Seq.seq_no.in_(chunk))
+                .all()
+            )
+            for seq in chunk_seqs:
+                if seq.feature:
+                    chromosome_by_seq[seq.seq_no] = seq.feature.feature_name
+
+    # Build results
+    found: List[ResolvedFeature] = []
+    not_found: List[FeatureNotFound] = []
+
+    # Track which queries were found
+    found_queries = set()
+
+    for feature in unique_features.values():
+        location = locations_by_feature.get(feature.feature_no)
 
         chromosome = None
         start = None
@@ -104,16 +163,7 @@ def resolve_features(
         strand = None
 
         if location:
-            # Get chromosome name
-            root_seq = (
-                db.query(Seq)
-                .join(Feature, Seq.feature_no == Feature.feature_no)
-                .filter(Seq.seq_no == location.root_seq_no)
-                .first()
-            )
-            if root_seq and root_seq.feature:
-                chromosome = root_seq.feature.feature_name
-
+            chromosome = chromosome_by_seq.get(location.root_seq_no)
             start = location.start_coord
             end = location.stop_coord
             strand = location.strand
@@ -132,6 +182,19 @@ def resolve_features(
             end=end,
             strand=strand,
         ))
+
+        # Mark queries as found
+        if feature.gene_name:
+            found_queries.add(feature.gene_name.upper())
+        if feature.feature_name:
+            found_queries.add(feature.feature_name.upper())
+        if feature.dbxref_id:
+            found_queries.add(feature.dbxref_id.upper())
+
+    # Find not found queries
+    for q_upper, q_original in query_map.items():
+        if q_upper not in found_queries:
+            not_found.append(FeatureNotFound(query=q_original, reason="not found"))
 
     return found, not_found
 
