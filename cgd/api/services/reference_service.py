@@ -27,6 +27,8 @@ from cgd.schemas.reference_schema import (
     GenomeWideAnalysisPapersResponse,
     GenomeWideAnalysisPaper,
     GeneForPaper,
+    DatasetsResponse,
+    DatasetReferenceItem,
 )
 from cgd.models.models import (
     Reference,
@@ -881,5 +883,70 @@ def get_genome_wide_analysis_papers(
         page=page,
         page_size=page_size,
         total_pages=total_pages,
+        references=references,
+    )
+
+
+def get_references_with_datasets(db: Session) -> DatasetsResponse:
+    """
+    Get references that have archived datasets (url_type = 'Reference Data').
+
+    Returns references grouped by year in descending order, with links to
+    the dataset files.
+    """
+    # Query references that have a URL with type 'Reference Data'
+    results = (
+        db.query(Reference, Url.url)
+        .join(RefUrl, Reference.reference_no == RefUrl.reference_no)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(Url.url_type == 'Reference Data')
+        .order_by(Reference.year.desc(), Reference.citation.asc())
+        .all()
+    )
+
+    # Build response
+    references = []
+    years_set = set()
+
+    for ref, data_url in results:
+        years_set.add(ref.year)
+
+        # Build citation links
+        links = []
+        if ref.dbxref_id:
+            links.append(CitationLink(
+                name='CGD Paper',
+                url=f'/reference/{ref.dbxref_id}',
+                link_type='internal',
+            ))
+        if ref.pubmed:
+            links.append(CitationLink(
+                name='PubMed',
+                url=f'https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}',
+                link_type='external',
+            ))
+        if data_url:
+            links.append(CitationLink(
+                name='Reference Data',
+                url=data_url,
+                link_type='external',
+            ))
+
+        references.append(DatasetReferenceItem(
+            reference_no=ref.reference_no,
+            dbxref_id=ref.dbxref_id,
+            pubmed=ref.pubmed,
+            citation=ref.citation,
+            year=ref.year,
+            data_url=data_url,
+            links=links,
+        ))
+
+    # Sort years descending for the navigation bar
+    years = sorted(years_set, reverse=True)
+
+    return DatasetsResponse(
+        years=years,
+        total_count=len(references),
         references=references,
     )

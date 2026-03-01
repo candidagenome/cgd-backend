@@ -12,6 +12,7 @@ from cgd.schemas.reference_schema import (
     AuthorSearchResponse,
     NewPapersThisWeekResponse,
     GenomeWideAnalysisPapersResponse,
+    DatasetsResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
@@ -64,6 +65,17 @@ def get_genome_wide_analysis_papers(
     and pagination.
     """
     return reference_service.get_genome_wide_analysis_papers(db, topic, page, page_size)
+
+
+@router.get("/datasets", response_model=DatasetsResponse)
+def get_references_with_datasets(db: Session = Depends(get_db)):
+    """
+    Get references that have archived datasets.
+
+    Returns references with 'Reference Data' URLs, grouped by year
+    in descending order. Used for the Datasets page.
+    """
+    return reference_service.get_references_with_datasets(db)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)
