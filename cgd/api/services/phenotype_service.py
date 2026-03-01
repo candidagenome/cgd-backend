@@ -228,7 +228,9 @@ def search_phenotypes(
 
     # Collect pheno_annotation_nos and experiment_nos for batch loading
     pheno_annotation_nos = [pa.pheno_annotation_no for pa in annotations]
-    experiment_nos = [pa.experiment.experiment_no for pa in annotations if pa.experiment]
+    # Use pa.experiment_no (column) directly instead of pa.experiment (relationship)
+    # to avoid issues with joinedload not working correctly with outer joins
+    experiment_nos = [pa.experiment_no for pa in annotations if pa.experiment_no]
 
     # Load references in batch
     ref_link_map: dict[int, list] = {}
@@ -299,10 +301,10 @@ def search_phenotypes(
         feature_organism = feature.organism
         experiment = pa.experiment
 
-        # Get strain from batch-loaded map
+        # Get strain from batch-loaded map (use experiment_no column directly)
         strain = None
-        if experiment:
-            strain = strain_map.get(experiment.experiment_no)
+        if pa.experiment_no:
+            strain = strain_map.get(pa.experiment_no)
 
         # Build references
         references = []
@@ -321,10 +323,10 @@ def search_phenotypes(
                     links=_build_citation_links_for_phenotype(ref, ref_urls),
                 ))
 
-        # Build details list
+        # Build details list (use experiment_no column directly)
         details = []
-        if experiment:
-            for prop_type, prop_value in details_map.get(experiment.experiment_no, []):
+        if pa.experiment_no:
+            for prop_type, prop_value in details_map.get(pa.experiment_no, []):
                 details.append(SearchResultDetail(property_type=prop_type, property_value=prop_value))
 
         results.append(PhenotypeSearchResult(
