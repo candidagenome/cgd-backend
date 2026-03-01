@@ -287,7 +287,7 @@ def search_phenotypes(
     for pa in annotations:
         phenotype = pa.phenotype
         feature = pa.feature
-        organism = feature.organism
+        feature_organism = feature.organism
         experiment = pa.experiment
 
         # Get strain from batch-loaded map
@@ -315,7 +315,7 @@ def search_phenotypes(
         results.append(PhenotypeSearchResult(
             feature_name=feature.feature_name,
             gene_name=feature.gene_name,
-            organism=organism.organism_name if organism else "Unknown",
+            organism=feature_organism.organism_name if feature_organism else "Unknown",
             observable=phenotype.observable,
             qualifier=phenotype.qualifier,
             experiment_type=phenotype.experiment_type,
