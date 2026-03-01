@@ -759,11 +759,11 @@ DISEASE_TOPICS = [
 
 def _get_papers_by_topics(
     db: Session,
-    available_topics: list[str],
-    filter_topics: list[str],
-    selected_topic: str | None,
-    page: int,
-    page_size: int,
+    available_topics: list,
+    filter_topics: list,
+    selected_topic: str = None,
+    page: int = 1,
+    page_size: int = 50,
 ) -> GenomeWideAnalysisPapersResponse:
     """
     Get references tagged with specific literature topics using batch queries.
