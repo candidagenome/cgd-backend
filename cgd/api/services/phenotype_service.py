@@ -14,6 +14,8 @@ from cgd.schemas.phenotype_schema import (
     PhenotypeSearchResponse,
     PhenotypeSearchResult,
     PhenotypeSearchQuery,
+    PhenotypeSearchSummaryResponse,
+    PhenotypeMatchGroup,
     ReferenceForAnnotation,
     CitationLinkForPhenotype,
     ObservableTreeResponse,
@@ -339,6 +341,81 @@ def search_phenotypes(
         page=page,
         limit=limit,
         results=results,
+    )
+
+
+def search_phenotypes_summary(
+    db: Session,
+    query: Optional[str] = None,
+) -> PhenotypeSearchSummaryResponse:
+    """
+    Get summary of phenotype search results grouped by observable.
+
+    Args:
+        db: Database session
+        query: Keyword to search for
+
+    Returns:
+        PhenotypeSearchSummaryResponse with counts grouped by observable
+    """
+    if not query:
+        return PhenotypeSearchSummaryResponse(
+            query="",
+            total_results=0,
+            direct_matches=[],
+            related_matches=[],
+        )
+
+    query_pattern = f"%{query.replace('*', '%')}%"
+
+    # Get counts for observables that directly match the query (in observable name)
+    direct_matches_query = (
+        db.query(
+            Phenotype.observable,
+            func.count(PhenoAnnotation.pheno_annotation_no).label('count')
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(func.upper(Phenotype.observable).like(func.upper(query_pattern)))
+        .group_by(Phenotype.observable)
+        .order_by(func.count(PhenoAnnotation.pheno_annotation_no).desc())
+        .all()
+    )
+
+    direct_matches = [
+        PhenotypeMatchGroup(observable=obs, count=cnt, is_direct_match=True)
+        for obs, cnt in direct_matches_query
+    ]
+
+    # Get counts for observables matched via qualifier (related matches)
+    related_matches_query = (
+        db.query(
+            Phenotype.observable,
+            func.count(PhenoAnnotation.pheno_annotation_no).label('count')
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(func.upper(Phenotype.qualifier).like(func.upper(query_pattern)))
+        .filter(~func.upper(Phenotype.observable).like(func.upper(query_pattern)))  # Exclude direct matches
+        .group_by(Phenotype.observable)
+        .order_by(func.count(PhenoAnnotation.pheno_annotation_no).desc())
+        .all()
+    )
+
+    related_matches = [
+        PhenotypeMatchGroup(observable=obs, count=cnt, is_direct_match=False)
+        for obs, cnt in related_matches_query
+    ]
+
+    total_results = sum(m.count for m in direct_matches) + sum(m.count for m in related_matches)
+
+    return PhenotypeSearchSummaryResponse(
+        query=query,
+        total_results=total_results,
+        direct_matches=direct_matches,
+        related_matches=related_matches,
     )
 
 

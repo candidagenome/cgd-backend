@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
 from cgd.api.services import phenotype_service
-from cgd.schemas.phenotype_schema import PhenotypeSearchResponse, ObservableTreeResponse
+from cgd.schemas.phenotype_schema import PhenotypeSearchResponse, PhenotypeSearchSummaryResponse, ObservableTreeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,31 @@ def search_phenotypes(
         )
     except Exception as e:
         logger.error(f"Error in search_phenotypes: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/search/summary", response_model=PhenotypeSearchSummaryResponse)
+def search_phenotypes_summary(
+    query: Optional[str] = Query(None, description="General keyword search"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get summary of phenotype search results grouped by observable.
+
+    Returns counts of annotations for each observable matching the search query,
+    similar to the Perl CGI summary page.
+
+    Args:
+        query: Keyword to search for in observables and qualifiers
+
+    Returns:
+        Summary with counts grouped by observable term.
+    """
+    try:
+        return phenotype_service.search_phenotypes_summary(db=db, query=query)
+    except Exception as e:
+        logger.error(f"Error in search_phenotypes_summary: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -109,6 +109,21 @@ class PhenotypeSearchResponse(BaseModel):
     results: list[PhenotypeSearchResult]
 
 
+class PhenotypeMatchGroup(BaseModel):
+    """Group of phenotype matches for a specific observable"""
+    observable: str
+    count: int
+    is_direct_match: bool = True  # True if observable directly matches query
+
+
+class PhenotypeSearchSummaryResponse(BaseModel):
+    """Summary response from phenotype search grouped by observable"""
+    query: str
+    total_results: int
+    direct_matches: list[PhenotypeMatchGroup]  # Observables that directly match the query
+    related_matches: list[PhenotypeMatchGroup]  # Observables matched via qualifier/chemical/etc
+
+
 # =============================================================================
 # OBSERVABLE TERMS TREE SCHEMAS
 # =============================================================================
