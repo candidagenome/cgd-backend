@@ -740,10 +740,10 @@ class TestGetGenomeWideAnalysisPapers:
             MockQuery([(1,)]),  # Count query (returns total)
             MockQuery([(1,)]),  # Reference nos query
             MockQuery([ref]),  # Full reference query
-            MockQuery([("Genome-wide Analysis",)]),  # Topics query
-            MockQuery([]),  # Species query
-            MockQuery([]),  # Genes query
-            MockQuery([]),  # RefUrl query
+            MockQuery([(1, "Genome-wide Analysis")]),  # Batch topics query
+            MockQuery([]),  # Batch species query
+            MockQuery([]),  # Batch genes query
+            MockQuery([]),  # Batch URLs query
         ]
 
         # Mock count
@@ -761,10 +761,10 @@ class TestGetGenomeWideAnalysisPapers:
             MockQuery([(1,)]),  # Count query
             MockQuery([(1,)]),  # Reference nos query
             MockQuery([ref]),  # Full reference query
-            MockQuery([("Genome-wide Analysis",)]),  # Topics query
-            MockQuery([]),  # Species query
-            MockQuery([]),  # Genes query
-            MockQuery([]),  # RefUrl query
+            MockQuery([(1, "Genome-wide Analysis")]),  # Batch topics query
+            MockQuery([]),  # Batch species query
+            MockQuery([]),  # Batch genes query
+            MockQuery([]),  # Batch URLs query
         ]
         mock_db.query.return_value.count = MagicMock(return_value=1)
 
@@ -779,10 +779,10 @@ class TestGetGenomeWideAnalysisPapers:
             MockQuery([(i,) for i in range(100)]),  # Count query
             MockQuery([(1,)]),  # Reference nos query
             MockQuery([ref]),  # Full reference query
-            MockQuery([]),  # Topics query
-            MockQuery([]),  # Species query
-            MockQuery([]),  # Genes query
-            MockQuery([]),  # RefUrl query
+            MockQuery([]),  # Batch topics query
+            MockQuery([]),  # Batch species query
+            MockQuery([]),  # Batch genes query
+            MockQuery([]),  # Batch URLs query
         ]
         mock_db.query.return_value.count = MagicMock(return_value=100)
 
