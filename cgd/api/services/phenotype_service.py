@@ -103,10 +103,15 @@ def _build_citation_links_for_phenotype(ref, ref_urls=None) -> list[CitationLink
 
 def search_phenotypes(
     db: Session,
+    query: Optional[str] = None,
     observable: Optional[str] = None,
     qualifier: Optional[str] = None,
     experiment_type: Optional[str] = None,
     mutant_type: Optional[str] = None,
+    property_value: Optional[str] = None,
+    property_type: Optional[str] = None,
+    pubmed: Optional[str] = None,
+    organism: Optional[str] = None,
     page: int = 1,
     limit: int = 25,
 ) -> PhenotypeSearchResponse:
@@ -115,10 +120,15 @@ def search_phenotypes(
 
     Args:
         db: Database session
+        query: General keyword search across multiple fields
         observable: Observable term to search for (supports wildcards with *)
         qualifier: Qualifier filter
         experiment_type: Experiment type filter
         mutant_type: Mutant type filter
+        property_value: Chemical/condition value search
+        property_type: Property type filter
+        pubmed: PubMed ID search
+        organism: Organism abbreviation filter
         page: Page number (1-indexed)
         limit: Results per page
 
@@ -126,7 +136,7 @@ def search_phenotypes(
         PhenotypeSearchResponse with paginated results
     """
     # Build base query joining PhenoAnnotation with related tables
-    query = (
+    db_query = (
         db.query(PhenoAnnotation)
         .join(PhenoAnnotation.phenotype)
         .join(PhenoAnnotation.feature)
@@ -139,42 +149,92 @@ def search_phenotypes(
         .filter(func.lower(Feature.feature_type) != 'allele')
     )
 
-    # Apply filters
+    # General keyword search - searches across multiple fields
+    if query:
+        query_pattern = f"%{query.replace('*', '%')}%"
+        # Need to join experiment properties for chemical/condition search
+        db_query = db_query.outerjoin(
+            Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no
+        ).outerjoin(
+            ExptExptprop, Experiment.experiment_no == ExptExptprop.experiment_no
+        ).outerjoin(
+            ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
+        )
+        db_query = db_query.filter(
+            or_(
+                func.upper(Phenotype.observable).like(func.upper(query_pattern)),
+                func.upper(Phenotype.qualifier).like(func.upper(query_pattern)),
+                func.upper(Experiment.experiment_comment).like(func.upper(query_pattern)),
+                func.upper(ExptProperty.property_value).like(func.upper(query_pattern)),
+            )
+        ).distinct()
+
+    # Apply specific filters
     if observable:
         # Support wildcard search with * -> %
         observable_pattern = observable.replace('*', '%')
         if '%' in observable_pattern:
-            query = query.filter(func.upper(Phenotype.observable).like(func.upper(observable_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.observable).like(func.upper(observable_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.observable) == func.upper(observable))
+            db_query = db_query.filter(func.upper(Phenotype.observable) == func.upper(observable))
 
     if qualifier:
         qualifier_pattern = qualifier.replace('*', '%')
         if '%' in qualifier_pattern:
-            query = query.filter(func.upper(Phenotype.qualifier).like(func.upper(qualifier_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.qualifier).like(func.upper(qualifier_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.qualifier) == func.upper(qualifier))
+            db_query = db_query.filter(func.upper(Phenotype.qualifier) == func.upper(qualifier))
 
     if experiment_type:
         exp_pattern = experiment_type.replace('*', '%')
         if '%' in exp_pattern:
-            query = query.filter(func.upper(Phenotype.experiment_type).like(func.upper(exp_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.experiment_type).like(func.upper(exp_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.experiment_type) == func.upper(experiment_type))
+            db_query = db_query.filter(func.upper(Phenotype.experiment_type) == func.upper(experiment_type))
 
     if mutant_type:
         mut_pattern = mutant_type.replace('*', '%')
         if '%' in mut_pattern:
-            query = query.filter(func.upper(Phenotype.mutant_type).like(func.upper(mut_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.mutant_type).like(func.upper(mut_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.mutant_type) == func.upper(mutant_type))
+            db_query = db_query.filter(func.upper(Phenotype.mutant_type) == func.upper(mutant_type))
+
+    # Property value (chemical/condition) search
+    if property_value:
+        prop_pattern = f"%{property_value.replace('*', '%')}%"
+        # Join experiment properties if not already joined
+        if not query:
+            db_query = db_query.outerjoin(
+                Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no
+            ).outerjoin(
+                ExptExptprop, Experiment.experiment_no == ExptExptprop.experiment_no
+            ).outerjoin(
+                ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
+            )
+        prop_filter = func.upper(ExptProperty.property_value).like(func.upper(prop_pattern))
+        if property_type:
+            prop_filter = prop_filter & (func.upper(ExptProperty.property_type) == func.upper(property_type))
+        db_query = db_query.filter(prop_filter).distinct()
+
+    # Organism filter
+    if organism:
+        db_query = db_query.filter(func.upper(Organism.organism_abbrev) == func.upper(organism))
+
+    # PubMed filter - need to join references
+    if pubmed:
+        db_query = db_query.join(
+            RefLink,
+            (RefLink.tab_name == "PHENO_ANNOTATION") & (RefLink.primary_key == PhenoAnnotation.pheno_annotation_no)
+        ).join(
+            Reference, RefLink.reference_no == Reference.reference_no
+        ).filter(Reference.pubmed == pubmed)
 
     # Get total count before pagination
-    total_count = query.count()
+    total_count = db_query.count()
 
     # Apply pagination
     offset = (page - 1) * limit
-    annotations = query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
+    annotations = db_query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
 
     # Collect pheno_annotation_nos and experiment_nos for batch loading
     pheno_annotation_nos = [pa.pheno_annotation_no for pa in annotations]
@@ -278,10 +338,15 @@ def search_phenotypes(
 
     return PhenotypeSearchResponse(
         query=PhenotypeSearchQuery(
+            query=query,
             observable=observable,
             qualifier=qualifier,
             experiment_type=experiment_type,
             mutant_type=mutant_type,
+            property_value=property_value,
+            property_type=property_type,
+            pubmed=pubmed,
+            organism=organism,
         ),
         total_results=total_count,
         page=page,

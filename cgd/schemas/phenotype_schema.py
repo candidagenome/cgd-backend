@@ -89,10 +89,15 @@ class PhenotypeSearchResult(BaseModel):
 
 class PhenotypeSearchQuery(BaseModel):
     """Search parameters used in the query"""
+    query: typing.Optional[str] = None
     observable: typing.Optional[str] = None
     qualifier: typing.Optional[str] = None
     experiment_type: typing.Optional[str] = None
     mutant_type: typing.Optional[str] = None
+    property_value: typing.Optional[str] = None
+    property_type: typing.Optional[str] = None
+    pubmed: typing.Optional[str] = None
+    organism: typing.Optional[str] = None
 
 
 class PhenotypeSearchResponse(BaseModel):
