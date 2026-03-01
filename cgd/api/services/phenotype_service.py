@@ -176,8 +176,9 @@ def search_phenotypes(
     offset = (page - 1) * limit
     annotations = query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
 
-    # Collect pheno_annotation_nos for reference loading
+    # Collect pheno_annotation_nos and experiment_nos for batch loading
     pheno_annotation_nos = [pa.pheno_annotation_no for pa in annotations]
+    experiment_nos = [pa.experiment.experiment_no for pa in annotations if pa.experiment]
 
     # Load references in batch
     ref_link_map: dict[int, list] = {}
@@ -217,6 +218,21 @@ def search_phenotypes(
                     ref_url_map[ref_url.reference_no] = []
                 ref_url_map[ref_url.reference_no].append(ref_url)
 
+    # Batch load experiment properties (strain_background)
+    strain_map: dict[int, str] = {}
+    if experiment_nos:
+        expt_props = (
+            db.query(ExptExptprop.experiment_no, ExptProperty.property_value)
+            .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+            .filter(
+                ExptExptprop.experiment_no.in_(experiment_nos),
+                ExptProperty.property_type == 'strain_background'
+            )
+            .all()
+        )
+        for exp_no, prop_value in expt_props:
+            strain_map[exp_no] = prop_value
+
     # Build results
     results = []
     for pa in annotations:
@@ -225,19 +241,10 @@ def search_phenotypes(
         organism = feature.organism
         experiment = pa.experiment
 
-        # Get strain from experiment properties
+        # Get strain from batch-loaded map
         strain = None
         if experiment:
-            expt_props = (
-                db.query(ExptProperty)
-                .join(ExptExptprop, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
-                .filter(ExptExptprop.experiment_no == experiment.experiment_no)
-                .all()
-            )
-            for prop in expt_props:
-                if prop.property_type == 'strain_background':
-                    strain = prop.property_value
-                    break
+            strain = strain_map.get(experiment.experiment_no)
 
         # Build references
         references = []
