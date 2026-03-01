@@ -25,6 +25,7 @@ Routers:
 - patmatch_router: Pattern matching endpoints
 - restriction_mapper_router: Restriction enzyme mapping endpoints
 - homology_router: Homology/ortholog endpoints
+- literature_topic_router: Literature topic search endpoints
 """
 
 from .health_router import router as health_router
@@ -49,6 +50,7 @@ from .blast_router import router as blast_router
 from .patmatch_router import router as patmatch_router
 from .restriction_mapper_router import router as restriction_mapper_router
 from .homology_router import router as homology_router
+from .literature_topic_router import router as literature_topic_router
 
 __all__ = [
     "health_router",
@@ -73,4 +75,5 @@ __all__ = [
     "patmatch_router",
     "restriction_mapper_router",
     "homology_router",
+    "literature_topic_router",
 ]
