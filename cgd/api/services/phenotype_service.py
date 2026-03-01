@@ -388,25 +388,53 @@ def search_phenotypes_summary(
         for obs, cnt in direct_matches_query
     ]
 
-    # Get counts for observables matched via qualifier (related matches)
-    related_matches_query = (
+    # Get counts for observables matched via qualifier, experiment comment, or properties (related matches)
+    # First, get annotations that match in qualifier or experiment comment
+    related_via_qualifier_comment = (
         db.query(
             Phenotype.observable,
-            func.count(PhenoAnnotation.pheno_annotation_no).label('count')
+            PhenoAnnotation.pheno_annotation_no
         )
         .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
         .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .outerjoin(Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no)
         .filter(func.lower(Feature.feature_type) != 'allele')
-        .filter(func.upper(Phenotype.qualifier).like(func.upper(query_pattern)))
         .filter(~func.upper(Phenotype.observable).like(func.upper(query_pattern)))  # Exclude direct matches
-        .group_by(Phenotype.observable)
-        .order_by(func.count(PhenoAnnotation.pheno_annotation_no).desc())
+        .filter(
+            or_(
+                func.upper(Phenotype.qualifier).like(func.upper(query_pattern)),
+                func.upper(Experiment.experiment_comment).like(func.upper(query_pattern)),
+            )
+        )
         .all()
     )
 
+    # Get annotations that match in experiment properties
+    related_via_properties = (
+        db.query(
+            Phenotype.observable,
+            PhenoAnnotation.pheno_annotation_no
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .join(ExptExptprop, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no)
+        .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(~func.upper(Phenotype.observable).like(func.upper(query_pattern)))  # Exclude direct matches
+        .filter(func.upper(ExptProperty.property_value).like(func.upper(query_pattern)))
+        .all()
+    )
+
+    # Combine and count by observable (use set to avoid duplicates)
+    related_annotation_map: dict[str, set] = defaultdict(set)
+    for obs, pa_no in related_via_qualifier_comment:
+        related_annotation_map[obs].add(pa_no)
+    for obs, pa_no in related_via_properties:
+        related_annotation_map[obs].add(pa_no)
+
     related_matches = [
-        PhenotypeMatchGroup(observable=obs, count=cnt, is_direct_match=False)
-        for obs, cnt in related_matches_query
+        PhenotypeMatchGroup(observable=obs, count=len(pa_nos), is_direct_match=False)
+        for obs, pa_nos in sorted(related_annotation_map.items(), key=lambda x: -len(x[1]))
     ]
 
     total_results = sum(m.count for m in direct_matches) + sum(m.count for m in related_matches)
