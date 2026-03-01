@@ -18,6 +18,7 @@ from cgd.schemas.phenotype_schema import (
     PhenotypeMatchGroup,
     ReferenceForAnnotation,
     CitationLinkForPhenotype,
+    SearchResultDetail,
     ObservableTreeResponse,
     ObservableTerm,
 )
@@ -267,20 +268,28 @@ def search_phenotypes(
                     ref_url_map[ref_url.reference_no] = []
                 ref_url_map[ref_url.reference_no].append(ref_url)
 
-    # Batch load experiment properties (strain_background)
+    # Batch load all experiment properties
     strain_map: dict[int, str] = {}
+    details_map: dict[int, list] = defaultdict(list)
     if experiment_nos:
         expt_props = (
-            db.query(ExptExptprop.experiment_no, ExptProperty.property_value)
+            db.query(ExptExptprop.experiment_no, ExptProperty.property_type, ExptProperty.property_value)
             .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
-            .filter(
-                ExptExptprop.experiment_no.in_(experiment_nos),
-                ExptProperty.property_type == 'strain_background'
-            )
+            .filter(ExptExptprop.experiment_no.in_(experiment_nos))
             .all()
         )
-        for exp_no, prop_value in expt_props:
-            strain_map[exp_no] = prop_value
+        for exp_no, prop_type, prop_value in expt_props:
+            if prop_type == 'strain_background':
+                strain_map[exp_no] = prop_value
+            elif prop_type in ('Condition', 'Chemical_pending', 'chebi_ontology', 'Details',
+                               'Reporter', 'Numerical_value', 'Allele'):
+                # Map internal types to display types
+                display_type = prop_type
+                if prop_type == 'Chemical_pending' or prop_type == 'chebi_ontology':
+                    display_type = 'Chemical'
+                elif prop_type == 'Numerical_value':
+                    display_type = 'Details'
+                details_map[exp_no].append((display_type, prop_value))
 
     # Build results
     results = []
@@ -312,6 +321,12 @@ def search_phenotypes(
                     links=_build_citation_links_for_phenotype(ref, ref_urls),
                 ))
 
+        # Build details list
+        details = []
+        if experiment:
+            for prop_type, prop_value in details_map.get(experiment.experiment_no, []):
+                details.append(SearchResultDetail(property_type=prop_type, property_value=prop_value))
+
         results.append(PhenotypeSearchResult(
             feature_name=feature.feature_name,
             gene_name=feature.gene_name,
@@ -322,6 +337,7 @@ def search_phenotypes(
             mutant_type=phenotype.mutant_type,
             experiment_comment=experiment.experiment_comment if experiment else None,
             strain=strain,
+            details=details,
             references=references,
         ))
 

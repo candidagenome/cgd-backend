@@ -73,6 +73,12 @@ class PhenotypeDetailsResponse(BaseModel):
 # PHENOTYPE SEARCH SCHEMAS
 # =============================================================================
 
+class SearchResultDetail(BaseModel):
+    """Detail item for phenotype search result (condition, chemical, details, etc.)"""
+    property_type: str  # e.g., "Condition", "Chemical", "Details"
+    property_value: str
+
+
 class PhenotypeSearchResult(BaseModel):
     """Single result from phenotype search"""
     feature_name: str
@@ -84,6 +90,7 @@ class PhenotypeSearchResult(BaseModel):
     mutant_type: typing.Optional[str] = None
     experiment_comment: typing.Optional[str] = None
     strain: typing.Optional[str] = None
+    details: list[SearchResultDetail] = []  # Condition, Chemical, Details, etc.
     references: list[ReferenceForAnnotation] = []
 
 
