@@ -750,10 +750,31 @@ GENOME_WIDE_TOPICS = [
 ]
 
 DISEASE_TOPICS = [
+    # Parent category
     "Disease",
-    "Disease and Virulence",
-    "Human disease",
-    "Human homolog of disease gene",
+    # Child topics under Disease
+    "Cancer",
+    "Candidemia",
+    "Chronic disseminated candidiasis",
+    "Dental caries",
+    "Denture stomatitis",
+    "Dermal candidiasis",
+    "Esophageal candidiasis",
+    "Familial candidiasis",
+    "Fungal myositis",
+    "Gastrointestinal candidiasis",
+    "Immunodeficiency 103 fungal infection",
+    "Invasive candidiasis",
+    "Mucocutaneous candidiasis",
+    "Ocular candidiasis",
+    "Onychomycosis",
+    "Oral candidiasis",
+    "Oropharyngeal candidiasis",
+    "Urinary tract candidiasis",
+    "Vaginal candidiasis",
+    "Vulvovaginal candidiasis",
+    # Disease Gene Related (under Related Genes/Proteins)
+    "Disease Gene Related",
 ]
 
 
