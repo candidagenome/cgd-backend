@@ -78,6 +78,22 @@ def get_references_with_datasets(db: Session = Depends(get_db)):
     return reference_service.get_references_with_datasets(db)
 
 
+@router.get("/disease-related", response_model=GenomeWideAnalysisPapersResponse)
+def get_disease_related_papers(
+    topic: str = Query(None, description="Filter by specific disease topic"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get references tagged as disease-related papers.
+
+    Returns papers with disease-related topics including human disease
+    and virulence. Supports filtering by specific topic and pagination.
+    """
+    return reference_service.get_disease_related_papers(db, topic, page, page_size)
+
+
 @router.get("/{identifier}", response_model=ReferenceResponse)
 def get_reference(identifier: str, db: Session = Depends(get_db)):
     """
