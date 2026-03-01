@@ -44,6 +44,7 @@ from .chromosome_router import router as chromosome_router
 from .webprimer_router import router as webprimer_router
 from .go_term_finder_router import router as go_term_finder_router
 from .go_slim_mapper_router import router as go_slim_mapper_router
+from .go_annotation_summary_router import router as go_annotation_summary_router
 from .blast_router import router as blast_router
 from .patmatch_router import router as patmatch_router
 from .restriction_mapper_router import router as restriction_mapper_router
@@ -67,6 +68,7 @@ __all__ = [
     "webprimer_router",
     "go_term_finder_router",
     "go_slim_mapper_router",
+    "go_annotation_summary_router",
     "blast_router",
     "patmatch_router",
     "restriction_mapper_router",

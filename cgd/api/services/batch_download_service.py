@@ -13,7 +13,7 @@ from sqlalchemy import func, or_
 from cgd.models.models import (
     Feature, Seq, FeatLocation, GoAnnotation,
     PhenoAnnotation, FeatHomology,
-    DbxrefFeat, Dbxref,
+    DbxrefFeat, Dbxref, Organism,
 )
 from cgd.schemas.batch_download_schema import (
     DataType,
@@ -23,9 +23,11 @@ from cgd.schemas.batch_download_schema import (
 )
 from cgd.api.services.sequence_service import (
     get_sequence_by_feature,
+    get_sequence_by_coordinates,
     format_as_fasta,
 )
 from cgd.schemas.sequence_schema import SeqType
+from cgd.schemas.batch_download_schema import ChromosomalRegion
 
 
 # GO aspect mapping
@@ -47,51 +49,127 @@ NON_CGD_ORTHOLOG_SOURCES = {
 }
 
 
+def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
+    """Split a list into chunks of specified size (default 900 for Oracle's 1000 limit)."""
+    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
+
 def resolve_features(
     db: Session,
     queries: List[str],
+    organism: str = None,
 ) -> Tuple[List[ResolvedFeature], List[FeatureNotFound]]:
     """
     Resolve feature names/identifiers to Feature objects.
 
+    Uses batch queries for efficiency with large gene lists.
+
+    Args:
+        db: Database session
+        queries: List of feature names/identifiers
+        organism: Optional organism abbreviation to filter by (e.g., 'C_albicans_SC5314')
+
     Returns:
         Tuple of (found features, not found queries)
     """
-    found: List[ResolvedFeature] = []
-    not_found: List[FeatureNotFound] = []
+    # Clean and dedupe queries
+    query_map = {}  # upper -> original
+    for q in queries:
+        q_clean = q.strip()
+        if q_clean:
+            query_map[q_clean.upper()] = q_clean
 
-    for query in queries:
-        query_upper = query.strip().upper()
-        if not query_upper:
-            continue
+    if not query_map:
+        return [], []
 
-        # Try gene_name, feature_name, dbxref_id
-        feature = (
+    queries_upper = list(query_map.keys())
+
+    # Batch query features by gene_name, feature_name, or dbxref_id
+    features_by_query: Dict[str, Feature] = {}
+
+    for chunk in _chunk_list(queries_upper):
+        query = (
             db.query(Feature)
             .options(joinedload(Feature.organism))
             .filter(
                 or_(
-                    func.upper(Feature.gene_name) == query_upper,
-                    func.upper(Feature.feature_name) == query_upper,
-                    func.upper(Feature.dbxref_id) == query_upper,
+                    func.upper(Feature.gene_name).in_(chunk),
+                    func.upper(Feature.feature_name).in_(chunk),
+                    func.upper(Feature.dbxref_id).in_(chunk),
                 )
             )
-            .first()
         )
 
-        if not feature:
-            not_found.append(FeatureNotFound(query=query, reason="not found"))
-            continue
+        # Filter by organism if specified
+        if organism:
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no)
+            query = query.filter(Organism.organism_abbrev == organism)
 
-        # Get location info
-        location = (
-            db.query(FeatLocation)
-            .filter(
-                FeatLocation.feature_no == feature.feature_no,
-                FeatLocation.is_loc_current == "Y"
+        chunk_features = query.all()
+
+        for feature in chunk_features:
+            # Map by all possible identifiers
+            if feature.gene_name:
+                gn_upper = feature.gene_name.upper()
+                if gn_upper in query_map:
+                    features_by_query[gn_upper] = feature
+            if feature.feature_name:
+                fn_upper = feature.feature_name.upper()
+                if fn_upper in query_map:
+                    features_by_query[fn_upper] = feature
+            if feature.dbxref_id:
+                dx_upper = feature.dbxref_id.upper()
+                if dx_upper in query_map:
+                    features_by_query[dx_upper] = feature
+
+    # Get unique features
+    unique_features = {f.feature_no: f for f in features_by_query.values()}
+    feature_nos = list(unique_features.keys())
+
+    # Batch query locations
+    locations_by_feature: Dict[int, FeatLocation] = {}
+    if feature_nos:
+        for chunk in _chunk_list(feature_nos):
+            chunk_locations = (
+                db.query(FeatLocation)
+                .filter(
+                    FeatLocation.feature_no.in_(chunk),
+                    FeatLocation.is_loc_current == "Y"
+                )
+                .all()
             )
-            .first()
-        )
+            for loc in chunk_locations:
+                locations_by_feature[loc.feature_no] = loc
+
+    # Get unique root_seq_nos for chromosome lookup
+    root_seq_nos = list(set(
+        loc.root_seq_no for loc in locations_by_feature.values()
+        if loc.root_seq_no
+    ))
+
+    # Batch query chromosome names
+    chromosome_by_seq: Dict[int, str] = {}
+    if root_seq_nos:
+        for chunk in _chunk_list(root_seq_nos):
+            chunk_seqs = (
+                db.query(Seq)
+                .join(Feature, Seq.feature_no == Feature.feature_no)
+                .filter(Seq.seq_no.in_(chunk))
+                .all()
+            )
+            for seq in chunk_seqs:
+                if seq.feature:
+                    chromosome_by_seq[seq.seq_no] = seq.feature.feature_name
+
+    # Build results
+    found: List[ResolvedFeature] = []
+    not_found: List[FeatureNotFound] = []
+
+    # Track which queries were found
+    found_queries = set()
+
+    for feature in unique_features.values():
+        location = locations_by_feature.get(feature.feature_no)
 
         chromosome = None
         start = None
@@ -99,16 +177,7 @@ def resolve_features(
         strand = None
 
         if location:
-            # Get chromosome name
-            root_seq = (
-                db.query(Seq)
-                .join(Feature, Seq.feature_no == Feature.feature_no)
-                .filter(Seq.seq_no == location.root_seq_no)
-                .first()
-            )
-            if root_seq and root_seq.feature:
-                chromosome = root_seq.feature.feature_name
-
+            chromosome = chromosome_by_seq.get(location.root_seq_no)
             start = location.start_coord
             end = location.stop_coord
             strand = location.strand
@@ -127,6 +196,19 @@ def resolve_features(
             end=end,
             strand=strand,
         ))
+
+        # Mark queries as found
+        if feature.gene_name:
+            found_queries.add(feature.gene_name.upper())
+        if feature.feature_name:
+            found_queries.add(feature.feature_name.upper())
+        if feature.dbxref_id:
+            found_queries.add(feature.dbxref_id.upper())
+
+    # Find not found queries
+    for q_upper, q_original in query_map.items():
+        if q_upper not in found_queries:
+            not_found.append(FeatureNotFound(query=q_original, reason="not found"))
 
     return found, not_found
 
@@ -258,13 +340,16 @@ def generate_go_gaf(
     feature_nos = [f.feature_no for f in features]
     feat_map = {f.feature_no: f for f in features}
 
-    # Query GO annotations
-    annotations = (
-        db.query(GoAnnotation)
-        .options(joinedload(GoAnnotation.go))
-        .filter(GoAnnotation.feature_no.in_(feature_nos))
-        .all()
-    )
+    # Query GO annotations (chunked to avoid Oracle 1000 limit)
+    annotations = []
+    for chunk in _chunk_list(feature_nos):
+        chunk_results = (
+            db.query(GoAnnotation)
+            .options(joinedload(GoAnnotation.go))
+            .filter(GoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        annotations.extend(chunk_results)
 
     for ga in annotations:
         feat = feat_map.get(ga.feature_no)
@@ -316,13 +401,16 @@ def generate_phenotype_tsv(
     feature_nos = [f.feature_no for f in features]
     feat_map = {f.feature_no: f for f in features}
 
-    # Query phenotype annotations
-    annotations = (
-        db.query(PhenoAnnotation)
-        .options(joinedload(PhenoAnnotation.phenotype))
-        .filter(PhenoAnnotation.feature_no.in_(feature_nos))
-        .all()
-    )
+    # Query phenotype annotations (chunked to avoid Oracle 1000 limit)
+    annotations = []
+    for chunk in _chunk_list(feature_nos):
+        chunk_results = (
+            db.query(PhenoAnnotation)
+            .options(joinedload(PhenoAnnotation.phenotype))
+            .filter(PhenoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        annotations.extend(chunk_results)
 
     for pa in annotations:
         feat = feat_map.get(pa.feature_no)
@@ -437,6 +525,28 @@ def compress_content(content: str) -> bytes:
     return buf.getvalue()
 
 
+def generate_region_fasta(
+    db: Session,
+    regions: List[ChromosomalRegion],
+) -> str:
+    """Generate FASTA content for chromosomal regions."""
+    lines = []
+
+    for region in regions:
+        result = get_sequence_by_coordinates(
+            db=db,
+            chromosome=region.chromosome,
+            start=region.start,
+            end=region.end,
+            strand=region.strand,
+        )
+        if result:
+            fasta = format_as_fasta(result.fasta_header, result.sequence)
+            lines.append(fasta)
+
+    return "\n".join(lines)
+
+
 def process_batch_download(
     db: Session,
     request: BatchDownloadRequest,
@@ -455,56 +565,72 @@ def process_batch_download(
     not_found = []
 
     if request.genes:
-        features, not_found = resolve_features(db, request.genes)
-
-    # Handle regions (if any) - convert to features
-    if request.regions:
-        for region in request.regions:
-            # For regions, we don't resolve to features
-            # Just generate coordinate-based sequence
-            pass
+        features, not_found = resolve_features(db, request.genes, request.organism)
 
     # Generate content for each data type
     results: Dict[DataType, Tuple[str, bytes]] = {}
+
+    # Handle region-based requests separately for sequence data types
+    has_regions = bool(request.regions and len(request.regions) > 0)
 
     for data_type in request.data_types:
         content = ""
         filename_base = "batch_download"
 
         if data_type == DataType.GENOMIC:
-            content = generate_genomic_fasta(db, features)
+            # For regions, generate coordinate-based sequence
+            if has_regions:
+                content = generate_region_fasta(db, request.regions)
+            else:
+                content = generate_genomic_fasta(db, features)
             filename_base = "genomic_sequences"
 
         elif data_type == DataType.GENOMIC_FLANKING:
-            content = generate_genomic_fasta(
-                db, features,
-                flank_left=request.flank_left,
-                flank_right=request.flank_right
-            )
+            # For regions, generate coordinate-based sequence (flanking not applicable)
+            if has_regions:
+                content = generate_region_fasta(db, request.regions)
+            else:
+                content = generate_genomic_fasta(
+                    db, features,
+                    flank_left=request.flank_left,
+                    flank_right=request.flank_right
+                )
             filename_base = "genomic_flanking_sequences"
 
         elif data_type == DataType.CODING:
-            content = generate_coding_fasta(db, features)
+            # Coding sequences only available for gene-based queries
+            if not has_regions:
+                content = generate_coding_fasta(db, features)
             filename_base = "coding_sequences"
 
         elif data_type == DataType.PROTEIN:
-            content = generate_protein_fasta(db, features)
+            # Protein sequences only available for gene-based queries
+            if not has_regions:
+                content = generate_protein_fasta(db, features)
             filename_base = "protein_sequences"
 
         elif data_type == DataType.COORDS:
-            content = generate_coords_tsv(db, features)
+            # Coordinates only for gene-based queries
+            if not has_regions:
+                content = generate_coords_tsv(db, features)
             filename_base = "coordinates"
 
         elif data_type == DataType.GO:
-            content = generate_go_gaf(db, features)
+            # GO annotations only for gene-based queries
+            if not has_regions:
+                content = generate_go_gaf(db, features)
             filename_base = "go_annotations"
 
         elif data_type == DataType.PHENOTYPE:
-            content = generate_phenotype_tsv(db, features)
+            # Phenotypes only for gene-based queries
+            if not has_regions:
+                content = generate_phenotype_tsv(db, features)
             filename_base = "phenotypes"
 
         elif data_type == DataType.ORTHOLOG:
-            content = generate_ortholog_tsv(db, features)
+            # Orthologs only for gene-based queries
+            if not has_regions:
+                content = generate_ortholog_tsv(db, features)
             filename_base = "orthologs"
 
         if content:

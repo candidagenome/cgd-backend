@@ -204,7 +204,7 @@ def download_results(
 @router.post("/graph", response_model=GoEnrichmentGraphResponse)
 def get_enrichment_graph(
     request: GoTermFinderRequest,
-    max_nodes: int = Query(50, ge=5, le=200, description="Maximum nodes in graph"),
+    max_terms: int = Query(5, ge=3, le=50, description="Maximum enriched terms to show in graph"),
     db: Session = Depends(get_db),
 ):
     """
@@ -212,7 +212,7 @@ def get_enrichment_graph(
 
     Args:
         request: Same analysis parameters as /analyze endpoint
-        max_nodes: Maximum number of nodes to include (default 50)
+        max_terms: Maximum number of enriched terms to include (default 10)
 
     Returns:
         GoEnrichmentGraphResponse with nodes and edges for Cytoscape.js
@@ -230,9 +230,9 @@ def get_enrichment_graph(
             result.result.component_terms
         )
 
-        # Build graph
+        # Build graph with top enriched terms
         return go_term_finder_service.build_enrichment_graph(
-            db, all_terms, max_nodes=max_nodes
+            db, all_terms, max_terms=max_terms
         )
 
     except Exception as e:

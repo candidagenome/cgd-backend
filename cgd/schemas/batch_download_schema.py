@@ -36,6 +36,10 @@ class BatchDownloadRequest(BaseModel):
         None,
         description="List of chromosomal regions"
     )
+    organism: Optional[str] = Field(
+        None,
+        description="Organism abbreviation to filter by (e.g., 'C_albicans_SC5314'). If not specified, returns features from all organisms."
+    )
     data_types: List[DataType] = Field(
         ...,
         min_length=1,

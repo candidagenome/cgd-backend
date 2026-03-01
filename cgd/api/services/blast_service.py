@@ -27,7 +27,7 @@ from cgd.core.blast_config import (
     build_database_names,
     get_database_type_for_dataset,
 )
-from cgd.models.models import Feature, Seq, FeatRelationship
+from cgd.models.models import Feature, Seq, FeatRelationship, Organism
 from cgd.schemas.blast_schema import (
     BlastProgram,
     BlastDatabase,
@@ -405,32 +405,51 @@ def _parse_fasta_header(sequence: str) -> Tuple[str, str]:
     return header, seq
 
 
-def _get_sequence_for_locus(db: Session, locus: str, seq_type: str = "genomic") -> Optional[Tuple[str, str]]:
+def _map_organism_tag_to_abbrev(organism_tag: str) -> str:
+    """
+    Map a BLAST organism tag to database organism_abbrev.
+
+    E.g., "C_albicans_SC5314_A22" -> "C_albicans_SC5314" (strip assembly suffix)
+    """
+    # Strip assembly suffixes like _A19, _A21, _A22
+    return re.sub(r'_A\d+$', '', organism_tag)
+
+
+def _get_sequence_for_locus(
+    db: Session,
+    locus: str,
+    seq_type: str = "genomic",
+    organism_tag: Optional[str] = None
+) -> Optional[Tuple[str, str]]:
     """
     Get sequence for a locus from the database.
+
+    Args:
+        db: Database session
+        locus: Locus name (gene_name, feature_name, or dbxref_id)
+        seq_type: Sequence type (genomic, coding, protein)
+        organism_tag: Optional organism tag to filter by (e.g., "C_albicans_SC5314_A22")
 
     Returns (header, sequence) tuple or None if not found.
     """
     query_upper = locus.strip().upper()
 
+    # Build base query with optional organism filter
+    def build_query(filter_expr):
+        query = db.query(Feature).filter(filter_expr)
+        if organism_tag:
+            # Map BLAST tag to organism_abbrev and join with Organism table
+            org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
+            query = query.join(Organism, Feature.organism_no == Organism.organism_no)
+            query = query.filter(Organism.organism_abbrev == org_abbrev)
+        return query
+
     # Find feature by gene_name, feature_name, or dbxref_id
-    feature = (
-        db.query(Feature)
-        .filter(func.upper(Feature.gene_name) == query_upper)
-        .first()
-    )
+    feature = build_query(func.upper(Feature.gene_name) == query_upper).first()
     if not feature:
-        feature = (
-            db.query(Feature)
-            .filter(func.upper(Feature.feature_name) == query_upper)
-            .first()
-        )
+        feature = build_query(func.upper(Feature.feature_name) == query_upper).first()
     if not feature:
-        feature = (
-            db.query(Feature)
-            .filter(func.upper(Feature.dbxref_id) == query_upper)
-            .first()
-        )
+        feature = build_query(func.upper(Feature.dbxref_id) == query_upper).first()
 
     if not feature:
         return None
@@ -843,11 +862,12 @@ def run_blast_search(
     if request.locus:
         # Determine sequence type based on program
         seq_type = "protein" if program_info.query_type == DatabaseType.PROTEIN else "genomic"
-        result = _get_sequence_for_locus(db, request.locus, seq_type)
+        result = _get_sequence_for_locus(db, request.locus, seq_type, request.locus_organism)
         if not result:
+            org_msg = f" in {request.locus_organism}" if request.locus_organism else ""
             return BlastSearchResponse(
                 success=False,
-                error=f"Could not find {seq_type} sequence for locus: {request.locus}",
+                error=f"Could not find {seq_type} sequence for locus: {request.locus}{org_msg}",
             )
         header, sequence = result
     elif request.sequence:
@@ -1045,11 +1065,12 @@ def run_multi_database_blast(
     # Get query sequence
     if request.locus:
         seq_type = "protein" if program_info.query_type == DatabaseType.PROTEIN else "genomic"
-        result = _get_sequence_for_locus(db, request.locus, seq_type)
+        result = _get_sequence_for_locus(db, request.locus, seq_type, request.locus_organism)
         if not result:
+            org_msg = f" in {request.locus_organism}" if request.locus_organism else ""
             return BlastSearchResponse(
                 success=False,
-                error=f"Could not find {seq_type} sequence for locus: {request.locus}",
+                error=f"Could not find {seq_type} sequence for locus: {request.locus}{org_msg}",
             )
         header, sequence = result
     elif request.sequence:

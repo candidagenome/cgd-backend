@@ -151,18 +151,21 @@ def validate_genes(
             total_with_go=0,
         )
 
-    # Query features by feature_name or gene_name
-    features_by_name = (
-        db.query(Feature)
-        .filter(Feature.organism_no == request.organism_no)
-        .filter(
-            or_(
-                func.upper(Feature.feature_name).in_(genes_upper),
-                func.upper(Feature.gene_name).in_(genes_upper),
+    # Query features by feature_name or gene_name (chunked to avoid Oracle 1000 limit)
+    features_by_name = []
+    for chunk in _chunk_list(genes_upper):
+        chunk_results = (
+            db.query(Feature)
+            .filter(Feature.organism_no == request.organism_no)
+            .filter(
+                or_(
+                    func.upper(Feature.feature_name).in_(chunk),
+                    func.upper(Feature.gene_name).in_(chunk),
+                )
             )
+            .all()
         )
-        .all()
-    )
+        features_by_name.extend(chunk_results)
 
     # Build result
     found_map: dict[str, Feature] = {}  # input_upper -> Feature
@@ -175,33 +178,37 @@ def validate_genes(
         if gname_upper and gname_upper in genes_upper:
             found_map[gname_upper] = feature
 
-    # Query aliases for remaining genes
+    # Query aliases for remaining genes (chunked to avoid Oracle 1000 limit)
     remaining_genes = [g for g in genes_upper if g not in found_map]
     if remaining_genes:
-        alias_results = (
-            db.query(Feature, Alias)
-            .join(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
-            .join(Alias, Alias.alias_no == FeatAlias.alias_no)
-            .filter(Feature.organism_no == request.organism_no)
-            .filter(func.upper(Alias.alias_name).in_(remaining_genes))
-            .all()
-        )
+        alias_results = []
+        for chunk in _chunk_list(remaining_genes):
+            chunk_results = (
+                db.query(Feature, Alias)
+                .join(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
+                .join(Alias, Alias.alias_no == FeatAlias.alias_no)
+                .filter(Feature.organism_no == request.organism_no)
+                .filter(func.upper(Alias.alias_name).in_(chunk))
+                .all()
+            )
+            alias_results.extend(chunk_results)
         for feature, alias in alias_results:
             alias_upper = alias.alias_name.upper() if alias.alias_name else None
             if alias_upper and alias_upper in remaining_genes:
                 found_map[alias_upper] = feature
 
-    # Get GO annotation status for found features
+    # Get GO annotation status for found features (chunked to avoid Oracle 1000 limit)
     feature_nos = list(set(f.feature_no for f in found_map.values()))
     features_with_go = set()
     if feature_nos:
-        go_check = (
-            db.query(GoAnnotation.feature_no)
-            .filter(GoAnnotation.feature_no.in_(feature_nos))
-            .distinct()
-            .all()
-        )
-        features_with_go = {row.feature_no for row in go_check}
+        for chunk in _chunk_list(feature_nos):
+            go_check = (
+                db.query(GoAnnotation.feature_no)
+                .filter(GoAnnotation.feature_no.in_(chunk))
+                .distinct()
+                .all()
+            )
+            features_with_go.update(row.feature_no for row in go_check)
 
     # Build response
     found_genes = []
@@ -634,28 +641,34 @@ def run_go_term_finder(
 
     # Step 6: Build enriched term objects
     go_nos = [r[0] for r in corrected_results]
-    go_records = db.query(Go).filter(Go.go_no.in_(go_nos)).all()
+    go_records = []
+    for chunk in _chunk_list(go_nos):
+        go_records.extend(db.query(Go).filter(Go.go_no.in_(chunk)).all())
     go_no_to_go = {go.go_no: go for go in go_records}
 
-    # Get feature info for genes in query
-    feature_records = db.query(Feature).filter(Feature.feature_no.in_(query_genes_with_go)).all()
+    # Get feature info for genes in query (chunked to avoid Oracle 1000 limit)
+    feature_records = []
+    for chunk in _chunk_list(query_genes_with_go):
+        feature_records.extend(db.query(Feature).filter(Feature.feature_no.in_(chunk)).all())
     feature_no_to_feature = {f.feature_no: f for f in feature_records}
 
-    # Build gene-to-evidence mapping for enriched terms
-    gene_evidence_query = (
-        db.query(
-            GoAnnotation.feature_no,
-            GoAnnotation.go_no,
-            GoAnnotation.go_evidence,
-        )
-        .filter(GoAnnotation.feature_no.in_(query_genes_with_go))
-        .filter(GoAnnotation.go_no.in_(go_nos))
-    )
+    # Build gene-to-evidence mapping for enriched terms (chunked queries)
     ann_filters = _build_annotation_filters(request.evidence_codes, request.annotation_types)
-    for f in ann_filters:
-        gene_evidence_query = gene_evidence_query.filter(f)
-
-    gene_evidence_results = gene_evidence_query.all()
+    gene_evidence_results = []
+    for feature_chunk in _chunk_list(query_genes_with_go):
+        for go_chunk in _chunk_list(go_nos):
+            query = (
+                db.query(
+                    GoAnnotation.feature_no,
+                    GoAnnotation.go_no,
+                    GoAnnotation.go_evidence,
+                )
+                .filter(GoAnnotation.feature_no.in_(feature_chunk))
+                .filter(GoAnnotation.go_no.in_(go_chunk))
+            )
+            for f in ann_filters:
+                query = query.filter(f)
+            gene_evidence_results.extend(query.all())
 
     # Build mapping: go_no -> feature_no -> evidence_codes
     go_to_gene_evidence: dict[int, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
@@ -752,7 +765,7 @@ def run_go_term_finder(
 def build_enrichment_graph(
     db: Session,
     enriched_terms: list[EnrichedGoTerm],
-    max_nodes: int = 50,
+    max_terms: int = 5,
 ) -> GoEnrichmentGraphResponse:
     """
     Build GO hierarchy graph for enriched terms visualization.
@@ -763,7 +776,7 @@ def build_enrichment_graph(
     Args:
         db: Database session
         enriched_terms: List of enriched GO terms
-        max_nodes: Maximum number of nodes to include
+        max_terms: Maximum number of enriched terms to include (default 10)
 
     Returns:
         GoEnrichmentGraphResponse with nodes and edges
@@ -771,8 +784,10 @@ def build_enrichment_graph(
     if not enriched_terms:
         return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
-    # Filter to terms with >1 gene and limit to max_nodes
-    terms_to_use = [t for t in enriched_terms if t.query_count > 1][:max_nodes]
+    # Filter to terms with >1 gene, sort by p-value, and take top max_terms
+    terms_with_genes = [t for t in enriched_terms if t.query_count > 1]
+    terms_sorted = sorted(terms_with_genes, key=lambda t: (t.p_value, -t.query_count))
+    terms_to_use = terms_sorted[:max_terms]
     if not terms_to_use:
         return GoEnrichmentGraphResponse(nodes=[], edges=[])
 
@@ -873,7 +888,7 @@ def build_enrichment_graph(
         nodes_to_include.update(path_nodes)
 
     # Limit nodes if too many (keep enriched terms, root, and closest ancestors)
-    if len(nodes_to_include) > max_nodes * 2:
+    if len(nodes_to_include) > max_terms * 5:
         # Keep enriched terms and root, then add closest ancestors
         essential = enriched_go_nos.copy()
         if root_go:
