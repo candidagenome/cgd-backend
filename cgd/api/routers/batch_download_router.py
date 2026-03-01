@@ -279,11 +279,20 @@ def batch_download_metadata_post(
             record_count=record_count,
         ))
 
+    # Calculate totals based on input type
+    total_requested = len(request.genes) if request.genes else 0
+    total_found = len(features)
+
+    # For region-based requests, count regions
+    if request.regions and len(request.regions) > 0:
+        total_requested = len(request.regions)
+        total_found = len(request.regions)  # Regions are always "found"
+
     return BatchDownloadResponse(
         success=True,
         files=files,
-        total_requested=len(request.genes) if request.genes else 0,
-        total_found=len(features),
+        total_requested=total_requested,
+        total_found=total_found,
         not_found=not_found,
     )
 

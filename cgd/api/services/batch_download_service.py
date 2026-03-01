@@ -23,9 +23,11 @@ from cgd.schemas.batch_download_schema import (
 )
 from cgd.api.services.sequence_service import (
     get_sequence_by_feature,
+    get_sequence_by_coordinates,
     format_as_fasta,
 )
 from cgd.schemas.sequence_schema import SeqType
+from cgd.schemas.batch_download_schema import ChromosomalRegion
 
 
 # GO aspect mapping
@@ -523,6 +525,28 @@ def compress_content(content: str) -> bytes:
     return buf.getvalue()
 
 
+def generate_region_fasta(
+    db: Session,
+    regions: List[ChromosomalRegion],
+) -> str:
+    """Generate FASTA content for chromosomal regions."""
+    lines = []
+
+    for region in regions:
+        result = get_sequence_by_coordinates(
+            db=db,
+            chromosome=region.chromosome,
+            start=region.start,
+            end=region.end,
+            strand=region.strand,
+        )
+        if result:
+            fasta = format_as_fasta(result.fasta_header, result.sequence)
+            lines.append(fasta)
+
+    return "\n".join(lines)
+
+
 def process_batch_download(
     db: Session,
     request: BatchDownloadRequest,
@@ -543,54 +567,70 @@ def process_batch_download(
     if request.genes:
         features, not_found = resolve_features(db, request.genes, request.organism)
 
-    # Handle regions (if any) - convert to features
-    if request.regions:
-        for region in request.regions:
-            # For regions, we don't resolve to features
-            # Just generate coordinate-based sequence
-            pass
-
     # Generate content for each data type
     results: Dict[DataType, Tuple[str, bytes]] = {}
+
+    # Handle region-based requests separately for sequence data types
+    has_regions = bool(request.regions and len(request.regions) > 0)
 
     for data_type in request.data_types:
         content = ""
         filename_base = "batch_download"
 
         if data_type == DataType.GENOMIC:
-            content = generate_genomic_fasta(db, features)
+            # For regions, generate coordinate-based sequence
+            if has_regions:
+                content = generate_region_fasta(db, request.regions)
+            else:
+                content = generate_genomic_fasta(db, features)
             filename_base = "genomic_sequences"
 
         elif data_type == DataType.GENOMIC_FLANKING:
-            content = generate_genomic_fasta(
-                db, features,
-                flank_left=request.flank_left,
-                flank_right=request.flank_right
-            )
+            # For regions, generate coordinate-based sequence (flanking not applicable)
+            if has_regions:
+                content = generate_region_fasta(db, request.regions)
+            else:
+                content = generate_genomic_fasta(
+                    db, features,
+                    flank_left=request.flank_left,
+                    flank_right=request.flank_right
+                )
             filename_base = "genomic_flanking_sequences"
 
         elif data_type == DataType.CODING:
-            content = generate_coding_fasta(db, features)
+            # Coding sequences only available for gene-based queries
+            if not has_regions:
+                content = generate_coding_fasta(db, features)
             filename_base = "coding_sequences"
 
         elif data_type == DataType.PROTEIN:
-            content = generate_protein_fasta(db, features)
+            # Protein sequences only available for gene-based queries
+            if not has_regions:
+                content = generate_protein_fasta(db, features)
             filename_base = "protein_sequences"
 
         elif data_type == DataType.COORDS:
-            content = generate_coords_tsv(db, features)
+            # Coordinates only for gene-based queries
+            if not has_regions:
+                content = generate_coords_tsv(db, features)
             filename_base = "coordinates"
 
         elif data_type == DataType.GO:
-            content = generate_go_gaf(db, features)
+            # GO annotations only for gene-based queries
+            if not has_regions:
+                content = generate_go_gaf(db, features)
             filename_base = "go_annotations"
 
         elif data_type == DataType.PHENOTYPE:
-            content = generate_phenotype_tsv(db, features)
+            # Phenotypes only for gene-based queries
+            if not has_regions:
+                content = generate_phenotype_tsv(db, features)
             filename_base = "phenotypes"
 
         elif data_type == DataType.ORTHOLOG:
-            content = generate_ortholog_tsv(db, features)
+            # Orthologs only for gene-based queries
+            if not has_regions:
+                content = generate_ortholog_tsv(db, features)
             filename_base = "orthologs"
 
         if content:
