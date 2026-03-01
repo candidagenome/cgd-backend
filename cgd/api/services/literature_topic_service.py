@@ -205,8 +205,10 @@ def search_by_topics(
         .all()
     )
 
-    # Build results grouped by topic
-    results_by_topic: dict[str, TopicReferenceResult] = {}
+    # Build results grouped by topic, then by reference
+    # Structure: topic -> reference_no -> (ref_obj, genes_list)
+    results_by_topic: dict[str, dict[int, tuple]] = {}
+    topic_cv_term_map: dict[str, int] = {}
     all_references: set[int] = set()
     all_genes: set[int] = set()
 
@@ -229,19 +231,18 @@ def search_by_topics(
         if cv_term_no is None:
             continue
 
-        # Initialize topic result if not exists
+        # Track cv_term_no for topic
+        topic_cv_term_map[topic] = cv_term_no
+
+        # Initialize topic dict if not exists
         if topic not in results_by_topic:
-            results_by_topic[topic] = TopicReferenceResult(
-                topic=topic,
-                cv_term_no=cv_term_no,
-                references=[],
-                genes=[],
-            )
+            results_by_topic[topic] = {}
 
-        # Add reference if not already added
-        if ref.reference_no not in all_references:
-            all_references.add(ref.reference_no)
+        # Track unique references
+        all_references.add(ref.reference_no)
 
+        # Initialize reference entry if not exists
+        if ref.reference_no not in results_by_topic[topic]:
             # Get ref URLs if not cached
             if ref.reference_no not in ref_url_cache:
                 ref_urls = (
@@ -254,23 +255,15 @@ def search_by_topics(
 
             links = _build_citation_links(ref, ref_url_cache[ref.reference_no])
 
-            ref_obj = ReferenceForLitTopic(
-                reference_no=ref.reference_no,
-                dbxref_id=ref.dbxref_id,
-                pubmed=ref.pubmed,
-                citation=ref.citation,
-                title=ref.title,
-                year=ref.year,
-                links=links,
-            )
+            results_by_topic[topic][ref.reference_no] = (ref, links, [])
 
-            # Add to topic results
-            results_by_topic[topic].references.append(ref_obj)
+        # Add genes associated with this ref_property to this specific reference
+        ref_genes = results_by_topic[topic][ref.reference_no][2]
+        ref_gene_nos = {g.feature_no for g in ref_genes}
 
-        # Add genes associated with this ref_property
         for rpf in rp.refprop_feat:
             feat = rpf.feature
-            if feat and feat.feature_no not in all_genes:
+            if feat and feat.feature_no not in ref_gene_nos:
                 all_genes.add(feat.feature_no)
                 org = feat.organism
                 organism_name = None
@@ -286,17 +279,39 @@ def search_by_topics(
                     gene_name=feat.gene_name,
                     organism=organism_name,
                 )
+                ref_genes.append(gene_obj)
 
-                # Add to topic results
-                results_by_topic[topic].genes.append(gene_obj)
+    # Build final results
+    results = []
+    for topic in sorted(results_by_topic.keys()):
+        refs_dict = results_by_topic[topic]
+        references = []
 
-    # Sort results
-    results = list(results_by_topic.values())
-    for result in results:
-        result.references.sort(key=lambda r: (-(r.year or 0), r.citation or ''))
-        result.genes.sort(key=lambda g: (g.gene_name or g.feature_name or ''))
+        for ref_no in refs_dict:
+            ref, links, genes = refs_dict[ref_no]
+            # Sort genes
+            genes.sort(key=lambda g: (g.gene_name or g.feature_name or ''))
 
-    results.sort(key=lambda r: r.topic)
+            ref_obj = ReferenceForLitTopic(
+                reference_no=ref.reference_no,
+                dbxref_id=ref.dbxref_id,
+                pubmed=ref.pubmed,
+                citation=ref.citation,
+                title=ref.title,
+                year=ref.year,
+                links=links,
+                genes=genes,
+            )
+            references.append(ref_obj)
+
+        # Sort references by year descending, then citation
+        references.sort(key=lambda r: (-(r.year or 0), r.citation or ''))
+
+        results.append(TopicReferenceResult(
+            topic=topic,
+            cv_term_no=topic_cv_term_map[topic],
+            references=references,
+        ))
 
     return LiteratureTopicSearchResponse(
         query=LiteratureTopicSearchQuery(

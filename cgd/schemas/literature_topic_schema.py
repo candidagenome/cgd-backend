@@ -36,7 +36,7 @@ class GeneForLitTopic(BaseModel):
 
 
 class ReferenceForLitTopic(BaseModel):
-    """Reference with topic-gene associations."""
+    """Reference with its associated genes for a specific topic."""
     reference_no: int
     dbxref_id: typing.Optional[str] = None
     pubmed: typing.Optional[int] = None
@@ -44,14 +44,14 @@ class ReferenceForLitTopic(BaseModel):
     title: typing.Optional[str] = None
     year: typing.Optional[int] = None
     links: list[CitationLinkForLitTopic] = []
+    genes: list[GeneForLitTopic] = []  # Genes associated with this reference for this topic
 
 
 class TopicReferenceResult(BaseModel):
-    """A topic with its associated references and genes."""
+    """A topic with its associated references (each with their own genes)."""
     topic: str
     cv_term_no: int
     references: list[ReferenceForLitTopic]
-    genes: list[GeneForLitTopic]
 
 
 class LiteratureTopicSearchQuery(BaseModel):
