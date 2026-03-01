@@ -54,7 +54,7 @@ def get_new_papers_this_week(
 def get_genome_wide_analysis_papers(
     topic: str = Query(None, description="Filter by specific genome-wide topic"),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
+    page_size: int = Query(50, ge=1, le=1000, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
@@ -82,7 +82,7 @@ def get_references_with_datasets(db: Session = Depends(get_db)):
 def get_disease_related_papers(
     topic: str = Query(None, description="Filter by specific disease topic"),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
+    page_size: int = Query(50, ge=1, le=1000, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
