@@ -149,25 +149,15 @@ def search_phenotypes(
         .filter(func.lower(Feature.feature_type) != 'allele')
     )
 
-    # General keyword search - searches across multiple fields
+    # General keyword search - searches observable and qualifier
     if query:
         query_pattern = f"%{query.replace('*', '%')}%"
-        # Need to join experiment properties for chemical/condition search
-        db_query = db_query.outerjoin(
-            Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no
-        ).outerjoin(
-            ExptExptprop, Experiment.experiment_no == ExptExptprop.experiment_no
-        ).outerjoin(
-            ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
-        )
         db_query = db_query.filter(
             or_(
                 func.upper(Phenotype.observable).like(func.upper(query_pattern)),
                 func.upper(Phenotype.qualifier).like(func.upper(query_pattern)),
-                func.upper(Experiment.experiment_comment).like(func.upper(query_pattern)),
-                func.upper(ExptProperty.property_value).like(func.upper(query_pattern)),
             )
-        ).distinct()
+        )
 
     # Apply specific filters
     if observable:
@@ -202,15 +192,12 @@ def search_phenotypes(
     # Property value (chemical/condition) search
     if property_value:
         prop_pattern = f"%{property_value.replace('*', '%')}%"
-        # Join experiment properties if not already joined
-        if not query:
-            db_query = db_query.outerjoin(
-                Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no
-            ).outerjoin(
-                ExptExptprop, Experiment.experiment_no == ExptExptprop.experiment_no
-            ).outerjoin(
-                ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
-            )
+        # Join experiment properties
+        db_query = db_query.outerjoin(
+            ExptExptprop, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no
+        ).outerjoin(
+            ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
+        )
         prop_filter = func.upper(ExptProperty.property_value).like(func.upper(prop_pattern))
         if property_type:
             prop_filter = prop_filter & (func.upper(ExptProperty.property_type) == func.upper(property_type))
