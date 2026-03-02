@@ -14,8 +14,11 @@ from cgd.schemas.phenotype_schema import (
     PhenotypeSearchResponse,
     PhenotypeSearchResult,
     PhenotypeSearchQuery,
+    PhenotypeSearchSummaryResponse,
+    PhenotypeMatchGroup,
     ReferenceForAnnotation,
     CitationLinkForPhenotype,
+    SearchResultDetail,
     ObservableTreeResponse,
     ObservableTerm,
 )
@@ -103,10 +106,15 @@ def _build_citation_links_for_phenotype(ref, ref_urls=None) -> list[CitationLink
 
 def search_phenotypes(
     db: Session,
+    query: Optional[str] = None,
     observable: Optional[str] = None,
     qualifier: Optional[str] = None,
     experiment_type: Optional[str] = None,
     mutant_type: Optional[str] = None,
+    property_value: Optional[str] = None,
+    property_type: Optional[str] = None,
+    pubmed: Optional[str] = None,
+    organism: Optional[str] = None,
     page: int = 1,
     limit: int = 25,
 ) -> PhenotypeSearchResponse:
@@ -115,10 +123,15 @@ def search_phenotypes(
 
     Args:
         db: Database session
+        query: General keyword search across multiple fields
         observable: Observable term to search for (supports wildcards with *)
         qualifier: Qualifier filter
         experiment_type: Experiment type filter
         mutant_type: Mutant type filter
+        property_value: Chemical/condition value search
+        property_type: Property type filter
+        pubmed: PubMed ID search
+        organism: Organism abbreviation filter
         page: Page number (1-indexed)
         limit: Results per page
 
@@ -126,7 +139,7 @@ def search_phenotypes(
         PhenotypeSearchResponse with paginated results
     """
     # Build base query joining PhenoAnnotation with related tables
-    query = (
+    db_query = (
         db.query(PhenoAnnotation)
         .join(PhenoAnnotation.phenotype)
         .join(PhenoAnnotation.feature)
@@ -139,45 +152,85 @@ def search_phenotypes(
         .filter(func.lower(Feature.feature_type) != 'allele')
     )
 
-    # Apply filters
+    # General keyword search - searches observable and qualifier
+    if query:
+        query_pattern = f"%{query.replace('*', '%')}%"
+        db_query = db_query.filter(
+            or_(
+                func.upper(Phenotype.observable).like(func.upper(query_pattern)),
+                func.upper(Phenotype.qualifier).like(func.upper(query_pattern)),
+            )
+        )
+
+    # Apply specific filters
     if observable:
         # Support wildcard search with * -> %
         observable_pattern = observable.replace('*', '%')
         if '%' in observable_pattern:
-            query = query.filter(func.upper(Phenotype.observable).like(func.upper(observable_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.observable).like(func.upper(observable_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.observable) == func.upper(observable))
+            db_query = db_query.filter(func.upper(Phenotype.observable) == func.upper(observable))
 
     if qualifier:
         qualifier_pattern = qualifier.replace('*', '%')
         if '%' in qualifier_pattern:
-            query = query.filter(func.upper(Phenotype.qualifier).like(func.upper(qualifier_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.qualifier).like(func.upper(qualifier_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.qualifier) == func.upper(qualifier))
+            db_query = db_query.filter(func.upper(Phenotype.qualifier) == func.upper(qualifier))
 
     if experiment_type:
         exp_pattern = experiment_type.replace('*', '%')
         if '%' in exp_pattern:
-            query = query.filter(func.upper(Phenotype.experiment_type).like(func.upper(exp_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.experiment_type).like(func.upper(exp_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.experiment_type) == func.upper(experiment_type))
+            db_query = db_query.filter(func.upper(Phenotype.experiment_type) == func.upper(experiment_type))
 
     if mutant_type:
         mut_pattern = mutant_type.replace('*', '%')
         if '%' in mut_pattern:
-            query = query.filter(func.upper(Phenotype.mutant_type).like(func.upper(mut_pattern)))
+            db_query = db_query.filter(func.upper(Phenotype.mutant_type).like(func.upper(mut_pattern)))
         else:
-            query = query.filter(func.upper(Phenotype.mutant_type) == func.upper(mutant_type))
+            db_query = db_query.filter(func.upper(Phenotype.mutant_type) == func.upper(mutant_type))
+
+    # Property value (chemical/condition) search
+    if property_value:
+        prop_pattern = f"%{property_value.replace('*', '%')}%"
+        # Join experiment properties
+        db_query = db_query.outerjoin(
+            ExptExptprop, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no
+        ).outerjoin(
+            ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no
+        )
+        prop_filter = func.upper(ExptProperty.property_value).like(func.upper(prop_pattern))
+        if property_type:
+            prop_filter = prop_filter & (func.upper(ExptProperty.property_type) == func.upper(property_type))
+        db_query = db_query.filter(prop_filter).distinct()
+
+    # Organism filter
+    if organism:
+        db_query = db_query.filter(func.upper(Organism.organism_abbrev) == func.upper(organism))
+
+    # PubMed filter - need to join references
+    if pubmed:
+        db_query = db_query.join(
+            RefLink,
+            (RefLink.tab_name == "PHENO_ANNOTATION") & (RefLink.primary_key == PhenoAnnotation.pheno_annotation_no)
+        ).join(
+            Reference, RefLink.reference_no == Reference.reference_no
+        ).filter(Reference.pubmed == pubmed)
 
     # Get total count before pagination
-    total_count = query.count()
+    total_count = db_query.count()
 
     # Apply pagination
     offset = (page - 1) * limit
-    annotations = query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
+    annotations = db_query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
 
-    # Collect pheno_annotation_nos for reference loading
+    # Collect pheno_annotation_nos and experiment_nos for batch loading
     pheno_annotation_nos = [pa.pheno_annotation_no for pa in annotations]
+    # Use pa.experiment_no (column) directly instead of pa.experiment (relationship)
+    # to avoid issues with joinedload not working correctly with outer joins
+    experiment_nos = [pa.experiment_no for pa in annotations if pa.experiment_no]
 
     # Load references in batch
     ref_link_map: dict[int, list] = {}
@@ -217,27 +270,41 @@ def search_phenotypes(
                     ref_url_map[ref_url.reference_no] = []
                 ref_url_map[ref_url.reference_no].append(ref_url)
 
+    # Batch load all experiment properties
+    strain_map: dict[int, str] = {}
+    details_map: dict[int, list] = defaultdict(list)
+    if experiment_nos:
+        expt_props = (
+            db.query(ExptExptprop.experiment_no, ExptProperty.property_type, ExptProperty.property_value)
+            .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+            .filter(ExptExptprop.experiment_no.in_(experiment_nos))
+            .all()
+        )
+        for exp_no, prop_type, prop_value in expt_props:
+            if prop_type == 'strain_background':
+                strain_map[exp_no] = prop_value
+            elif prop_type in ('Condition', 'Chemical_pending', 'chebi_ontology', 'Details',
+                               'Reporter', 'Numerical_value', 'Allele'):
+                # Map internal types to display types
+                display_type = prop_type
+                if prop_type == 'Chemical_pending' or prop_type == 'chebi_ontology':
+                    display_type = 'Chemical'
+                elif prop_type == 'Numerical_value':
+                    display_type = 'Details'
+                details_map[exp_no].append((display_type, prop_value))
+
     # Build results
     results = []
     for pa in annotations:
         phenotype = pa.phenotype
         feature = pa.feature
-        organism = feature.organism
+        feature_organism = feature.organism
         experiment = pa.experiment
 
-        # Get strain from experiment properties
+        # Get strain from batch-loaded map (use experiment_no column directly)
         strain = None
-        if experiment:
-            expt_props = (
-                db.query(ExptProperty)
-                .join(ExptExptprop, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
-                .filter(ExptExptprop.experiment_no == experiment.experiment_no)
-                .all()
-            )
-            for prop in expt_props:
-                if prop.property_type == 'strain_background':
-                    strain = prop.property_value
-                    break
+        if pa.experiment_no:
+            strain = strain_map.get(pa.experiment_no)
 
         # Build references
         references = []
@@ -256,30 +323,145 @@ def search_phenotypes(
                     links=_build_citation_links_for_phenotype(ref, ref_urls),
                 ))
 
+        # Build details list (use experiment_no column directly)
+        details = []
+        if pa.experiment_no:
+            for prop_type, prop_value in details_map.get(pa.experiment_no, []):
+                details.append(SearchResultDetail(property_type=prop_type, property_value=prop_value))
+
         results.append(PhenotypeSearchResult(
             feature_name=feature.feature_name,
             gene_name=feature.gene_name,
-            organism=organism.organism_name if organism else "Unknown",
+            organism=feature_organism.organism_name if feature_organism else "Unknown",
             observable=phenotype.observable,
             qualifier=phenotype.qualifier,
             experiment_type=phenotype.experiment_type,
             mutant_type=phenotype.mutant_type,
             experiment_comment=experiment.experiment_comment if experiment else None,
             strain=strain,
+            details=details,
             references=references,
         ))
 
     return PhenotypeSearchResponse(
         query=PhenotypeSearchQuery(
+            query=query,
             observable=observable,
             qualifier=qualifier,
             experiment_type=experiment_type,
             mutant_type=mutant_type,
+            property_value=property_value,
+            property_type=property_type,
+            pubmed=pubmed,
+            organism=organism,
         ),
         total_results=total_count,
         page=page,
         limit=limit,
         results=results,
+    )
+
+
+def search_phenotypes_summary(
+    db: Session,
+    query: Optional[str] = None,
+) -> PhenotypeSearchSummaryResponse:
+    """
+    Get summary of phenotype search results grouped by observable.
+
+    Args:
+        db: Database session
+        query: Keyword to search for
+
+    Returns:
+        PhenotypeSearchSummaryResponse with counts grouped by observable
+    """
+    if not query:
+        return PhenotypeSearchSummaryResponse(
+            query="",
+            total_results=0,
+            direct_matches=[],
+            related_matches=[],
+        )
+
+    query_pattern = f"%{query.replace('*', '%')}%"
+
+    # Get counts for observables that directly match the query (in observable name)
+    direct_matches_query = (
+        db.query(
+            Phenotype.observable,
+            func.count(PhenoAnnotation.pheno_annotation_no).label('count')
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(func.upper(Phenotype.observable).like(func.upper(query_pattern)))
+        .group_by(Phenotype.observable)
+        .order_by(func.count(PhenoAnnotation.pheno_annotation_no).desc())
+        .all()
+    )
+
+    direct_matches = [
+        PhenotypeMatchGroup(observable=obs, count=cnt, is_direct_match=True)
+        for obs, cnt in direct_matches_query
+    ]
+
+    # Get counts for observables matched via qualifier, experiment comment, or properties (related matches)
+    # First, get annotations that match in qualifier or experiment comment
+    related_via_qualifier_comment = (
+        db.query(
+            Phenotype.observable,
+            PhenoAnnotation.pheno_annotation_no
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .outerjoin(Experiment, PhenoAnnotation.experiment_no == Experiment.experiment_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(~func.upper(Phenotype.observable).like(func.upper(query_pattern)))  # Exclude direct matches
+        .filter(
+            or_(
+                func.upper(Phenotype.qualifier).like(func.upper(query_pattern)),
+                func.upper(Experiment.experiment_comment).like(func.upper(query_pattern)),
+            )
+        )
+        .all()
+    )
+
+    # Get annotations that match in experiment properties
+    related_via_properties = (
+        db.query(
+            Phenotype.observable,
+            PhenoAnnotation.pheno_annotation_no
+        )
+        .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+        .join(Feature, PhenoAnnotation.feature_no == Feature.feature_no)
+        .join(ExptExptprop, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no)
+        .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(~func.upper(Phenotype.observable).like(func.upper(query_pattern)))  # Exclude direct matches
+        .filter(func.upper(ExptProperty.property_value).like(func.upper(query_pattern)))
+        .all()
+    )
+
+    # Combine and count by observable (use set to avoid duplicates)
+    related_annotation_map: dict[str, set] = defaultdict(set)
+    for obs, pa_no in related_via_qualifier_comment:
+        related_annotation_map[obs].add(pa_no)
+    for obs, pa_no in related_via_properties:
+        related_annotation_map[obs].add(pa_no)
+
+    related_matches = [
+        PhenotypeMatchGroup(observable=obs, count=len(pa_nos), is_direct_match=False)
+        for obs, pa_nos in sorted(related_annotation_map.items(), key=lambda x: -len(x[1]))
+    ]
+
+    total_results = sum(m.count for m in direct_matches) + sum(m.count for m in related_matches)
+
+    return PhenotypeSearchSummaryResponse(
+        query=query,
+        total_results=total_results,
+        direct_matches=direct_matches,
+        related_matches=related_matches,
     )
 
 

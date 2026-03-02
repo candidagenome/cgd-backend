@@ -73,6 +73,12 @@ class PhenotypeDetailsResponse(BaseModel):
 # PHENOTYPE SEARCH SCHEMAS
 # =============================================================================
 
+class SearchResultDetail(BaseModel):
+    """Detail item for phenotype search result (condition, chemical, details, etc.)"""
+    property_type: str  # e.g., "Condition", "Chemical", "Details"
+    property_value: str
+
+
 class PhenotypeSearchResult(BaseModel):
     """Single result from phenotype search"""
     feature_name: str
@@ -84,15 +90,21 @@ class PhenotypeSearchResult(BaseModel):
     mutant_type: typing.Optional[str] = None
     experiment_comment: typing.Optional[str] = None
     strain: typing.Optional[str] = None
+    details: list[SearchResultDetail] = []  # Condition, Chemical, Details, etc.
     references: list[ReferenceForAnnotation] = []
 
 
 class PhenotypeSearchQuery(BaseModel):
     """Search parameters used in the query"""
+    query: typing.Optional[str] = None
     observable: typing.Optional[str] = None
     qualifier: typing.Optional[str] = None
     experiment_type: typing.Optional[str] = None
     mutant_type: typing.Optional[str] = None
+    property_value: typing.Optional[str] = None
+    property_type: typing.Optional[str] = None
+    pubmed: typing.Optional[str] = None
+    organism: typing.Optional[str] = None
 
 
 class PhenotypeSearchResponse(BaseModel):
@@ -102,6 +114,21 @@ class PhenotypeSearchResponse(BaseModel):
     page: int
     limit: int
     results: list[PhenotypeSearchResult]
+
+
+class PhenotypeMatchGroup(BaseModel):
+    """Group of phenotype matches for a specific observable"""
+    observable: str
+    count: int
+    is_direct_match: bool = True  # True if observable directly matches query
+
+
+class PhenotypeSearchSummaryResponse(BaseModel):
+    """Summary response from phenotype search grouped by observable"""
+    query: str
+    total_results: int
+    direct_matches: list[PhenotypeMatchGroup]  # Observables that directly match the query
+    related_matches: list[PhenotypeMatchGroup]  # Observables matched via qualifier/chemical/etc
 
 
 # =============================================================================

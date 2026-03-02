@@ -220,3 +220,23 @@ class GenomeWideAnalysisPapersResponse(BaseModel):
     page_size: int
     total_pages: int
     references: list[GenomeWideAnalysisPaper]
+
+
+# --- Datasets (References with archived data) ---
+
+class DatasetReferenceItem(BaseModel):
+    """A reference item with archived dataset."""
+    reference_no: int
+    dbxref_id: str
+    pubmed: typing.Optional[int] = None
+    citation: str
+    year: int
+    data_url: typing.Optional[str] = None  # URL to the dataset
+    links: list[CitationLink] = []
+
+
+class DatasetsResponse(BaseModel):
+    """Response for references with archived datasets."""
+    years: list[int]  # Available years for navigation
+    total_count: int
+    references: list[DatasetReferenceItem]

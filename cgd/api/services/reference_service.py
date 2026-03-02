@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
 
+from collections import defaultdict
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 
@@ -27,6 +30,8 @@ from cgd.schemas.reference_schema import (
     GenomeWideAnalysisPapersResponse,
     GenomeWideAnalysisPaper,
     GeneForPaper,
+    DatasetsResponse,
+    DatasetReferenceItem,
 )
 from cgd.models.models import (
     Reference,
@@ -744,6 +749,195 @@ GENOME_WIDE_TOPICS = [
     "Other large-scale proteomic analysis",
 ]
 
+DISEASE_TOPICS = [
+    # Parent category
+    "Disease",
+    # Child topics under Disease
+    "Cancer",
+    "Candidemia",
+    "Chronic disseminated candidiasis",
+    "Dental caries",
+    "Denture stomatitis",
+    "Dermal candidiasis",
+    "Esophageal candidiasis",
+    "Familial candidiasis",
+    "Fungal myositis",
+    "Gastrointestinal candidiasis",
+    "Immunodeficiency 103 fungal infection",
+    "Invasive candidiasis",
+    "Mucocutaneous candidiasis",
+    "Ocular candidiasis",
+    "Onychomycosis",
+    "Oral candidiasis",
+    "Oropharyngeal candidiasis",
+    "Urinary tract candidiasis",
+    "Vaginal candidiasis",
+    "Vulvovaginal candidiasis",
+    # Disease Gene Related (under Related Genes/Proteins)
+    "Disease Gene Related",
+]
+
+
+def _get_papers_by_topics(
+    db: Session,
+    available_topics: list,
+    filter_topics: list,
+    selected_topic: str = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> GenomeWideAnalysisPapersResponse:
+    """
+    Get references tagged with specific literature topics using batch queries.
+
+    This helper function avoids the N+1 query problem by fetching all related
+    data (topics, species, genes, URLs) in batch queries instead of per-reference.
+
+    Args:
+        db: Database session
+        available_topics: All topics available for filtering (for response)
+        filter_topics: Topics to filter references by
+        selected_topic: Currently selected topic filter (for response)
+        page: Page number (1-indexed)
+        page_size: Number of results per page
+
+    Returns:
+        GenomeWideAnalysisPapersResponse with list of papers
+    """
+    # Get total count
+    total_count = (
+        db.query(Reference.reference_no)
+        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+        .filter(RefProperty.property_value.in_(filter_topics))
+        .distinct()
+        .count()
+    )
+
+    # Calculate pagination
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    offset = (page - 1) * page_size
+
+    # Query reference numbers with pagination
+    ref_nos = (
+        db.query(Reference.reference_no)
+        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+        .filter(RefProperty.property_value.in_(filter_topics))
+        .distinct()
+        .order_by(Reference.reference_no.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    ref_no_list = [r[0] for r in ref_nos]
+
+    if not ref_no_list:
+        return GenomeWideAnalysisPapersResponse(
+            available_topics=available_topics,
+            selected_topic=selected_topic,
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            references=[],
+        )
+
+    # Fetch full reference data
+    refs = (
+        db.query(Reference)
+        .filter(Reference.reference_no.in_(ref_no_list))
+        .order_by(Reference.year.desc(), Reference.citation)
+        .all()
+    )
+
+    # Batch query 1: Get all topics for all references
+    topics_query = (
+        db.query(RefProperty.reference_no, RefProperty.property_value)
+        .filter(
+            RefProperty.reference_no.in_(ref_no_list),
+            RefProperty.property_value.in_(available_topics),
+        )
+        .distinct()
+        .all()
+    )
+    topics_by_ref = defaultdict(list)
+    for ref_no, topic_value in topics_query:
+        topics_by_ref[ref_no].append(topic_value)
+
+    # Batch query 2: Get all species for all references
+    species_query = (
+        db.query(RefProperty.reference_no, Organism.organism_name)
+        .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+        .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(RefProperty.reference_no.in_(ref_no_list))
+        .distinct()
+        .all()
+    )
+    species_by_ref = defaultdict(list)
+    for ref_no, organism_name in species_query:
+        if organism_name and organism_name not in species_by_ref[ref_no]:
+            species_by_ref[ref_no].append(organism_name)
+
+    # Batch query 3: Get all genes for all references
+    # We fetch all genes and limit to 10 per reference in Python
+    genes_query = (
+        db.query(
+            RefProperty.reference_no,
+            Feature.feature_name,
+            Feature.gene_name,
+        )
+        .join(RefpropFeat, RefProperty.ref_property_no == RefpropFeat.ref_property_no)
+        .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+        .filter(RefProperty.reference_no.in_(ref_no_list))
+        .distinct()
+        .all()
+    )
+    genes_by_ref = defaultdict(list)
+    for ref_no, feature_name, gene_name in genes_query:
+        if len(genes_by_ref[ref_no]) < 10:
+            genes_by_ref[ref_no].append(
+                GeneForPaper(feature_name=feature_name, gene_name=gene_name)
+            )
+
+    # Batch query 4: Get all URLs for all references
+    urls_query = (
+        db.query(RefUrl.reference_no, RefUrl, Url)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(RefUrl.reference_no.in_(ref_no_list))
+        .all()
+    )
+    urls_by_ref = defaultdict(list)
+    for ref_no, ref_url_obj, url_obj in urls_query:
+        if url_obj and url_obj.url:
+            ref_url_obj.url = url_obj
+            urls_by_ref[ref_no].append(ref_url_obj)
+
+    # Build response
+    references = []
+    for ref in refs:
+        links = _build_citation_links(ref, urls_by_ref.get(ref.reference_no, []))
+
+        references.append(GenomeWideAnalysisPaper(
+            reference_no=ref.reference_no,
+            dbxref_id=ref.dbxref_id,
+            pubmed=ref.pubmed,
+            citation=ref.citation,
+            year=ref.year,
+            topics=topics_by_ref.get(ref.reference_no, []),
+            species=species_by_ref.get(ref.reference_no, []),
+            genes=genes_by_ref.get(ref.reference_no, []),
+            links=links,
+        ))
+
+    return GenomeWideAnalysisPapersResponse(
+        available_topics=available_topics,
+        selected_topic=selected_topic,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        references=references,
+    )
+
 
 def get_genome_wide_analysis_papers(
     db: Session,
@@ -763,123 +957,116 @@ def get_genome_wide_analysis_papers(
     Returns:
         GenomeWideAnalysisPapersResponse with list of genome-wide analysis papers
     """
-    # Determine which topics to filter by
     if topic and topic in GENOME_WIDE_TOPICS:
         filter_topics = [topic]
     else:
         filter_topics = GENOME_WIDE_TOPICS
-        topic = None  # Reset to None if invalid
+        topic = None
 
-    # Get total count first
-    total_count = (
-        db.query(Reference.reference_no)
-        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-        .filter(RefProperty.property_value.in_(filter_topics))
-        .distinct()
-        .count()
+    return _get_papers_by_topics(
+        db=db,
+        available_topics=GENOME_WIDE_TOPICS,
+        filter_topics=filter_topics,
+        selected_topic=topic,
+        page=page,
+        page_size=page_size,
     )
 
-    # Calculate pagination
-    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
-    offset = (page - 1) * page_size
 
-    # Query references with pagination
-    ref_nos = (
-        db.query(Reference.reference_no)
-        .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
-        .filter(RefProperty.property_value.in_(filter_topics))
-        .distinct()
-        .order_by(Reference.reference_no.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
+def get_disease_related_papers(
+    db: Session,
+    topic: str = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> GenomeWideAnalysisPapersResponse:
+    """
+    Get references tagged with disease-related literature topics.
+
+    Args:
+        db: Database session
+        topic: Optional specific topic to filter by
+        page: Page number (1-indexed)
+        page_size: Number of results per page
+
+    Returns:
+        GenomeWideAnalysisPapersResponse with list of disease-related papers
+    """
+    if topic and topic in DISEASE_TOPICS:
+        filter_topics = [topic]
+    else:
+        filter_topics = DISEASE_TOPICS
+        topic = None
+
+    return _get_papers_by_topics(
+        db=db,
+        available_topics=DISEASE_TOPICS,
+        filter_topics=filter_topics,
+        selected_topic=topic,
+        page=page,
+        page_size=page_size,
     )
-    ref_no_list = [r[0] for r in ref_nos]
 
-    # Fetch full reference data
-    refs = (
-        db.query(Reference)
-        .filter(Reference.reference_no.in_(ref_no_list))
-        .order_by(Reference.year.desc(), Reference.citation)
+
+def get_references_with_datasets(db: Session) -> DatasetsResponse:
+    """
+    Get references that have archived datasets (url_type = 'Reference Data').
+
+    Returns references grouped by year in descending order, with links to
+    the dataset files.
+    """
+    # Query references that have a URL with type 'Reference Data'
+    results = (
+        db.query(Reference, Url.url)
+        .join(RefUrl, Reference.reference_no == RefUrl.reference_no)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(Url.url_type == 'Reference Data')
+        .order_by(Reference.year.desc(), Reference.citation.asc())
         .all()
     )
 
     # Build response
     references = []
-    for ref in refs:
-        # Get literature topics for this reference (only genome-wide ones)
-        ref_topics = (
-            db.query(RefProperty.property_value)
-            .filter(
-                RefProperty.reference_no == ref.reference_no,
-                RefProperty.property_value.in_(GENOME_WIDE_TOPICS),
-            )
-            .distinct()
-            .all()
-        )
-        paper_topics = [t[0] for t in ref_topics]
+    years_set = set()
 
-        # Get species from organisms of features linked to this reference
-        species_query = (
-            db.query(Organism.organism_name)
-            .join(Feature, Organism.organism_no == Feature.organism_no)
-            .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
-            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
-            .filter(RefProperty.reference_no == ref.reference_no)
-            .distinct()
-            .all()
-        )
-        species = [s[0] for s in species_query]
+    for ref, data_url in results:
+        years_set.add(ref.year)
 
-        # Get genes addressed via refprop_feat
-        genes_query = (
-            db.query(Feature.feature_name, Feature.gene_name)
-            .join(RefpropFeat, Feature.feature_no == RefpropFeat.feature_no)
-            .join(RefProperty, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
-            .filter(RefProperty.reference_no == ref.reference_no)
-            .distinct()
-            .limit(10)  # Limit to avoid huge lists
-            .all()
-        )
-        genes = [
-            GeneForPaper(feature_name=fn, gene_name=gn)
-            for fn, gn in genes_query
-        ]
+        # Build citation links
+        links = []
+        if ref.dbxref_id:
+            links.append(CitationLink(
+                name='CGD Paper',
+                url=f'/reference/{ref.dbxref_id}',
+                link_type='internal',
+            ))
+        if ref.pubmed:
+            links.append(CitationLink(
+                name='PubMed',
+                url=f'https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}',
+                link_type='external',
+            ))
+        if data_url:
+            links.append(CitationLink(
+                name='Reference Data',
+                url=data_url,
+                link_type='external',
+            ))
 
-        # Get URLs for citation links
-        ref_url_records = (
-            db.query(RefUrl, Url)
-            .join(Url, RefUrl.url_no == Url.url_no)
-            .filter(RefUrl.reference_no == ref.reference_no)
-            .all()
-        )
-
-        ref_url_list = []
-        for ref_url_obj, url_obj in ref_url_records:
-            if url_obj and url_obj.url:
-                ref_url_obj.url = url_obj
-                ref_url_list.append(ref_url_obj)
-
-        links = _build_citation_links(ref, ref_url_list)
-
-        references.append(GenomeWideAnalysisPaper(
+        references.append(DatasetReferenceItem(
             reference_no=ref.reference_no,
             dbxref_id=ref.dbxref_id,
             pubmed=ref.pubmed,
             citation=ref.citation,
             year=ref.year,
-            topics=paper_topics,
-            species=species,
-            genes=genes,
+            data_url=data_url,
             links=links,
         ))
 
-    return GenomeWideAnalysisPapersResponse(
-        available_topics=GENOME_WIDE_TOPICS,
-        selected_topic=topic,
-        total_count=total_count,
-        page=page,
-        page_size=page_size,
-        total_pages=total_pages,
+    # Sort years descending for the navigation bar
+    years = sorted(years_set, reverse=True)
+
+    return DatasetsResponse(
+        years=years,
+        total_count=len(references),
         references=references,
     )

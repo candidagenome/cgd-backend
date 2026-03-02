@@ -12,6 +12,7 @@ from cgd.schemas.reference_schema import (
     AuthorSearchResponse,
     NewPapersThisWeekResponse,
     GenomeWideAnalysisPapersResponse,
+    DatasetsResponse,
 )
 
 router = APIRouter(prefix="/api/reference", tags=["reference"])
@@ -53,7 +54,7 @@ def get_new_papers_this_week(
 def get_genome_wide_analysis_papers(
     topic: str = Query(None, description="Filter by specific genome-wide topic"),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
+    page_size: int = Query(50, ge=1, le=1000, description="Results per page"),
     db: Session = Depends(get_db),
 ):
     """
@@ -64,6 +65,33 @@ def get_genome_wide_analysis_papers(
     and pagination.
     """
     return reference_service.get_genome_wide_analysis_papers(db, topic, page, page_size)
+
+
+@router.get("/datasets", response_model=DatasetsResponse)
+def get_references_with_datasets(db: Session = Depends(get_db)):
+    """
+    Get references that have archived datasets.
+
+    Returns references with 'Reference Data' URLs, grouped by year
+    in descending order. Used for the Datasets page.
+    """
+    return reference_service.get_references_with_datasets(db)
+
+
+@router.get("/disease-related", response_model=GenomeWideAnalysisPapersResponse)
+def get_disease_related_papers(
+    topic: str = Query(None, description="Filter by specific disease topic"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=1000, description="Results per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get references tagged as disease-related papers.
+
+    Returns papers with disease-related topics including human disease
+    and virulence. Supports filtering by specific topic and pagination.
+    """
+    return reference_service.get_disease_related_papers(db, topic, page, page_size)
 
 
 @router.get("/{identifier}", response_model=ReferenceResponse)
