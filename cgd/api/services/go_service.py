@@ -33,6 +33,7 @@ from cgd.models.models import (
     GoQualifier,
     GoPath,
     Feature,
+    FeatRelationship,
     RefUrl,
     Code,
     Seq,
@@ -95,6 +96,38 @@ def _get_organism_name(feature: Feature) -> str:
             or str(feature.organism_no)
         )
     return str(feature.organism_no)
+
+
+def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
+    """
+    Identify Assembly 21 features that have Assembly 22 equivalents.
+
+    In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
+    Assembly 22 (C7_XXXXX_A) feature records. We prefer Assembly 22.
+
+    Args:
+        db: Database session
+        feature_nos: Set of feature_no values to check
+
+    Returns:
+        Set of feature_no values that are Assembly 21 versions with
+        Assembly 22 equivalents (these should be excluded from results)
+    """
+    if not feature_nos:
+        return set()
+
+    # Find Assembly 21 features that have Assembly 22 parents
+    a21_relationships = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.child_feature_no.in_(feature_nos),
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .all()
+    )
+
+    return {rel[0] for rel in a21_relationships}
 
 
 def _normalize_annotation_type(db_type: str) -> str:
@@ -240,20 +273,22 @@ def get_go_term_info(
     )
 
     # Query all annotations for this GO term with eager loading
-    # Only include genes on the current assembly (Assembly 22 for C. albicans SC5314)
     annotations = (
         db.query(GoAnnotation)
-        .join(Feature, GoAnnotation.feature_no == Feature.feature_no)
-        .join(Seq, Seq.feature_no == Feature.feature_no)
         .options(
             joinedload(GoAnnotation.feature).joinedload(Feature.organism),
             joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
             joinedload(GoAnnotation.go_ref).joinedload(GoRef.go_qualifier),
         )
         .filter(GoAnnotation.go_no == go_term.go_no)
-        .filter(Seq.is_seq_current == 'Y')
         .all()
     )
+
+    # Filter out Assembly 21 features that have Assembly 22 equivalents
+    # to only show genes on Assembly 22 for C. albicans SC5314
+    all_feature_nos = {ann.feature_no for ann in annotations if ann.feature}
+    a21_to_exclude = _get_assembly21_feature_nos_to_exclude(db, all_feature_nos)
+    annotations = [ann for ann in annotations if ann.feature_no not in a21_to_exclude]
 
     # Collect all unique reference_no values to query RefUrl
     ref_nos = set()
@@ -606,16 +641,24 @@ def get_go_hierarchy(
 
     # Query annotation counts for all nodes (direct annotations)
     # Count distinct feature_no for each go_no
-    # Only include genes on the current assembly (Assembly 22 for C. albicans SC5314)
+    # Exclude Assembly 21 features that have Assembly 22 equivalents
+    # Use a subquery to find feature_nos to exclude
+    a21_subquery = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .subquery()
+    )
+
     annotation_counts = (
         db.query(
             GoAnnotation.go_no,
             func.count(func.distinct(GoAnnotation.feature_no)).label('gene_count')
         )
-        .join(Feature, GoAnnotation.feature_no == Feature.feature_no)
-        .join(Seq, Seq.feature_no == Feature.feature_no)
         .filter(GoAnnotation.go_no.in_(all_go_nos))
-        .filter(Seq.is_seq_current == 'Y')
+        .filter(~GoAnnotation.feature_no.in_(a21_subquery))
         .group_by(GoAnnotation.go_no)
         .all()
     )
