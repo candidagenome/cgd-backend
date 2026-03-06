@@ -35,6 +35,7 @@ from cgd.models.models import (
     Feature,
     RefUrl,
     Code,
+    Seq,
 )
 
 
@@ -239,14 +240,18 @@ def get_go_term_info(
     )
 
     # Query all annotations for this GO term with eager loading
+    # Only include genes on the current assembly (Assembly 22 for C. albicans SC5314)
     annotations = (
         db.query(GoAnnotation)
+        .join(Feature, GoAnnotation.feature_no == Feature.feature_no)
+        .join(Seq, Seq.feature_no == Feature.feature_no)
         .options(
             joinedload(GoAnnotation.feature).joinedload(Feature.organism),
             joinedload(GoAnnotation.go_ref).joinedload(GoRef.reference),
             joinedload(GoAnnotation.go_ref).joinedload(GoRef.go_qualifier),
         )
         .filter(GoAnnotation.go_no == go_term.go_no)
+        .filter(Seq.is_seq_current == 'Y')
         .all()
     )
 
@@ -601,12 +606,16 @@ def get_go_hierarchy(
 
     # Query annotation counts for all nodes (direct annotations)
     # Count distinct feature_no for each go_no
+    # Only include genes on the current assembly (Assembly 22 for C. albicans SC5314)
     annotation_counts = (
         db.query(
             GoAnnotation.go_no,
             func.count(func.distinct(GoAnnotation.feature_no)).label('gene_count')
         )
+        .join(Feature, GoAnnotation.feature_no == Feature.feature_no)
+        .join(Seq, Seq.feature_no == Feature.feature_no)
         .filter(GoAnnotation.go_no.in_(all_go_nos))
+        .filter(Seq.is_seq_current == 'Y')
         .group_by(GoAnnotation.go_no)
         .all()
     )
