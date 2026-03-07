@@ -65,6 +65,7 @@ LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
+NCBI_API_KEY = os.getenv("NCBI_API_KEY")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 
 # NCBI URLs
@@ -76,6 +77,8 @@ PDF_STATUS_NAP = "NAP"
 
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
+if NCBI_API_KEY:
+    Entrez.api_key = NCBI_API_KEY
 
 # Gene names to avoid using in query (common words that produce false positives)
 IGNORE_WORDS = {

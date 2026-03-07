@@ -49,6 +49,7 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
+NCBI_API_KEY = os.getenv("NCBI_API_KEY")
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 
 # How many days back to search
@@ -56,6 +57,8 @@ RELDATE = 10
 
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
+if NCBI_API_KEY:
+    Entrez.api_key = NCBI_API_KEY
 
 # Configure logging
 logging.basicConfig(
