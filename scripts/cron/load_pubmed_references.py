@@ -46,7 +46,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 # Project root directory (cgd-backend/)
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Add parent directory to path to import cgd modules
 sys.path.insert(0, str(PROJECT_ROOT))
