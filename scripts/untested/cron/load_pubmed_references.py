@@ -45,8 +45,11 @@ from Bio import Entrez, Medline
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
@@ -55,8 +58,8 @@ load_dotenv()
 
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
