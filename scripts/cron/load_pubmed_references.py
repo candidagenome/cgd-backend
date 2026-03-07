@@ -88,6 +88,15 @@ IGNORE_WORDS = {
     }
 }
 
+# Mapping of species abbreviation to seq.source value in database
+SEQ_SOURCE_MAP = {
+    "C_albicans": "C. albicans SC5314 Assembly 22",
+    "C_glabrata": "C. glabrata CBS138",
+    "C_dubliniensis": "C. dubliniensis CD36",
+    "C_parapsilosis": "C. parapsilosis CDC317",
+    "C_auris": "C. auris B8441",
+}
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -226,13 +235,14 @@ class JournalFileParser:
 
     def download(self) -> bool:
         """Download NCBI journal file."""
+        import urllib.request
+
         try:
             logger.info(f"Downloading NCBI journal file from {NCBI_JOURNAL_URL}")
-            response = requests.get(NCBI_JOURNAL_URL, timeout=300)
-            response.raise_for_status()
-
             self.journal_file.parent.mkdir(parents=True, exist_ok=True)
-            self.journal_file.write_text(response.text)
+
+            # Use urllib for FTP (requests doesn't support FTP)
+            urllib.request.urlretrieve(NCBI_JOURNAL_URL, self.journal_file)
 
             logger.info(f"Successfully downloaded journal file to {self.journal_file}")
             return True
@@ -340,21 +350,8 @@ class PubMedLoader:
         self.error_file.flush()
 
     def _get_seq_source(self) -> str | None:
-        """Get sequence source for species."""
-        query = text(f"""
-            SELECT DISTINCT fl.seq_source
-            FROM {DB_SCHEMA}.feat_location fl
-            JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
-            JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
-            WHERE o.organism_abbrev = :species_abbrev
-            AND fl.is_loc_current = 'Y'
-        """)
-
-        result = self.session.execute(
-            query, {"species_abbrev": self.species_abbrev}
-        ).first()
-
-        return result[0] if result else None
+        """Get sequence source for species from mapping."""
+        return SEQ_SOURCE_MAP.get(self.species_abbrev)
 
     def _get_gene_prefix(self) -> str:
         """Get gene prefix for species (e.g., 'Ca' for C. albicans)."""
