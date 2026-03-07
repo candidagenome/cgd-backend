@@ -1548,13 +1548,15 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
 def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     """
     Query GO annotations for each feature matching the locus name,
-    grouped by organism.
+    grouped by organism. Only includes genes on the current assembly
+    (Assembly 22 for C. albicans SC5314).
     """
     from cgd.models.models import GoQualifier, GorefDbxref
 
     n = name.strip()
     features = (
         db.query(Feature)
+        .join(Seq, Seq.feature_no == Feature.feature_no)
         .options(
             joinedload(Feature.organism),
             joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
@@ -1577,6 +1579,7 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
             )
         )
         .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(Seq.is_seq_current == 'Y')
         .all()
     )
 
