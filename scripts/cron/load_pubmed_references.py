@@ -542,14 +542,30 @@ class PubMedLoader:
     def get_ncbi_pmids(self) -> None:
         """Query NCBI PubMed for references by gene names."""
         self.log("Querying NCBI PubMed for references...")
+        logger.info("Querying NCBI PubMed for references...")
+
+        total_features = len(self.query_terms_by_feat)
+        processed = 0
+        query_count = 0
+        error_count = 0
 
         for feature_name, terms in self.query_terms_by_feat.items():
+            processed += 1
+
             if not terms:
                 continue
+
+            # Log progress every 100 features
+            if processed % 100 == 0:
+                msg = (f"Progress: {processed}/{total_features} features processed, "
+                       f"{query_count} queries, {error_count} errors")
+                self.log(msg)
+                logger.info(msg)
 
             for term in terms:
                 # Build query: term AND species
                 query = f'"{term}"[TW] AND ({self.species_query})'
+                query_count += 1
 
                 try:
                     # Search PubMed
@@ -581,11 +597,18 @@ class PubMedLoader:
                         self.ncbi_pmids_by_feat[feature_name].add(pmid)
 
                 except Exception as e:
+                    error_count += 1
                     self.log(f"Error querying PubMed for {term}: {e}")
                     continue
 
         total_pmids = sum(len(pmids) for pmids in self.ncbi_pmids_by_feat.values())
-        self.log(f"Retrieved {total_pmids} PMIDs for {len(self.ncbi_pmids_by_feat)} features")
+        msg1 = (f"Completed: {processed}/{total_features} features, "
+                f"{query_count} queries, {error_count} errors")
+        msg2 = f"Retrieved {total_pmids} PMIDs for {len(self.ncbi_pmids_by_feat)} features"
+        self.log(msg1)
+        self.log(msg2)
+        logger.info(msg1)
+        logger.info(msg2)
 
     def compare_pmids(self) -> None:
         """Compare local and NCBI PubMed IDs to find new references."""
