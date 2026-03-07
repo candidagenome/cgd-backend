@@ -1044,11 +1044,12 @@ class PubMedLoader:
                     # Insert ref_property
                     insert_prop = text(f"""
                         INSERT INTO {DB_SCHEMA}.ref_property
-                        (reference_no, property_type, property_value, created_by)
-                        VALUES (:ref_no, 'curation_status', :status, :user)
+                        (reference_no, source, property_type, property_value, created_by)
+                        VALUES (:ref_no, :source, 'curation_status', :status, :user)
                     """)
                     self.session.execute(insert_prop, {
                         "ref_no": reference_no,
+                        "source": PROJECT_ACRONYM,
                         "status": curation_status,
                         "user": ADMIN_USER
                     })
