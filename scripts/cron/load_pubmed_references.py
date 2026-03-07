@@ -562,44 +562,46 @@ class PubMedLoader:
                 self.log(msg)
                 logger.info(msg)
 
-            for term in terms:
-                # Build query: term AND species
-                query = f'"{term}"[TW] AND ({self.species_query})'
-                query_count += 1
+            # Batch all terms for this feature into ONE query using OR
+            # This is much faster than querying each term separately
+            term_queries = [f'"{term}"[TW]' for term in terms]
+            combined_terms = " OR ".join(term_queries)
+            query = f"({combined_terms}) AND ({self.species_query})"
+            query_count += 1
 
-                try:
-                    # Search PubMed
-                    handle = Entrez.esearch(
-                        db="pubmed",
-                        term=query,
-                        retmax=1000,
-                        usehistory="n"
-                    )
-                    record = Entrez.read(handle)
-                    handle.close()
+            try:
+                # Search PubMed
+                handle = Entrez.esearch(
+                    db="pubmed",
+                    term=query,
+                    retmax=9000,
+                    usehistory="n"
+                )
+                record = Entrez.read(handle)
+                handle.close()
 
-                    pmids = [int(pmid) for pmid in record.get("IdList", [])]
+                pmids = [int(pmid) for pmid in record.get("IdList", [])]
 
-                    # Filter PMIDs
-                    for pmid in pmids:
-                        # Skip curated, bad, temp, or unlinked PMIDs
-                        if pmid in self.curated_pmids:
-                            continue
-                        if pmid in self.bad_pmids:
-                            continue
-                        if pmid in self.temp_pmids:
-                            continue
-                        if pmid in self.unlink_pmids and feature_name in self.unlink_pmids[pmid]:
-                            continue
+                # Filter PMIDs
+                for pmid in pmids:
+                    # Skip curated, bad, temp, or unlinked PMIDs
+                    if pmid in self.curated_pmids:
+                        continue
+                    if pmid in self.bad_pmids:
+                        continue
+                    if pmid in self.temp_pmids:
+                        continue
+                    if pmid in self.unlink_pmids and feature_name in self.unlink_pmids[pmid]:
+                        continue
 
-                        if feature_name not in self.ncbi_pmids_by_feat:
-                            self.ncbi_pmids_by_feat[feature_name] = set()
-                        self.ncbi_pmids_by_feat[feature_name].add(pmid)
+                    if feature_name not in self.ncbi_pmids_by_feat:
+                        self.ncbi_pmids_by_feat[feature_name] = set()
+                    self.ncbi_pmids_by_feat[feature_name].add(pmid)
 
-                except Exception as e:
-                    error_count += 1
-                    self.log(f"Error querying PubMed for {term}: {e}")
-                    continue
+            except Exception as e:
+                error_count += 1
+                self.log(f"Error querying PubMed for {feature_name}: {e}")
+                continue
 
         total_pmids = sum(len(pmids) for pmids in self.ncbi_pmids_by_feat.values())
         msg1 = (f"Completed: {processed}/{total_features} features, "
