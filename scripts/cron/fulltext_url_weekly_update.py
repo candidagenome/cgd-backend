@@ -47,7 +47,7 @@ LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-ADMIN_USER = os.getenv("ADMIN_USER", "ADMIN")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # NCBI E-utilities
 ELINK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi"

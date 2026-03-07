@@ -66,7 +66,7 @@ PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
 NCBI_API_KEY = os.getenv("NCBI_API_KEY")
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # NCBI URLs
 NCBI_JOURNAL_URL = "ftp://ftp.ncbi.nih.gov/pubmed/J_Medline.txt"
