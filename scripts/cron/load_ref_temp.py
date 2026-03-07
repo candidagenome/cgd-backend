@@ -34,13 +34,13 @@ from sqlalchemy import text
 # Project root directory (cgd-backend/)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
