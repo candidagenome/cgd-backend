@@ -236,7 +236,7 @@ class RefTempLoader:
     def is_in_ref_bad(self, pmid: int) -> bool:
         """Check if PMID is in ref_bad table."""
         query = text(f"""
-            SELECT ref_bad_no FROM {DB_SCHEMA}.ref_bad
+            SELECT 1 FROM {DB_SCHEMA}.ref_bad
             WHERE pubmed = :pmid
         """)
         result = self.session.execute(query, {"pmid": pmid}).first()
@@ -245,7 +245,7 @@ class RefTempLoader:
     def is_in_ref_temp(self, pmid: int) -> bool:
         """Check if PMID is already in ref_temp table."""
         query = text(f"""
-            SELECT ref_temp_no FROM {DB_SCHEMA}.ref_temp
+            SELECT 1 FROM {DB_SCHEMA}.ref_temp
             WHERE pubmed = :pmid
         """)
         result = self.session.execute(query, {"pmid": pmid}).first()
