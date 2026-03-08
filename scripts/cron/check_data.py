@@ -176,27 +176,35 @@ class DataChecker:
 
     def check_headline_descriptions(self, strain_abbrev: str, organism_no: int) -> int:
         """Check for features with headline linked to multiple refs including auto-generated."""
-        # This is a complex check - looking for features where headline
-        # is linked to multiple references and one is the auto-generated ref
+        # Reference_no for internal reference: "auto-generated descriptions using orthologs and transferred GO"
+        # CGD: 56824, AspGD: 3444
+        auto_ref_no = 56824  # CGD default
+
+        # Find features where headline is linked to auto-generated ref AND other refs
         query = text(f"""
-            SELECT f.feature_name, COUNT(DISTINCT rfl.reference_no) as ref_count
-            FROM {DB_SCHEMA}.feature f
-            JOIN {DB_SCHEMA}.ref_link rfl ON f.feature_no = rfl.feature_no
-            WHERE f.organism_no = :organism_no
-            AND f.headline IS NOT NULL
-            AND rfl.ref_link_type = 'Headline'
-            GROUP BY f.feature_name
-            HAVING COUNT(DISTINCT rfl.reference_no) > 1
+            SELECT DISTINCT r1.primary_key, f.feature_name, f.headline
+            FROM {DB_SCHEMA}.ref_link r1
+            JOIN {DB_SCHEMA}.ref_link r2 ON r1.primary_key = r2.primary_key
+            JOIN {DB_SCHEMA}.feature f ON r1.primary_key = f.feature_no
+            WHERE r1.tab_name = 'FEATURE'
+            AND r1.col_name = 'HEADLINE'
+            AND r2.tab_name = 'FEATURE'
+            AND r2.col_name = 'HEADLINE'
+            AND r1.reference_no != r2.reference_no
+            AND r1.reference_no = :auto_ref_no
+            AND f.organism_no = :organism_no
         """)
 
-        result = self.session.execute(query, {"organism_no": organism_no})
+        result = self.session.execute(
+            query, {"auto_ref_no": auto_ref_no, "organism_no": organism_no}
+        )
         count = 0
 
         for row in result:
-            feature_name, ref_count = row
+            feature_no, feature_name, headline = row
             self.add_issue(
                 f"Headline Refs ({strain_abbrev})",
-                f"Feature {feature_name} has {ref_count} references linked to headline",
+                f"Feature {feature_name} (feature_no={feature_no}) has auto-generated headline with other refs",
             )
             count += 1
 
