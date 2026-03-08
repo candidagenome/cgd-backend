@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Update ORF classifications (Dubious, Verified, Uncharacterized).
 
@@ -49,19 +51,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 
 # GO evidence codes to exclude when determining "Verified" status
