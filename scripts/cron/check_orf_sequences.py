@@ -70,7 +70,7 @@ def get_orfs_for_strain(session, strain_abbrev: str, assembly_filter: str | None
     Args:
         session: Database session
         strain_abbrev: Strain abbreviation (e.g., C_albicans_SC5314)
-        assembly_filter: Optional filter for seq_source (e.g., 'Assembly 22')
+        assembly_filter: Optional filter for seq.source (e.g., 'Assembly 22')
     """
     # Build base query
     base_query = f"""
@@ -78,7 +78,7 @@ def get_orfs_for_strain(session, strain_abbrev: str, assembly_filter: str | None
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
         JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
-        JOIN {DB_SCHEMA}.sequence s ON fl.seq_no = s.seq_no
+        JOIN {DB_SCHEMA}.seq s ON fl.seq_no = s.seq_no
         WHERE f.feature_type = 'ORF'
         AND o.organism_abbrev = :abbrev
         AND fl.seq_no IS NOT NULL
@@ -90,7 +90,7 @@ def get_orfs_for_strain(session, strain_abbrev: str, assembly_filter: str | None
 
     # Add assembly filter if provided
     if assembly_filter:
-        base_query += " AND s.seq_source LIKE :assembly_filter"
+        base_query += " AND s.source LIKE :assembly_filter"
 
     query = text(base_query)
     params = {"abbrev": strain_abbrev}
