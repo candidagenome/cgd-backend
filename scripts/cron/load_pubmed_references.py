@@ -1026,6 +1026,9 @@ class PubMedLoader:
         result = self.session.execute(query)
         ref_no_by_pmid = {row[0]: row[1] for row in result}
 
+        # Track which ref_property records we've already created
+        ref_property_by_ref_no: dict[int, int] = {}
+
         for feature_name, pmids in self.new_ncbi_obj_pmids.items():
             feature_no = self.feature_no_by_name.get(feature_name)
             if not feature_no:
@@ -1041,35 +1044,50 @@ class PubMedLoader:
                     continue
 
                 try:
-                    # Insert ref_property
-                    insert_prop = text(f"""
-                        INSERT INTO {DB_SCHEMA}.ref_property
-                        (reference_no, source, property_type, property_value, created_by)
-                        VALUES (:ref_no, :source, 'curation_status', :status, :user)
-                    """)
-                    self.session.execute(insert_prop, {
-                        "ref_no": reference_no,
-                        "source": PROJECT_ACRONYM,
-                        "status": curation_status,
-                        "user": ADMIN_USER
-                    })
+                    # Check if we already have a ref_property_no for this reference
+                    if reference_no not in ref_property_by_ref_no:
+                        # Check if ref_property already exists in database
+                        query_prop = text(f"""
+                            SELECT ref_property_no
+                            FROM {DB_SCHEMA}.ref_property
+                            WHERE reference_no = :ref_no
+                            AND property_type = 'curation_status'
+                            AND property_value = :status
+                        """)
+                        result = self.session.execute(query_prop, {
+                            "ref_no": reference_no,
+                            "status": curation_status
+                        }).first()
 
-                    # Get ref_property_no
-                    query_prop = text(f"""
-                        SELECT ref_property_no
-                        FROM {DB_SCHEMA}.ref_property
-                        WHERE reference_no = :ref_no
-                        AND property_type = 'curation_status'
-                        AND property_value = :status
-                    """)
-                    result = self.session.execute(query_prop, {
-                        "ref_no": reference_no,
-                        "status": curation_status
-                    }).first()
+                        if result:
+                            # Already exists
+                            ref_property_by_ref_no[reference_no] = result[0]
+                        else:
+                            # Insert new ref_property
+                            insert_prop = text(f"""
+                                INSERT INTO {DB_SCHEMA}.ref_property
+                                (reference_no, source, property_type, property_value, created_by)
+                                VALUES (:ref_no, :source, 'curation_status', :status, :user)
+                            """)
+                            self.session.execute(insert_prop, {
+                                "ref_no": reference_no,
+                                "source": PROJECT_ACRONYM,
+                                "status": curation_status,
+                                "user": ADMIN_USER
+                            })
+                            self.session.commit()
 
-                    if result and self.link_genes:
-                        ref_property_no = result[0]
+                            # Get the new ref_property_no
+                            result = self.session.execute(query_prop, {
+                                "ref_no": reference_no,
+                                "status": curation_status
+                            }).first()
+                            if result:
+                                ref_property_by_ref_no[reference_no] = result[0]
 
+                    ref_property_no = ref_property_by_ref_no.get(reference_no)
+
+                    if ref_property_no and self.link_genes:
                         # Insert refprop_feat
                         insert_feat = text(f"""
                             INSERT INTO {DB_SCHEMA}.refprop_feat
@@ -1081,8 +1099,8 @@ class PubMedLoader:
                             "feat_no": feature_no,
                             "user": ADMIN_USER
                         })
+                        self.session.commit()
 
-                    self.session.commit()
                     self.load_gi_count += 1
                     self.log(f"Loaded curation status for {feature_name} - PMID {pmid}")
 
