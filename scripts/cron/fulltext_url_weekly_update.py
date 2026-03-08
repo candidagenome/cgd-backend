@@ -136,7 +136,10 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
             root = ET.fromstring(response.text)
 
             # Find all IdUrlSet elements - each contains one PMID and its URLs
-            for id_url_set in root.findall(".//IdUrlSet"):
+            id_url_sets = root.findall(".//IdUrlSet")
+            logger.debug(f"Found {len(id_url_sets)} IdUrlSet elements in response")
+
+            for id_url_set in id_url_sets:
                 # Get the PMID for this set
                 id_elem = id_url_set.find("Id")
                 if id_elem is None or not id_elem.text:
@@ -151,25 +154,32 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
                     continue
 
                 # Get all ObjUrl elements for this PMID
-                for obj_url in id_url_set.findall("ObjUrl"):
-                    # Check if this is a full-text link by looking at Attribute elements
-                    is_fulltext = False
-                    for attr in obj_url.findall("Attribute"):
-                        if attr.text and "full-text" in attr.text.lower():
-                            is_fulltext = True
-                            break
+                obj_urls = id_url_set.findall("ObjUrl")
+                for obj_url in obj_urls:
+                    # Get the URL first
+                    url_elem = obj_url.find("Url")
+                    if url_elem is None or not url_elem.text:
+                        continue
+
+                    url = url_elem.text.strip()
+
+                    # Check if this is a full-text link by looking at Category element
+                    # NCBI uses <Category>Full Text Sources</Category> for full text links
+                    category_elem = obj_url.find("Category")
+                    is_fulltext = (
+                        category_elem is not None
+                        and category_elem.text
+                        and "full text" in category_elem.text.lower()
+                    )
 
                     if not is_fulltext:
                         continue
 
-                    # Get the URL
-                    url_elem = obj_url.find("Url")
-                    if url_elem is not None and url_elem.text:
-                        url = url_elem.text.strip()
-                        # Filter for known full text providers
-                        if _is_fulltext_url(url):
-                            if url not in urls_by_pmid[pmid]:  # Avoid duplicates
-                                urls_by_pmid[pmid].append(url)
+                    # Filter for known full text providers
+                    if _is_fulltext_url(url):
+                        if url not in urls_by_pmid[pmid]:  # Avoid duplicates
+                            urls_by_pmid[pmid].append(url)
+                            logger.debug(f"Found fulltext URL for PMID {pmid}: {url}")
 
         except ET.ParseError as e:
             logger.error(f"Error parsing XML response: {e}")
@@ -182,45 +192,26 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
 
 
 def _is_fulltext_url(url: str) -> bool:
-    """Check if URL appears to be a full text link."""
-    # Skip known non-fulltext URLs
+    """
+    Check if URL should be included as a full text link.
+
+    Since we filter by NCBI's <Category>Full Text Sources</Category>,
+    we trust that classification and only skip specific non-useful URLs.
+    """
+    url_lower = url.lower()
+
+    # Skip PubMed abstract pages (not full text)
     skip_patterns = [
-        "pubmed",
         "ncbi.nlm.nih.gov/pubmed",
-        "abstract",
-        "ncbi.nlm.nih.gov/pmc",  # PMC is handled separately
+        "pubmed.ncbi.nlm.nih.gov",
     ]
 
-    url_lower = url.lower()
     for pattern in skip_patterns:
         if pattern in url_lower:
             return False
 
-    # Accept URLs from known full text providers
-    fulltext_patterns = [
-        "doi.org",
-        "sciencedirect",
-        "springer",
-        "wiley",
-        "nature.com",
-        "cell.com",
-        "asm.org",
-        "plos",
-        "frontiersin",
-        "mdpi",
-        "oxford",
-        "cambridge",
-        "tandfonline",
-        "karger",
-        "jbc.org",
-        "pnas.org",
-    ]
-
-    for pattern in fulltext_patterns:
-        if pattern in url_lower:
-            return True
-
-    return False
+    # Accept all other URLs from Full Text Sources category
+    return True
 
 
 def get_existing_urls(session) -> tuple[dict, dict, dict]:
