@@ -214,38 +214,26 @@ def check_protein_sequences(
 
 def get_sequence_files(strain_abbrev: str) -> tuple[Path, Path]:
     """Get paths to coding and protein sequence files for a strain."""
-    # Try to find sequence files in expected locations
-    seq_dir = DATA_DIR / "sequences" / strain_abbrev
+    # Primary location: /data/fasta_files/<strain>/
+    seq_dir = Path("/data/fasta_files") / strain_abbrev
 
-    # Look for compressed or uncompressed files
-    coding_patterns = [
-        f"{strain_abbrev}_coding.fasta.gz",
-        f"{strain_abbrev}_coding.fasta",
-        "coding.fasta.gz",
-        "coding.fasta",
-    ]
-
-    protein_patterns = [
-        f"{strain_abbrev}_protein.fasta.gz",
-        f"{strain_abbrev}_protein.fasta",
-        "protein.fasta.gz",
-        "protein.fasta",
-    ]
+    # Fallback to DATA_DIR/sequences/<strain>/
+    if not seq_dir.exists():
+        seq_dir = DATA_DIR / "sequences" / strain_abbrev
 
     coding_file = None
     protein_file = None
 
-    for pattern in coding_patterns:
-        path = seq_dir / pattern
-        if path.exists():
-            coding_file = path
-            break
+    if seq_dir.exists():
+        # Find coding file (orf_coding_<strain>*.fasta)
+        coding_matches = list(seq_dir.glob(f"orf_coding_{strain_abbrev}*.fasta"))
+        if coding_matches:
+            coding_file = coding_matches[0]
 
-    for pattern in protein_patterns:
-        path = seq_dir / pattern
-        if path.exists():
-            protein_file = path
-            break
+        # Find protein file (orf_trans_all_<strain>*.fasta)
+        protein_matches = list(seq_dir.glob(f"orf_trans_all_{strain_abbrev}*.fasta"))
+        if protein_matches:
+            protein_file = protein_matches[0]
 
     return coding_file, protein_file
 
