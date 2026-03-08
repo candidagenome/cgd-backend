@@ -664,14 +664,6 @@ def generate_curator_report(strain_abbrev: str) -> bool:
 
             logger.info(f"Report written to {log_file}")
 
-            # Send email
-            if CURATOR_EMAIL:
-                send_email(
-                    subject=f"{reporter.species_abbrev} curation progress report",
-                    body=report,
-                    to_email=CURATOR_EMAIL,
-                )
-
             return True
 
     except Exception as e:
