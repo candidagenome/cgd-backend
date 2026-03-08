@@ -210,11 +210,10 @@ def get_existing_urls(session) -> tuple[dict, dict, dict]:
     Returns:
         Tuple of (url_dict, ref_url_dict, ref_no_dict)
     """
-    # Get existing LINKOUT URLs
+    # Get all existing URLs (any type) to avoid unique constraint violations
     url_query = text(f"""
         SELECT url, url_no
         FROM {DB_SCHEMA}.url
-        WHERE url_type = 'Reference LINKOUT'
     """)
     url_result = session.execute(url_query)
     url_dict = {row[0]: row[1] for row in url_result}
