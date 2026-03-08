@@ -22,7 +22,8 @@ cd "$PROJECT_ROOT"
 echo "Starting ORF sequence checks at $(date)"
 echo "========================================"
 
-python3 "$SCRIPT_DIR/check_orf_sequences.py" C_albicans_SC5314
+# C. albicans has both Assembly 19 and Assembly 22 ORFs, filter to Assembly 22 only
+python3 "$SCRIPT_DIR/check_orf_sequences.py" C_albicans_SC5314 --assembly "Assembly 22"
 python3 "$SCRIPT_DIR/check_orf_sequences.py" C_dubliniensis_CD36
 python3 "$SCRIPT_DIR/check_orf_sequences.py" C_glabrata_CBS138
 python3 "$SCRIPT_DIR/check_orf_sequences.py" C_parapsilosis_CDC317
