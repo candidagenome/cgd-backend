@@ -102,46 +102,50 @@ class DataChecker:
         return count
 
     def check_gene_reservations(self, strain_abbrev: str, organism_no: int) -> int:
-        """Check for gene reservations with missing/invalid emails."""
+        """Check for gene reservations with colleagues missing email addresses."""
         query = text(f"""
-            SELECT gr.reservation_name, gr.email
-            FROM {DB_SCHEMA}.gene_reservation gr
-            WHERE gr.organism_no = :organism_no
-            AND (gr.email IS NULL OR gr.email NOT LIKE '%@%')
+            SELECT f.feature_no, cg.colleague_no
+            FROM {DB_SCHEMA}.gene_reservation g
+            JOIN {DB_SCHEMA}.coll_generes cg ON g.gene_reservation_no = cg.gene_reservation_no
+            JOIN {DB_SCHEMA}.colleague c ON cg.colleague_no = c.colleague_no
+            JOIN {DB_SCHEMA}.feature f ON g.feature_no = f.feature_no
+            WHERE f.organism_no = :organism_no
+            AND c.email IS NULL
         """)
 
         result = self.session.execute(query, {"organism_no": organism_no})
         count = 0
 
         for row in result:
-            res_name, email = row
+            feature_no, colleague_no = row
             self.add_issue(
                 f"Gene Reservation ({strain_abbrev})",
-                f"Reservation '{res_name}' has invalid email: {email}",
+                f"Feature {feature_no} reservation has colleague {colleague_no} with no email",
             )
             count += 1
 
         return count
 
     def check_locus_vs_alias_names(self, strain_abbrev: str, organism_no: int) -> int:
-        """Check for conflicts between locus names and aliases."""
+        """Check for features where gene_name matches an alias_name."""
         query = text(f"""
-            SELECT f1.feature_name AS locus, a.alias_name, f2.feature_name AS alias_feature
-            FROM {DB_SCHEMA}.feature f1
-            JOIN {DB_SCHEMA}.alias a ON f1.feature_no = a.feature_no
-            JOIN {DB_SCHEMA}.feature f2 ON UPPER(a.alias_name) = UPPER(f2.gene_name)
-            WHERE f1.organism_no = :organism_no
-            AND f1.feature_no != f2.feature_no
+            SELECT f.feature_no, f.gene_name, a.alias_no, a.alias_name
+            FROM {DB_SCHEMA}.feature f
+            JOIN {DB_SCHEMA}.feat_alias fa ON f.feature_no = fa.feature_no
+            JOIN {DB_SCHEMA}.alias a ON fa.alias_no = a.alias_no
+            WHERE f.organism_no = :organism_no
+            AND f.gene_name IS NOT NULL
+            AND f.gene_name = a.alias_name
         """)
 
         result = self.session.execute(query, {"organism_no": organism_no})
         count = 0
 
         for row in result:
-            locus, alias_name, alias_feature = row
+            feature_no, gene_name, alias_no, alias_name = row
             self.add_issue(
                 f"Locus/Alias Conflict ({strain_abbrev})",
-                f"Locus {locus} has alias '{alias_name}' which matches gene name of {alias_feature}",
+                f"Feature {feature_no} gene_name '{gene_name}' matches alias '{alias_name}' (alias_no={alias_no})",
             )
             count += 1
 
