@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
-Run various checks on ORF sequences for AspGD strains.
+Run various checks on ORF sequences.
 
 This script reads protein and coding sequence files and checks for:
 - ORFs with ambiguous sequence (check coding)
@@ -10,11 +12,9 @@ This script reads protein and coding sequence files and checks for:
 - ORFs with internal Stop codon(s) (check protein)
 - ORFs with multiple terminal Stop codons (check protein)
 
-Based on variousChecksOnOrfSeqs_AspGD.pl.
-
 Usage:
-    python various_checks_on_orf_seqs_aspgd.py <strain_abbrev>
-    python various_checks_on_orf_seqs_aspgd.py A_nidulans_FGSC_A4
+    python check_orf_sequences.py <strain_abbrev>
+    python check_orf_sequences.py C_albicans_SC5314
 
 Environment Variables:
     DATABASE_URL: Database connection URL
@@ -35,18 +35,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directories to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
 
 # Configure logging
 logging.basicConfig(
