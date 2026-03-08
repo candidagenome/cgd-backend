@@ -88,6 +88,7 @@ class DataChecker:
             FROM {DB_SCHEMA}.feat_url fu
             JOIN {DB_SCHEMA}.feature f ON fu.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.url u ON fu.url_no = u.url_no
+            WHERE u.url_type != 'query by CGD ORF name'
             GROUP BY f.feature_name, u.url_type
             HAVING COUNT(*) > 1
         """)
