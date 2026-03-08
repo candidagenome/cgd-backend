@@ -24,8 +24,10 @@ Environment Variables:
 
 import logging
 import os
+import smtplib
 import sys
 from datetime import datetime
+from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -48,6 +50,8 @@ LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "localhost")
+PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 
 # Ensure log directory exists
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,19 +300,31 @@ def send_report_email(issues: list[dict]) -> None:
             by_category[cat] = []
         by_category[cat].append(issue["message"])
 
-    # Build message
-    message = f"Data Check Report - {datetime.now().strftime('%m/%d/%Y')}\n\n"
-    message += f"Total issues found: {len(issues)}\n\n"
+    # Build message body
+    body = f"Data Check Report - {datetime.now().strftime('%m/%d/%Y')}\n\n"
+    body += f"Total issues found: {len(issues)}\n\n"
 
     for category, messages in sorted(by_category.items()):
-        message += f"\n=== {category} ({len(messages)}) ===\n"
+        body += f"\n=== {category} ({len(messages)}) ===\n"
         for msg in messages:
-            message += f"  - {msg}\n"
+            body += f"  - {msg}\n"
 
-    message += f"\n\nThe full log file is available at: {LOG_FILE}\n"
+    body += f"\n\nThe full log file is available at: {LOG_FILE}\n"
 
-    logger.info(f"Would send report to {CURATOR_EMAIL}")
-    # In production, implement actual email sending
+    # Create email
+    subject = f"Check {PROJECT_ACRONYM} Data for Business Rules - {datetime.now().strftime('%m/%d/%Y')}"
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = ADMIN_EMAIL
+    msg["To"] = CURATOR_EMAIL
+
+    # Send email
+    try:
+        with smtplib.SMTP(SMTP_SERVER) as server:
+            server.send_message(msg)
+        logger.info(f"Sent report email to {CURATOR_EMAIL}")
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
 
 
 def main() -> int:
