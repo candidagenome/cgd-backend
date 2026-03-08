@@ -112,6 +112,8 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
     Returns:
         Dictionary mapping PMID to list of URLs
     """
+    import xml.etree.ElementTree as ET
+
     if not pmids:
         return {}
 
@@ -127,32 +129,50 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
         response = requests.get(ELINK_URL, params=params, timeout=60)
         response.raise_for_status()
 
-        # Parse response for full text URLs
-        # This is a simplified parser - in production, use proper XML parsing
-        urls_by_pmid: dict[int, list[str]] = {}
+        # Parse XML response properly to associate URLs with correct PMIDs
+        urls_by_pmid: dict[int, list[str]] = {pmid: [] for pmid in pmids}
 
-        content = response.text
+        try:
+            root = ET.fromstring(response.text)
 
-        # Look for URL patterns in the response
-        import re
+            # Find all IdUrlSet elements - each contains one PMID and its URLs
+            for id_url_set in root.findall(".//IdUrlSet"):
+                # Get the PMID for this set
+                id_elem = id_url_set.find("Id")
+                if id_elem is None or not id_elem.text:
+                    continue
 
-        # Find IdUrlSet blocks
-        for pmid in pmids:
-            urls_by_pmid[pmid] = []
+                try:
+                    pmid = int(id_elem.text)
+                except ValueError:
+                    continue
 
-            # Look for full text provider URLs
-            # Pattern varies by provider
-            patterns = [
-                rf'<Id>{pmid}</Id>.*?<Url[^>]*>([^<]+)</Url>',
-                rf'<ObjUrl>.*?<Url>([^<]+)</Url>.*?</ObjUrl>',
-            ]
+                if pmid not in urls_by_pmid:
+                    continue
 
-            for pattern in patterns:
-                matches = re.findall(pattern, content, re.DOTALL)
-                for url in matches:
-                    # Filter for full text URLs (exclude PubMed, abstract-only links)
-                    if _is_fulltext_url(url):
-                        urls_by_pmid[pmid].append(url)
+                # Get all ObjUrl elements for this PMID
+                for obj_url in id_url_set.findall("ObjUrl"):
+                    # Check if this is a full-text link by looking at Attribute elements
+                    is_fulltext = False
+                    for attr in obj_url.findall("Attribute"):
+                        if attr.text and "full-text" in attr.text.lower():
+                            is_fulltext = True
+                            break
+
+                    if not is_fulltext:
+                        continue
+
+                    # Get the URL
+                    url_elem = obj_url.find("Url")
+                    if url_elem is not None and url_elem.text:
+                        url = url_elem.text.strip()
+                        # Filter for known full text providers
+                        if _is_fulltext_url(url):
+                            if url not in urls_by_pmid[pmid]:  # Avoid duplicates
+                                urls_by_pmid[pmid].append(url)
+
+        except ET.ParseError as e:
+            logger.error(f"Error parsing XML response: {e}")
 
         return urls_by_pmid
 
