@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Generate curator progress reports.
 
@@ -36,17 +38,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
+HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", str(PROJECT_ROOT / "html")))
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
 SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
@@ -85,12 +90,11 @@ class CuratorReporter:
 
     def get_organism_info(self) -> bool:
         """Get organism information from database."""
+        # Get organism_no for the strain
         query = text(f"""
-            SELECT o.organism_no, p.organism_abbrev
-            FROM {DB_SCHEMA}.organism o
-            LEFT JOIN {DB_SCHEMA}.organism p ON o.parent_organism_no = p.organism_no
-                AND p.tax_rank = 'Species'
-            WHERE o.organism_abbrev = :strain_abbrev
+            SELECT organism_no, organism_abbrev
+            FROM {DB_SCHEMA}.organism
+            WHERE organism_abbrev = :strain_abbrev
         """)
 
         result = self.session.execute(
@@ -99,7 +103,8 @@ class CuratorReporter:
 
         if result:
             self.organism_no = result[0]
-            self.species_abbrev = result[1] or self.strain_abbrev
+            # Use strain abbrev as species abbrev (simplified)
+            self.species_abbrev = self.strain_abbrev
             return True
         return False
 
