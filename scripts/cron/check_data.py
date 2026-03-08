@@ -200,16 +200,27 @@ class DataChecker:
 
     def get_all_strains(self) -> list[dict]:
         """Get all strains from the database."""
-        query = text(f"""
-            SELECT organism_no, organism_abbrev
-            FROM {DB_SCHEMA}.organism
-            WHERE tax_rank = 'Strain'
-            OR tax_rank = 'no rank'
-            ORDER BY organism_abbrev
-        """)
+        # Known CGD strains
+        strain_abbrevs = [
+            "C_albicans_SC5314",
+            "C_dubliniensis_CD36",
+            "C_glabrata_CBS138",
+            "C_parapsilosis_CDC317",
+            "C_auris_B8441",
+        ]
 
-        result = self.session.execute(query)
-        return [{"organism_no": row[0], "organism_abbrev": row[1]} for row in result]
+        strains = []
+        for abbrev in strain_abbrevs:
+            query = text(f"""
+                SELECT organism_no, organism_abbrev
+                FROM {DB_SCHEMA}.organism
+                WHERE organism_abbrev = :abbrev
+            """)
+            result = self.session.execute(query, {"abbrev": abbrev}).fetchone()
+            if result:
+                strains.append({"organism_no": result[0], "organism_abbrev": result[1]})
+
+        return strains
 
     def run_all_checks(self) -> dict:
         """Run all data checks."""
