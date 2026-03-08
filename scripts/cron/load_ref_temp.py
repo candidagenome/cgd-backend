@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Load recent PubMed references into ref_temp table.
 
@@ -31,26 +33,32 @@ from Bio import Entrez, Medline
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+NCBI_API_KEY = os.getenv("NCBI_API_KEY")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # How many days back to search
 RELDATE = 10
 
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
+if NCBI_API_KEY:
+    Entrez.api_key = NCBI_API_KEY
 
 # Configure logging
 logging.basicConfig(

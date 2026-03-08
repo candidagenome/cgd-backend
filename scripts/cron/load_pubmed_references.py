@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Load PubMed references from NCBI.
 
@@ -45,22 +47,26 @@ from Bio import Entrez, Medline
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+NCBI_API_KEY = os.getenv("NCBI_API_KEY")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # NCBI URLs
 NCBI_JOURNAL_URL = "ftp://ftp.ncbi.nih.gov/pubmed/J_Medline.txt"
@@ -71,6 +77,8 @@ PDF_STATUS_NAP = "NAP"
 
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
+if NCBI_API_KEY:
+    Entrez.api_key = NCBI_API_KEY
 
 # Gene names to avoid using in query (common words that produce false positives)
 IGNORE_WORDS = {
@@ -81,6 +89,15 @@ IGNORE_WORDS = {
     "AspGD": {
         "abpA", "sidE", "asp", "areA", "his", "pro", "man"
     }
+}
+
+# Mapping of species abbreviation to seq.source value in database
+SEQ_SOURCE_MAP = {
+    "C_albicans": "C. albicans SC5314 Assembly 22",
+    "C_glabrata": "C. glabrata CBS138",
+    "C_dubliniensis": "C. dubliniensis CD36",
+    "C_parapsilosis": "C. parapsilosis CDC317",
+    "C_auris": "C. auris B8441",
 }
 
 # Configure logging
@@ -221,13 +238,14 @@ class JournalFileParser:
 
     def download(self) -> bool:
         """Download NCBI journal file."""
+        import urllib.request
+
         try:
             logger.info(f"Downloading NCBI journal file from {NCBI_JOURNAL_URL}")
-            response = requests.get(NCBI_JOURNAL_URL, timeout=300)
-            response.raise_for_status()
-
             self.journal_file.parent.mkdir(parents=True, exist_ok=True)
-            self.journal_file.write_text(response.text)
+
+            # Use urllib for FTP (requests doesn't support FTP)
+            urllib.request.urlretrieve(NCBI_JOURNAL_URL, self.journal_file)
 
             logger.info(f"Successfully downloaded journal file to {self.journal_file}")
             return True
@@ -335,21 +353,8 @@ class PubMedLoader:
         self.error_file.flush()
 
     def _get_seq_source(self) -> str | None:
-        """Get sequence source for species."""
-        query = text(f"""
-            SELECT DISTINCT fl.seq_source
-            FROM {DB_SCHEMA}.feat_location fl
-            JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
-            JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
-            WHERE o.organism_abbrev = :species_abbrev
-            AND fl.is_loc_current = 'Y'
-        """)
-
-        result = self.session.execute(
-            query, {"species_abbrev": self.species_abbrev}
-        ).first()
-
-        return result[0] if result else None
+        """Get sequence source for species from mapping."""
+        return SEQ_SOURCE_MAP.get(self.species_abbrev)
 
     def _get_gene_prefix(self) -> str:
         """Get gene prefix for species (e.g., 'Ca' for C. albicans)."""
@@ -537,50 +542,75 @@ class PubMedLoader:
     def get_ncbi_pmids(self) -> None:
         """Query NCBI PubMed for references by gene names."""
         self.log("Querying NCBI PubMed for references...")
+        logger.info("Querying NCBI PubMed for references...")
+
+        total_features = len(self.query_terms_by_feat)
+        processed = 0
+        query_count = 0
+        error_count = 0
 
         for feature_name, terms in self.query_terms_by_feat.items():
+            processed += 1
+
             if not terms:
                 continue
 
-            for term in terms:
-                # Build query: term AND species
-                query = f'"{term}"[TW] AND ({self.species_query})'
+            # Log progress every 100 features
+            if processed % 100 == 0:
+                msg = (f"Progress: {processed}/{total_features} features processed, "
+                       f"{query_count} queries, {error_count} errors")
+                self.log(msg)
+                logger.info(msg)
 
-                try:
-                    # Search PubMed
-                    handle = Entrez.esearch(
-                        db="pubmed",
-                        term=query,
-                        retmax=1000,
-                        usehistory="n"
-                    )
-                    record = Entrez.read(handle)
-                    handle.close()
+            # Batch all terms for this feature into ONE query using OR
+            # This is much faster than querying each term separately
+            term_queries = [f'"{term}"[TW]' for term in terms]
+            combined_terms = " OR ".join(term_queries)
+            query = f"({combined_terms}) AND ({self.species_query})"
+            query_count += 1
 
-                    pmids = [int(pmid) for pmid in record.get("IdList", [])]
+            try:
+                # Search PubMed
+                handle = Entrez.esearch(
+                    db="pubmed",
+                    term=query,
+                    retmax=9000,
+                    usehistory="n"
+                )
+                record = Entrez.read(handle)
+                handle.close()
 
-                    # Filter PMIDs
-                    for pmid in pmids:
-                        # Skip curated, bad, temp, or unlinked PMIDs
-                        if pmid in self.curated_pmids:
-                            continue
-                        if pmid in self.bad_pmids:
-                            continue
-                        if pmid in self.temp_pmids:
-                            continue
-                        if pmid in self.unlink_pmids and feature_name in self.unlink_pmids[pmid]:
-                            continue
+                pmids = [int(pmid) for pmid in record.get("IdList", [])]
 
-                        if feature_name not in self.ncbi_pmids_by_feat:
-                            self.ncbi_pmids_by_feat[feature_name] = set()
-                        self.ncbi_pmids_by_feat[feature_name].add(pmid)
+                # Filter PMIDs
+                for pmid in pmids:
+                    # Skip curated, bad, temp, or unlinked PMIDs
+                    if pmid in self.curated_pmids:
+                        continue
+                    if pmid in self.bad_pmids:
+                        continue
+                    if pmid in self.temp_pmids:
+                        continue
+                    if pmid in self.unlink_pmids and feature_name in self.unlink_pmids[pmid]:
+                        continue
 
-                except Exception as e:
-                    self.log(f"Error querying PubMed for {term}: {e}")
-                    continue
+                    if feature_name not in self.ncbi_pmids_by_feat:
+                        self.ncbi_pmids_by_feat[feature_name] = set()
+                    self.ncbi_pmids_by_feat[feature_name].add(pmid)
+
+            except Exception as e:
+                error_count += 1
+                self.log(f"Error querying PubMed for {feature_name}: {e}")
+                continue
 
         total_pmids = sum(len(pmids) for pmids in self.ncbi_pmids_by_feat.values())
-        self.log(f"Retrieved {total_pmids} PMIDs for {len(self.ncbi_pmids_by_feat)} features")
+        msg1 = (f"Completed: {processed}/{total_features} features, "
+                f"{query_count} queries, {error_count} errors")
+        msg2 = f"Retrieved {total_pmids} PMIDs for {len(self.ncbi_pmids_by_feat)} features"
+        self.log(msg1)
+        self.log(msg2)
+        logger.info(msg1)
+        logger.info(msg2)
 
     def compare_pmids(self) -> None:
         """Compare local and NCBI PubMed IDs to find new references."""
@@ -996,6 +1026,9 @@ class PubMedLoader:
         result = self.session.execute(query)
         ref_no_by_pmid = {row[0]: row[1] for row in result}
 
+        # Track which ref_property records we've already created
+        ref_property_by_ref_no: dict[int, int] = {}
+
         for feature_name, pmids in self.new_ncbi_obj_pmids.items():
             feature_no = self.feature_no_by_name.get(feature_name)
             if not feature_no:
@@ -1011,34 +1044,50 @@ class PubMedLoader:
                     continue
 
                 try:
-                    # Insert ref_property
-                    insert_prop = text(f"""
-                        INSERT INTO {DB_SCHEMA}.ref_property
-                        (reference_no, property_type, property_value, created_by)
-                        VALUES (:ref_no, 'curation_status', :status, :user)
-                    """)
-                    self.session.execute(insert_prop, {
-                        "ref_no": reference_no,
-                        "status": curation_status,
-                        "user": ADMIN_USER
-                    })
+                    # Check if we already have a ref_property_no for this reference
+                    if reference_no not in ref_property_by_ref_no:
+                        # Check if ref_property already exists in database
+                        query_prop = text(f"""
+                            SELECT ref_property_no
+                            FROM {DB_SCHEMA}.ref_property
+                            WHERE reference_no = :ref_no
+                            AND property_type = 'curation_status'
+                            AND property_value = :status
+                        """)
+                        result = self.session.execute(query_prop, {
+                            "ref_no": reference_no,
+                            "status": curation_status
+                        }).first()
 
-                    # Get ref_property_no
-                    query_prop = text(f"""
-                        SELECT ref_property_no
-                        FROM {DB_SCHEMA}.ref_property
-                        WHERE reference_no = :ref_no
-                        AND property_type = 'curation_status'
-                        AND property_value = :status
-                    """)
-                    result = self.session.execute(query_prop, {
-                        "ref_no": reference_no,
-                        "status": curation_status
-                    }).first()
+                        if result:
+                            # Already exists
+                            ref_property_by_ref_no[reference_no] = result[0]
+                        else:
+                            # Insert new ref_property
+                            insert_prop = text(f"""
+                                INSERT INTO {DB_SCHEMA}.ref_property
+                                (reference_no, source, property_type, property_value, created_by)
+                                VALUES (:ref_no, :source, 'curation_status', :status, :user)
+                            """)
+                            self.session.execute(insert_prop, {
+                                "ref_no": reference_no,
+                                "source": PROJECT_ACRONYM,
+                                "status": curation_status,
+                                "user": ADMIN_USER
+                            })
+                            self.session.commit()
 
-                    if result and self.link_genes:
-                        ref_property_no = result[0]
+                            # Get the new ref_property_no
+                            result = self.session.execute(query_prop, {
+                                "ref_no": reference_no,
+                                "status": curation_status
+                            }).first()
+                            if result:
+                                ref_property_by_ref_no[reference_no] = result[0]
 
+                    ref_property_no = ref_property_by_ref_no.get(reference_no)
+
+                    if ref_property_no and self.link_genes:
                         # Insert refprop_feat
                         insert_feat = text(f"""
                             INSERT INTO {DB_SCHEMA}.refprop_feat
@@ -1050,8 +1099,8 @@ class PubMedLoader:
                             "feat_no": feature_no,
                             "user": ADMIN_USER
                         })
+                        self.session.commit()
 
-                    self.session.commit()
                     self.load_gi_count += 1
                     self.log(f"Loaded curation status for {feature_name} - PMID {pmid}")
 
