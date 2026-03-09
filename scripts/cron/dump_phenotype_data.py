@@ -82,6 +82,7 @@ def get_phenotype_data(session, organism_no: int) -> list[dict]:
 
     Returns a list of dictionaries containing phenotype annotation data.
     """
+    # Note: References are linked via ref_link table (polymorphic pattern)
     query = text(f"""
         SELECT
             f.feature_name,
@@ -89,22 +90,20 @@ def get_phenotype_data(session, organism_no: int) -> list[dict]:
             f.dbxref_id,
             p.observable,
             p.qualifier,
-            pa.experiment_type,
-            pa.mutant_type,
-            pa.strain_background,
-            pa.allele,
-            pa.details,
-            pa.reporter,
-            pa.reporter_desc,
-            pa.chemical,
-            pa.condition,
-            pa.experiment_comment,
+            p.experiment_type,
+            p.mutant_type,
+            e.source AS experiment_source,
+            e.experiment_comment,
             r.pubmed,
             r.citation
         FROM {DB_SCHEMA}.pheno_annotation pa
         JOIN {DB_SCHEMA}.feature f ON pa.feature_no = f.feature_no
         JOIN {DB_SCHEMA}.phenotype p ON pa.phenotype_no = p.phenotype_no
-        LEFT JOIN {DB_SCHEMA}.reference r ON pa.reference_no = r.reference_no
+        LEFT JOIN {DB_SCHEMA}.experiment e ON pa.experiment_no = e.experiment_no
+        LEFT JOIN {DB_SCHEMA}.ref_link rl ON rl.tab_name = 'PHENO_ANNOTATION'
+            AND rl.col_name = 'PHENO_ANNOTATION_NO'
+            AND rl.primary_key = pa.pheno_annotation_no
+        LEFT JOIN {DB_SCHEMA}.reference r ON rl.reference_no = r.reference_no
         WHERE f.organism_no = :organism_no
         ORDER BY f.feature_name, p.observable
     """)
@@ -121,16 +120,10 @@ def get_phenotype_data(session, organism_no: int) -> list[dict]:
             "qualifier": row[4] or "",
             "experiment_type": row[5] or "",
             "mutant_type": row[6] or "",
-            "strain_background": row[7] or "",
-            "allele": row[8] or "",
-            "allele_details": row[9] or "",
-            "reporter": row[10] or "",
-            "reporter_details": row[11] or "",
-            "chemical": row[12] or "",
-            "condition": row[13] or "",
-            "experiment_details": row[14] or "",
-            "pubmed": row[15] or "",
-            "citation": row[16] or "",
+            "experiment_source": row[7] or "",
+            "experiment_comment": row[8] or "",
+            "pubmed": row[9] or "",
+            "citation": row[10] or "",
         })
 
     return phenotypes
@@ -151,14 +144,8 @@ def write_phenotype_file(phenotypes: list[dict], output_file: Path) -> int:
         "Qualifier",
         "Experiment Type",
         "Mutant Type",
-        "Strain Background",
-        "Allele",
-        "Allele Details",
-        "Reporter",
-        "Reporter Details",
-        "Chemical",
-        "Condition",
-        "Experiment Details",
+        "Experiment Source",
+        "Experiment Comment",
         "PubMed ID",
         "Citation",
     ]
@@ -177,14 +164,8 @@ def write_phenotype_file(phenotypes: list[dict], output_file: Path) -> int:
                 p["qualifier"],
                 p["experiment_type"],
                 p["mutant_type"],
-                p["strain_background"],
-                p["allele"],
-                p["allele_details"],
-                p["reporter"],
-                p["reporter_details"],
-                p["chemical"],
-                p["condition"],
-                p["experiment_details"],
+                p["experiment_source"],
+                p["experiment_comment"],
                 str(p["pubmed"]) if p["pubmed"] else "",
                 p["citation"],
             ]
