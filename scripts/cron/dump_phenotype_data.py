@@ -128,39 +128,44 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         return []
 
     # Collect all pheno_annotation_nos and experiment_nos
-    pa_nos = set()
-    exp_nos = set()
+    pa_nos = []
+    exp_nos = []
     for row in base_results:
-        pa_nos.add(row[0])
+        pa_nos.append(row[0])
         if row[1]:
-            exp_nos.add(row[1])
+            exp_nos.append(row[1])
+
+    # Oracle IN clause limit is 1000, so batch the queries
+    BATCH_SIZE = 900
 
     # Get references via ref_link (one annotation can have multiple refs)
-    ref_query = text(f"""
-        SELECT rl.primary_key, r.pubmed, r.dbxref_id
-        FROM {DB_SCHEMA}.ref_link rl
-        JOIN {DB_SCHEMA}.reference r ON rl.reference_no = r.reference_no
-        WHERE rl.tab_name = 'PHENO_ANNOTATION'
-        AND rl.col_name = 'PHENO_ANNOTATION_NO'
-        AND rl.primary_key IN :pa_nos
-    """).bindparams(bindparam("pa_nos", expanding=True))
-    ref_results = session.execute(ref_query, {"pa_nos": list(pa_nos)}).fetchall()
-
-    # Build reference map: pa_no -> list of (pubmed, cgd_ref)
     ref_map: dict[int, list[tuple]] = defaultdict(list)
-    for row in ref_results:
-        ref_map[row[0]].append((row[1], row[2]))
+    for i in range(0, len(pa_nos), BATCH_SIZE):
+        batch = pa_nos[i:i + BATCH_SIZE]
+        ref_query = text(f"""
+            SELECT rl.primary_key, r.pubmed, r.dbxref_id
+            FROM {DB_SCHEMA}.ref_link rl
+            JOIN {DB_SCHEMA}.reference r ON rl.reference_no = r.reference_no
+            WHERE rl.tab_name = 'PHENO_ANNOTATION'
+            AND rl.col_name = 'PHENO_ANNOTATION_NO'
+            AND rl.primary_key IN :pa_nos
+        """).bindparams(bindparam("pa_nos", expanding=True))
+        ref_results = session.execute(ref_query, {"pa_nos": batch}).fetchall()
+        for row in ref_results:
+            ref_map[row[0]].append((row[1], row[2]))
 
     # Get experiment properties
     prop_map: dict[int, dict[str, str]] = defaultdict(dict)
-    if exp_nos:
+    exp_nos_unique = list(set(exp_nos))
+    for i in range(0, len(exp_nos_unique), BATCH_SIZE):
+        batch = exp_nos_unique[i:i + BATCH_SIZE]
         prop_query = text(f"""
             SELECT ee.experiment_no, ep.property_type, ep.property_value
             FROM {DB_SCHEMA}.expt_exptprop ee
             JOIN {DB_SCHEMA}.expt_property ep ON ee.expt_property_no = ep.expt_property_no
             WHERE ee.experiment_no IN :exp_nos
         """).bindparams(bindparam("exp_nos", expanding=True))
-        prop_results = session.execute(prop_query, {"exp_nos": list(exp_nos)}).fetchall()
+        prop_results = session.execute(prop_query, {"exp_nos": batch}).fetchall()
 
         for row in prop_results:
             exp_no, prop_type, prop_value = row
