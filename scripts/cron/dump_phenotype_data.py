@@ -49,7 +49,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 # Project root directory (cgd-backend/)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -143,8 +143,8 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         WHERE rl.tab_name = 'PHENO_ANNOTATION'
         AND rl.col_name = 'PHENO_ANNOTATION_NO'
         AND rl.primary_key IN :pa_nos
-    """)
-    ref_results = session.execute(ref_query, {"pa_nos": tuple(pa_nos)}).fetchall()
+    """).bindparams(bindparam("pa_nos", expanding=True))
+    ref_results = session.execute(ref_query, {"pa_nos": list(pa_nos)}).fetchall()
 
     # Build reference map: pa_no -> list of (pubmed, cgd_ref)
     ref_map: dict[int, list[tuple]] = defaultdict(list)
@@ -159,8 +159,8 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
             FROM {DB_SCHEMA}.expt_exptprop ee
             JOIN {DB_SCHEMA}.expt_property ep ON ee.expt_property_no = ep.expt_property_no
             WHERE ee.experiment_no IN :exp_nos
-        """)
-        prop_results = session.execute(prop_query, {"exp_nos": tuple(exp_nos)}).fetchall()
+        """).bindparams(bindparam("exp_nos", expanding=True))
+        prop_results = session.execute(prop_query, {"exp_nos": list(exp_nos)}).fetchall()
 
         for row in prop_results:
             exp_no, prop_type, prop_value = row
