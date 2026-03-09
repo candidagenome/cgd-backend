@@ -109,6 +109,7 @@ def get_genome_version_history(
     seq_source: str,
     page: int = 1,
     page_size: int = 20,
+    version_type: Optional[str] = None,
 ) -> GenomeVersionHistoryResponse:
     """
     Get genome version history for a specific strain/assembly.
@@ -118,6 +119,8 @@ def get_genome_version_history(
         seq_source: Organism abbreviation (strain identifier)
         page: Page number (1-indexed)
         page_size: Number of items per page
+        version_type: Optional filter - 'major' for major releases (ending in r01),
+                      'minor' for minor releases (not ending in r01)
 
     Returns:
         Genome version history with pagination
@@ -142,20 +145,38 @@ def get_genome_version_history(
             error=f"Strain '{seq_source}' not found",
         )
 
-    # Get total count
-    total_count = (
-        db.query(func.count(GenomeVersion.genome_version_no))
-        .filter(GenomeVersion.organism_no == organism.organism_no)
-        .scalar()
-    )
+    # Build base query filter
+    base_filter = GenomeVersion.organism_no == organism.organism_no
+
+    # Apply version type filter if specified
+    if version_type == "major":
+        # Major versions end with r01
+        version_filter = GenomeVersion.genome_version.like("%r01")
+    elif version_type == "minor":
+        # Minor versions don't end with r01
+        version_filter = ~GenomeVersion.genome_version.like("%r01")
+    else:
+        version_filter = None
+
+    # Get total count with filter
+    count_query = db.query(func.count(GenomeVersion.genome_version_no)).filter(base_filter)
+    if version_filter is not None:
+        count_query = count_query.filter(version_filter)
+    total_count = count_query.scalar()
 
     total_pages = math.ceil(total_count / page_size) if total_count > 0 else 0
 
     # Get paginated genome versions for this organism
     offset = (page - 1) * page_size
-    genome_versions = (
+    versions_query = (
         db.query(GenomeVersion)
-        .filter(GenomeVersion.organism_no == organism.organism_no)
+        .filter(base_filter)
+    )
+    if version_filter is not None:
+        versions_query = versions_query.filter(version_filter)
+
+    genome_versions = (
+        versions_query
         .order_by(GenomeVersion.date_created.desc())
         .offset(offset)
         .limit(page_size)
