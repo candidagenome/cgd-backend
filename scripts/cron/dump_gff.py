@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump gene annotation data in GFF3 (General Feature Format version 3) format.
 
@@ -21,7 +23,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DATA_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -29,6 +31,7 @@ import argparse
 import gzip
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -36,19 +39,22 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging to stderr so stdout can be used for GFF output
 logging.basicConfig(
@@ -77,7 +83,7 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     }
 
 
-def get_seq_source(session, strain_abbrev: str) -> str | None:
+def get_seq_source(session, organism_no: int) -> str | None:
     """Get sequence source for a strain."""
     query = text(f"""
         SELECT DISTINCT s.source
@@ -85,14 +91,14 @@ def get_seq_source(session, strain_abbrev: str) -> str | None:
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
         FETCH FIRST 1 ROW ONLY
     """)
-    result = session.execute(query, {"strain_abbrev": strain_abbrev}).fetchone()
+    result = session.execute(query, {"organism_no": organism_no}).fetchone()
     return result[0] if result else None
 
 
-def get_root_sequences(session, seq_source: str, strain_abbrev: str) -> list[dict]:
+def get_root_sequences(session, seq_source: str) -> list[dict]:
     """Get root sequences (chromosomes/contigs) for an assembly."""
     query = text(f"""
         SELECT f.feature_name, f.feature_type, fl.max_coord
@@ -116,23 +122,24 @@ def get_root_sequences(session, seq_source: str, strain_abbrev: str) -> list[dic
     return roots
 
 
-def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
+def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get features for a strain that have current locations."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                f.feature_qualifier, f.dbxref_id, f.headline,
                fl.min_coord, fl.max_coord, fl.strand,
-               s.seq_name as root_name
+               root_feat.feature_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
-        WHERE f.organism_abbrev = :strain_abbrev
-        ORDER BY s.seq_name, fl.min_coord
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        WHERE f.organism_no = :organism_no
+        ORDER BY root_feat.feature_name, fl.min_coord
     """)
 
     features = []
     for row in session.execute(
-        query, {"strain_abbrev": strain_abbrev, "seq_source": seq_source}
+        query, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         feature_qualifier = row[4] or ""
 
@@ -214,6 +221,7 @@ def format_gff_attributes(attrs: dict) -> str:
 
 def dump_gff(
     session,
+    organism_no: int,
     strain_abbrev: str,
     seq_source: str | None = None,
     output_file=None,
@@ -223,6 +231,7 @@ def dump_gff(
 
     Args:
         session: Database session
+        organism_no: Organism number
         strain_abbrev: Strain abbreviation
         seq_source: Sequence source (optional, auto-detected if not provided)
         output_file: Output file handle (defaults to stdout)
@@ -233,15 +242,9 @@ def dump_gff(
     if output_file is None:
         output_file = sys.stdout
 
-    # Get strain config
-    config = get_strain_config(session, strain_abbrev)
-    if not config:
-        logger.error(f"Strain {strain_abbrev} not found in database")
-        return 0
-
     # Get or determine seq_source
     if not seq_source:
-        seq_source = get_seq_source(session, strain_abbrev)
+        seq_source = get_seq_source(session, organism_no)
         if not seq_source:
             logger.error(f"No seq_source found for {strain_abbrev}")
             return 0
@@ -254,7 +257,7 @@ def dump_gff(
     output_file.write("##gff-version\t3\n")
 
     # Write root sequences (chromosomes/contigs)
-    roots = get_root_sequences(session, seq_source, strain_abbrev)
+    roots = get_root_sequences(session, seq_source)
     logger.info(f"Found {len(roots)} root sequences")
 
     for root in roots:
@@ -267,7 +270,7 @@ def dump_gff(
         )
 
     # Get features
-    features = get_features(session, strain_abbrev, seq_source)
+    features = get_features(session, organism_no, seq_source)
     logger.info(f"Found {len(features)} features")
 
     count = 0
@@ -294,13 +297,11 @@ def dump_gff(
         if feat["headline"]:
             # Strip HTML tags from headline
             headline = feat["headline"]
-            import re
             headline = re.sub(r"<[^<>]+>", "", headline)
             attrs["Note"] = headline
 
         # Get ORF classification from qualifier
         if feat["feature_qualifier"]:
-            import re
             match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
             if match:
                 attrs["orf_classification"] = match.group(1)
@@ -374,16 +375,22 @@ def main() -> int:
 
     try:
         with SessionLocal() as session:
+            # Get strain config
+            config = get_strain_config(session, args.strain_abbrev)
+            if not config:
+                logger.error(f"Strain {args.strain_abbrev} not found in database")
+                return 1
+
             if args.output:
                 if args.gzip:
                     with gzip.open(args.output, "wt") as f:
-                        count = dump_gff(session, args.strain_abbrev, args.seq_source, f)
+                        count = dump_gff(session, config["organism_no"], args.strain_abbrev, args.seq_source, f)
                 else:
                     with open(args.output, "w") as f:
-                        count = dump_gff(session, args.strain_abbrev, args.seq_source, f)
+                        count = dump_gff(session, config["organism_no"], args.strain_abbrev, args.seq_source, f)
                 logger.info(f"Output written to {args.output}")
             else:
-                count = dump_gff(session, args.strain_abbrev, args.seq_source)
+                count = dump_gff(session, config["organism_no"], args.strain_abbrev, args.seq_source)
 
             if count == 0:
                 return 1
