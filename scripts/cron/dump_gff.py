@@ -177,28 +177,16 @@ def get_feature_aliases(session, feature_no: int) -> list[str]:
 
 
 def get_subfeatures(session, feature_no: int) -> list[dict]:
-    """Get subfeatures (CDS, exons) for a feature."""
-    query = text(f"""
-        SELECT sf.subfeature_type, sf.relative_coord_start, sf.relative_coord_end
-        FROM {DB_SCHEMA}.subfeature sf
-        WHERE sf.feature_no = :feature_no
-        ORDER BY sf.relative_coord_start
-    """)
+    """
+    Get subfeatures (CDS, exons) for a feature.
 
-    subfeatures = []
-    for row in session.execute(query, {"feature_no": feature_no}).fetchall():
-        start = row[1]
-        end = row[2]
-        # Ensure start <= end
-        if start > end:
-            start, end = end, start
-        subfeatures.append({
-            "type": row[0],
-            "start": start,
-            "end": end,
-        })
-
-    return subfeatures
+    Note: CGD schema stores CDS/exons as separate features in the feature table,
+    not in a subfeature table. This function returns an empty list as subfeatures
+    are already included as separate feature entries in the GFF output.
+    """
+    # CGD doesn't have a subfeature table - CDS, exons, introns are stored
+    # as separate features in the feature table
+    return []
 
 
 def escape_gff_value(value: str) -> str:
