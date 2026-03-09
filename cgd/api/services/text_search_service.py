@@ -327,6 +327,44 @@ def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -
 # Individual Category Search Functions
 # =============================================================================
 
+def _get_a21_exclusion_subquery(db: Session):
+    """
+    Build a subquery that returns all feature_nos to exclude:
+    - Direct Assembly 21 features (have 'Assembly 21 Primary Allele' relationship)
+    - Alleles of Assembly 21 features (parent has 'Assembly 21 Primary Allele' relationship)
+
+    Returns a subquery that can be used with ~Feature.feature_no.in_(subquery)
+    """
+    # Direct Assembly 21 features
+    direct_a21 = (
+        db.query(FeatRelationship.child_feature_no.label('feature_no'))
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+    )
+
+    # Alleles of Assembly 21 features
+    # Join allele relationships with A21 relationships to find alleles whose parents are A21
+    alleles_of_a21 = (
+        db.query(FeatRelationship.child_feature_no.label('feature_no'))
+        .filter(
+            FeatRelationship.relationship_type == 'allele',
+            FeatRelationship.rank == 3,
+            FeatRelationship.parent_feature_no.in_(
+                db.query(FeatRelationship.child_feature_no)
+                .filter(
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+            )
+        )
+    )
+
+    # Union both
+    return direct_a21.union(alleles_of_a21).subquery()
+
+
 def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
     """
     Search genes/loci by gene_name, feature_name, dbxref_id, or aliases.
@@ -339,15 +377,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to get Assembly 21 feature_nos to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     # Exclude Assembly 21 features directly in SQL
@@ -360,7 +391,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             ),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .limit(limit)
     )
@@ -391,7 +422,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
             .filter(
                 func.upper(Alias.alias_name).like(upper_pattern),
-                ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+                ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
             )
             .limit(remaining + len(found_feature_nos))  # Extra to account for duplicates
         )
@@ -431,15 +462,8 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to get Assembly 21 feature_nos to exclude (same as count function)
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Query with Assembly 21 exclusion built into the SQL
     feature_query = (
@@ -447,7 +471,7 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             func.upper(Feature.headline).like(upper_pattern),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .limit(limit)
     )
@@ -1039,22 +1063,15 @@ def _count_genes(db: Session, query: str) -> int:
     # Union of both to get all matching feature_nos (distinct)
     all_matches = direct_subq.union(alias_subq).subquery()
 
-    # Subquery to get Assembly 21 feature_nos to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Count distinct feature_nos, excluding Assembly 21 duplicates
     # Use labeled column name 'fno' from the UNION subquery
     total_count = (
         db.query(func.count(all_matches.c.fno))
         .filter(
-            ~all_matches.c.fno.in_(db.query(a21_subq.c.child_feature_no))
+            ~all_matches.c.fno.in_(db.query(a21_subq.c.feature_no))
         )
         .scalar()
     )
@@ -1100,15 +1117,8 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     # Union of both to get all matching features with their organism_no
     all_matches = direct_subq.union(alias_subq).subquery()
 
-    # Subquery to get Assembly 21 feature_nos to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Join with Organism to get organism names and count by organism
     # Exclude Assembly 21 duplicates
@@ -1118,7 +1128,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
             func.count(func.distinct(all_matches.c.fno))
         )
         .join(Organism, all_matches.c.org_no == Organism.organism_no)
-        .filter(~all_matches.c.fno.in_(db.query(a21_subq.c.child_feature_no)))
+        .filter(~all_matches.c.fno.in_(db.query(a21_subq.c.feature_no)))
         .group_by(Organism.organism_name)
         .all()
     )
@@ -1136,21 +1146,14 @@ def _count_descriptions(db: Session, query: str) -> int:
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to get Assembly 21 feature_nos to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     return (
         db.query(func.count(Feature.feature_no))
         .filter(
             func.upper(Feature.headline).like(upper_pattern),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .scalar()
     )
