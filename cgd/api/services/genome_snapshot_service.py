@@ -15,9 +15,11 @@ from cgd.models.models import (
     Organism,
     Feature,
     FeatProperty,
+    FeatLocation,
     GoAnnotation,
     Go,
     Seq,
+    GenomeVersion,
 )
 from cgd.schemas.genome_snapshot_schema import (
     GenomeSnapshotResponse,
@@ -147,47 +149,66 @@ def get_genome_snapshot(db: Session, organism_abbrev: str) -> GenomeSnapshotResp
 
 
 def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
-    """Get ORF counts by qualifier, excluding deleted ORFs."""
-    # Get all ORF feature_nos for this organism
-    all_orfs = (
+    """
+    Get ORF counts by qualifier, matching the original Perl logic.
+
+    The original Perl query filters by:
+    1. is_loc_current = 'Y' - Only count features with current location
+    2. is_seq_current = 'Y' - Only count features on current sequence
+    3. is_ver_current = 'Y' - Only count features on current genome version
+    4. Excludes features with 'Deleted%' qualifier
+    5. Uses exact qualifier matching for 'Dubious', 'Verified', 'Uncharacterized'
+    """
+    # Subquery: Get deleted feature_nos
+    deleted_subquery = (
+        db.query(FeatProperty.feature_no)
+        .filter(FeatProperty.property_value.like("Deleted%"))
+        .subquery()
+    )
+
+    # Main query: Get ORFs that are on current location/seq/version and not deleted
+    # This matches the Perl logic:
+    # - Join feature -> feat_location (is_loc_current='Y')
+    # - Join feat_location -> seq (via root_seq_no, is_seq_current='Y')
+    # - Join seq -> genome_version (is_ver_current='Y')
+    current_orfs = (
         db.query(Feature.feature_no)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "ORF",
-        )
-        .all()
-    )
-    all_orf_nos = set(f[0] for f in all_orfs)
-
-    # Get deleted ORF feature_nos (those with "Deleted" in qualifier)
-    deleted_orfs = (
-        db.query(FeatProperty.feature_no)
-        .filter(
-            FeatProperty.feature_no.in_(all_orf_nos),
-            FeatProperty.property_type == "feature_qualifier",
-            FeatProperty.property_value.like("%Deleted%"),
+            FeatLocation.is_loc_current == "Y",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
         )
         .distinct()
         .all()
     )
-    deleted_orf_nos = set(f[0] for f in deleted_orfs)
+    current_orf_nos = set(f[0] for f in current_orfs)
+    total = len(current_orf_nos)
 
-    # Exclude deleted ORFs from total
-    active_orf_nos = all_orf_nos - deleted_orf_nos
-    total = len(active_orf_nos)
+    if not current_orf_nos:
+        return {
+            "total": 0,
+            "verified": 0,
+            "uncharacterized": 0,
+            "dubious": 0,
+        }
 
-    # Get qualifier counts (only for active ORFs)
+    # Get qualifier counts using EXACT matching (not substring)
+    # Only count 'Dubious', 'Verified', 'Uncharacterized' - the exact values
     qualifier_counts = (
         db.query(
             FeatProperty.property_value,
-            func.count(distinct(Feature.feature_no))
+            func.count(distinct(FeatProperty.feature_no))
         )
-        .join(Feature, FeatProperty.feature_no == Feature.feature_no)
         .filter(
-            Feature.organism_no == organism_no,
-            Feature.feature_type == "ORF",
-            Feature.feature_no.in_(active_orf_nos),
+            FeatProperty.feature_no.in_(current_orf_nos),
             FeatProperty.property_type == "feature_qualifier",
+            FeatProperty.property_value.in_(["Dubious", "Verified", "Uncharacterized"]),
         )
         .group_by(FeatProperty.property_value)
         .all()
@@ -201,75 +222,91 @@ def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
     }
 
     for qualifier, count in qualifier_counts:
-        if qualifier:
-            qual_lower = qualifier.lower()
-            if "verified" in qual_lower:
-                counts["verified"] += count
-            elif "uncharacterized" in qual_lower:
-                counts["uncharacterized"] += count
-            elif "dubious" in qual_lower:
-                counts["dubious"] += count
+        if qualifier == "Verified":
+            counts["verified"] = count
+        elif qualifier == "Uncharacterized":
+            counts["uncharacterized"] = count
+        elif qualifier == "Dubious":
+            counts["dubious"] = count
 
     return counts
 
 
 def _get_trna_count(db: Session, organism_no: int) -> int:
-    """Get tRNA gene count, excluding deleted tRNAs."""
-    # Get all tRNA feature_nos for this organism
-    all_trnas = (
+    """
+    Get tRNA gene count, matching the original Perl logic.
+
+    Filters by:
+    1. is_loc_current = 'Y' - Only count features with current location
+    2. is_seq_current = 'Y' - Only count features on current sequence
+    3. is_ver_current = 'Y' - Only count features on current genome version
+    4. Excludes features with 'Deleted%' qualifier
+    """
+    # Subquery: Get deleted feature_nos
+    deleted_subquery = (
+        db.query(FeatProperty.feature_no)
+        .filter(FeatProperty.property_value.like("Deleted%"))
+        .subquery()
+    )
+
+    # Main query: Get tRNAs that are on current location/seq/version and not deleted
+    current_trnas = (
         db.query(Feature.feature_no)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "tRNA",
-        )
-        .all()
-    )
-    all_trna_nos = set(f[0] for f in all_trnas)
-
-    if not all_trna_nos:
-        return 0
-
-    # Get deleted tRNA feature_nos (those with "Deleted" in qualifier)
-    deleted_trnas = (
-        db.query(FeatProperty.feature_no)
-        .filter(
-            FeatProperty.feature_no.in_(all_trna_nos),
-            FeatProperty.property_type == "feature_qualifier",
-            FeatProperty.property_value.like("%Deleted%"),
+            FeatLocation.is_loc_current == "Y",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
         )
         .distinct()
         .all()
     )
-    deleted_trna_nos = set(f[0] for f in deleted_trnas)
 
-    # Return count excluding deleted tRNAs
-    return len(all_trna_nos - deleted_trna_nos)
+    return len(current_trnas)
 
 
 def _get_chromosomes_and_length(db: Session, organism_no: int) -> tuple:
-    """Get chromosome list and total genome length."""
-    # Get chromosomes
+    """
+    Get chromosome list and total genome length.
+
+    Matches the Perl logic by filtering for:
+    - is_seq_current = 'Y'
+    - is_ver_current = 'Y'
+    """
+    # Get chromosomes with current sequences on current genome version
     chromosomes = (
         db.query(Feature.feature_name)
+        .join(Seq, Feature.feature_no == Seq.feature_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "chromosome",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
         )
         .order_by(Feature.feature_name)
+        .distinct()
         .all()
     )
 
     chromosome_names = [c[0] for c in chromosomes]
 
-    # Get genome length from Seq table
+    # Get genome length from Seq table with current version
     genome_length = (
         db.query(func.sum(Seq.seq_length))
         .join(Feature, Seq.feature_no == Feature.feature_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "chromosome",
             Seq.is_seq_current == "Y",
             Seq.seq_type == "Genomic",
+            GenomeVersion.is_ver_current == "Y",
         )
         .scalar() or 0
     )

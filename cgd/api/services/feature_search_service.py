@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 from cgd.models.models import (
     Feature, Organism, FeatProperty, FeatLocation, Seq,
     Go, GoSet, GoPath, GoAnnotation, FeatRelationship,
+    GenomeVersion,
 )
 from cgd.schemas.feature_search_schema import (
     FeatureSearchRequest,
@@ -158,10 +159,22 @@ def search_features(
         request.additional_goids
     )
 
-    # Build base query for features
+    # Build base query for features with current location/sequence/version
+    # This matches the Perl logic:
+    # - Join feature -> feat_location (is_loc_current='Y')
+    # - Join feat_location -> seq (via root_seq_no, is_seq_current='Y')
+    # - Join seq -> genome_version (is_ver_current='Y')
     base_query = (
-        db.query(Feature)
-        .filter(Feature.organism_no == organism_obj.organism_no)
+        db.query(Feature.feature_no)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Feature.organism_no == organism_obj.organism_no,
+            FeatLocation.is_loc_current == "Y",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+        )
     )
 
     # Filter by feature types
@@ -181,8 +194,8 @@ def search_features(
 
         base_query = base_query.filter(or_(*type_conditions))
 
-    # Get all matching feature numbers for filtering
-    feature_nos = set(f.feature_no for f in base_query.all())
+    # Get all matching feature numbers for filtering (distinct due to joins)
+    feature_nos = set(f[0] for f in base_query.distinct().all())
 
     # Apply filters and track counts
     filter_counts = []
@@ -376,16 +389,25 @@ def _get_all_chromosomes(
 
 
 def _get_chromosomes_for_organism(db: Session, organism_abbrev: str) -> List[str]:
-    """Get chromosomes for a specific organism."""
-    # Get chromosome features for this organism
+    """
+    Get chromosomes for a specific organism.
+
+    Filters for current sequence and genome version to match the Perl logic.
+    """
+    # Get chromosome features with current sequence and genome version
     chromosomes = (
         db.query(Feature.feature_name)
         .join(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Seq, Feature.feature_no == Seq.feature_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Organism.organism_abbrev == organism_abbrev,
-            Feature.feature_type == "chromosome"
+            Feature.feature_type == "chromosome",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
         )
         .order_by(Feature.feature_name)
+        .distinct()
         .all()
     )
 
@@ -513,7 +535,11 @@ def _filter_by_chromosomes(
     feature_nos: Set[int],
     chromosomes: List[str],
 ) -> Tuple[Set[int], int]:
-    """Filter features by chromosome location."""
+    """
+    Filter features by chromosome location.
+
+    Uses current sequence and genome version filters to match the Perl logic.
+    """
     if not feature_nos:
         return set(), 0
 
@@ -528,10 +554,15 @@ def _filter_by_chromosomes(
     if not chr_feature_no_list:
         return set(), 0
 
-    # Get seq_no for chromosomes
+    # Get seq_no for chromosomes with current sequence and genome version
     chr_seq_nos = (
         db.query(Seq.seq_no)
-        .filter(Seq.feature_no.in_(chr_feature_no_list))
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Seq.feature_no.in_(chr_feature_no_list),
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+        )
         .all()
     )
     chr_seq_no_list = [s[0] for s in chr_seq_nos]
@@ -540,6 +571,8 @@ def _filter_by_chromosomes(
         return set(), 0
 
     # Get features located on these chromosomes using chunked query
+    # Note: The features are already filtered for current location in the base query,
+    # so we just need to filter by the chromosome seq_nos here
     feature_nos_list = list(feature_nos)
 
     def query_locations(db, chunk):
