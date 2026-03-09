@@ -17,7 +17,7 @@ Usage:
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name (default: MULTI)
-    HTML_ROOT_DIR: Root directory for HTML/download files
+    DATA_DIR: Directory for data files (default: PROJECT_ROOT/data)
     LOG_DIR: Directory for log files
 """
 
@@ -44,7 +44,7 @@ from cgd.db.engine import SessionLocal
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging
@@ -206,13 +206,13 @@ def main() -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: HTML_ROOT_DIR/download/phenotype/)",
+        help="Output directory (default: DATA_DIR/phenotype/)",
     )
 
     args = parser.parse_args()
 
     org_abbrev = args.organism_abbrev
-    output_dir = args.output_dir or HTML_ROOT_DIR / "download" / "phenotype"
+    output_dir = args.output_dir or DATA_DIR / "phenotype"
 
     # Ensure log directory exists
     LOG_DIR.mkdir(parents=True, exist_ok=True)
