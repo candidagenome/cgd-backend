@@ -186,8 +186,11 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         qualifier = row[8] or ""
         observable = row[9] or ""
 
-        # Build phenotype string (qualifier + observable)
-        phenotype = f"{qualifier} {observable}".strip() if qualifier else observable
+        # Build phenotype string (observable: qualifier) - matches Perl format
+        if qualifier:
+            phenotype = f"{observable}: {qualifier}"
+        else:
+            phenotype = observable
 
         # Build reference string: PMID: ####|CGD_REF: ####
         refs = ref_map.get(pa_no, [])
@@ -205,13 +208,19 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         # Get experiment properties
         props = prop_map.get(exp_no, {})
 
+        # Append details to experiment_type in parentheses (matches Perl format)
+        exp_type_with_details = experiment_type
+        details = props.get("Details", "")
+        if details:
+            exp_type_with_details = f"{experiment_type} ({details})"
+
         phenotypes.append({
             "feature_name": feature_name,
             "feature_type": feature_type,
             "gene_name": gene_name,
             "cgdid": dbxref_id,
             "reference": reference,
-            "experiment_type": experiment_type,
+            "experiment_type": exp_type_with_details,
             "mutant_type": mutant_type,
             "allele": props.get("Allele", ""),
             "strain_background": props.get("strain_background", ""),
