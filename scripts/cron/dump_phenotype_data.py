@@ -114,10 +114,12 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
             p.experiment_type,
             p.mutant_type,
             p.qualifier,
-            p.observable
+            p.observable,
+            e.experiment_comment
         FROM {DB_SCHEMA}.pheno_annotation pa
         JOIN {DB_SCHEMA}.feature f ON pa.feature_no = f.feature_no
         JOIN {DB_SCHEMA}.phenotype p ON pa.phenotype_no = p.phenotype_no
+        LEFT JOIN {DB_SCHEMA}.experiment e ON pa.experiment_no = e.experiment_no
         WHERE f.organism_no = :organism_no
         ORDER BY f.feature_name, p.observable
     """)
@@ -185,6 +187,7 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         mutant_type = row[7] or ""
         qualifier = row[8] or ""
         observable = row[9] or ""
+        experiment_comment = row[10] or ""
 
         # Build phenotype string (observable: qualifier) - matches Perl format
         if qualifier:
@@ -208,11 +211,10 @@ def get_phenotype_data(session, organism_no: int, species_name: str) -> list[dic
         # Get experiment properties
         props = prop_map.get(exp_no, {})
 
-        # Append details to experiment_type in parentheses (matches Perl format)
+        # Append experiment_comment to experiment_type in parentheses (matches Perl format)
         exp_type_with_details = experiment_type
-        details = props.get("Details", "")
-        if details:
-            exp_type_with_details = f"{experiment_type} ({details})"
+        if experiment_comment:
+            exp_type_with_details = f"{experiment_type} ({experiment_comment})"
 
         phenotypes.append({
             "feature_name": feature_name,
