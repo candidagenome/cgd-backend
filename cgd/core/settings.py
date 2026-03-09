@@ -82,7 +82,7 @@ class Settings(BaseSettings):
 
     # JBrowse configuration
     jbrowse_base_url: str = Field(
-        default="http://www.candidagenome.org/jbrowse/index.html",
+        default="/jbrowse/index.html",
         validation_alias="JBROWSE_BASE_URL"
     )
     jbrowse_flank: int = Field(
