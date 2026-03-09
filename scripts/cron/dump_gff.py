@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -84,7 +85,7 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
 
 
 def get_seq_source(session, organism_no: int) -> str | None:
-    """Get sequence source for a strain."""
+    """Get sequence source for a strain (returns latest/highest numbered assembly)."""
     query = text(f"""
         SELECT DISTINCT s.source
         FROM {DB_SCHEMA}.seq s
@@ -92,6 +93,7 @@ def get_seq_source(session, organism_no: int) -> str | None:
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
         AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
     result = session.execute(query, {"organism_no": organism_no}).fetchone()
@@ -123,7 +125,7 @@ def get_root_sequences(session, seq_source: str) -> list[dict]:
 
 
 def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
-    """Get features for a strain that have current locations."""
+    """Get features for a strain that have current locations (excludes chromosomes/contigs)."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                fp.property_value as feature_qualifier, f.dbxref_id, f.headline,
@@ -135,6 +137,7 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
         LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
+        AND f.feature_type NOT IN ('chromosome', 'contig')
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
@@ -242,8 +245,27 @@ def dump_gff(
 
     source = PROJECT_ACRONYM
 
-    # Write GFF header
-    output_file.write("##gff-version\t3\n")
+    # Extract genome version from seq_source (e.g., "Assembly 22" -> "A22")
+    genome_version = seq_source.split()[-1] if seq_source else ""
+    if genome_version.isdigit():
+        genome_version = f"A{genome_version}"
+
+    # Get organism name
+    org_query = text(f"""
+        SELECT organism_name FROM {DB_SCHEMA}.organism WHERE organism_no = :organism_no
+    """)
+    org_result = session.execute(org_query, {"organism_no": organism_no}).fetchone()
+    organism_name = org_result[0] if org_result else strain_abbrev
+
+    # Write GFF header with metadata comments
+    output_file.write("##gff-version 3\n")
+    output_file.write(f"# Organism: {organism_name}\n")
+    output_file.write(f"# Genome version: {genome_version}\n")
+    output_file.write(f"# Date created: {datetime.now().strftime('%a %b %d %H:%M:%S %Y')}\n")
+    output_file.write(f"# Created by: The Candida Genome Database (http://www.candidagenome.org/)\n")
+    output_file.write(f"# Contact Email: candida-curator AT lists DOT stanford DOT edu\n")
+    output_file.write(f"# Funding: NIDCR at US NIH, grant number 1-R01-DE015873-01\n")
+    output_file.write("#\n")
 
     # Write root sequences (chromosomes/contigs)
     roots = get_root_sequences(session, seq_source)
