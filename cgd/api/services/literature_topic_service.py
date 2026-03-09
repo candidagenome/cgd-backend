@@ -173,7 +173,9 @@ def search_by_topics(
         topic_cv_term_nos: List of cv_term_no values for topics to search
 
     Returns:
-        LiteratureTopicSearchResponse with references and genes per topic
+        LiteratureTopicSearchResponse with references and genes per topic.
+        Note: Returns ALL genes associated with each reference (via any topic),
+        not just genes linked to the searched topic specifically.
     """
     if not topic_cv_term_nos:
         return LiteratureTopicSearchResponse(
@@ -195,22 +197,68 @@ def search_by_topics(
     # Query ref_property for matching topics with references
     ref_properties = (
         db.query(RefProperty)
-        .options(
-            joinedload(RefProperty.reference),
-            joinedload(RefProperty.refprop_feat)
-            .joinedload(RefpropFeat.feature)
-            .joinedload(Feature.organism),
-        )
+        .options(joinedload(RefProperty.reference))
         .filter(RefProperty.property_value.in_(topic_names))
         .all()
     )
 
+    # Collect all unique reference_no values
+    ref_no_set: set[int] = set()
+    for rp in ref_properties:
+        if rp.reference:
+            ref_no_set.add(rp.reference.reference_no)
+
+    # Get ALL genes for these references (via any RefProperty, not just searched topics)
+    # This ensures we show all genes associated with a paper, regardless of which topic
+    # they were curated under
+    ref_genes_map: dict[int, list[GeneForLitTopic]] = defaultdict(list)
+    all_genes: set[int] = set()
+
+    if ref_no_set:
+        # Query all RefProperty for these references to get all associated genes
+        all_ref_properties = (
+            db.query(RefProperty)
+            .options(
+                joinedload(RefProperty.refprop_feat)
+                .joinedload(RefpropFeat.feature)
+                .joinedload(Feature.organism),
+            )
+            .filter(RefProperty.reference_no.in_(ref_no_set))
+            .all()
+        )
+
+        # Build genes list per reference
+        for rp in all_ref_properties:
+            ref_no = rp.reference_no
+            seen_gene_nos = {g.feature_no for g in ref_genes_map[ref_no]}
+
+            for rpf in rp.refprop_feat:
+                feat = rpf.feature
+                if feat and feat.feature_no not in seen_gene_nos:
+                    all_genes.add(feat.feature_no)
+                    seen_gene_nos.add(feat.feature_no)
+
+                    org = feat.organism
+                    organism_name = None
+                    if org:
+                        organism_name = (
+                            getattr(org, "organism_name", None)
+                            or getattr(org, "display_name", None)
+                        )
+
+                    gene_obj = GeneForLitTopic(
+                        feature_no=feat.feature_no,
+                        feature_name=feat.feature_name,
+                        gene_name=feat.gene_name,
+                        organism=organism_name,
+                    )
+                    ref_genes_map[ref_no].append(gene_obj)
+
     # Build results grouped by topic, then by reference
-    # Structure: topic -> reference_no -> (ref_obj, genes_list)
+    # Structure: topic -> reference_no -> (ref_obj, links)
     results_by_topic: dict[str, dict[int, tuple]] = {}
     topic_cv_term_map: dict[str, int] = {}
     all_references: set[int] = set()
-    all_genes: set[int] = set()
 
     # Cache for reference URL lookups
     ref_url_cache: dict[int, list] = {}
@@ -255,31 +303,7 @@ def search_by_topics(
 
             links = _build_citation_links(ref, ref_url_cache[ref.reference_no])
 
-            results_by_topic[topic][ref.reference_no] = (ref, links, [])
-
-        # Add genes associated with this ref_property to this specific reference
-        ref_genes = results_by_topic[topic][ref.reference_no][2]
-        ref_gene_nos = {g.feature_no for g in ref_genes}
-
-        for rpf in rp.refprop_feat:
-            feat = rpf.feature
-            if feat and feat.feature_no not in ref_gene_nos:
-                all_genes.add(feat.feature_no)
-                org = feat.organism
-                organism_name = None
-                if org:
-                    organism_name = (
-                        getattr(org, "organism_name", None)
-                        or getattr(org, "display_name", None)
-                    )
-
-                gene_obj = GeneForLitTopic(
-                    feature_no=feat.feature_no,
-                    feature_name=feat.feature_name,
-                    gene_name=feat.gene_name,
-                    organism=organism_name,
-                )
-                ref_genes.append(gene_obj)
+            results_by_topic[topic][ref.reference_no] = (ref, links)
 
     # Build final results
     results = []
@@ -288,7 +312,9 @@ def search_by_topics(
         references = []
 
         for ref_no in refs_dict:
-            ref, links, genes = refs_dict[ref_no]
+            ref, links = refs_dict[ref_no]
+            # Get ALL genes for this reference (from any topic)
+            genes = list(ref_genes_map.get(ref_no, []))
             # Sort genes
             genes.sort(key=lambda g: (g.gene_name or g.feature_name or ''))
 
