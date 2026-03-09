@@ -173,7 +173,7 @@ def search_features(
         qual_subquery = (
             db.query(FeatProperty.feature_no)
             .filter(
-                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_type == "feature_qualifier",
                 FeatProperty.property_value.in_(request.feature_types)
             )
         )
@@ -339,7 +339,7 @@ def _get_qualifiers(db: Session) -> List[str]:
         .join(Feature, FeatProperty.feature_no == Feature.feature_no)
         .filter(
             Feature.feature_type == "ORF",
-            FeatProperty.property_type == "qualifier"
+            FeatProperty.property_type == "feature_qualifier"
         )
         .distinct()
         .all()
@@ -467,7 +467,7 @@ def _filter_by_qualifiers(
             db.query(FeatProperty.feature_no)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_type == "feature_qualifier",
                 FeatProperty.property_value.in_(qualifiers)
             )
             .distinct()
@@ -495,7 +495,7 @@ def _exclude_deleted_features(
             db.query(FeatProperty.feature_no)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_type == "feature_qualifier",
                 FeatProperty.property_value.like("%Deleted%")
             )
             .distinct()
@@ -813,7 +813,7 @@ def _get_feature_details(
             db.query(FeatProperty.feature_no, FeatProperty.property_value)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier"
+                FeatProperty.property_type == "feature_qualifier"
             )
             .all()
         )
