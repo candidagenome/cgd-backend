@@ -101,7 +101,7 @@ def get_seq_source(session, organism_no: int) -> str | None:
 def get_root_sequences(session, seq_source: str) -> list[dict]:
     """Get root sequences (chromosomes/contigs) for an assembly."""
     query = text(f"""
-        SELECT f.feature_name, f.feature_type, fl.max_coord
+        SELECT f.feature_name, f.feature_type, fl.stop_coord
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.seq s ON f.feature_no = s.feature_no
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
@@ -127,14 +127,14 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                f.feature_qualifier, f.dbxref_id, f.headline,
-               fl.min_coord, fl.max_coord, fl.strand,
+               fl.start_coord, fl.stop_coord, fl.strand,
                root_feat.feature_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
         JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
         WHERE f.organism_no = :organism_no
-        ORDER BY root_feat.feature_name, fl.min_coord
+        ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
     features = []
@@ -155,8 +155,8 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
             "feature_qualifier": feature_qualifier,
             "dbxref_id": row[5],
             "headline": row[6],
-            "min_coord": row[7],
-            "max_coord": row[8],
+            "start_coord": row[7],
+            "stop_coord": row[8],
             "strand": row[9],
             "root_name": row[10],
         })
@@ -281,8 +281,8 @@ def dump_gff(
         feature_type = feat["feature_type"].replace(" ", "_")
 
         # Get coordinates
-        start = feat["min_coord"]
-        end = feat["max_coord"]
+        start = feat["start_coord"]
+        end = feat["stop_coord"]
         if start > end:
             start, end = end, start
 
