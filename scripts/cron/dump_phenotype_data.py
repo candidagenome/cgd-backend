@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump phenotype data for all features of a given organism.
 
@@ -10,7 +12,6 @@ Based on dumpPhenotypeData.pl by Adil Lotia (May 6, 2009).
 
 Usage:
     python dump_phenotype_data.py <organism_abbrev>
-    python dump_phenotype_data.py A_nidulans_FGSC_A4
     python dump_phenotype_data.py C_albicans_SC5314
 
 Environment Variables:
@@ -30,18 +31,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging
 logging.basicConfig(
@@ -72,44 +76,7 @@ def get_organism_info(session, org_abbrev: str) -> dict | None:
     }
 
 
-def get_species_abbrev(session, org_abbrev: str) -> str | None:
-    """
-    Get the species-level organism abbreviation.
-
-    For strain-level organisms, returns the parent species abbreviation.
-    For species-level organisms, returns the same abbreviation.
-    """
-    # First try to get parent species through taxonomy hierarchy
-    query = text(f"""
-        SELECT parent.organism_abbrev
-        FROM {DB_SCHEMA}.organism child
-        JOIN {DB_SCHEMA}.organism parent
-            ON child.parent_organism_no = parent.organism_no
-        WHERE child.organism_abbrev = :org_abbrev
-        AND parent.tax_rank = 'Species'
-    """)
-    result = session.execute(query, {"org_abbrev": org_abbrev}).fetchone()
-
-    if result:
-        return result[0]
-
-    # If no parent species found, check if this organism is itself a species
-    query = text(f"""
-        SELECT organism_abbrev
-        FROM {DB_SCHEMA}.organism
-        WHERE organism_abbrev = :org_abbrev
-        AND tax_rank = 'Species'
-    """)
-    result = session.execute(query, {"org_abbrev": org_abbrev}).fetchone()
-
-    if result:
-        return result[0]
-
-    # Fallback: use the organism abbreviation as-is
-    return org_abbrev
-
-
-def get_phenotype_data(session, org_abbrev: str) -> list[dict]:
+def get_phenotype_data(session, organism_no: int) -> list[dict]:
     """
     Get all phenotype data for features of a given organism.
 
@@ -122,28 +89,27 @@ def get_phenotype_data(session, org_abbrev: str) -> list[dict]:
             f.dbxref_id,
             p.observable,
             p.qualifier,
-            p.experiment_type,
-            p.mutant_type,
-            e.strain_background,
-            e.allele,
-            e.allele_details,
-            e.reporter,
-            e.reporter_details,
-            e.chemical,
-            e.condition,
-            e.experiment_details,
+            pa.experiment_type,
+            pa.mutant_type,
+            pa.strain_background,
+            pa.allele,
+            pa.details,
+            pa.reporter,
+            pa.reporter_desc,
+            pa.chemical,
+            pa.condition,
+            pa.experiment_comment,
             r.pubmed,
             r.citation
         FROM {DB_SCHEMA}.pheno_annotation pa
         JOIN {DB_SCHEMA}.feature f ON pa.feature_no = f.feature_no
         JOIN {DB_SCHEMA}.phenotype p ON pa.phenotype_no = p.phenotype_no
-        LEFT JOIN {DB_SCHEMA}.experiment e ON pa.experiment_no = e.experiment_no
-        LEFT JOIN {DB_SCHEMA}.reference r ON e.reference_no = r.reference_no
-        WHERE f.organism_abbrev = :org_abbrev
+        LEFT JOIN {DB_SCHEMA}.reference r ON pa.reference_no = r.reference_no
+        WHERE f.organism_no = :organism_no
         ORDER BY f.feature_name, p.observable
     """)
 
-    results = session.execute(query, {"org_abbrev": org_abbrev}).fetchall()
+    results = session.execute(query, {"organism_no": organism_no}).fetchall()
 
     phenotypes = []
     for row in results:
@@ -234,7 +200,7 @@ def main() -> int:
     )
     parser.add_argument(
         "organism_abbrev",
-        help="Organism abbreviation (e.g., A_nidulans_FGSC_A4, C_albicans_SC5314)",
+        help="Organism abbreviation (e.g., C_albicans_SC5314)",
     )
     parser.add_argument(
         "--output-dir",
@@ -247,6 +213,9 @@ def main() -> int:
 
     org_abbrev = args.organism_abbrev
     output_dir = args.output_dir or HTML_ROOT_DIR / "download" / "phenotype"
+
+    # Ensure log directory exists
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     # Set up file logging
     log_file = LOG_DIR / f"dumpPhenotypeData_{org_abbrev}.log"
@@ -267,23 +236,14 @@ def main() -> int:
 
             logger.info(f"Found organism: {org_info['organism_name']}")
 
-            # Get species abbreviation for output filename
-            species_abbrev = get_species_abbrev(session, org_abbrev)
-            if not species_abbrev:
-                species_abbrev = org_abbrev
-
             # Ensure output directory exists
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            if not output_dir.exists():
-                logger.error(f"Output directory does not exist: {output_dir}")
-                return 1
-
-            output_file = output_dir / f"{species_abbrev}_phenotype_data.tab"
+            output_file = output_dir / f"{org_abbrev}_phenotype_data.tab"
 
             # Get phenotype data
             logger.info("Retrieving phenotype data from database...")
-            phenotypes = get_phenotype_data(session, org_abbrev)
+            phenotypes = get_phenotype_data(session, org_info["organism_no"])
 
             if not phenotypes:
                 logger.warning(f"No phenotype data found for {org_abbrev}")
