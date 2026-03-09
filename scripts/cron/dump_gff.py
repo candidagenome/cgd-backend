@@ -125,7 +125,12 @@ def get_root_sequences(session, seq_source: str) -> list[dict]:
 
 
 def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
-    """Get features for a strain that have current locations (excludes chromosomes/contigs)."""
+    """Get features for a strain that have current locations.
+
+    Excludes:
+    - chromosomes/contigs (these are root sequences)
+    - subfeature types (CDS, intron, exon, UTR, etc.) - these are output as subfeatures of parent features
+    """
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                fp.property_value as feature_qualifier, f.dbxref_id, f.headline,
@@ -137,7 +142,10 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
         LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
-        AND f.feature_type NOT IN ('chromosome', 'contig')
+        AND f.feature_type NOT IN ('chromosome', 'contig',
+            'CDS', 'intron', 'noncoding_exon', 'adjustment', 'gap',
+            'three_prime_UTR', 'five_prime_UTR',
+            'three_prime_UTR_intron', 'five_prime_UTR_intron')
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
@@ -168,28 +176,76 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     return features
 
 
-def get_feature_aliases(session, feature_no: int) -> list[str]:
-    """Get aliases for a feature."""
+def get_all_feature_aliases(session, organism_no: int) -> dict[int, list[str]]:
+    """Get all aliases for features of an organism (batched for performance)."""
+    from collections import defaultdict
+
     query = text(f"""
-        SELECT a.alias_name
+        SELECT fa.feature_no, a.alias_name
         FROM {DB_SCHEMA}.alias a
         JOIN {DB_SCHEMA}.feat_alias fa ON a.alias_no = fa.alias_no
-        WHERE fa.feature_no = :feature_no
+        JOIN {DB_SCHEMA}.feature f ON fa.feature_no = f.feature_no
+        WHERE f.organism_no = :organism_no
+        ORDER BY fa.feature_no, a.alias_name
     """)
-    return [row[0] for row in session.execute(query, {"feature_no": feature_no}).fetchall()]
+
+    alias_map: dict[int, list[str]] = defaultdict(list)
+    for row in session.execute(query, {"organism_no": organism_no}).fetchall():
+        alias_map[row[0]].append(row[1])
+
+    return alias_map
 
 
-def get_subfeatures(session, feature_no: int) -> list[dict]:
-    """
-    Get subfeatures (CDS, exons) for a feature.
+def get_all_subfeatures(session, organism_no: int, seq_source: str) -> dict[int, list[dict]]:
+    """Get all subfeatures for features of an organism (batched for performance)."""
+    from collections import defaultdict
 
-    Note: CGD schema stores CDS/exons as separate features in the feature table,
-    not in a subfeature table. This function returns an empty list as subfeatures
-    are already included as separate feature entries in the GFF output.
-    """
-    # CGD doesn't have a subfeature table - CDS, exons, introns are stored
-    # as separate features in the feature table
-    return []
+    query = text(f"""
+        SELECT fr.parent_feature_no, f.feature_type, fl.start_coord, fl.stop_coord,
+               f.feature_no, f.feature_name
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.seq_no = s.seq_no AND s.is_seq_current = 'Y')
+        JOIN {DB_SCHEMA}.genome_version gv ON (s.genome_version_no = gv.genome_version_no AND gv.is_ver_current = 'Y')
+        JOIN {DB_SCHEMA}.feature parent_f ON fr.parent_feature_no = parent_f.feature_no
+        WHERE parent_f.organism_no = :organism_no
+        AND fr.rank = 2
+        AND s.source = :seq_source
+        ORDER BY fr.parent_feature_no, f.feature_type, fl.start_coord
+    """)
+
+    subfeature_map: dict[int, list[dict]] = defaultdict(list)
+    for row in session.execute(query, {"organism_no": organism_no, "seq_source": seq_source}).fetchall():
+        subfeature_map[row[0]].append({
+            "type": row[1],
+            "start": row[2],
+            "end": row[3],
+            "feature_no": row[4],
+            "feature_name": row[5],
+        })
+
+    return subfeature_map
+
+
+def get_all_allele_parent_types(session, organism_no: int) -> dict[int, str]:
+    """Get parent feature types for all allele features of an organism (batched for performance)."""
+    query = text(f"""
+        SELECT fr.child_feature_no, f.feature_type
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON f.feature_no = fr.parent_feature_no
+        JOIN {DB_SCHEMA}.feature child_f ON fr.child_feature_no = child_f.feature_no
+        WHERE child_f.organism_no = :organism_no
+        AND child_f.feature_type = 'allele'
+        AND fr.relationship_type = 'allele'
+        AND fr.rank = 3
+    """)
+
+    parent_type_map = {}
+    for row in session.execute(query, {"organism_no": organism_no}).fetchall():
+        parent_type_map[row[0]] = row[1]
+
+    return parent_type_map
 
 
 def escape_gff_value(value: str) -> str:
@@ -257,8 +313,8 @@ def dump_gff(
     org_result = session.execute(org_query, {"organism_no": organism_no}).fetchone()
     organism_name = org_result[0] if org_result else strain_abbrev
 
-    # Write GFF header with metadata comments
-    output_file.write("##gff-version 3\n")
+    # Write GFF header with metadata comments (tab separator per GFF3 spec)
+    output_file.write("##gff-version\t3\n")
     output_file.write(f"# Organism: {organism_name}\n")
     output_file.write(f"# Genome version: {genome_version}\n")
     output_file.write(f"# Date created: {datetime.now().strftime('%a %b %d %H:%M:%S %Y')}\n")
@@ -284,12 +340,25 @@ def dump_gff(
     features = get_features(session, organism_no, seq_source)
     logger.info(f"Found {len(features)} features")
 
+    # Batch fetch all aliases, subfeatures, and allele parent types for performance
+    logger.info("Fetching aliases...")
+    alias_map = get_all_feature_aliases(session, organism_no)
+    logger.info("Fetching subfeatures...")
+    subfeature_map = get_all_subfeatures(session, organism_no, seq_source)
+    logger.info("Fetching allele parent types...")
+    allele_parent_map = get_all_allele_parent_types(session, organism_no)
+
     count = 0
 
     for feat in features:
         feature_name = feat["feature_name"]
         root_name = feat["root_name"]
         feature_type = feat["feature_type"].replace(" ", "_")
+
+        # Handle allele features - look up parent feature type
+        if feature_type == "allele":
+            parent_type = allele_parent_map.get(feat["feature_no"])
+            feature_type = parent_type if parent_type else "ORF"
 
         # Get coordinates
         start = feat["start_coord"]
@@ -312,13 +381,15 @@ def dump_gff(
             attrs["Note"] = headline
 
         # Get ORF classification from qualifier
+        orf_classification = None
         if feat["feature_qualifier"]:
             match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
             if match:
-                attrs["orf_classification"] = match.group(1)
+                orf_classification = match.group(1)
+                attrs["orf_classification"] = orf_classification
 
-        # Get aliases
-        aliases = get_feature_aliases(session, feat["feature_no"])
+        # Get aliases from pre-fetched map
+        aliases = alias_map.get(feat["feature_no"], [])
         if aliases:
             attrs["Alias"] = aliases
 
@@ -327,18 +398,19 @@ def dump_gff(
             f"{root_name}\t{source}\t{feature_type}\t{start}\t{end}\t.\t{strand}\t.\t{attr_str}\n"
         )
 
-        # Get and write subfeatures
-        subfeatures = get_subfeatures(session, feat["feature_no"])
+        # Get and write subfeatures from pre-fetched map
+        subfeatures = subfeature_map.get(feat["feature_no"], [])
         for sf in subfeatures:
             sf_attrs = {"Parent": feature_name}
 
             # Add orf_classification to CDS subfeatures
             if feature_type == "ORF" and sf["type"] == "CDS":
-                if "orf_classification" in attrs:
-                    sf_attrs["orf_classification"] = attrs["orf_classification"]
+                if orf_classification:
+                    sf_attrs["orf_classification"] = orf_classification
 
             sf_attrs["parent_feature_type"] = feature_type
 
+            # Get subfeature coordinates - swap for minus strand (per Perl script)
             sf_start = sf["start"]
             sf_end = sf["end"]
             if strand == "-":
