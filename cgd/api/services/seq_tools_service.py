@@ -8,7 +8,7 @@ from urllib.parse import quote, urlencode
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion
+from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion, FeatRelationship
 from cgd.schemas.seq_tools_schema import (
     InputType,
     SeqType,
@@ -28,6 +28,49 @@ JBROWSE_BASE_URL = "https://www.candidagenome.org/jbrowse"
 DEFAULT_JBROWSE_TRACKS = "DNA,Genes"
 
 
+def _get_assembly22_equivalent(db: Session, feature: Feature) -> Optional[Feature]:
+    """
+    Get the Assembly 22 equivalent for an Assembly 21 feature.
+
+    In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
+    Assembly 22 (C1_XXXXX_A) feature records. We prefer Assembly 22.
+
+    The relationship is stored in FeatRelationship where:
+    - child_feature_no = Assembly 21 feature
+    - parent_feature_no = Assembly 22 feature
+    - relationship_type = 'Assembly 21 Primary Allele'
+    - rank = 3
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Assembly 22 feature if found, None otherwise
+    """
+    relationship = (
+        db.query(FeatRelationship)
+        .filter(
+            FeatRelationship.child_feature_no == feature.feature_no,
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .first()
+    )
+
+    if not relationship:
+        return None
+
+    # Get the Assembly 22 parent feature
+    a22_feature = (
+        db.query(Feature)
+        .filter(Feature.feature_no == relationship.parent_feature_no)
+        .first()
+    )
+
+    return a22_feature
+
+
 def resolve_gene_query(
     db: Session,
     query: str,
@@ -35,6 +78,8 @@ def resolve_gene_query(
 ) -> Optional[FeatureInfo]:
     """
     Resolve a gene query to feature information.
+
+    Prefers Assembly 22 (C1_XXXXX) identifiers over Assembly 21 (orf19.XXXX).
 
     Args:
         db: Database session
@@ -72,6 +117,12 @@ def resolve_gene_query(
 
     if not feature:
         return None
+
+    # Check if this is an Assembly 21 feature that has an Assembly 22 equivalent
+    # If so, prefer the Assembly 22 feature
+    a22_feature = _get_assembly22_equivalent(db, feature)
+    if a22_feature:
+        feature = a22_feature
 
     # Get location info
     location = (
