@@ -147,18 +147,36 @@ def get_genome_snapshot(db: Session, organism_abbrev: str) -> GenomeSnapshotResp
 
 
 def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
-    """Get ORF counts by qualifier."""
-    # Total ORFs
-    total = (
-        db.query(func.count(Feature.feature_no))
+    """Get ORF counts by qualifier, excluding deleted ORFs."""
+    # Get all ORF feature_nos for this organism
+    all_orfs = (
+        db.query(Feature.feature_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "ORF",
         )
-        .scalar() or 0
+        .all()
     )
+    all_orf_nos = set(f[0] for f in all_orfs)
 
-    # Get qualifier counts
+    # Get deleted ORF feature_nos (those with "Deleted" in qualifier)
+    deleted_orfs = (
+        db.query(FeatProperty.feature_no)
+        .filter(
+            FeatProperty.feature_no.in_(all_orf_nos),
+            FeatProperty.property_type == "feature_qualifier",
+            FeatProperty.property_value.like("%Deleted%"),
+        )
+        .distinct()
+        .all()
+    )
+    deleted_orf_nos = set(f[0] for f in deleted_orfs)
+
+    # Exclude deleted ORFs from total
+    active_orf_nos = all_orf_nos - deleted_orf_nos
+    total = len(active_orf_nos)
+
+    # Get qualifier counts (only for active ORFs)
     qualifier_counts = (
         db.query(
             FeatProperty.property_value,
@@ -168,6 +186,7 @@ def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "ORF",
+            Feature.feature_no.in_(active_orf_nos),
             FeatProperty.property_type == "feature_qualifier",
         )
         .group_by(FeatProperty.property_value)
@@ -195,16 +214,36 @@ def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
 
 
 def _get_trna_count(db: Session, organism_no: int) -> int:
-    """Get tRNA gene count."""
-    count = (
-        db.query(func.count(Feature.feature_no))
+    """Get tRNA gene count, excluding deleted tRNAs."""
+    # Get all tRNA feature_nos for this organism
+    all_trnas = (
+        db.query(Feature.feature_no)
         .filter(
             Feature.organism_no == organism_no,
             Feature.feature_type == "tRNA",
         )
-        .scalar() or 0
+        .all()
     )
-    return count
+    all_trna_nos = set(f[0] for f in all_trnas)
+
+    if not all_trna_nos:
+        return 0
+
+    # Get deleted tRNA feature_nos (those with "Deleted" in qualifier)
+    deleted_trnas = (
+        db.query(FeatProperty.feature_no)
+        .filter(
+            FeatProperty.feature_no.in_(all_trna_nos),
+            FeatProperty.property_type == "feature_qualifier",
+            FeatProperty.property_value.like("%Deleted%"),
+        )
+        .distinct()
+        .all()
+    )
+    deleted_trna_nos = set(f[0] for f in deleted_trnas)
+
+    # Return count excluding deleted tRNAs
+    return len(all_trna_nos - deleted_trna_nos)
 
 
 def _get_chromosomes_and_length(db: Session, organism_no: int) -> tuple:
