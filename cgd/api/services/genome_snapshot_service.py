@@ -30,6 +30,85 @@ from cgd.schemas.genome_snapshot_schema import (
 logger = logging.getLogger(__name__)
 
 
+def get_current_feature_nos(
+    db: Session,
+    organism_no: int,
+    feature_type: str = None,
+) -> set:
+    """
+    Get feature numbers for current features (excluding deleted).
+
+    This is the shared logic used by both genome_snapshot and feature_search
+    to ensure consistent counts.
+
+    Args:
+        db: Database session
+        organism_no: Organism number
+        feature_type: Optional feature type filter (e.g., "ORF", "tRNA")
+
+    Returns:
+        Set of feature_no values
+    """
+    # Subquery: Get deleted feature_nos
+    deleted_subquery = (
+        db.query(FeatProperty.feature_no)
+        .filter(FeatProperty.property_value.like("Deleted%"))
+        .subquery()
+    )
+
+    # Base query with current location/seq/version filters
+    query = (
+        db.query(Feature.feature_no)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Feature.organism_no == organism_no,
+            FeatLocation.is_loc_current == "Y",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
+        )
+    )
+
+    if feature_type:
+        query = query.filter(Feature.feature_type == feature_type)
+
+    return set(f[0] for f in query.distinct().all())
+
+
+def get_features_with_qualifier(
+    db: Session,
+    feature_nos: set,
+    qualifier: str,
+) -> set:
+    """
+    Get feature numbers that have a specific qualifier.
+
+    Args:
+        db: Database session
+        feature_nos: Set of feature numbers to filter
+        qualifier: Qualifier value (e.g., "Verified", "Uncharacterized")
+
+    Returns:
+        Set of feature_no values that have the qualifier
+    """
+    if not feature_nos:
+        return set()
+
+    matching = (
+        db.query(FeatProperty.feature_no)
+        .filter(
+            FeatProperty.feature_no.in_(feature_nos),
+            FeatProperty.property_type == "feature_qualifier",
+            FeatProperty.property_value == qualifier,
+        )
+        .distinct()
+        .all()
+    )
+    return set(f[0] for f in matching)
+
+
 def get_available_organisms(db: Session) -> GenomeSnapshotListResponse:
     """
     Get list of organisms available for genome snapshot.

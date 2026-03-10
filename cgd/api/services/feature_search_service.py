@@ -23,6 +23,10 @@ from cgd.models.models import (
     Go, GoSet, GoPath, GoAnnotation, FeatRelationship,
     GenomeVersion,
 )
+from cgd.api.services.genome_snapshot_service import (
+    get_current_feature_nos,
+    get_features_with_qualifier,
+)
 from cgd.schemas.feature_search_schema import (
     FeatureSearchRequest,
     FeatureSearchResponse,
