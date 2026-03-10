@@ -459,8 +459,8 @@ def _get_go_annotation_counts(db: Session, organism_no: int) -> GoAnnotationCoun
     return counts
 
 
-# GO Slim set name used for genome snapshot
-GENOME_SNAPSHOT_GO_SLIM_SET = "Candida GO Slim"
+# GO Slim set name used for genome snapshot (note: uses hyphen like original Perl)
+GENOME_SNAPSHOT_GO_SLIM_SET = "Candida GO-Slim"
 
 # Aspect names mapping
 ASPECT_NAMES = {
@@ -608,20 +608,46 @@ def get_go_slim_distribution(
                             slim_term_counts[aspect][ancestor_go_no].add(feature_no)
                             aspect_gene_sets[aspect].add(feature_no)
 
+        # Root terms to exclude (like original Perl code)
+        ROOT_TERMS = {
+            "cellular_component",
+            "molecular_function",
+            "biological_process",
+        }
+
+        # Get total number of features with GO annotations for percentage calc
+        all_annotated_features = set()
+        for feature_no, _ in feature_go_annotations:
+            all_annotated_features.add(feature_no)
+        total_annotated_features = len(all_annotated_features)
+
         # Build response
         distributions = {}
         for aspect, aspect_name in ASPECT_NAMES.items():
             categories = []
             for go_no, feature_nos_set in slim_term_counts[aspect].items():
                 goid, go_term, _ = slim_term_map[go_no]
+
+                # Skip root terms (like original Perl code)
+                term_lower = go_term.lower().replace(" ", "_")
+                if term_lower in ROOT_TERMS:
+                    continue
+
+                count = len(feature_nos_set)
+                # Calculate percentage of total annotated genes
+                percentage = 0.0
+                if total_annotated_features > 0:
+                    percentage = round((count / total_annotated_features) * 100, 1)
+
                 categories.append(GoSlimCategory(
                     go_term=go_term,
                     goid=_format_goid(goid),
-                    count=len(feature_nos_set),
+                    count=count,
+                    percentage=percentage,
                 ))
 
-            # Sort by count descending
-            categories.sort(key=lambda x: -x.count)
+            # Sort by percentage descending (like original Perl code)
+            categories.sort(key=lambda x: -x.percentage)
 
             distributions[aspect] = GoSlimDistribution(
                 aspect=aspect,

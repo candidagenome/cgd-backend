@@ -14,10 +14,11 @@ class GoAnnotationCounts(BaseModel):
 
 
 class GoSlimCategory(BaseModel):
-    """A single GO Slim category with gene count."""
+    """A single GO Slim category with gene count and percentage."""
     go_term: str = Field(..., description="GO Slim term name")
     goid: str = Field(..., description="GO ID (e.g., GO:0008150)")
     count: int = Field(0, description="Number of genes annotated to this term")
+    percentage: float = Field(0.0, description="Percentage of total genes annotated")
 
 
 class GoSlimDistribution(BaseModel):
