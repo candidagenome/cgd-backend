@@ -163,47 +163,30 @@ def search_features(
         request.additional_goids
     )
 
-    # Build base query for features with current location/sequence/version
-    # This matches the Perl logic and genome_snapshot_service:
-    # - Join feature -> feat_location (is_loc_current='Y')
-    # - Join feat_location -> seq (via root_seq_no, is_seq_current='Y')
-    # - Join seq -> genome_version (is_ver_current='Y')
-    # - Exclude deleted features (property_value LIKE 'Deleted%')
-
-    # Subquery: Get deleted feature_nos (same as genome_snapshot_service)
-    deleted_subquery = (
-        db.query(FeatProperty.feature_no)
-        .filter(FeatProperty.property_value.like("Deleted%"))
-        .subquery()
-    )
-
-    base_query = (
-        db.query(Feature.feature_no)
-        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
-        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
-        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
-        .filter(
-            Feature.organism_no == organism_obj.organism_no,
-            FeatLocation.is_loc_current == "Y",
-            Seq.is_seq_current == "Y",
-            GenomeVersion.is_ver_current == "Y",
-            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
-        )
-    )
-
-    # Filter by feature types
-    if not request.include_all_types and request.feature_types:
-        base_query = base_query.filter(Feature.feature_type.in_(request.feature_types))
-
-    # Get all matching feature numbers for filtering (distinct due to joins)
-    feature_nos = set(f[0] for f in base_query.distinct().all())
+    # Get base feature set using shared function (same as genome_snapshot_service)
+    # This ensures consistent counts between feature_search and genome_snapshot
+    if not request.include_all_types and request.feature_types and len(request.feature_types) == 1:
+        # Single feature type - use shared function
+        feature_nos = get_current_feature_nos(db, organism_obj.organism_no, request.feature_types[0])
+    elif not request.include_all_types and request.feature_types:
+        # Multiple feature types - get each and union
+        feature_nos = set()
+        for ft in request.feature_types:
+            feature_nos |= get_current_feature_nos(db, organism_obj.organism_no, ft)
+    else:
+        # All types
+        feature_nos = get_current_feature_nos(db, organism_obj.organism_no)
 
     # Apply filters and track counts
     filter_counts = []
 
-    # Qualifier filter (deleted features already excluded in base query)
+    # Qualifier filter using shared function
     if request.qualifiers:
-        feature_nos, count = _filter_by_qualifiers(db, feature_nos, request.qualifiers)
+        filtered_nos = set()
+        for qual in request.qualifiers:
+            filtered_nos |= get_features_with_qualifier(db, feature_nos, qual)
+        count = len(filtered_nos)
+        feature_nos = filtered_nos
         filter_counts.append(FilterCount(
             description=f"Qualifier is {' or '.join(request.qualifiers)}",
             count=count
