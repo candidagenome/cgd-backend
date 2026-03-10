@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from cgd.core.settings import settings
-from cgd.core.database import get_db
+from cgd.db.deps import get_db
 from cgd.models.models import Feature, HomologyGroup, FeatHomology, Seq, FeatLocation
 
 logger = logging.getLogger(__name__)
