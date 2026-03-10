@@ -160,10 +160,19 @@ def search_features(
     )
 
     # Build base query for features with current location/sequence/version
-    # This matches the Perl logic:
+    # This matches the Perl logic and genome_snapshot_service:
     # - Join feature -> feat_location (is_loc_current='Y')
     # - Join feat_location -> seq (via root_seq_no, is_seq_current='Y')
     # - Join seq -> genome_version (is_ver_current='Y')
+    # - Exclude deleted features (property_value LIKE 'Deleted%')
+
+    # Subquery: Get deleted feature_nos (same as genome_snapshot_service)
+    deleted_subquery = (
+        db.query(FeatProperty.feature_no)
+        .filter(FeatProperty.property_value.like("Deleted%"))
+        .subquery()
+    )
+
     base_query = (
         db.query(Feature.feature_no)
         .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
@@ -174,6 +183,7 @@ def search_features(
             FeatLocation.is_loc_current == "Y",
             Seq.is_seq_current == "Y",
             GenomeVersion.is_ver_current == "Y",
+            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
         )
     )
 
@@ -187,16 +197,13 @@ def search_features(
     # Apply filters and track counts
     filter_counts = []
 
-    # Qualifier filter
+    # Qualifier filter (deleted features already excluded in base query)
     if request.qualifiers:
         feature_nos, count = _filter_by_qualifiers(db, feature_nos, request.qualifiers)
         filter_counts.append(FilterCount(
             description=f"Qualifier is {' or '.join(request.qualifiers)}",
             count=count
         ))
-    else:
-        # By default, exclude Deleted features
-        feature_nos, _ = _exclude_deleted_features(db, feature_nos)
 
     # Chromosome filter
     if request.chromosomes:
