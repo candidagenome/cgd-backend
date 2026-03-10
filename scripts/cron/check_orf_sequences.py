@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
-Run various checks on ORF sequences for AspGD strains.
+Run various checks on ORF sequences.
 
 This script reads protein and coding sequence files and checks for:
 - ORFs with ambiguous sequence (check coding)
@@ -10,11 +12,9 @@ This script reads protein and coding sequence files and checks for:
 - ORFs with internal Stop codon(s) (check protein)
 - ORFs with multiple terminal Stop codons (check protein)
 
-Based on variousChecksOnOrfSeqs_AspGD.pl.
-
 Usage:
-    python various_checks_on_orf_seqs_aspgd.py <strain_abbrev>
-    python various_checks_on_orf_seqs_aspgd.py A_nidulans_FGSC_A4
+    python check_orf_sequences.py <strain_abbrev>
+    python check_orf_sequences.py C_albicans_SC5314
 
 Environment Variables:
     DATABASE_URL: Database connection URL
@@ -35,18 +35,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directories to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
 
 # Configure logging
 logging.basicConfig(
@@ -60,22 +63,42 @@ logger = logging.getLogger(__name__)
 STOP_CODONS = {"TAA", "TAG", "TGA"}
 
 
-def get_orfs_for_strain(session, strain_abbrev: str) -> set[str]:
-    """Get all ORF feature names for a strain that have sequence locations."""
-    query = text(f"""
-        SELECT f.feature_name
+def get_orfs_for_strain(session, strain_abbrev: str, assembly_filter: str | None = None) -> set[str]:
+    """
+    Get all ORF feature names for a strain that have sequence locations.
+
+    Args:
+        session: Database session
+        strain_abbrev: Strain abbreviation (e.g., C_albicans_SC5314)
+        assembly_filter: Optional filter for seq.source (e.g., 'Assembly 22')
+    """
+    # Build base query
+    base_query = f"""
+        SELECT DISTINCT f.feature_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
-        JOIN {DB_SCHEMA}.feat_property fp ON f.feature_no = fp.feature_no
         JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
+        JOIN {DB_SCHEMA}.seq s ON fl.seq_no = s.seq_no
         WHERE f.feature_type = 'ORF'
         AND o.organism_abbrev = :abbrev
-        AND fp.property_value != 'Deleted'
         AND fl.seq_no IS NOT NULL
-    """)
+        AND f.feature_no NOT IN (
+            SELECT feature_no FROM {DB_SCHEMA}.feat_property
+            WHERE property_value LIKE 'Deleted%'
+        )
+    """
+
+    # Add assembly filter if provided
+    if assembly_filter:
+        base_query += " AND s.source LIKE :assembly_filter"
+
+    query = text(base_query)
+    params = {"abbrev": strain_abbrev}
+    if assembly_filter:
+        params["assembly_filter"] = f"%{assembly_filter}%"
 
     orfs = set()
-    for row in session.execute(query, {"abbrev": strain_abbrev}).fetchall():
+    for row in session.execute(query, params).fetchall():
         orfs.add(row[0])
 
     return orfs
@@ -211,38 +234,26 @@ def check_protein_sequences(
 
 def get_sequence_files(strain_abbrev: str) -> tuple[Path, Path]:
     """Get paths to coding and protein sequence files for a strain."""
-    # Try to find sequence files in expected locations
-    seq_dir = DATA_DIR / "sequences" / strain_abbrev
+    # Primary location: /data/fasta_files/<strain>/
+    seq_dir = Path("/data/fasta_files") / strain_abbrev
 
-    # Look for compressed or uncompressed files
-    coding_patterns = [
-        f"{strain_abbrev}_coding.fasta.gz",
-        f"{strain_abbrev}_coding.fasta",
-        "coding.fasta.gz",
-        "coding.fasta",
-    ]
-
-    protein_patterns = [
-        f"{strain_abbrev}_protein.fasta.gz",
-        f"{strain_abbrev}_protein.fasta",
-        "protein.fasta.gz",
-        "protein.fasta",
-    ]
+    # Fallback to DATA_DIR/sequences/<strain>/
+    if not seq_dir.exists():
+        seq_dir = DATA_DIR / "sequences" / strain_abbrev
 
     coding_file = None
     protein_file = None
 
-    for pattern in coding_patterns:
-        path = seq_dir / pattern
-        if path.exists():
-            coding_file = path
-            break
+    if seq_dir.exists():
+        # Find coding file (orf_coding_<strain>*.fasta)
+        coding_matches = list(seq_dir.glob(f"orf_coding_{strain_abbrev}*.fasta"))
+        if coding_matches:
+            coding_file = coding_matches[0]
 
-    for pattern in protein_patterns:
-        path = seq_dir / pattern
-        if path.exists():
-            protein_file = path
-            break
+        # Find protein file (orf_trans_all_<strain>*.fasta)
+        protein_matches = list(seq_dir.glob(f"orf_trans_all_{strain_abbrev}*.fasta"))
+        if protein_matches:
+            protein_file = protein_matches[0]
 
     return coding_file, protein_file
 
@@ -250,11 +261,15 @@ def get_sequence_files(strain_abbrev: str) -> tuple[Path, Path]:
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Run various checks on ORF sequences for AspGD strains"
+        description="Run various checks on ORF sequences"
     )
     parser.add_argument(
         "strain_abbrev",
-        help="Strain abbreviation (e.g., A_nidulans_FGSC_A4)",
+        help="Strain abbreviation (e.g., C_albicans_SC5314)",
+    )
+    parser.add_argument(
+        "--assembly",
+        help="Filter ORFs by assembly (e.g., 'Assembly 22')",
     )
     parser.add_argument(
         "--debug",
@@ -316,8 +331,12 @@ def main() -> int:
     try:
         with SessionLocal() as session:
             # Get ORFs for strain
-            logger.info("Collecting ORFs from database...")
-            orfs = get_orfs_for_strain(session, strain_abbrev)
+            assembly_filter = args.assembly
+            if assembly_filter:
+                logger.info(f"Collecting ORFs from database (assembly filter: {assembly_filter})...")
+            else:
+                logger.info("Collecting ORFs from database...")
+            orfs = get_orfs_for_strain(session, strain_abbrev, assembly_filter)
             logger.info(f"Found {len(orfs)} ORFs")
 
     except Exception as e:

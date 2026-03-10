@@ -14,13 +14,18 @@ from __future__ import annotations
 import logging
 from typing import Optional, List, Dict, Set, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, text
+from sqlalchemy import func, text
 
 logger = logging.getLogger(__name__)
 
 from cgd.models.models import (
     Feature, Organism, FeatProperty, FeatLocation, Seq,
     Go, GoSet, GoPath, GoAnnotation, FeatRelationship,
+    GenomeVersion,
+)
+from cgd.api.services.genome_snapshot_service import (
+    get_current_feature_nos,
+    get_features_with_qualifier,
 )
 from cgd.schemas.feature_search_schema import (
     FeatureSearchRequest,
@@ -158,45 +163,34 @@ def search_features(
         request.additional_goids
     )
 
-    # Build base query for features
-    base_query = (
-        db.query(Feature)
-        .filter(Feature.organism_no == organism_obj.organism_no)
-    )
-
-    # Filter by feature types
-    if not request.include_all_types and request.feature_types:
-        # Also check qualifiers that match feature type names (Verified, Uncharacterized, etc.)
-        type_conditions = [Feature.feature_type.in_(request.feature_types)]
-
-        # Get features with matching qualifiers
-        qual_subquery = (
-            db.query(FeatProperty.feature_no)
-            .filter(
-                FeatProperty.property_type == "qualifier",
-                FeatProperty.property_value.in_(request.feature_types)
-            )
-        )
-        type_conditions.append(Feature.feature_no.in_(qual_subquery))
-
-        base_query = base_query.filter(or_(*type_conditions))
-
-    # Get all matching feature numbers for filtering
-    feature_nos = set(f.feature_no for f in base_query.all())
+    # Get base feature set using shared function (same as genome_snapshot_service)
+    # This ensures consistent counts between feature_search and genome_snapshot
+    if not request.include_all_types and request.feature_types and len(request.feature_types) == 1:
+        # Single feature type - use shared function
+        feature_nos = get_current_feature_nos(db, organism_obj.organism_no, request.feature_types[0])
+    elif not request.include_all_types and request.feature_types:
+        # Multiple feature types - get each and union
+        feature_nos = set()
+        for ft in request.feature_types:
+            feature_nos |= get_current_feature_nos(db, organism_obj.organism_no, ft)
+    else:
+        # All types
+        feature_nos = get_current_feature_nos(db, organism_obj.organism_no)
 
     # Apply filters and track counts
     filter_counts = []
 
-    # Qualifier filter
+    # Qualifier filter using shared function
     if request.qualifiers:
-        feature_nos, count = _filter_by_qualifiers(db, feature_nos, request.qualifiers)
+        filtered_nos = set()
+        for qual in request.qualifiers:
+            filtered_nos |= get_features_with_qualifier(db, feature_nos, qual)
+        count = len(filtered_nos)
+        feature_nos = filtered_nos
         filter_counts.append(FilterCount(
             description=f"Qualifier is {' or '.join(request.qualifiers)}",
             count=count
         ))
-    else:
-        # By default, exclude Deleted features
-        feature_nos, _ = _exclude_deleted_features(db, feature_nos)
 
     # Chromosome filter
     if request.chromosomes:
@@ -339,7 +333,7 @@ def _get_qualifiers(db: Session) -> List[str]:
         .join(Feature, FeatProperty.feature_no == Feature.feature_no)
         .filter(
             Feature.feature_type == "ORF",
-            FeatProperty.property_type == "qualifier"
+            FeatProperty.property_type == "feature_qualifier"
         )
         .distinct()
         .all()
@@ -376,16 +370,25 @@ def _get_all_chromosomes(
 
 
 def _get_chromosomes_for_organism(db: Session, organism_abbrev: str) -> List[str]:
-    """Get chromosomes for a specific organism."""
-    # Get chromosome features for this organism
+    """
+    Get chromosomes for a specific organism.
+
+    Filters for current sequence and genome version to match the Perl logic.
+    """
+    # Get chromosome features with current sequence and genome version
     chromosomes = (
         db.query(Feature.feature_name)
         .join(Organism, Feature.organism_no == Organism.organism_no)
+        .join(Seq, Feature.feature_no == Seq.feature_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Organism.organism_abbrev == organism_abbrev,
-            Feature.feature_type == "chromosome"
+            Feature.feature_type == "chromosome",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
         )
         .order_by(Feature.feature_name)
+        .distinct()
         .all()
     )
 
@@ -467,7 +470,7 @@ def _filter_by_qualifiers(
             db.query(FeatProperty.feature_no)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_type == "feature_qualifier",
                 FeatProperty.property_value.in_(qualifiers)
             )
             .distinct()
@@ -495,7 +498,7 @@ def _exclude_deleted_features(
             db.query(FeatProperty.feature_no)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier",
+                FeatProperty.property_type == "feature_qualifier",
                 FeatProperty.property_value.like("%Deleted%")
             )
             .distinct()
@@ -513,7 +516,11 @@ def _filter_by_chromosomes(
     feature_nos: Set[int],
     chromosomes: List[str],
 ) -> Tuple[Set[int], int]:
-    """Filter features by chromosome location."""
+    """
+    Filter features by chromosome location.
+
+    Uses current sequence and genome version filters to match the Perl logic.
+    """
     if not feature_nos:
         return set(), 0
 
@@ -528,10 +535,15 @@ def _filter_by_chromosomes(
     if not chr_feature_no_list:
         return set(), 0
 
-    # Get seq_no for chromosomes
+    # Get seq_no for chromosomes with current sequence and genome version
     chr_seq_nos = (
         db.query(Seq.seq_no)
-        .filter(Seq.feature_no.in_(chr_feature_no_list))
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Seq.feature_no.in_(chr_feature_no_list),
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+        )
         .all()
     )
     chr_seq_no_list = [s[0] for s in chr_seq_nos]
@@ -540,6 +552,8 @@ def _filter_by_chromosomes(
         return set(), 0
 
     # Get features located on these chromosomes using chunked query
+    # Note: The features are already filtered for current location in the base query,
+    # so we just need to filter by the chromosome seq_nos here
     feature_nos_list = list(feature_nos)
 
     def query_locations(db, chunk):
@@ -813,7 +827,7 @@ def _get_feature_details(
             db.query(FeatProperty.feature_no, FeatProperty.property_value)
             .filter(
                 FeatProperty.feature_no.in_(chunk),
-                FeatProperty.property_type == "qualifier"
+                FeatProperty.property_type == "feature_qualifier"
             )
             .all()
         )

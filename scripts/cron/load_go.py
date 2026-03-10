@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Load/update GO (Gene Ontology) info from OBO file.
 
@@ -38,19 +40,22 @@ import requests
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 
 # GO download URL

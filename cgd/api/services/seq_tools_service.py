@@ -8,7 +8,7 @@ from urllib.parse import quote, urlencode
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion
+from cgd.models.models import Feature, Seq, FeatLocation, Organism, GenomeVersion, FeatRelationship
 from cgd.schemas.seq_tools_schema import (
     InputType,
     SeqType,
@@ -23,9 +23,107 @@ from cgd.schemas.seq_tools_schema import (
 )
 
 
-# JBrowse configuration
-JBROWSE_BASE_URL = "https://www.candidagenome.org/jbrowse"
-DEFAULT_JBROWSE_TRACKS = "DNA,Genes"
+# JBrowse configuration - using settings for base URL
+from cgd.core.settings import settings
+
+# JBrowse configuration per organism/strain
+# Format: { organism_name: { 'data_path': str, 'tracks': str } }
+JBROWSE_CONFIG = {
+    "Candida albicans SC5314": {
+        "data_path": "cgd_data/C_albicans_SC5314",
+        "tracks": "DNA,Transcribed Features",
+    },
+    "Candida glabrata CBS138": {
+        "data_path": "cgd_data/C_glabrata_CBS138",
+        "tracks": "DNA,Transcribed Features",
+    },
+    "Candida dubliniensis CD36": {
+        "data_path": "cgd_data/C_dubliniensis_CD36",
+        "tracks": "DNA,Transcribed Features",
+    },
+    "Candida parapsilosis CDC317": {
+        "data_path": "cgd_data/C_parapsilosis_CDC317",
+        "tracks": "DNA,Transcribed Features",
+    },
+    "Candida auris B8441": {
+        "data_path": "cgd_data/C_auris_B8441",
+        "tracks": "DNA,Transcribed Features",
+    },
+}
+
+# Flanking basepairs to add to JBrowse coordinates
+JBROWSE_FLANK = 1000
+
+
+def _get_organism_from_chromosome(db: Session, chromosome: str) -> Optional[str]:
+    """
+    Get the organism name for a chromosome.
+
+    Args:
+        db: Database session
+        chromosome: Chromosome name (e.g., 'Ca22chr1A_C_albicans_SC5314')
+
+    Returns:
+        Organism name or None if not found
+    """
+    # Look up the chromosome feature and get its organism
+    chr_feature = (
+        db.query(Feature)
+        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Feature.feature_name == chromosome,
+            Feature.feature_type.in_(['chromosome', 'contig'])
+        )
+        .first()
+    )
+
+    if chr_feature and chr_feature.organism:
+        return chr_feature.organism.organism_name
+
+    return None
+
+
+def _get_assembly22_equivalent(db: Session, feature: Feature) -> Optional[Feature]:
+    """
+    Get the Assembly 22 equivalent for an Assembly 21 feature.
+
+    In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
+    Assembly 22 (C1_XXXXX_A) feature records. We prefer Assembly 22.
+
+    The relationship is stored in FeatRelationship where:
+    - child_feature_no = Assembly 21 feature
+    - parent_feature_no = Assembly 22 feature
+    - relationship_type = 'Assembly 21 Primary Allele'
+    - rank = 3
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Assembly 22 feature if found, None otherwise
+    """
+    relationship = (
+        db.query(FeatRelationship)
+        .filter(
+            FeatRelationship.child_feature_no == feature.feature_no,
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .first()
+    )
+
+    if not relationship:
+        return None
+
+    # Get the Assembly 22 parent feature
+    a22_feature = (
+        db.query(Feature)
+        .filter(Feature.feature_no == relationship.parent_feature_no)
+        .first()
+    )
+
+    return a22_feature
 
 
 def resolve_gene_query(
@@ -35,6 +133,8 @@ def resolve_gene_query(
 ) -> Optional[FeatureInfo]:
     """
     Resolve a gene query to feature information.
+
+    Prefers Assembly 22 (C1_XXXXX) identifiers over Assembly 21 (orf19.XXXX).
 
     Args:
         db: Database session
@@ -72,6 +172,12 @@ def resolve_gene_query(
 
     if not feature:
         return None
+
+    # Check if this is an Assembly 21 feature that has an Assembly 22 equivalent
+    # If so, prefer the Assembly 22 feature
+    a22_feature = _get_assembly22_equivalent(db, feature)
+    if a22_feature:
+        feature = a22_feature
 
     # Get location info
     location = (
@@ -118,25 +224,60 @@ def resolve_gene_query(
 
 
 def _build_jbrowse_link(
+    organism_name: str,
     chromosome: Optional[str],
     start: Optional[int],
     end: Optional[int],
     flank_left: int = 0,
     flank_right: int = 0,
 ) -> Optional[str]:
-    """Build JBrowse URL for a genomic location."""
+    """
+    Build JBrowse URL for a genomic location.
+
+    Uses organism-specific configuration for data path and tracks.
+    URL format: /jbrowse/index.html?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    """
     if not chromosome or not start or not end:
         return None
 
-    # Add flanking regions
-    view_start = max(1, start - flank_left)
-    view_end = end + flank_right
+    # Get JBrowse config for this organism
+    config = JBROWSE_CONFIG.get(organism_name)
+    if not config:
+        # Try partial match (e.g., "Candida albicans" matches "Candida albicans SC5314")
+        for org_key, org_config in JBROWSE_CONFIG.items():
+            if organism_name in org_key or org_key in organism_name:
+                config = org_config
+                break
 
-    params = {
-        "loc": f"{chromosome}:{view_start}..{view_end}",
-        "tracks": DEFAULT_JBROWSE_TRACKS,
-    }
-    return f"{JBROWSE_BASE_URL}?{urlencode(params)}"
+    if not config:
+        return None
+
+    # Calculate coordinates with flanking region
+    low = min(start, end)
+    high = max(start, end)
+    # Use JBROWSE_FLANK as default, but allow custom flanking
+    effective_flank_left = flank_left if flank_left > 0 else JBROWSE_FLANK
+    effective_flank_right = flank_right if flank_right > 0 else JBROWSE_FLANK
+    low_flanked = max(1, low - effective_flank_left)
+    high_flanked = high + effective_flank_right
+
+    # URL encode the parameters
+    data_encoded = quote(config['data_path'], safe='')
+    tracks_encoded = quote(config['tracks'], safe='')
+    loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
+
+    # Build URL with proper JBrowse parameters
+    # Format: ?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    jbrowse_url = (
+        f"{settings.jbrowse_base_url}"
+        f"?data={data_encoded}"
+        f"&tracklist=1&nav=1&overview=1"
+        f"&tracks={tracks_encoded}"
+        f"&loc={loc_encoded}"
+        f"&highlight="
+    )
+
+    return jbrowse_url
 
 
 def _build_blast_link(sequence: str) -> str:
@@ -283,6 +424,7 @@ def get_tools_for_gene(
     # Maps/Tables category
     maps_tools = []
     jbrowse_url = _build_jbrowse_link(
+        feature.organism,
         feature.chromosome,
         feature.start,
         feature.end,
@@ -380,6 +522,7 @@ def get_tools_for_gene(
 
 
 def get_tools_for_coordinates(
+    db: Session,
     chromosome: str,
     start: int,
     end: int,
@@ -391,6 +534,7 @@ def get_tools_for_coordinates(
     Get available tools for chromosomal coordinates.
 
     Args:
+        db: Database session
         chromosome: Chromosome name
         start: Start coordinate
         end: End coordinate
@@ -407,10 +551,13 @@ def get_tools_for_coordinates(
     view_start = max(1, start - flank_left)
     view_end = end + flank_right
 
+    # Get organism name from chromosome
+    organism_name = _get_organism_from_chromosome(db, chromosome)
+
     # Maps/Tables category
     maps_tools = []
 
-    jbrowse_url = _build_jbrowse_link(chromosome, start, end, flank_left, flank_right)
+    jbrowse_url = _build_jbrowse_link(organism_name, chromosome, start, end, flank_left, flank_right) if organism_name else None
     if jbrowse_url:
         maps_tools.append(ToolLink(
             name="JBrowse Genome Browser",
@@ -650,7 +797,7 @@ def resolve_and_get_tools(
             return None
 
         categories = get_tools_for_coordinates(
-            chromosome, start, end, flank_left, flank_right, reverse_complement
+            db, chromosome, start, end, flank_left, flank_right, reverse_complement
         )
 
         return SeqToolsResponse(

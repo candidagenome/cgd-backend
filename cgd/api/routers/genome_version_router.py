@@ -43,6 +43,10 @@ def get_history(
     seq_source: str,
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(20, ge=1, le=100, description="Results per page"),
+    version_type: str = Query(
+        None,
+        description="Filter by version type: 'major' or 'minor'. Omit for all versions."
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -52,12 +56,14 @@ def get_history(
         seq_source: Organism abbreviation (e.g., C_albicans_SC5314)
         page: Page number (1-indexed)
         page_size: Results per page (max 100)
+        version_type: Optional filter - 'major' for major releases only,
+                      'minor' for minor releases only
 
     Returns:
         Paginated list of genome versions with dates and descriptions.
     """
     try:
-        return get_genome_version_history(db, seq_source, page, page_size)
+        return get_genome_version_history(db, seq_source, page, page_size, version_type)
     except Exception as e:
         logger.error(f"Error getting genome version history for {seq_source}: {e}")
         logger.error(traceback.format_exc())
@@ -69,6 +75,10 @@ def get_history_query(
     seq_source: str = Query(..., description="Organism abbreviation"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(20, ge=1, le=100, description="Results per page"),
+    version_type: str = Query(
+        None,
+        description="Filter by version type: 'major' or 'minor'. Omit for all versions."
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -77,7 +87,7 @@ def get_history_query(
     Alternative endpoint using query parameter instead of path parameter.
     """
     try:
-        return get_genome_version_history(db, seq_source, page, page_size)
+        return get_genome_version_history(db, seq_source, page, page_size, version_type)
     except Exception as e:
         logger.error(f"Error getting genome version history for {seq_source}: {e}")
         logger.error(traceback.format_exc())

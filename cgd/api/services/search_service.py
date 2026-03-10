@@ -238,12 +238,54 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     )
 
 
+def _get_a21_exclusion_subquery(db: Session):
+    """
+    Build a subquery that returns all feature_nos to exclude:
+    - Direct Assembly 21 features (have 'Assembly 21 Primary Allele' relationship)
+    - Alleles of Assembly 21 features (parent has 'Assembly 21 Primary Allele' relationship)
+
+    Returns a subquery that can be used with ~Feature.feature_no.in_(subquery)
+    """
+    # Direct Assembly 21 features
+    direct_a21 = (
+        db.query(FeatRelationship.child_feature_no.label('feature_no'))
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+    )
+
+    # Alleles of Assembly 21 features
+    # Join allele relationships with A21 relationships to find alleles whose parents are A21
+    alleles_of_a21 = (
+        db.query(FeatRelationship.child_feature_no.label('feature_no'))
+        .filter(
+            FeatRelationship.relationship_type == 'allele',
+            FeatRelationship.rank == 3,
+            FeatRelationship.parent_feature_no.in_(
+                db.query(FeatRelationship.child_feature_no)
+                .filter(
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+            )
+        )
+    )
+
+    # Union both
+    return direct_a21.union(alleles_of_a21).subquery()
+
+
 def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -> set[int]:
     """
     Identify Assembly 21 features that have Assembly 22 equivalents.
 
     In CGD, the same gene may have both Assembly 21 (orf19.XXXX) and
     Assembly 22 (C7_XXXXX_A) feature records. We prefer Assembly 22.
+
+    This also excludes alleles of Assembly 21 features (e.g., orf19.8514 is an
+    allele of orf19.895, and should also be excluded when orf19.895 has an
+    Assembly 22 equivalent).
 
     Args:
         db: Database session
@@ -256,6 +298,8 @@ def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -
     if not feature_nos:
         return set()
 
+    to_exclude = set()
+
     # Find Assembly 21 features that have Assembly 22 parents
     a21_relationships = (
         db.query(FeatRelationship.child_feature_no)
@@ -266,8 +310,44 @@ def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -
         )
         .all()
     )
+    direct_a21_features = {rel[0] for rel in a21_relationships}
+    to_exclude.update(direct_a21_features)
 
-    return {rel[0] for rel in a21_relationships}
+    # Also find alleles of Assembly 21 features that have Assembly 22 equivalents
+    # These are features where parent has 'Assembly 21 Primary Allele' relationship
+    # and the child is an allele (relationship_type='allele')
+    if feature_nos:
+        # Find features in our set that are alleles of any feature
+        allele_relationships = (
+            db.query(FeatRelationship.child_feature_no, FeatRelationship.parent_feature_no)
+            .filter(
+                FeatRelationship.child_feature_no.in_(feature_nos),
+                FeatRelationship.relationship_type == 'allele',
+                FeatRelationship.rank == 3,
+            )
+            .all()
+        )
+
+        # Check if parent features have Assembly 22 equivalents
+        parent_feature_nos = {rel[1] for rel in allele_relationships}
+        if parent_feature_nos:
+            parents_with_a22 = (
+                db.query(FeatRelationship.child_feature_no)
+                .filter(
+                    FeatRelationship.child_feature_no.in_(parent_feature_nos),
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+                .all()
+            )
+            parents_to_exclude = {rel[0] for rel in parents_with_a22}
+
+            # Exclude alleles whose parents have Assembly 22 equivalents
+            for child_no, parent_no in allele_relationships:
+                if parent_no in parents_to_exclude:
+                    to_exclude.add(child_no)
+
+    return to_exclude
 
 
 def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
@@ -796,15 +876,8 @@ def _count_genes(db: Session, query: str) -> int:
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to identify Assembly 21 features to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to identify Assembly 21 features to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
@@ -813,7 +886,7 @@ def _count_genes(db: Session, query: str) -> int:
         db.query(Feature.feature_no.label('fno'))
         .filter(
             Feature.organism_no.isnot(None),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -830,7 +903,7 @@ def _count_genes(db: Session, query: str) -> int:
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
     )
@@ -856,15 +929,8 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to identify Assembly 21 features to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to identify Assembly 21 features to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     direct_subq = (
@@ -874,7 +940,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         )
         .filter(
             Feature.organism_no.isnot(None),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -893,7 +959,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no)),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
     )
@@ -1065,15 +1131,8 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Subquery to get Assembly 21 feature_nos to exclude
-    a21_subq = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .subquery()
-    )
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Get all features matching directly (excluding Assembly 21)
     feature_query = (
@@ -1085,7 +1144,7 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             ),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
     )
 
@@ -1112,7 +1171,7 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             func.upper(Alias.alias_name).like(upper_pattern),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.child_feature_no))
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
     )
 

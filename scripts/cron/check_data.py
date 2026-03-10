@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Check data for complex business rules.
 
@@ -22,28 +24,37 @@ Environment Variables:
 
 import logging
 import os
+import smtplib
 import sys
 from datetime import datetime
+from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-LOG_DIR = Path(os.getenv("LOG_DIR", "/tmp"))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "localhost")
+PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 
+# Ensure log directory exists
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "CheckData.log"
 
 # Configure logging
@@ -77,6 +88,7 @@ class DataChecker:
             FROM {DB_SCHEMA}.feat_url fu
             JOIN {DB_SCHEMA}.feature f ON fu.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.url u ON fu.url_no = u.url_no
+            WHERE u.url_type != 'query by CGD ORF name'
             GROUP BY f.feature_name, u.url_type
             HAVING COUNT(*) > 1
         """)
@@ -95,46 +107,50 @@ class DataChecker:
         return count
 
     def check_gene_reservations(self, strain_abbrev: str, organism_no: int) -> int:
-        """Check for gene reservations with missing/invalid emails."""
+        """Check for gene reservations with colleagues missing email addresses."""
         query = text(f"""
-            SELECT gr.reservation_name, gr.email
-            FROM {DB_SCHEMA}.gene_reservation gr
-            WHERE gr.organism_no = :organism_no
-            AND (gr.email IS NULL OR gr.email NOT LIKE '%@%')
+            SELECT f.feature_no, cg.colleague_no
+            FROM {DB_SCHEMA}.gene_reservation g
+            JOIN {DB_SCHEMA}.coll_generes cg ON g.gene_reservation_no = cg.gene_reservation_no
+            JOIN {DB_SCHEMA}.colleague c ON cg.colleague_no = c.colleague_no
+            JOIN {DB_SCHEMA}.feature f ON g.feature_no = f.feature_no
+            WHERE f.organism_no = :organism_no
+            AND c.email IS NULL
         """)
 
         result = self.session.execute(query, {"organism_no": organism_no})
         count = 0
 
         for row in result:
-            res_name, email = row
+            feature_no, colleague_no = row
             self.add_issue(
                 f"Gene Reservation ({strain_abbrev})",
-                f"Reservation '{res_name}' has invalid email: {email}",
+                f"Feature {feature_no} reservation has colleague {colleague_no} with no email",
             )
             count += 1
 
         return count
 
     def check_locus_vs_alias_names(self, strain_abbrev: str, organism_no: int) -> int:
-        """Check for conflicts between locus names and aliases."""
+        """Check for features where gene_name matches an alias_name."""
         query = text(f"""
-            SELECT f1.feature_name AS locus, a.alias_name, f2.feature_name AS alias_feature
-            FROM {DB_SCHEMA}.feature f1
-            JOIN {DB_SCHEMA}.alias a ON f1.feature_no = a.feature_no
-            JOIN {DB_SCHEMA}.feature f2 ON UPPER(a.alias_name) = UPPER(f2.gene_name)
-            WHERE f1.organism_no = :organism_no
-            AND f1.feature_no != f2.feature_no
+            SELECT f.feature_no, f.gene_name, a.alias_no, a.alias_name
+            FROM {DB_SCHEMA}.feature f
+            JOIN {DB_SCHEMA}.feat_alias fa ON f.feature_no = fa.feature_no
+            JOIN {DB_SCHEMA}.alias a ON fa.alias_no = a.alias_no
+            WHERE f.organism_no = :organism_no
+            AND f.gene_name IS NOT NULL
+            AND f.gene_name = a.alias_name
         """)
 
         result = self.session.execute(query, {"organism_no": organism_no})
         count = 0
 
         for row in result:
-            locus, alias_name, alias_feature = row
+            feature_no, gene_name, alias_no, alias_name = row
             self.add_issue(
                 f"Locus/Alias Conflict ({strain_abbrev})",
-                f"Locus {locus} has alias '{alias_name}' which matches gene name of {alias_feature}",
+                f"Feature {feature_no} gene_name '{gene_name}' matches alias '{alias_name}' (alias_no={alias_no})",
             )
             count += 1
 
@@ -165,27 +181,35 @@ class DataChecker:
 
     def check_headline_descriptions(self, strain_abbrev: str, organism_no: int) -> int:
         """Check for features with headline linked to multiple refs including auto-generated."""
-        # This is a complex check - looking for features where headline
-        # is linked to multiple references and one is the auto-generated ref
+        # Reference_no for internal reference: "auto-generated descriptions using orthologs and transferred GO"
+        # CGD: 56824, AspGD: 3444
+        auto_ref_no = 56824  # CGD default
+
+        # Find features where headline is linked to auto-generated ref AND other refs
         query = text(f"""
-            SELECT f.feature_name, COUNT(DISTINCT rfl.reference_no) as ref_count
-            FROM {DB_SCHEMA}.feature f
-            JOIN {DB_SCHEMA}.ref_link rfl ON f.feature_no = rfl.feature_no
-            WHERE f.organism_no = :organism_no
-            AND f.headline IS NOT NULL
-            AND rfl.ref_link_type = 'Headline'
-            GROUP BY f.feature_name
-            HAVING COUNT(DISTINCT rfl.reference_no) > 1
+            SELECT DISTINCT r1.primary_key, f.feature_name, f.headline
+            FROM {DB_SCHEMA}.ref_link r1
+            JOIN {DB_SCHEMA}.ref_link r2 ON r1.primary_key = r2.primary_key
+            JOIN {DB_SCHEMA}.feature f ON r1.primary_key = f.feature_no
+            WHERE r1.tab_name = 'FEATURE'
+            AND r1.col_name = 'HEADLINE'
+            AND r2.tab_name = 'FEATURE'
+            AND r2.col_name = 'HEADLINE'
+            AND r1.reference_no != r2.reference_no
+            AND r1.reference_no = :auto_ref_no
+            AND f.organism_no = :organism_no
         """)
 
-        result = self.session.execute(query, {"organism_no": organism_no})
+        result = self.session.execute(
+            query, {"auto_ref_no": auto_ref_no, "organism_no": organism_no}
+        )
         count = 0
 
         for row in result:
-            feature_name, ref_count = row
+            feature_no, feature_name, headline = row
             self.add_issue(
                 f"Headline Refs ({strain_abbrev})",
-                f"Feature {feature_name} has {ref_count} references linked to headline",
+                f"Feature {feature_name} (feature_no={feature_no}) has auto-generated headline with other refs",
             )
             count += 1
 
@@ -193,16 +217,27 @@ class DataChecker:
 
     def get_all_strains(self) -> list[dict]:
         """Get all strains from the database."""
-        query = text(f"""
-            SELECT organism_no, organism_abbrev
-            FROM {DB_SCHEMA}.organism
-            WHERE tax_rank = 'Strain'
-            OR tax_rank = 'no rank'
-            ORDER BY organism_abbrev
-        """)
+        # Known CGD strains
+        strain_abbrevs = [
+            "C_albicans_SC5314",
+            "C_dubliniensis_CD36",
+            "C_glabrata_CBS138",
+            "C_parapsilosis_CDC317",
+            "C_auris_B8441",
+        ]
 
-        result = self.session.execute(query)
-        return [{"organism_no": row[0], "organism_abbrev": row[1]} for row in result]
+        strains = []
+        for abbrev in strain_abbrevs:
+            query = text(f"""
+                SELECT organism_no, organism_abbrev
+                FROM {DB_SCHEMA}.organism
+                WHERE organism_abbrev = :abbrev
+            """)
+            result = self.session.execute(query, {"abbrev": abbrev}).fetchone()
+            if result:
+                strains.append({"organism_no": result[0], "organism_abbrev": result[1]})
+
+        return strains
 
     def run_all_checks(self) -> dict:
         """Run all data checks."""
@@ -266,19 +301,31 @@ def send_report_email(issues: list[dict]) -> None:
             by_category[cat] = []
         by_category[cat].append(issue["message"])
 
-    # Build message
-    message = f"Data Check Report - {datetime.now().strftime('%m/%d/%Y')}\n\n"
-    message += f"Total issues found: {len(issues)}\n\n"
+    # Build message body
+    body = f"Data Check Report - {datetime.now().strftime('%m/%d/%Y')}\n\n"
+    body += f"Total issues found: {len(issues)}\n\n"
 
     for category, messages in sorted(by_category.items()):
-        message += f"\n=== {category} ({len(messages)}) ===\n"
+        body += f"\n=== {category} ({len(messages)}) ===\n"
         for msg in messages:
-            message += f"  - {msg}\n"
+            body += f"  - {msg}\n"
 
-    message += f"\n\nThe full log file is available at: {LOG_FILE}\n"
+    body += f"\n\nThe full log file is available at: {LOG_FILE}\n"
 
-    logger.info(f"Would send report to {CURATOR_EMAIL}")
-    # In production, implement actual email sending
+    # Create email
+    subject = f"Check {PROJECT_ACRONYM} Data for Business Rules - {datetime.now().strftime('%m/%d/%Y')}"
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = ADMIN_EMAIL
+    msg["To"] = CURATOR_EMAIL
+
+    # Send email
+    try:
+        with smtplib.SMTP(SMTP_SERVER) as server:
+            server.send_message(msg)
+        logger.info(f"Sent report email to {CURATOR_EMAIL}")
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
 
 
 def main() -> int:
