@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, List, Dict, Set, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, text
+from sqlalchemy import func, text
 
 logger = logging.getLogger(__name__)
 
@@ -179,20 +179,7 @@ def search_features(
 
     # Filter by feature types
     if not request.include_all_types and request.feature_types:
-        # Also check qualifiers that match feature type names (Verified, Uncharacterized, etc.)
-        type_conditions = [Feature.feature_type.in_(request.feature_types)]
-
-        # Get features with matching qualifiers
-        qual_subquery = (
-            db.query(FeatProperty.feature_no)
-            .filter(
-                FeatProperty.property_type == "feature_qualifier",
-                FeatProperty.property_value.in_(request.feature_types)
-            )
-        )
-        type_conditions.append(Feature.feature_no.in_(qual_subquery))
-
-        base_query = base_query.filter(or_(*type_conditions))
+        base_query = base_query.filter(Feature.feature_type.in_(request.feature_types))
 
     # Get all matching feature numbers for filtering (distinct due to joins)
     feature_nos = set(f[0] for f in base_query.distinct().all())
