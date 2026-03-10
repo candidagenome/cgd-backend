@@ -21,6 +21,8 @@ from cgd.models.models import (
     FeatLocation,
     GoAnnotation,
     Go,
+    GoPath,
+    GoSet,
     Seq,
     GenomeVersion,
 )
@@ -28,6 +30,9 @@ from cgd.schemas.genome_snapshot_schema import (
     GenomeSnapshotResponse,
     GenomeSnapshotListResponse,
     GoAnnotationCounts,
+    GoSlimCategory,
+    GoSlimDistribution,
+    GoSlimDistributionResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -452,3 +457,195 @@ def _get_go_annotation_counts(db: Session, organism_no: int) -> GoAnnotationCoun
     counts.total = total
 
     return counts
+
+
+# GO Slim set name used for genome snapshot
+GENOME_SNAPSHOT_GO_SLIM_SET = "Candida GO Slim"
+
+# Aspect names mapping
+ASPECT_NAMES = {
+    "F": "Molecular Function",
+    "C": "Cellular Component",
+    "P": "Biological Process",
+}
+
+
+def _format_goid(goid: int) -> str:
+    """Format GOID as GO:XXXXXXX (7-digit padded)."""
+    return f"GO:{goid:07d}"
+
+
+def get_go_slim_distribution(
+    db: Session,
+    organism_abbrev: str,
+) -> GoSlimDistributionResponse:
+    """
+    Get GO Slim distribution for genome snapshot visualization.
+
+    This returns the count of genes mapped to each GO Slim term for all three
+    aspects (Molecular Function, Cellular Component, Biological Process).
+
+    Args:
+        db: Database session
+        organism_abbrev: Organism abbreviation (e.g., C_albicans_SC5314)
+
+    Returns:
+        GoSlimDistributionResponse with distribution data for each aspect
+    """
+    try:
+        # Get organism
+        organism = (
+            db.query(Organism)
+            .filter(Organism.organism_abbrev == organism_abbrev)
+            .first()
+        )
+
+        if not organism:
+            return GoSlimDistributionResponse(
+                success=False,
+                organism_abbrev=organism_abbrev,
+                organism_name="",
+                error=f"Organism '{organism_abbrev}' not found",
+            )
+
+        organism_no = organism.organism_no
+
+        # Get all feature_nos for this organism
+        feature_nos = (
+            db.query(Feature.feature_no)
+            .filter(Feature.organism_no == organism_no)
+            .all()
+        )
+        feature_no_set = set(f[0] for f in feature_nos)
+
+        if not feature_no_set:
+            return GoSlimDistributionResponse(
+                success=False,
+                organism_abbrev=organism_abbrev,
+                organism_name=organism.organism_name,
+                error="No features found for this organism",
+            )
+
+        # Get GO Slim terms from the Candida GO Slim set
+        slim_terms = (
+            db.query(Go.go_no, Go.goid, Go.go_term, Go.go_aspect)
+            .join(GoSet, GoSet.go_no == Go.go_no)
+            .filter(GoSet.go_set_name == GENOME_SNAPSHOT_GO_SLIM_SET)
+            .all()
+        )
+
+        if not slim_terms:
+            return GoSlimDistributionResponse(
+                success=False,
+                organism_abbrev=organism_abbrev,
+                organism_name=organism.organism_name,
+                error=f"No GO Slim terms found for set '{GENOME_SNAPSHOT_GO_SLIM_SET}'",
+            )
+
+        slim_go_nos = {t[0] for t in slim_terms}
+        slim_term_map = {t[0]: (t[1], t[2], t[3]) for t in slim_terms}
+
+        # Get all GO annotations for this organism's features
+        # We need to chunk to avoid Oracle's 1000 item IN clause limit
+        feature_no_list = list(feature_no_set)
+        feature_go_annotations = []
+
+        for i in range(0, len(feature_no_list), ORACLE_IN_LIMIT):
+            chunk = feature_no_list[i:i + ORACLE_IN_LIMIT]
+            annotations = (
+                db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
+                .filter(GoAnnotation.feature_no.in_(chunk))
+                .all()
+            )
+            feature_go_annotations.extend(annotations)
+
+        # Get all unique go_nos from annotations
+        annotation_go_nos = set(a[1] for a in feature_go_annotations)
+
+        # Get ancestors for all annotation go_nos (to map to slim terms)
+        go_to_ancestors = {}
+        if annotation_go_nos:
+            annotation_go_no_list = list(annotation_go_nos)
+            for i in range(0, len(annotation_go_no_list), ORACLE_IN_LIMIT):
+                chunk = annotation_go_no_list[i:i + ORACLE_IN_LIMIT]
+                paths = (
+                    db.query(GoPath.child_go_no, GoPath.ancestor_go_no)
+                    .filter(GoPath.child_go_no.in_(chunk))
+                    .all()
+                )
+                for child, ancestor in paths:
+                    if child not in go_to_ancestors:
+                        go_to_ancestors[child] = set()
+                    go_to_ancestors[child].add(ancestor)
+
+        # Map features to slim terms
+        # For each feature, find which slim terms it maps to
+        slim_term_counts = {aspect: {} for aspect in ["F", "C", "P"]}
+        aspect_gene_sets = {aspect: set() for aspect in ["F", "C", "P"]}
+
+        for feature_no, go_no in feature_go_annotations:
+            # Get aspect for this go_no
+            go_info = slim_term_map.get(go_no)
+            if go_info:
+                # Direct hit - annotation is a slim term
+                _, _, aspect = go_info
+                if aspect in slim_term_counts:
+                    if go_no not in slim_term_counts[aspect]:
+                        slim_term_counts[aspect][go_no] = set()
+                    slim_term_counts[aspect][go_no].add(feature_no)
+                    aspect_gene_sets[aspect].add(feature_no)
+
+            # Check ancestors
+            ancestors = go_to_ancestors.get(go_no, set())
+            for ancestor_go_no in ancestors:
+                if ancestor_go_no in slim_go_nos:
+                    go_info = slim_term_map.get(ancestor_go_no)
+                    if go_info:
+                        _, _, aspect = go_info
+                        if aspect in slim_term_counts:
+                            if ancestor_go_no not in slim_term_counts[aspect]:
+                                slim_term_counts[aspect][ancestor_go_no] = set()
+                            slim_term_counts[aspect][ancestor_go_no].add(feature_no)
+                            aspect_gene_sets[aspect].add(feature_no)
+
+        # Build response
+        distributions = {}
+        for aspect, aspect_name in ASPECT_NAMES.items():
+            categories = []
+            for go_no, feature_nos_set in slim_term_counts[aspect].items():
+                goid, go_term, _ = slim_term_map[go_no]
+                categories.append(GoSlimCategory(
+                    go_term=go_term,
+                    goid=_format_goid(goid),
+                    count=len(feature_nos_set),
+                ))
+
+            # Sort by count descending
+            categories.sort(key=lambda x: -x.count)
+
+            distributions[aspect] = GoSlimDistribution(
+                aspect=aspect,
+                aspect_name=aspect_name,
+                categories=categories,
+                total_genes=len(aspect_gene_sets[aspect]),
+            )
+
+        return GoSlimDistributionResponse(
+            success=True,
+            organism_abbrev=organism_abbrev,
+            organism_name=organism.organism_name,
+            molecular_function=distributions.get("F"),
+            cellular_component=distributions.get("C"),
+            biological_process=distributions.get("P"),
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting GO Slim distribution for {organism_abbrev}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return GoSlimDistributionResponse(
+            success=False,
+            organism_abbrev=organism_abbrev,
+            organism_name="",
+            error=str(e),
+        )
