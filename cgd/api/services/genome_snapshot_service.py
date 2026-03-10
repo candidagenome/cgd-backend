@@ -6,10 +6,13 @@ Provides real-time genome statistics for the Genome Snapshot page.
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
+
+# Oracle IN clause limit
+ORACLE_IN_LIMIT = 999
 
 from cgd.models.models import (
     Organism,
@@ -96,17 +99,25 @@ def get_features_with_qualifier(
     if not feature_nos:
         return set()
 
-    matching = (
-        db.query(FeatProperty.feature_no)
-        .filter(
-            FeatProperty.feature_no.in_(feature_nos),
-            FeatProperty.property_type == "feature_qualifier",
-            FeatProperty.property_value == qualifier,
+    # Use chunked query to avoid Oracle's 1000 item IN clause limit
+    feature_nos_list = list(feature_nos)
+    all_matching = set()
+
+    for i in range(0, len(feature_nos_list), ORACLE_IN_LIMIT):
+        chunk = feature_nos_list[i:i + ORACLE_IN_LIMIT]
+        matching = (
+            db.query(FeatProperty.feature_no)
+            .filter(
+                FeatProperty.feature_no.in_(chunk),
+                FeatProperty.property_type == "feature_qualifier",
+                FeatProperty.property_value == qualifier,
+            )
+            .distinct()
+            .all()
         )
-        .distinct()
-        .all()
-    )
-    return set(f[0] for f in matching)
+        all_matching.update(f[0] for f in matching)
+
+    return all_matching
 
 
 def get_available_organisms(db: Session) -> GenomeSnapshotListResponse:
@@ -279,19 +290,29 @@ def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
 
     # Get qualifier counts using EXACT matching (not substring)
     # Only count 'Dubious', 'Verified', 'Uncharacterized' - the exact values
-    qualifier_counts = (
-        db.query(
-            FeatProperty.property_value,
-            func.count(distinct(FeatProperty.feature_no))
+    # Use chunked query to avoid Oracle's 1000 item IN clause limit
+    current_orf_nos_list = list(current_orf_nos)
+    qualifier_results = {}
+
+    for i in range(0, len(current_orf_nos_list), ORACLE_IN_LIMIT):
+        chunk = current_orf_nos_list[i:i + ORACLE_IN_LIMIT]
+        chunk_counts = (
+            db.query(
+                FeatProperty.property_value,
+                func.count(distinct(FeatProperty.feature_no))
+            )
+            .filter(
+                FeatProperty.feature_no.in_(chunk),
+                FeatProperty.property_type == "feature_qualifier",
+                FeatProperty.property_value.in_(["Dubious", "Verified", "Uncharacterized"]),
+            )
+            .group_by(FeatProperty.property_value)
+            .all()
         )
-        .filter(
-            FeatProperty.feature_no.in_(current_orf_nos),
-            FeatProperty.property_type == "feature_qualifier",
-            FeatProperty.property_value.in_(["Dubious", "Verified", "Uncharacterized"]),
-        )
-        .group_by(FeatProperty.property_value)
-        .all()
-    )
+        for qualifier, count in chunk_counts:
+            qualifier_results[qualifier] = qualifier_results.get(qualifier, 0) + count
+
+    qualifier_counts = list(qualifier_results.items())
 
     counts = {
         "total": total,
