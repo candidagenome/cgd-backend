@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_, and_
 
 from cgd.schemas.search_schema import (
@@ -1088,55 +1088,65 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     """
     Search notes (history notes) linked to features or references.
     Returns TextSearchResult list with category="notes".
+    Only returns notes with valid links to existing features or references.
     """
     results = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Search notes linked to features
-    note_query = (
-        db.query(Note, NoteLink)
+    # Search notes linked to features (with verified feature existence)
+    feature_notes_query = (
+        db.query(Note, NoteLink, Feature)
         .join(NoteLink, Note.note_no == NoteLink.note_no)
-        .filter(func.upper(Note.note).like(upper_pattern))
+        .join(Feature, NoteLink.primary_key == Feature.feature_no)
+        .options(joinedload(Feature.organism))
+        .filter(
+            func.upper(Note.note).like(upper_pattern),
+            func.upper(NoteLink.tab_name) == 'FEATURE'
+        )
         .limit(limit)
     )
 
-    for note, note_link in note_query:
-        # Determine link based on tab_name
-        link = None
-        link_name = f"Note {note.note_no}"
-        organism_name = None
+    for note, note_link, feat in feature_notes_query:
+        description = _extract_context_around_match(note.note, query, 120)
+        organism_name = _get_organism_name(feat.organism) if feat.organism else None
+        link_name = feat.gene_name or feat.feature_name
+        results.append(TextSearchResult(
+            category="notes",
+            id=str(note.note_no),
+            name=link_name,
+            description=description,
+            link=f"/locus/{feat.feature_name}",
+            organism=organism_name,
+            match_context=note.note_type,
+            highlighted_name=_highlight_text(link_name, query),
+            highlighted_description=_highlight_text(description, query),
+        ))
 
-        if note_link.tab_name.upper() == 'FEATURE':
-            # Look up the feature with organism
-            feat = (
-                db.query(Feature)
-                .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
-                .filter(Feature.feature_no == note_link.primary_key)
-                .first()
+    # Search notes linked to references (with verified reference existence)
+    remaining_limit = limit - len(results)
+    if remaining_limit > 0:
+        reference_notes_query = (
+            db.query(Note, NoteLink, Reference)
+            .join(NoteLink, Note.note_no == NoteLink.note_no)
+            .join(Reference, NoteLink.primary_key == Reference.reference_no)
+            .filter(
+                func.upper(Note.note).like(upper_pattern),
+                func.upper(NoteLink.tab_name) == 'REFERENCE'
             )
-            if feat:
-                link = f"/locus/{feat.feature_name}"
-                link_name = feat.gene_name or feat.feature_name
-                organism_name = _get_organism_name(feat.organism)
-        elif note_link.tab_name.upper() == 'REFERENCE':
-            ref = db.query(Reference).filter(
-                Reference.reference_no == note_link.primary_key
-            ).first()
-            if ref:
-                link = f"/reference/{ref.dbxref_id}"
-                link_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+            .limit(remaining_limit)
+        )
 
-        if link:
-            # Extract context around matching keyword
+        for note, note_link, ref in reference_notes_query:
             description = _extract_context_around_match(note.note, query, 120)
+            link_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
             results.append(TextSearchResult(
                 category="notes",
                 id=str(note.note_no),
                 name=link_name,
                 description=description,
-                link=link,
-                organism=organism_name,
+                link=f"/reference/{ref.dbxref_id}",
+                organism=None,
                 match_context=note.note_type,
                 highlighted_name=_highlight_text(link_name, query),
                 highlighted_description=_highlight_text(description, query),
@@ -1576,15 +1586,38 @@ def _count_phenotypes(db: Session, query: str) -> int:
 
 
 def _count_notes(db: Session, query: str) -> int:
-    """Count total notes matching the query."""
+    """
+    Count total notes matching the query that have displayable links.
+    Only counts notes linked to existing features or references.
+    """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    return (
-        db.query(func.count(Note.note_no))
-        .filter(func.upper(Note.note).like(upper_pattern))
-        .scalar()
+    # Count notes linked to features that exist
+    feature_notes_count = (
+        db.query(func.count(func.distinct(Note.note_no)))
+        .join(NoteLink, Note.note_no == NoteLink.note_no)
+        .join(Feature, NoteLink.primary_key == Feature.feature_no)
+        .filter(
+            func.upper(Note.note).like(upper_pattern),
+            func.upper(NoteLink.tab_name) == 'FEATURE'
+        )
+        .scalar() or 0
     )
+
+    # Count notes linked to references that exist
+    reference_notes_count = (
+        db.query(func.count(func.distinct(Note.note_no)))
+        .join(NoteLink, Note.note_no == NoteLink.note_no)
+        .join(Reference, NoteLink.primary_key == Reference.reference_no)
+        .filter(
+            func.upper(Note.note).like(upper_pattern),
+            func.upper(NoteLink.tab_name) == 'REFERENCE'
+        )
+        .scalar() or 0
+    )
+
+    return feature_notes_count + reference_notes_count
 
 
 def _count_external_ids(db: Session, query: str) -> int:
