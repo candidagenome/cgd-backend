@@ -96,6 +96,53 @@ def _get_like_pattern(query: str) -> str:
     return normalized
 
 
+def _parse_search_terms(query: str) -> list[str]:
+    """
+    Parse search query into individual terms.
+    Splits on whitespace, but keeps quoted phrases together.
+    """
+    import shlex
+    try:
+        # Use shlex to handle quoted strings
+        terms = shlex.split(query.strip())
+    except ValueError:
+        # If shlex fails (e.g., unbalanced quotes), fall back to simple split
+        terms = query.strip().split()
+    return [t for t in terms if t]
+
+
+def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
+    """
+    Build a SQLAlchemy filter for multi-term search.
+
+    Args:
+        column: SQLAlchemy column to search
+        query: Search query string (may contain multiple terms)
+        match_mode: "all" (AND) or "any" (OR)
+
+    Returns:
+        SQLAlchemy filter expression
+    """
+    terms = _parse_search_terms(query)
+    if not terms:
+        return None
+
+    # Build LIKE patterns for each term
+    conditions = []
+    for term in terms:
+        pattern = _get_like_pattern(term)
+        upper_pattern = pattern.upper()
+        conditions.append(func.upper(column).like(upper_pattern))
+
+    if len(conditions) == 1:
+        return conditions[0]
+
+    if match_mode == "any":
+        return or_(*conditions)
+    else:  # "all" is the default
+        return and_(*conditions)
+
+
 def _format_goid(goid: int) -> str:
     """Format GOID as GO:XXXXXXX (7-digit padded)."""
     return f"GO:{goid:07d}"
@@ -112,20 +159,29 @@ def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
     """
     Highlight matching query text with <mark> tags.
     Case-insensitive matching that preserves original case.
+    Supports multi-term queries by highlighting each term.
     """
     if not text or not query:
         return text
 
-    clean_query = query.strip().replace('*', '').replace('%', '')
-    if not clean_query:
+    # Parse into individual terms
+    terms = _parse_search_terms(query)
+    if not terms:
         return text
 
-    pattern = re.compile(re.escape(clean_query), re.IGNORECASE)
+    result = text
+    for term in terms:
+        clean_term = term.strip().replace('*', '').replace('%', '')
+        if not clean_term:
+            continue
+        pattern = re.compile(re.escape(clean_term), re.IGNORECASE)
 
-    def replacer(match):
-        return f"<mark>{match.group(0)}</mark>"
+        def replacer(match):
+            return f"<mark>{match.group(0)}</mark>"
 
-    return pattern.sub(replacer, text)
+        result = pattern.sub(replacer, result)
+
+    return result
 
 
 def _truncate_text(text: Optional[str], max_length: int = 300) -> Optional[str]:
@@ -767,27 +823,78 @@ def search_paragraphs(db: Session, query: str, limit: int = 20) -> list[TextSear
     return results
 
 
-def search_abstracts(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+def search_abstracts(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    search_field: str = "both",
+    match_mode: str = "all"
+) -> list[TextSearchResult]:
     """
-    Search paper abstracts.
+    Search paper abstracts and/or titles.
+
+    Args:
+        db: Database session
+        query: Search query string
+        limit: Maximum results to return
+        search_field: "title", "abstract", or "both" (default)
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
+
     Returns TextSearchResult list with category="abstracts".
     """
     results = []
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
 
-    abstract_query = (
+    # Build the base query joining Abstract and Reference
+    base_query = (
         db.query(Abstract, Reference)
         .join(Reference, Abstract.reference_no == Reference.reference_no)
-        .filter(func.upper(Abstract.abstract).like(upper_pattern))
-        .limit(limit)
     )
+
+    # Build filter based on search_field and match_mode
+    if search_field == "title":
+        # Search only in title
+        title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+        if title_filter is None:
+            return results
+        abstract_query = base_query.filter(title_filter).limit(limit)
+    elif search_field == "abstract":
+        # Search only in abstract
+        abstract_filter = _build_multi_term_filter(Abstract.abstract, query, match_mode)
+        if abstract_filter is None:
+            return results
+        abstract_query = base_query.filter(abstract_filter).limit(limit)
+    else:  # "both" - search in either title or abstract
+        title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+        abstract_filter = _build_multi_term_filter(Abstract.abstract, query, match_mode)
+        if title_filter is None or abstract_filter is None:
+            return results
+        # Match in title OR abstract (document matches if either field matches the terms)
+        abstract_query = base_query.filter(or_(title_filter, abstract_filter)).limit(limit)
 
     for abstract, ref in abstract_query:
         # Use citation as name (plain text, no link)
         name = ref.citation or f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
-        # Extract context around matching keyword
-        description = _extract_context_around_match(abstract.abstract, query, 120)
+
+        # Build description based on search_field
+        if search_field == "title":
+            # Show the full title when searching by title
+            description = f"Title: {ref.title}" if ref.title else None
+        elif search_field == "abstract":
+            # Show abstract snippet
+            description = _extract_context_around_match(abstract.abstract, query, 120)
+        else:  # "both"
+            # Show title if it matches, otherwise show abstract snippet
+            title_matches = False
+            if ref.title:
+                terms = _parse_search_terms(query)
+                for term in terms:
+                    if term.lower() in ref.title.lower():
+                        title_matches = True
+                        break
+            if title_matches:
+                description = f"Title: {ref.title}"
+            else:
+                description = _extract_context_around_match(abstract.abstract, query, 120)
 
         # Use PMID as ID if available, otherwise use dbxref_id
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
@@ -900,15 +1007,20 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
         # Determine link based on tab_name
         link = None
         link_name = f"Note {note.note_no}"
+        organism_name = None
 
         if note_link.tab_name.upper() == 'FEATURE':
-            # Look up the feature
-            feat = db.query(Feature).filter(
-                Feature.feature_no == note_link.primary_key
-            ).first()
+            # Look up the feature with organism
+            feat = (
+                db.query(Feature)
+                .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+                .filter(Feature.feature_no == note_link.primary_key)
+                .first()
+            )
             if feat:
                 link = f"/locus/{feat.feature_name}"
                 link_name = feat.gene_name or feat.feature_name
+                organism_name = _get_organism_name(feat.organism)
         elif note_link.tab_name.upper() == 'REFERENCE':
             ref = db.query(Reference).filter(
                 Reference.reference_no == note_link.primary_key
@@ -926,6 +1038,7 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 name=link_name,
                 description=description,
                 link=link,
+                organism=organism_name,
                 match_context=note.note_type,
                 highlighted_name=_highlight_text(link_name, query),
                 highlighted_description=_highlight_text(description, query),
@@ -1269,16 +1382,42 @@ def _count_paragraphs(db: Session, query: str) -> int:
     )
 
 
-def _count_abstracts(db: Session, query: str) -> int:
-    """Count total abstracts matching the query."""
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+def _count_abstracts(
+    db: Session,
+    query: str,
+    search_field: str = "both",
+    match_mode: str = "all"
+) -> int:
+    """
+    Count total abstracts/titles matching the query.
 
-    return (
+    Args:
+        db: Database session
+        query: Search query string
+        search_field: "title", "abstract", or "both" (default)
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
+    """
+    base_query = (
         db.query(func.count(Abstract.reference_no))
-        .filter(func.upper(Abstract.abstract).like(upper_pattern))
-        .scalar()
+        .join(Reference, Abstract.reference_no == Reference.reference_no)
     )
+
+    if search_field == "title":
+        title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+        if title_filter is None:
+            return 0
+        return base_query.filter(title_filter).scalar() or 0
+    elif search_field == "abstract":
+        abstract_filter = _build_multi_term_filter(Abstract.abstract, query, match_mode)
+        if abstract_filter is None:
+            return 0
+        return base_query.filter(abstract_filter).scalar() or 0
+    else:  # "both"
+        title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+        abstract_filter = _build_multi_term_filter(Abstract.abstract, query, match_mode)
+        if title_filter is None or abstract_filter is None:
+            return 0
+        return base_query.filter(or_(title_filter, abstract_filter)).scalar() or 0
 
 
 def _count_name_descriptions(db: Session, query: str) -> int:
@@ -1482,6 +1621,8 @@ def text_search(
     query: str,
     limit_per_category: int = 10,
     category_filter: Optional[str] = None,
+    search_field: str = "both",
+    match_mode: str = "all",
 ) -> TextSearchResponse:
     """
     Search all categories (or a single category if filtered).
@@ -1491,6 +1632,8 @@ def text_search(
         query: Search query string
         limit_per_category: Maximum results per category
         category_filter: If set, only search this category (e.g., "orthologs")
+        search_field: For abstracts category - "title", "abstract", or "both" (default)
+        match_mode: For multi-term queries - "all" (AND) or "any" (OR)
 
     Returns:
         TextSearchResponse with results grouped by category
@@ -1506,10 +1649,16 @@ def text_search(
         search_func = CATEGORY_SEARCH_FUNCTIONS[category]
         count_func = CATEGORY_COUNT_FUNCTIONS[category]
 
-        # Get results
-        results = search_func(db, query, limit_per_category)
-        # Get total count for this category
-        count = count_func(db, query)
+        # For abstracts category, pass the extra parameters
+        if category == "abstracts":
+            results = search_func(
+                db, query, limit_per_category,
+                search_field=search_field, match_mode=match_mode
+            )
+            count = count_func(db, query, search_field=search_field, match_mode=match_mode)
+        else:
+            results = search_func(db, query, limit_per_category)
+            count = count_func(db, query)
 
         if results or count > 0:
             results_list.append(TextSearchCategoryResult(
@@ -1531,6 +1680,8 @@ def text_search_category(
     db: Session,
     query: str,
     category: str,
+    search_field: str = "both",
+    match_mode: str = "all",
 ) -> TextSearchCategoryPagedResponse:
     """
     Search within a specific category, returning all results.
@@ -1539,6 +1690,8 @@ def text_search_category(
         db: Database session
         query: Search query string
         category: Category to search
+        search_field: For abstracts category - "title", "abstract", or "both" (default)
+        match_mode: For multi-term queries - "all" (AND) or "any" (OR)
 
     Returns:
         TextSearchCategoryPagedResponse with all results
@@ -1552,11 +1705,18 @@ def text_search_category(
         )
 
     count_func = CATEGORY_COUNT_FUNCTIONS[category]
-    total_count = count_func(db, query)
-
-    # Get all results (no limit)
     search_func = CATEGORY_SEARCH_FUNCTIONS[category]
-    all_results = search_func(db, query, limit=50000)  # High limit to get all
+
+    # For abstracts category, pass the extra parameters
+    if category == "abstracts":
+        total_count = count_func(db, query, search_field=search_field, match_mode=match_mode)
+        all_results = search_func(
+            db, query, limit=50000,
+            search_field=search_field, match_mode=match_mode
+        )
+    else:
+        total_count = count_func(db, query)
+        all_results = search_func(db, query, limit=50000)
 
     # Get organism counts for genes category
     organism_counts = None

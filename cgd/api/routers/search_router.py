@@ -108,33 +108,63 @@ def text_search(
         None,
         description="Filter: 'homolog' for orthologs only"
     ),
+    search_field: str = Query(
+        "both",
+        description="For paper abstracts: 'title', 'abstract', or 'both' (default)",
+        pattern="^(title|abstract|both)$"
+    ),
+    match_mode: str = Query(
+        "all",
+        description="For multi-term queries: 'all' (AND) or 'any' (OR)",
+        pattern="^(all|any)$"
+    ),
     db: Session = Depends(get_db),
 ):
     """
     Full text search across all CGD categories.
 
-    Searches 13 categories: genes, descriptions, go_terms, colleagues, authors,
+    Searches 14 categories: genes, descriptions, go_terms, colleagues, authors,
     pathways, paragraphs, abstracts, name_descriptions, phenotypes, notes,
-    external_ids, orthologs.
+    external_ids, orthologs, literature_topics.
 
     Use type=homolog to search only orthologs/best hits.
+    Use search_field to limit paper search to title, abstract, or both.
+    Use match_mode to specify AND (all) or OR (any) for multi-term queries.
     """
     category_filter = "orthologs" if type == "homolog" else None
-    return text_search_service.text_search(db, query, limit, category_filter)
+    return text_search_service.text_search(
+        db, query, limit, category_filter,
+        search_field=search_field, match_mode=match_mode
+    )
 
 
 @router.get("/text/category", response_model=TextSearchCategoryPagedResponse)
 def text_search_category(
     query: str = Query(..., min_length=1, description="Search query string"),
     category: str = Query(..., description="Category to search"),
+    search_field: str = Query(
+        "both",
+        description="For paper abstracts: 'title', 'abstract', or 'both' (default)",
+        pattern="^(title|abstract|both)$"
+    ),
+    match_mode: str = Query(
+        "all",
+        description="For multi-term queries: 'all' (AND) or 'any' (OR)",
+        pattern="^(all|any)$"
+    ),
     db: Session = Depends(get_db),
 ):
     """
     Text search within a specific category.
 
     Returns all results for a single category.
+    Use search_field to limit paper search to title, abstract, or both.
+    Use match_mode to specify AND (all) or OR (any) for multi-term queries.
     """
-    return text_search_service.text_search_category(db, query, category)
+    return text_search_service.text_search_category(
+        db, query, category,
+        search_field=search_field, match_mode=match_mode
+    )
 
 
 @router.get("", response_model=SearchDispatchResponse)
