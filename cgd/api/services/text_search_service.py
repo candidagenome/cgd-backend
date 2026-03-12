@@ -58,6 +58,7 @@ CATEGORY_DISPLAY_NAMES = {
     "pathways": "Pathways",
     "paragraphs": "Locus Summary Notes",
     "abstracts": "Papers",
+    "paper_titles": "Paper Titles",
     "name_descriptions": "Gene Name Descriptions",
     "phenotypes": "Phenotypes",
     "notes": "History Notes",
@@ -69,7 +70,7 @@ CATEGORY_DISPLAY_NAMES = {
 # Order in which categories are displayed
 CATEGORY_ORDER = [
     "genes", "descriptions", "go_terms", "colleagues", "authors",
-    "pathways", "paragraphs", "name_descriptions",
+    "pathways", "paragraphs", "paper_titles", "name_descriptions",
     "phenotypes", "notes", "external_ids", "orthologs", "literature_topics"
 ]
 
@@ -113,7 +114,7 @@ def _parse_search_terms(query: str) -> list[str]:
 
 def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     """
-    Build a SQLAlchemy filter for multi-term search with word boundary matching.
+    Build a SQLAlchemy filter for multi-term search.
 
     Args:
         column: SQLAlchemy column to search
@@ -127,17 +128,13 @@ def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     if not terms:
         return None
 
-    # Build regex patterns for each term with word boundaries
-    # Using PostgreSQL case-insensitive regex operator ~*
-    # \y is PostgreSQL word boundary (like \b in other regex flavors)
+    # Build LIKE patterns for each term (wildcard matching)
+    # Each term becomes %TERM% for case-insensitive substring matching
     conditions = []
     for term in terms:
-        # Escape special regex characters in the term
-        escaped_term = re.escape(term)
-        # Use word boundaries to match whole words only
-        pattern = f"\\y{escaped_term}\\y"
-        # Use PostgreSQL ~* operator for case-insensitive regex match
-        conditions.append(column.op("~*")(pattern))
+        pattern = _get_like_pattern(term)
+        upper_pattern = pattern.upper()
+        conditions.append(func.upper(column).like(upper_pattern))
 
     if len(conditions) == 1:
         return conditions[0]
@@ -940,6 +937,69 @@ def search_abstracts(
     return results
 
 
+def search_paper_titles(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    match_mode: str = "all"
+) -> list[TextSearchResult]:
+    """
+    Search paper titles only.
+
+    Args:
+        db: Database session
+        query: Search query string
+        limit: Maximum results to return
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
+
+    Returns TextSearchResult list with category="paper_titles".
+    """
+    results = []
+
+    # Build filter for title search
+    title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+    if title_filter is None:
+        return results
+
+    # Query references with matching titles
+    ref_query = (
+        db.query(Reference)
+        .filter(
+            Reference.title.isnot(None),
+            title_filter
+        )
+        .limit(limit)
+    )
+
+    for ref in ref_query:
+        # Use citation as name
+        name = ref.citation or (f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id)
+
+        # Use PMID as ID if available
+        display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+
+        # Get ref_url for building links
+        ref_urls = (
+            db.query(RefUrl)
+            .filter(RefUrl.reference_no == ref.reference_no)
+            .all()
+        )
+        links = _build_citation_links_for_search(ref, ref_urls)
+
+        results.append(TextSearchResult(
+            category="paper_titles",
+            id=display_id,
+            name=name,
+            description=ref.title,
+            link=None,
+            links=links,
+            highlighted_name=_highlight_text(name, query),
+            highlighted_description=_highlight_text(ref.title, query),
+        ))
+
+    return results
+
+
 def search_name_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
     """
     Search gene name descriptions (name_description field).
@@ -1446,6 +1506,29 @@ def _count_abstracts(
         return base_query.filter(or_(title_filter, abstract_filter)).scalar() or 0
 
 
+def _count_paper_titles(db: Session, query: str, match_mode: str = "all") -> int:
+    """
+    Count total paper titles matching the query.
+
+    Args:
+        db: Database session
+        query: Search query string
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
+    """
+    title_filter = _build_multi_term_filter(Reference.title, query, match_mode)
+    if title_filter is None:
+        return 0
+
+    return (
+        db.query(func.count(Reference.reference_no))
+        .filter(
+            Reference.title.isnot(None),
+            title_filter
+        )
+        .scalar() or 0
+    )
+
+
 def _count_name_descriptions(db: Session, query: str) -> int:
     """Count total name_description matches."""
     like_pattern = _get_like_pattern(query)
@@ -1612,6 +1695,7 @@ CATEGORY_SEARCH_FUNCTIONS = {
     "pathways": search_pathways,
     "paragraphs": search_paragraphs,
     "abstracts": search_abstracts,
+    "paper_titles": search_paper_titles,
     "name_descriptions": search_name_descriptions,
     "phenotypes": search_phenotypes,
     "notes": search_notes,
@@ -1629,6 +1713,7 @@ CATEGORY_COUNT_FUNCTIONS = {
     "pathways": _count_pathways,
     "paragraphs": _count_paragraphs,
     "abstracts": _count_abstracts,
+    "paper_titles": _count_paper_titles,
     "name_descriptions": _count_name_descriptions,
     "phenotypes": _count_phenotypes,
     "notes": _count_notes,
@@ -1682,8 +1767,8 @@ def text_search(
                 search_field=search_field, match_mode=match_mode
             )
             count = count_func(db, query, search_field=search_field, match_mode=match_mode)
-        # For descriptions category, pass match_mode
-        elif category == "descriptions":
+        # For descriptions and paper_titles categories, pass match_mode
+        elif category in ("descriptions", "paper_titles"):
             results = search_func(db, query, limit_per_category, match_mode=match_mode)
             count = count_func(db, query, match_mode=match_mode)
         else:
@@ -1744,8 +1829,8 @@ def text_search_category(
             db, query, limit=50000,
             search_field=search_field, match_mode=match_mode
         )
-    # For descriptions category, pass match_mode
-    elif category == "descriptions":
+    # For descriptions and paper_titles categories, pass match_mode
+    elif category in ("descriptions", "paper_titles"):
         total_count = count_func(db, query, match_mode=match_mode)
         all_results = search_func(db, query, limit=50000, match_mode=match_mode)
     else:
