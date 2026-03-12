@@ -1827,6 +1827,9 @@ def text_search(
             results = search_func(db, query, limit_per_category)
             count = count_func(db, query)
 
+        # Filter out results with empty or null names
+        results = [r for r in results if r.name]
+
         if results or count > 0:
             results_list.append(TextSearchCategoryResult(
                 category=category,
@@ -1888,6 +1891,9 @@ def text_search_category(
     else:
         total_count = count_func(db, query)
         all_results = search_func(db, query, limit=50000)
+
+    # Filter out results with empty or null names
+    all_results = [r for r in all_results if r.name]
 
     # Get organism counts for genes category
     organism_counts = None
