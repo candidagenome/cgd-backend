@@ -69,7 +69,7 @@ CATEGORY_DISPLAY_NAMES = {
 # Order in which categories are displayed
 CATEGORY_ORDER = [
     "genes", "descriptions", "go_terms", "colleagues", "authors",
-    "pathways", "paragraphs", "abstracts", "name_descriptions",
+    "pathways", "paragraphs", "name_descriptions",
     "phenotypes", "notes", "external_ids", "orthologs", "literature_topics"
 ]
 
@@ -113,7 +113,7 @@ def _parse_search_terms(query: str) -> list[str]:
 
 def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     """
-    Build a SQLAlchemy filter for multi-term search.
+    Build a SQLAlchemy filter for multi-term search with word boundary matching.
 
     Args:
         column: SQLAlchemy column to search
@@ -127,12 +127,17 @@ def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     if not terms:
         return None
 
-    # Build LIKE patterns for each term
+    # Build regex patterns for each term with word boundaries
+    # Using PostgreSQL case-insensitive regex operator ~*
+    # \y is PostgreSQL word boundary (like \b in other regex flavors)
     conditions = []
     for term in terms:
-        pattern = _get_like_pattern(term)
-        upper_pattern = pattern.upper()
-        conditions.append(func.upper(column).like(upper_pattern))
+        # Escape special regex characters in the term
+        escaped_term = re.escape(term)
+        # Use word boundaries to match whole words only
+        pattern = f"\\y{escaped_term}\\y"
+        # Use PostgreSQL ~* operator for case-insensitive regex match
+        conditions.append(column.op("~*")(pattern))
 
     if len(conditions) == 1:
         return conditions[0]
