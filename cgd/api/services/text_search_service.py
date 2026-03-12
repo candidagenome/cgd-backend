@@ -145,6 +145,21 @@ def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
         return and_(*conditions)
 
 
+def _exact_phrase_order(column, query: str):
+    """
+    Create an ORDER BY expression that prioritizes exact phrase matches.
+
+    Returns a CASE expression: 0 for exact phrase match, 1 otherwise.
+    Use with .order_by() to show exact matches first.
+    """
+    from sqlalchemy import case
+    exact_pattern = f"%{query.strip().upper()}%"
+    return case(
+        (func.upper(column).like(exact_pattern), 0),
+        else_=1
+    )
+
+
 def _format_goid(goid: int) -> str:
     """Format GOID as GO:XXXXXXX (7-digit padded)."""
     return f"GO:{goid:07d}"
@@ -538,6 +553,7 @@ def search_descriptions(
     a21_subq = _get_a21_exclusion_subquery(db)
 
     # Query with Assembly 21 exclusion built into the SQL
+    # Order by exact phrase match first
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
@@ -545,6 +561,7 @@ def search_descriptions(
             headline_filter,
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
+        .order_by(_exact_phrase_order(Feature.headline, query))
         .limit(limit)
     )
 
@@ -962,12 +979,14 @@ def search_paper_titles(
         return results
 
     # Query references with matching titles
+    # Order by exact phrase match first
     ref_query = (
         db.query(Reference)
         .filter(
             Reference.title.isnot(None),
             title_filter
         )
+        .order_by(_exact_phrase_order(Reference.title, query))
         .limit(limit)
     )
 
