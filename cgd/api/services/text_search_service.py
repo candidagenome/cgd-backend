@@ -506,17 +506,31 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     return results
 
 
-def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+def search_descriptions(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    match_mode: str = "all"
+) -> list[TextSearchResult]:
     """
     Search locus descriptions (headline field).
     Returns TextSearchResult list with category="descriptions".
+
+    Args:
+        db: Database session
+        query: Search query string
+        limit: Maximum results to return
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
 
     Note: Filters out Assembly 21 features that have Assembly 22 equivalents
     to avoid duplicate results for the same gene.
     """
     results = []
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+
+    # Build filter for multi-term search
+    headline_filter = _build_multi_term_filter(Feature.headline, query, match_mode)
+    if headline_filter is None:
+        return results
 
     # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
     a21_subq = _get_a21_exclusion_subquery(db)
@@ -526,7 +540,7 @@ def search_descriptions(db: Session, query: str, limit: int = 20) -> list[TextSe
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
-            func.upper(Feature.headline).like(upper_pattern),
+            headline_filter,
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .limit(limit)
@@ -1249,15 +1263,22 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     return {name: count for name, count in organism_counts if name}
 
 
-def _count_descriptions(db: Session, query: str) -> int:
+def _count_descriptions(db: Session, query: str, match_mode: str = "all") -> int:
     """
     Count total description matches.
+
+    Args:
+        db: Database session
+        query: Search query string
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
 
     Note: Excludes Assembly 21 features that have Assembly 22 equivalents
     to avoid counting duplicates.
     """
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+    # Build filter for multi-term search
+    headline_filter = _build_multi_term_filter(Feature.headline, query, match_mode)
+    if headline_filter is None:
+        return 0
 
     # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
     a21_subq = _get_a21_exclusion_subquery(db)
@@ -1265,7 +1286,7 @@ def _count_descriptions(db: Session, query: str) -> int:
     return (
         db.query(func.count(Feature.feature_no))
         .filter(
-            func.upper(Feature.headline).like(upper_pattern),
+            headline_filter,
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .scalar()
@@ -1649,13 +1670,17 @@ def text_search(
         search_func = CATEGORY_SEARCH_FUNCTIONS[category]
         count_func = CATEGORY_COUNT_FUNCTIONS[category]
 
-        # For abstracts category, pass the extra parameters
+        # For abstracts category, pass the extra parameters (search_field + match_mode)
         if category == "abstracts":
             results = search_func(
                 db, query, limit_per_category,
                 search_field=search_field, match_mode=match_mode
             )
             count = count_func(db, query, search_field=search_field, match_mode=match_mode)
+        # For descriptions category, pass match_mode
+        elif category == "descriptions":
+            results = search_func(db, query, limit_per_category, match_mode=match_mode)
+            count = count_func(db, query, match_mode=match_mode)
         else:
             results = search_func(db, query, limit_per_category)
             count = count_func(db, query)
@@ -1707,13 +1732,17 @@ def text_search_category(
     count_func = CATEGORY_COUNT_FUNCTIONS[category]
     search_func = CATEGORY_SEARCH_FUNCTIONS[category]
 
-    # For abstracts category, pass the extra parameters
+    # For abstracts category, pass the extra parameters (search_field + match_mode)
     if category == "abstracts":
         total_count = count_func(db, query, search_field=search_field, match_mode=match_mode)
         all_results = search_func(
             db, query, limit=50000,
             search_field=search_field, match_mode=match_mode
         )
+    # For descriptions category, pass match_mode
+    elif category == "descriptions":
+        total_count = count_func(db, query, match_mode=match_mode)
+        all_results = search_func(db, query, limit=50000, match_mode=match_mode)
     else:
         total_count = count_func(db, query)
         all_results = search_func(db, query, limit=50000)
