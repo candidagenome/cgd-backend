@@ -1627,7 +1627,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
     print(f"DEBUG _count_notes: query='{query}', match_mode='{match_mode}'")
 
     # Count notes linked to features that exist and have a displayable name
-    # (gene_name or feature_name must be non-null and non-empty)
+    # (gene_name or feature_name must be non-null)
+    # Note: In Oracle, empty string '' is NULL, so we only check isnot(None)
     feature_notes_count = (
         db.query(func.count(func.distinct(Note.note_no)))
         .join(NoteLink, Note.note_no == NoteLink.note_no)
@@ -1636,8 +1637,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
             note_filter,
             func.upper(NoteLink.tab_name) == 'FEATURE',
             or_(
-                and_(Feature.gene_name.isnot(None), Feature.gene_name != ''),
-                and_(Feature.feature_name.isnot(None), Feature.feature_name != '')
+                Feature.gene_name.isnot(None),
+                Feature.feature_name.isnot(None)
             )
         )
         .scalar() or 0
@@ -1645,7 +1646,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
     print(f"DEBUG _count_notes: feature_notes_count={feature_notes_count}")
 
     # Count notes linked to references that exist and have a displayable name
-    # (pubmed or dbxref_id must be non-null and non-empty)
+    # (pubmed or dbxref_id must be non-null)
+    # Note: In Oracle, empty string '' is NULL, so we only check isnot(None)
     reference_notes_count = (
         db.query(func.count(func.distinct(Note.note_no)))
         .join(NoteLink, Note.note_no == NoteLink.note_no)
@@ -1654,8 +1656,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
             note_filter,
             func.upper(NoteLink.tab_name) == 'REFERENCE',
             or_(
-                and_(Reference.pubmed.isnot(None), Reference.pubmed != ''),
-                and_(Reference.dbxref_id.isnot(None), Reference.dbxref_id != '')
+                Reference.pubmed.isnot(None),
+                Reference.dbxref_id.isnot(None)
             )
         )
         .scalar() or 0
