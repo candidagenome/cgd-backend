@@ -1851,12 +1851,16 @@ def text_search(
     results_list = []
     total_results = 0
 
+    print(f"DEBUG text_search: query='{query}', match_mode='{match_mode}', categories={categories_to_search}")
+
     for category in categories_to_search:
         if category not in CATEGORY_SEARCH_FUNCTIONS:
             continue
 
         search_func = CATEGORY_SEARCH_FUNCTIONS[category]
         count_func = CATEGORY_COUNT_FUNCTIONS[category]
+
+        print(f"DEBUG text_search: processing category '{category}'")
 
         # For abstracts category, pass the extra parameters (search_field + match_mode)
         if category == "abstracts":
@@ -1867,11 +1871,14 @@ def text_search(
             count = count_func(db, query, search_field=search_field, match_mode=match_mode)
         # For descriptions, paper_titles, and notes categories, pass match_mode
         elif category in ("descriptions", "paper_titles", "notes"):
+            print(f"DEBUG text_search: calling {category} with match_mode='{match_mode}'")
             results = search_func(db, query, limit_per_category, match_mode=match_mode)
             count = count_func(db, query, match_mode=match_mode)
         else:
             results = search_func(db, query, limit_per_category)
             count = count_func(db, query)
+
+        print(f"DEBUG text_search: {category} returned {len(results)} results, count={count}")
 
         # Filter out results with empty or null names
         results = [r for r in results if r.name]
