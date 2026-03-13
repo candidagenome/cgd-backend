@@ -196,8 +196,8 @@ def get_genome_snapshot(db: Session, organism_abbrev: str) -> GenomeSnapshotResp
         # Get ORF counts
         orf_counts = _get_orf_counts(db, organism.organism_no)
 
-        # Get tRNA count
-        trna_count = _get_trna_count(db, organism.organism_no)
+        # Get all feature type counts
+        feature_counts = _get_all_feature_counts(db, organism.organism_no)
 
         # Get chromosomes and genome length
         chromosomes, genome_length_bp = _get_chromosomes_and_length(db, organism.organism_no)
@@ -210,7 +210,8 @@ def get_genome_snapshot(db: Session, organism_abbrev: str) -> GenomeSnapshotResp
 
         # Determine if diploid (C. albicans is diploid)
         is_diploid = "albicans" in organism_abbrev.lower()
-        haploid_orfs = orf_counts["total"] // 2 if is_diploid else orf_counts["total"]
+        divisor = 2 if is_diploid else 1
+        haploid_orfs = orf_counts["total"] // divisor
 
         return GenomeSnapshotResponse(
             success=True,
@@ -223,10 +224,23 @@ def get_genome_snapshot(db: Session, organism_abbrev: str) -> GenomeSnapshotResp
             verified_orfs=orf_counts["verified"],
             uncharacterized_orfs=orf_counts["uncharacterized"],
             dubious_orfs=orf_counts["dubious"],
-            trna_count=trna_count,
+            trna_count=feature_counts["trna_count"],
+            ltr_count=feature_counts["ltr_count"],
+            snorna_count=feature_counts["snorna_count"],
+            repeat_region_count=feature_counts["repeat_region_count"],
+            retrotransposon_count=feature_counts["retrotransposon_count"],
+            centromere_count=feature_counts["centromere_count"],
+            pseudogene_count=feature_counts["pseudogene_count"],
+            blocked_reading_frame_count=feature_counts["blocked_reading_frame_count"],
+            snrna_count=feature_counts["snrna_count"],
+            rrna_count=feature_counts["rrna_count"],
+            ncrna_count=feature_counts["ncrna_count"],
+            total_features=feature_counts["total_features"],
             chromosomes=chromosomes,
             genome_length=genome_length,
             genome_length_bp=genome_length_bp,
+            chromosome_length=genome_length_bp,
+            haploid_chromosome_length=genome_length_bp // divisor,
             go_annotations=go_counts,
         )
 
@@ -337,9 +351,9 @@ def _get_orf_counts(db: Session, organism_no: int) -> Dict[str, int]:
     return counts
 
 
-def _get_trna_count(db: Session, organism_no: int) -> int:
+def _get_feature_type_count(db: Session, organism_no: int, feature_type: str) -> int:
     """
-    Get tRNA gene count, matching the original Perl logic.
+    Get count for a specific feature type, matching the original Perl logic.
 
     Filters by:
     1. is_loc_current = 'Y' - Only count features with current location
@@ -354,15 +368,15 @@ def _get_trna_count(db: Session, organism_no: int) -> int:
         .subquery()
     )
 
-    # Main query: Get tRNAs that are on current location/seq/version and not deleted
-    current_trnas = (
+    # Main query: Get features that are on current location/seq/version and not deleted
+    current_features = (
         db.query(Feature.feature_no)
         .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
         .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
         .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Feature.organism_no == organism_no,
-            Feature.feature_type == "tRNA",
+            Feature.feature_type == feature_type,
             FeatLocation.is_loc_current == "Y",
             Seq.is_seq_current == "Y",
             GenomeVersion.is_ver_current == "Y",
@@ -372,7 +386,49 @@ def _get_trna_count(db: Session, organism_no: int) -> int:
         .all()
     )
 
-    return len(current_trnas)
+    return len(current_features)
+
+
+def _get_trna_count(db: Session, organism_no: int) -> int:
+    """Get tRNA gene count."""
+    return _get_feature_type_count(db, organism_no, "tRNA")
+
+
+def _get_all_feature_counts(db: Session, organism_no: int) -> Dict[str, int]:
+    """
+    Get counts for all feature types.
+
+    Returns a dictionary with counts for each feature type.
+    """
+    feature_types = [
+        ("tRNA", "trna_count"),
+        ("long_terminal_repeat", "ltr_count"),
+        ("snoRNA", "snorna_count"),
+        ("repeat_region", "repeat_region_count"),
+        ("retrotransposon", "retrotransposon_count"),
+        ("centromere", "centromere_count"),
+        ("pseudogene", "pseudogene_count"),
+        ("blocked_reading_frame", "blocked_reading_frame_count"),
+        ("snRNA", "snrna_count"),
+        ("rRNA", "rrna_count"),
+        ("ncRNA", "ncrna_count"),
+    ]
+
+    counts = {}
+    total = 0
+
+    for feature_type, key in feature_types:
+        count = _get_feature_type_count(db, organism_no, feature_type)
+        counts[key] = count
+        total += count
+
+    # Add ORF counts to total
+    orf_counts = _get_orf_counts(db, organism_no)
+    total += orf_counts["total"]
+
+    counts["total_features"] = total
+
+    return counts
 
 
 def _get_chromosomes_and_length(db: Session, organism_no: int) -> tuple:
