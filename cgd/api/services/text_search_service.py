@@ -1108,11 +1108,11 @@ def search_notes(
     if note_filter is None:
         return results
 
-    # DEBUG: Print the filter being used
-    print(f"DEBUG search_notes: query='{query}', match_mode='{match_mode}'")
-    print(f"DEBUG search_notes: note_filter={note_filter}")
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Search notes linked to features (with verified feature existence)
+    # Exclude Assembly 21 features that have Assembly 22 equivalents
     feature_notes_query = (
         db.query(Note, NoteLink, Feature)
         .join(NoteLink, Note.note_no == NoteLink.note_no)
@@ -1120,18 +1120,13 @@ def search_notes(
         .options(joinedload(Feature.organism))
         .filter(
             note_filter,
-            func.upper(NoteLink.tab_name) == 'FEATURE'
+            func.upper(NoteLink.tab_name) == 'FEATURE',
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .limit(limit)
     )
 
-    # DEBUG: Print the SQL query
-    print(f"DEBUG search_notes SQL: {feature_notes_query}")
-
-    feature_results = list(feature_notes_query)
-    print(f"DEBUG search_notes: found {len(feature_results)} feature notes")
-
-    for note, note_link, feat in feature_results:
+    for note, note_link, feat in feature_notes_query:
         description = _extract_context_around_match(note.note, query, 120)
         organism_name = _get_organism_name(feat.organism) if feat.organism else None
         link_name = feat.gene_name or feat.feature_name
@@ -1624,10 +1619,12 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
     if note_filter is None:
         return 0
 
-    print(f"DEBUG _count_notes: query='{query}', match_mode='{match_mode}'")
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
 
     # Count notes linked to features that exist and have a displayable name
     # (gene_name or feature_name must be non-null)
+    # Exclude Assembly 21 features that have Assembly 22 equivalents
     # Note: In Oracle, empty string '' is NULL, so we only check isnot(None)
     feature_notes_count = (
         db.query(func.count(func.distinct(Note.note_no)))
@@ -1639,11 +1636,11 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
             or_(
                 Feature.gene_name.isnot(None),
                 Feature.feature_name.isnot(None)
-            )
+            ),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
         .scalar() or 0
     )
-    print(f"DEBUG _count_notes: feature_notes_count={feature_notes_count}")
 
     # Count notes linked to references that exist and have a displayable name
     # (pubmed or dbxref_id must be non-null)
@@ -1662,8 +1659,6 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
         )
         .scalar() or 0
     )
-    print(f"DEBUG _count_notes: reference_notes_count={reference_notes_count}")
-    print(f"DEBUG _count_notes: total={feature_notes_count + reference_notes_count}")
 
     return feature_notes_count + reference_notes_count
 
@@ -1853,16 +1848,12 @@ def text_search(
     results_list = []
     total_results = 0
 
-    print(f"DEBUG text_search: query='{query}', match_mode='{match_mode}', categories={categories_to_search}")
-
     for category in categories_to_search:
         if category not in CATEGORY_SEARCH_FUNCTIONS:
             continue
 
         search_func = CATEGORY_SEARCH_FUNCTIONS[category]
         count_func = CATEGORY_COUNT_FUNCTIONS[category]
-
-        print(f"DEBUG text_search: processing category '{category}'")
 
         # For abstracts category, pass the extra parameters (search_field + match_mode)
         if category == "abstracts":
@@ -1873,14 +1864,11 @@ def text_search(
             count = count_func(db, query, search_field=search_field, match_mode=match_mode)
         # For descriptions, paper_titles, and notes categories, pass match_mode
         elif category in ("descriptions", "paper_titles", "notes"):
-            print(f"DEBUG text_search: calling {category} with match_mode='{match_mode}'")
             results = search_func(db, query, limit_per_category, match_mode=match_mode)
             count = count_func(db, query, match_mode=match_mode)
         else:
             results = search_func(db, query, limit_per_category)
             count = count_func(db, query)
-
-        print(f"DEBUG text_search: {category} returned {len(results)} results, count={count}")
 
         # Filter out results with empty or null names
         results = [r for r in results if r.name]
