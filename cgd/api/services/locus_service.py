@@ -3245,6 +3245,12 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
             species_name = source_to_species.get(source, source)
             url_template = source_to_url.get(source)
+
+            # TODO: dictyBase URLs need gene_id/feature/feature_id format but we only have feature_id
+            # Skip dictyBase entries for now until we have the correct gene ID
+            if source == 'dictyBase':
+                continue
+
             url = url_template.format(id=dbx.dbxref_id) if url_template else None
 
             # Use description as display name if available, otherwise dbxref_id
