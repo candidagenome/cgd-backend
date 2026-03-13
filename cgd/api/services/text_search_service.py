@@ -1084,15 +1084,29 @@ def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[TextSear
     return results
 
 
-def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+def search_notes(
+    db: Session,
+    query: str,
+    limit: int = 20,
+    match_mode: str = "all"
+) -> list[TextSearchResult]:
     """
     Search notes (history notes) linked to features or references.
     Returns TextSearchResult list with category="notes".
     Only returns notes with valid links to existing features or references.
+
+    Args:
+        db: Database session
+        query: Search query string
+        limit: Maximum results to return
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
     """
     results = []
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+
+    # Build filter for multi-term search
+    note_filter = _build_multi_term_filter(Note.note, query, match_mode)
+    if note_filter is None:
+        return results
 
     # Search notes linked to features (with verified feature existence)
     feature_notes_query = (
@@ -1101,7 +1115,7 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
         .join(Feature, NoteLink.primary_key == Feature.feature_no)
         .options(joinedload(Feature.organism))
         .filter(
-            func.upper(Note.note).like(upper_pattern),
+            note_filter,
             func.upper(NoteLink.tab_name) == 'FEATURE'
         )
         .limit(limit)
@@ -1131,7 +1145,7 @@ def search_notes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             .join(NoteLink, Note.note_no == NoteLink.note_no)
             .join(Reference, NoteLink.primary_key == Reference.reference_no)
             .filter(
-                func.upper(Note.note).like(upper_pattern),
+                note_filter,
                 func.upper(NoteLink.tab_name) == 'REFERENCE'
             )
             .limit(remaining_limit)
@@ -1585,13 +1599,20 @@ def _count_phenotypes(db: Session, query: str) -> int:
     )
 
 
-def _count_notes(db: Session, query: str) -> int:
+def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
     """
     Count total notes matching the query that have displayable links.
     Only counts notes linked to existing features or references with valid names.
+
+    Args:
+        db: Database session
+        query: Search query string
+        match_mode: "all" (AND) or "any" (OR) for multi-term queries
     """
-    like_pattern = _get_like_pattern(query)
-    upper_pattern = like_pattern.upper()
+    # Build filter for multi-term search
+    note_filter = _build_multi_term_filter(Note.note, query, match_mode)
+    if note_filter is None:
+        return 0
 
     # Count notes linked to features that exist and have a displayable name
     # (gene_name or feature_name must be non-null and non-empty)
@@ -1600,7 +1621,7 @@ def _count_notes(db: Session, query: str) -> int:
         .join(NoteLink, Note.note_no == NoteLink.note_no)
         .join(Feature, NoteLink.primary_key == Feature.feature_no)
         .filter(
-            func.upper(Note.note).like(upper_pattern),
+            note_filter,
             func.upper(NoteLink.tab_name) == 'FEATURE',
             or_(
                 and_(Feature.gene_name.isnot(None), Feature.gene_name != ''),
@@ -1617,7 +1638,7 @@ def _count_notes(db: Session, query: str) -> int:
         .join(NoteLink, Note.note_no == NoteLink.note_no)
         .join(Reference, NoteLink.primary_key == Reference.reference_no)
         .filter(
-            func.upper(Note.note).like(upper_pattern),
+            note_filter,
             func.upper(NoteLink.tab_name) == 'REFERENCE',
             or_(
                 and_(Reference.pubmed.isnot(None), Reference.pubmed != ''),
@@ -1829,8 +1850,8 @@ def text_search(
                 search_field=search_field, match_mode=match_mode
             )
             count = count_func(db, query, search_field=search_field, match_mode=match_mode)
-        # For descriptions and paper_titles categories, pass match_mode
-        elif category in ("descriptions", "paper_titles"):
+        # For descriptions, paper_titles, and notes categories, pass match_mode
+        elif category in ("descriptions", "paper_titles", "notes"):
             results = search_func(db, query, limit_per_category, match_mode=match_mode)
             count = count_func(db, query, match_mode=match_mode)
         else:
@@ -1894,8 +1915,8 @@ def text_search_category(
             db, query, limit=50000,
             search_field=search_field, match_mode=match_mode
         )
-    # For descriptions and paper_titles categories, pass match_mode
-    elif category in ("descriptions", "paper_titles"):
+    # For descriptions, paper_titles, and notes categories, pass match_mode
+    elif category in ("descriptions", "paper_titles", "notes"):
         total_count = count_func(db, query, match_mode=match_mode)
         all_results = search_func(db, query, limit=50000, match_mode=match_mode)
     else:
