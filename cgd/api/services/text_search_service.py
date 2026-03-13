@@ -1108,6 +1108,10 @@ def search_notes(
     if note_filter is None:
         return results
 
+    # DEBUG: Print the filter being used
+    print(f"DEBUG search_notes: query='{query}', match_mode='{match_mode}'")
+    print(f"DEBUG search_notes: note_filter={note_filter}")
+
     # Search notes linked to features (with verified feature existence)
     feature_notes_query = (
         db.query(Note, NoteLink, Feature)
@@ -1121,7 +1125,13 @@ def search_notes(
         .limit(limit)
     )
 
-    for note, note_link, feat in feature_notes_query:
+    # DEBUG: Print the SQL query
+    print(f"DEBUG search_notes SQL: {feature_notes_query}")
+
+    feature_results = list(feature_notes_query)
+    print(f"DEBUG search_notes: found {len(feature_results)} feature notes")
+
+    for note, note_link, feat in feature_results:
         description = _extract_context_around_match(note.note, query, 120)
         organism_name = _get_organism_name(feat.organism) if feat.organism else None
         link_name = feat.gene_name or feat.feature_name
@@ -1614,6 +1624,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
     if note_filter is None:
         return 0
 
+    print(f"DEBUG _count_notes: query='{query}', match_mode='{match_mode}'")
+
     # Count notes linked to features that exist and have a displayable name
     # (gene_name or feature_name must be non-null and non-empty)
     feature_notes_count = (
@@ -1630,6 +1642,7 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
         )
         .scalar() or 0
     )
+    print(f"DEBUG _count_notes: feature_notes_count={feature_notes_count}")
 
     # Count notes linked to references that exist and have a displayable name
     # (pubmed or dbxref_id must be non-null and non-empty)
@@ -1647,6 +1660,8 @@ def _count_notes(db: Session, query: str, match_mode: str = "all") -> int:
         )
         .scalar() or 0
     )
+    print(f"DEBUG _count_notes: reference_notes_count={reference_notes_count}")
+    print(f"DEBUG _count_notes: total={feature_notes_count + reference_notes_count}")
 
     return feature_notes_count + reference_notes_count
 
