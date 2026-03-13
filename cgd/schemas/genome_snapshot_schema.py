@@ -66,8 +66,21 @@ class GenomeSnapshotResponse(BaseModel):
 
     # Other feature counts
     trna_count: int = Field(0, description="tRNA gene count")
+    ltr_count: int = Field(0, description="Long terminal repeat count")
+    snorna_count: int = Field(0, description="snoRNA count")
+    repeat_region_count: int = Field(0, description="Repeat region count")
+    retrotransposon_count: int = Field(0, description="Retrotransposon count")
+    centromere_count: int = Field(0, description="Centromere count")
+    pseudogene_count: int = Field(0, description="Pseudogene count")
+    blocked_reading_frame_count: int = Field(0, description="Blocked reading frame count")
+    snrna_count: int = Field(0, description="snRNA count")
+    rrna_count: int = Field(0, description="rRNA count")
+    ncrna_count: int = Field(0, description="ncRNA count")
+    total_features: int = Field(0, description="Total feature count")
 
     # Genome info
+    chromosome_length: int = Field(0, description="Total chromosome length in bp")
+    haploid_chromosome_length: int = Field(0, description="Haploid chromosome length in bp")
     chromosomes: List[str] = Field(default_factory=list, description="List of chromosome names")
     genome_length: str = Field("", description="Total genome length formatted")
     genome_length_bp: int = Field(0, description="Total genome length in base pairs")

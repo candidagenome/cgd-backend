@@ -3106,6 +3106,19 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             is_query=False,
                             url=ext_url,
                         ))
+                    elif 'discoideum' in ext_org.lower():
+                        # Use search URL for dictyBase since we don't have DDB gene IDs
+                        ext_source = 'dictyBase'
+                        ext_url = f"http://dictybase.org/db/cgi-bin/search/search.pl?query={dbxref.dbxref_id}"
+                        ensembl_orthologs.append(OrthologOut(
+                            sequence_id=ext_seq_id,
+                            feature_name=dbxref.dbxref_id,
+                            organism_name=ext_org,
+                            source=ext_source,
+                            status=ext_status,
+                            is_query=False,
+                            url=ext_url,
+                        ))
                     else:
                         ext_source = 'EnsemblFungi'
                         ext_url = f"https://fungi.ensembl.org/id/{dbxref.dbxref_id}"
@@ -3245,7 +3258,12 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
             species_name = source_to_species.get(source, source)
             url_template = source_to_url.get(source)
-            url = url_template.format(id=dbx.dbxref_id) if url_template else None
+
+            # Use search URL for dictyBase since we don't have the gene IDs needed for direct links
+            if source == 'dictyBase':
+                url = f"http://dictybase.org/db/cgi-bin/search/search.pl?query={dbx.dbxref_id}"
+            else:
+                url = url_template.format(id=dbx.dbxref_id) if url_template else None
 
             # Use description as display name if available, otherwise dbxref_id
             display_name = dbx.description or dbx.dbxref_id
