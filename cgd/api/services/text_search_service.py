@@ -1588,31 +1588,41 @@ def _count_phenotypes(db: Session, query: str) -> int:
 def _count_notes(db: Session, query: str) -> int:
     """
     Count total notes matching the query that have displayable links.
-    Only counts notes linked to existing features or references.
+    Only counts notes linked to existing features or references with valid names.
     """
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Count notes linked to features that exist
+    # Count notes linked to features that exist and have a displayable name
+    # (gene_name or feature_name must be non-null and non-empty)
     feature_notes_count = (
         db.query(func.count(func.distinct(Note.note_no)))
         .join(NoteLink, Note.note_no == NoteLink.note_no)
         .join(Feature, NoteLink.primary_key == Feature.feature_no)
         .filter(
             func.upper(Note.note).like(upper_pattern),
-            func.upper(NoteLink.tab_name) == 'FEATURE'
+            func.upper(NoteLink.tab_name) == 'FEATURE',
+            or_(
+                and_(Feature.gene_name.isnot(None), Feature.gene_name != ''),
+                and_(Feature.feature_name.isnot(None), Feature.feature_name != '')
+            )
         )
         .scalar() or 0
     )
 
-    # Count notes linked to references that exist
+    # Count notes linked to references that exist and have a displayable name
+    # (pubmed or dbxref_id must be non-null and non-empty)
     reference_notes_count = (
         db.query(func.count(func.distinct(Note.note_no)))
         .join(NoteLink, Note.note_no == NoteLink.note_no)
         .join(Reference, NoteLink.primary_key == Reference.reference_no)
         .filter(
             func.upper(Note.note).like(upper_pattern),
-            func.upper(NoteLink.tab_name) == 'REFERENCE'
+            func.upper(NoteLink.tab_name) == 'REFERENCE',
+            or_(
+                and_(Reference.pubmed.isnot(None), Reference.pubmed != ''),
+                and_(Reference.dbxref_id.isnot(None), Reference.dbxref_id != '')
+            )
         )
         .scalar() or 0
     )
