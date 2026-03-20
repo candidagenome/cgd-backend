@@ -7,11 +7,14 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+# Base data directory (Dev: /data, Prod: /data/tools)
+CGD_DATA_DIR = os.environ.get("CGD_DATA_DIR", "/data")
+
 # Binary tool path
-SCAN_FOR_MATCHES_BINARY = os.environ.get("SCAN_FOR_MATCHES_BINARY", "/data/bin/scan_for_matches")
+SCAN_FOR_MATCHES_BINARY = os.environ.get("SCAN_FOR_MATCHES_BINARY", f"{CGD_DATA_DIR}/bin/scan_for_matches")
 
 # Restriction enzyme data directory
-RESTRICTION_ENZYMES_DIR = os.environ.get("RESTRICTION_ENZYMES_DIR", "/data/restriction_enzymes")
+RESTRICTION_ENZYMES_DIR = os.environ.get("RESTRICTION_ENZYMES_DIR", f"{CGD_DATA_DIR}/restriction_enzymes")
 
 
 class EnzymeFilterType(str, Enum):

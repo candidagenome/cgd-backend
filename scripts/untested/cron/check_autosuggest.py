@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 # Default configuration
 DEFAULT_PROC_PATTERN = "java -jar start.jar"
 DEFAULT_LOGFILE = "/share/www-data_cgd/prod/logs/autosuggest_monitor.log"
-DEFAULT_AUTOSUGGEST_DIR = "/data/autosuggest"
+CGD_DATA_DIR = os.environ.get("CGD_DATA_DIR", "/data")
+DEFAULT_AUTOSUGGEST_DIR = f"{CGD_DATA_DIR}/autosuggest"
 
 
 def setup_file_logging(log_file: Path) -> None:

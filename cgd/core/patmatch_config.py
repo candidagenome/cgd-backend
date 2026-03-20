@@ -7,18 +7,21 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+# Base data directory (Dev: /data, Prod: /data/tools)
+CGD_DATA_DIR = os.environ.get("CGD_DATA_DIR", "/data")
+
 # Binary tool paths
-NRGREP_BINARY = os.environ.get("NRGREP_BINARY", "/data/bin/nrgrep_coords")
-SCAN_FOR_MATCHES_BINARY = os.environ.get("SCAN_FOR_MATCHES_BINARY", "/data/bin/scan_for_matches")
+NRGREP_BINARY = os.environ.get("NRGREP_BINARY", f"{CGD_DATA_DIR}/bin/nrgrep_coords")
+SCAN_FOR_MATCHES_BINARY = os.environ.get("SCAN_FOR_MATCHES_BINARY", f"{CGD_DATA_DIR}/bin/scan_for_matches")
 
 # Data directories
-FASTA_FILES_DIR = os.environ.get("FASTA_FILES_DIR", "/data/fasta_files")
-RESTRICTION_ENZYMES_DIR = os.environ.get("RESTRICTION_ENZYMES_DIR", "/data/restriction_enzymes")
+FASTA_FILES_DIR = os.environ.get("FASTA_FILES_DIR", f"{CGD_DATA_DIR}/fasta_files")
+RESTRICTION_ENZYMES_DIR = os.environ.get("RESTRICTION_ENZYMES_DIR", f"{CGD_DATA_DIR}/restriction_enzymes")
 
 # Index generation script (for nrgrep)
 INDEX_GENERATOR_SCRIPT = os.environ.get(
     "INDEX_GENERATOR_SCRIPT",
-    "/data/bin/generate_sequence_index.pl"
+    f"{CGD_DATA_DIR}/bin/generate_sequence_index.pl"
 )
 
 

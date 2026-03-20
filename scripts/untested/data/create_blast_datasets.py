@@ -32,7 +32,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-BLAST_DATASET_DIR = Path(os.getenv("BLAST_DATASET_DIR", "/data/blast_datasets"))
+CGD_DATA_DIR = os.getenv("CGD_DATA_DIR", "/data")
+BLAST_DATASET_DIR = Path(os.getenv("BLAST_DATASET_DIR", f"{CGD_DATA_DIR}/blast_datasets"))
 BLAST_FORMAT_CMD = os.getenv("BLAST_FORMAT_CMD", "makeblastdb")
 SEQUENCE_FILES_CONFIG = os.getenv("SEQUENCE_FILES_CONFIG", "")
 LOG_DIR = Path(os.getenv("LOG_DIR", "/tmp"))

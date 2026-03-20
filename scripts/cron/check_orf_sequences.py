@@ -234,8 +234,9 @@ def check_protein_sequences(
 
 def get_sequence_files(strain_abbrev: str) -> tuple[Path, Path]:
     """Get paths to coding and protein sequence files for a strain."""
-    # Primary location: /data/fasta_files/<strain>/
-    seq_dir = Path("/data/fasta_files") / strain_abbrev
+    # Primary location: CGD_DATA_DIR/fasta_files/<strain>/
+    cgd_data_dir = os.getenv("CGD_DATA_DIR", "/data")
+    seq_dir = Path(cgd_data_dir) / "fasta_files" / strain_abbrev
 
     # Fallback to DATA_DIR/sequences/<strain>/
     if not seq_dir.exists():
