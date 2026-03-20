@@ -87,7 +87,7 @@ class Settings(BaseSettings):
 
     # JBrowse configuration
     jbrowse_base_url: str = Field(
-        default="/jbrowse/index.html",
+        default="/jbrowse2/",
         validation_alias="JBROWSE_BASE_URL"
     )
     jbrowse_flank: int = Field(
