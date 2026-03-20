@@ -2439,8 +2439,8 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         # Literature guide URL
         literature_guide_url = f"/locus/{f.feature_name}#literature"
 
-        # PBrowse URL for domain visualization
-        # URL structure: /jbrowse/index.html?data=cgd_data/{strain}_prot&loc={feature}:1..{len}&tracklist=0&nav=0&overview=0&tracks=...
+        # PBrowse URL for domain visualization (JBrowse2 format)
+        # URL structure: /jbrowse2/?assembly={strain}_prot&loc={feature}:1..{len}&tracks=...
         pbrowse_url = None
         protein_length = protein_info.protein_length if protein_info else None
         if protein_length and f.organism:
@@ -2462,21 +2462,19 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 if si.info_type:
                     domain_types_present.add(si.info_type)
 
-            # Build tracks string: Sequence, Protein, then add domain types present
-            # Match Perl: tracks=Sequence%2CProtein%2C{domain_types}
-            tracks = ['Sequence', 'Protein']
+            # Build tracks string: Protein, then add domain types present
+            tracks = ['Protein']
             for trk in domain_order + motif_order + strux_order:
                 if trk in domain_types_present:
                     tracks.append(trk)
 
-            tracks_str = '%2C'.join(tracks)  # URL-encoded comma
-            # Use configurable JBrowse URL for protein domain visualization
-            # Perl: pbrowseHome + '&loc=' + feature + ':1..' + len + '&tracklist=0&nav=0&overview=0&tracks=...'
+            tracks_str = ','.join(tracks)
+            # Use JBrowse2 URL format for protein domain visualization
             pbrowse_url = (
                 f"{settings.jbrowse_base_url}"
-                f"?data=cgd_data/{strain_abbrev}_prot"
+                f"?assembly={strain_abbrev}_prot"
                 f"&loc={f.feature_name}:1..{protein_length}"
-                f"&tracklist=0&nav=0&overview=0&tracks={tracks_str}"
+                f"&tracks={tracks_str}"
             )
 
         out[organism_name] = ProteinDetailsForOrganism(
@@ -3399,20 +3397,34 @@ def _get_sequence_resources(
     )
 
 
-# JBrowse configuration per organism/strain
-# Format: { organism_name: { 'data_path': str, 'tracks': str, 'mini_tracks': str } }
+# JBrowse2 configuration per organism/strain
+# Format: { organism_name: { 'assembly': str, 'tracks': str, 'mini_tracks': str } }
 JBROWSE_CONFIG = {
     "Candida albicans SC5314": {
-        "data_path": "cgd_data/C_albicans_SC5314",
-        "tracks": "DNA,Transcribed Features",
-        "mini_tracks": "DNA,Transcribed Features",
+        "assembly": "C_albicans_SC5314",
+        "tracks": "DNA,TranscribedFeatures",
+        "mini_tracks": "DNA,TranscribedFeatures",
     },
     "Candida glabrata CBS138": {
-        "data_path": "cgd_data/C_glabrata_CBS138",
-        "tracks": "DNA,Transcribed Features",
-        "mini_tracks": "DNA,Transcribed Features",
+        "assembly": "C_glabrata_CBS138",
+        "tracks": "DNA,TranscribedFeatures",
+        "mini_tracks": "DNA,TranscribedFeatures",
     },
-    # Add other organisms as needed
+    "Candida dubliniensis CD36": {
+        "assembly": "C_dubliniensis_CD36",
+        "tracks": "DNA,TranscribedFeatures",
+        "mini_tracks": "DNA,TranscribedFeatures",
+    },
+    "Candida parapsilosis CDC317": {
+        "assembly": "C_parapsilosis_CDC317",
+        "tracks": "DNA,TranscribedFeatures",
+        "mini_tracks": "DNA,TranscribedFeatures",
+    },
+    "Candida auris B8441": {
+        "assembly": "C_auris_B8441",
+        "tracks": "DNA,TranscribedFeatures",
+        "mini_tracks": "DNA,TranscribedFeatures",
+    },
 }
 
 # JBrowse base URL - use settings for configurability
@@ -3431,9 +3443,8 @@ def _get_jbrowse_info(
     feature_qualifier: Optional[str] = None,
 ) -> Optional[JBrowseInfo]:
     """
-    Generate JBrowse URLs for embedding and linking.
+    Generate JBrowse2 URLs for embedding and linking.
 
-    This implements the JBrowse section from the Perl code.
     Returns None if the feature is deleted/unmapped or has no location.
 
     Args:
@@ -3477,18 +3488,13 @@ def _get_jbrowse_info(
     low_flanked = max(1, low - JBROWSE_FLANK)
     high_flanked = high + JBROWSE_FLANK
 
-    # URL encode the parameters
-    data_encoded = quote(config['data_path'], safe='')
-    tracks_encoded = quote(config['tracks'], safe='')
-    mini_tracks_encoded = quote(config['mini_tracks'], safe='')
+    # URL encode the location
     loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
 
-    # Build URLs with proper JBrowse parameters
-    # Format: ?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
-    base_params = f"?data={data_encoded}&tracklist=1&nav=1&overview=1"
-
-    embed_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={mini_tracks_encoded}&loc={loc_encoded}&highlight="
-    full_url = f"{JBROWSE_BASE_URL}{base_params}&tracks={tracks_encoded}&loc={loc_encoded}&highlight="
+    # Build JBrowse2 URLs
+    # Format: ?assembly=...&loc=...&tracks=...
+    embed_url = f"{JBROWSE_BASE_URL}?assembly={config['assembly']}&loc={loc_encoded}&tracks={config['mini_tracks']}"
+    full_url = f"{JBROWSE_BASE_URL}?assembly={config['assembly']}&loc={loc_encoded}&tracks={config['tracks']}"
 
     return JBrowseInfo(
         embed_url=embed_url,

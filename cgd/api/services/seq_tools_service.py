@@ -26,28 +26,28 @@ from cgd.schemas.seq_tools_schema import (
 # JBrowse configuration - using settings for base URL
 from cgd.core.settings import settings
 
-# JBrowse configuration per organism/strain
-# Format: { organism_name: { 'data_path': str, 'tracks': str } }
+# JBrowse2 configuration per organism/strain
+# Format: { organism_name: { 'assembly': str, 'tracks': str } }
 JBROWSE_CONFIG = {
     "Candida albicans SC5314": {
-        "data_path": "cgd_data/C_albicans_SC5314",
-        "tracks": "DNA,Transcribed Features",
+        "assembly": "C_albicans_SC5314",
+        "tracks": "DNA,TranscribedFeatures",
     },
     "Candida glabrata CBS138": {
-        "data_path": "cgd_data/C_glabrata_CBS138",
-        "tracks": "DNA,Transcribed Features",
+        "assembly": "C_glabrata_CBS138",
+        "tracks": "DNA,TranscribedFeatures",
     },
     "Candida dubliniensis CD36": {
-        "data_path": "cgd_data/C_dubliniensis_CD36",
-        "tracks": "DNA,Transcribed Features",
+        "assembly": "C_dubliniensis_CD36",
+        "tracks": "DNA,TranscribedFeatures",
     },
     "Candida parapsilosis CDC317": {
-        "data_path": "cgd_data/C_parapsilosis_CDC317",
-        "tracks": "DNA,Transcribed Features",
+        "assembly": "C_parapsilosis_CDC317",
+        "tracks": "DNA,TranscribedFeatures",
     },
     "Candida auris B8441": {
-        "data_path": "cgd_data/C_auris_B8441",
-        "tracks": "DNA,Transcribed Features",
+        "assembly": "C_auris_B8441",
+        "tracks": "DNA,TranscribedFeatures",
     },
 }
 
@@ -232,10 +232,10 @@ def _build_jbrowse_link(
     flank_right: int = 0,
 ) -> Optional[str]:
     """
-    Build JBrowse URL for a genomic location.
+    Build JBrowse2 URL for a genomic location.
 
-    Uses organism-specific configuration for data path and tracks.
-    URL format: /jbrowse/index.html?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    Uses organism-specific configuration for assembly and tracks.
+    URL format: /jbrowse2/?assembly=...&loc=...&tracks=...
     """
     if not chromosome or not start or not end:
         return None
@@ -261,20 +261,15 @@ def _build_jbrowse_link(
     low_flanked = max(1, low - effective_flank_left)
     high_flanked = high + effective_flank_right
 
-    # URL encode the parameters
-    data_encoded = quote(config['data_path'], safe='')
-    tracks_encoded = quote(config['tracks'], safe='')
+    # URL encode the location
     loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
 
-    # Build URL with proper JBrowse parameters
-    # Format: ?data=...&tracklist=1&nav=1&overview=1&tracks=...&loc=...&highlight=
+    # Build JBrowse2 URL
     jbrowse_url = (
         f"{settings.jbrowse_base_url}"
-        f"?data={data_encoded}"
-        f"&tracklist=1&nav=1&overview=1"
-        f"&tracks={tracks_encoded}"
+        f"?assembly={config['assembly']}"
         f"&loc={loc_encoded}"
-        f"&highlight="
+        f"&tracks={config['tracks']}"
     )
 
     return jbrowse_url
