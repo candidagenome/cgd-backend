@@ -311,13 +311,14 @@ def _generate_jbrowse_url(
     low_flanked = max(1, low - settings.jbrowse_flank)
     high_flanked = high + settings.jbrowse_flank
 
-    # Build JBrowse URL
-    data_encoded = quote(config["jbrowse_data"], safe='')
+    # Build JBrowse2 URL
+    # Strip assembly suffix (e.g., _A22) since JBrowse2 uses base organism name
+    assembly = _map_organism_tag_to_abbrev(organism_tag)
     loc_encoded = quote(f"{chromosome}:{low_flanked}..{high_flanked}", safe='')
-    tracks_encoded = quote("DNA,Transcribed Features", safe='')
+    tracks = "DNA,TranscribedFeatures"
 
     base_url = settings.jbrowse_base_url
-    url = f"{base_url}?data={data_encoded}&tracklist=1&nav=1&overview=1&tracks={tracks_encoded}&loc={loc_encoded}&highlight="
+    url = f"{base_url}?assembly={assembly}&loc={loc_encoded}&tracks={tracks}"
 
     return url
 
