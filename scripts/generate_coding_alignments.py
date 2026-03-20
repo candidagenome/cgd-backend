@@ -151,8 +151,8 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path("/data/cgd-data"),
-        help="Path to CGD data directory (default: /data/cgd-data)"
+        default=Path(os.environ.get("CGD_DATA_DIR", "/data")),
+        help="Path to CGD data directory (default: CGD_DATA_DIR or /data)"
     )
     parser.add_argument(
         "--dry-run",

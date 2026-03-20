@@ -1,7 +1,7 @@
 import secrets
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,8 +44,11 @@ class Settings(BaseSettings):
         description="Domain for auth cookies (e.g., '.dev.candidagenome.org' for cross-subdomain)",
     )
 
-    # Path to CGD data files (default matches typical production setup)
-    cgd_data_dir: str = "/data"
+    # Path to CGD data files (Dev: /data, Prod: /data/tools)
+    cgd_data_dir: str = Field(
+        default="/data",
+        validation_alias="CGD_DATA_DIR"
+    )
 
     # Back-compat toggle for CGI-style dispatch endpoint
     allow_search_dispatch: bool = True
@@ -62,12 +65,14 @@ class Settings(BaseSettings):
         default="/tools/ncbi/blast/bin/",
         validation_alias="BLAST_BIN"
     )
+    # Note: blast_db_path and fasta_dir default to cgd_data_dir subdirectories
+    # but can be overridden via BLAST_DB_DIR and FASTA_DIR env vars
     blast_db_path: str = Field(
-        default="/data/blast_datasets/",
+        default="",
         validation_alias="BLAST_DB_DIR"
     )
     fasta_dir: str = Field(
-        default="/data/fasta_files/",
+        default="",
         validation_alias="FASTA_DIR"
     )
     blast_timeout: int = Field(
@@ -89,6 +94,15 @@ class Settings(BaseSettings):
         default=1000,
         description="Flanking base pairs for JBrowse coordinates"
     )
+
+    @model_validator(mode="after")
+    def set_data_dir_defaults(self) -> "Settings":
+        """Set blast_db_path and fasta_dir defaults based on cgd_data_dir."""
+        if not self.blast_db_path:
+            self.blast_db_path = f"{self.cgd_data_dir}/blast_datasets/"
+        if not self.fasta_dir:
+            self.fasta_dir = f"{self.cgd_data_dir}/fasta_files/"
+        return self
 
 
 settings = Settings()
