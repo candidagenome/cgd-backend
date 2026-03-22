@@ -156,6 +156,64 @@ def _get_ortholog_members(
     return [r[0] for r in results]
 
 
+def _find_cgob_cluster_for_gene(
+    db: Session,
+    query_feature: Feature,
+) -> Optional[HomologyGroup]:
+    """
+    Find CGOB ortholog cluster for a gene.
+
+    First checks the query feature's feat_homology. If not found, searches for
+    other ORF features with the same gene_name in the same organism that have
+    CGOB links. This handles cases where CGOB data was loaded with Assembly 22
+    names (e.g., C1_13700W_A) but the query uses Assembly 19 names (e.g., orf19.5007).
+
+    Args:
+        db: Database session
+        query_feature: The feature to find CGOB cluster for
+
+    Returns:
+        HomologyGroup if found, None otherwise
+    """
+    # First, check the query feature's own feat_homology
+    for fh in query_feature.feat_homology:
+        hg = fh.homology_group
+        if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+            return hg
+
+    # If not found and we have a gene_name, search for alternate assembly versions
+    if not query_feature.gene_name:
+        return None
+
+    # Find other ORFs with the same gene_name in the same organism
+    alternate_features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.feat_homology)
+            .joinedload(FeatHomology.homology_group)
+        )
+        .filter(
+            func.upper(Feature.gene_name) == func.upper(query_feature.gene_name),
+            Feature.organism_no == query_feature.organism_no,
+            func.lower(Feature.feature_type) == 'orf',
+            Feature.feature_no != query_feature.feature_no,  # Exclude the query feature
+        )
+        .all()
+    )
+
+    for alt_feat in alternate_features:
+        for fh in alt_feat.feat_homology:
+            hg = fh.homology_group
+            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+                logger.debug(
+                    f"Found CGOB cluster via alternate feature: "
+                    f"{query_feature.feature_name} -> {alt_feat.feature_name}"
+                )
+                return hg
+
+    return None
+
+
 def get_synteny_data(
     db: Session,
     name: str,
@@ -227,12 +285,8 @@ def get_synteny_data(
     )
 
     # Find CGOB ortholog cluster for query gene
-    cgob_cluster = None
-    for fh in query_feature.feat_homology:
-        hg = fh.homology_group
-        if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
-            cgob_cluster = hg
-            break
+    # This also checks alternate assembly versions (e.g., Assembly 22 vs Assembly 19)
+    cgob_cluster = _find_cgob_cluster_for_gene(db, query_feature)
 
     # Build synteny regions for each species
     synteny_regions: dict[str, SyntenyRegion] = {}
