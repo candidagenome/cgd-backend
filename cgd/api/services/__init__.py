@@ -27,6 +27,8 @@ Services:
 - locus_service: Locus/gene information services
 - colleague_service: Colleague/researcher services
 - reference_service: Reference/publication services
+- synteny_service: Locus-centric synteny viewer
+- genome_synteny_service: Genome-wide synteny browser
 """
 
 from .phenotype_service import *  # noqa: F401, F403
@@ -48,3 +50,5 @@ from .restriction_mapper_service import *  # noqa: F401, F403
 from .locus_service import *  # noqa: F401, F403
 from .colleague_service import *  # noqa: F401, F403
 from .reference_service import *  # noqa: F401, F403
+from .synteny_service import *  # noqa: F401, F403
+from .genome_synteny_service import *  # noqa: F401, F403

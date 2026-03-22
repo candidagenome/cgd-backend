@@ -50,3 +50,49 @@ class SyntenyResponse(BaseModel):
     query_gene: QueryGene
     synteny_regions: dict[str, SyntenyRegion]  # organism_name -> SyntenyRegion
     ortholog_connections: list[OrthologConnection] = []
+
+
+# ============================================================================
+# Genome Synteny Browser Schemas
+# ============================================================================
+
+class ChromosomeInfo(BaseModel):
+    """Information about a chromosome for the genome synteny browser."""
+    organism_name: str
+    chromosome: str  # feature_name of the chromosome
+    length: int  # sequence length in bp
+    gene_count: int  # number of ORFs on this chromosome
+
+
+class ChromosomeListResponse(BaseModel):
+    """
+    Response for /api/synteny/chromosomes endpoint.
+
+    Lists all chromosomes for each CGD species.
+    """
+    chromosomes: dict[str, list[ChromosomeInfo]]  # organism_name -> list of chromosomes
+
+
+class GenomeGene(BaseModel):
+    """A gene in a chromosome region for the genome synteny browser."""
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+    start: int
+    stop: int
+    strand: str  # 'W' or 'C'
+    ortholog_id: typing.Optional[str] = None  # CGOB cluster ID
+    headline: typing.Optional[str] = None  # gene description
+
+
+class ChromosomeGenesResponse(BaseModel):
+    """
+    Response for /api/synteny/chromosome/{name} endpoint.
+
+    Contains genes in a chromosome region with ortholog information.
+    """
+    organism_name: str
+    chromosome: str
+    chromosome_length: int
+    genes: list[GenomeGene] = []
+    window_start: typing.Optional[int] = None
+    window_end: typing.Optional[int] = None
