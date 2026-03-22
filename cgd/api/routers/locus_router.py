@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
-from cgd.api.services import locus_service
+from cgd.api.services import locus_service, synteny_service
 from cgd.schemas.locus_schema import (
     LocusByOrganismResponse,
     SequenceDetailsResponse,
@@ -17,6 +17,7 @@ from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
 from cgd.schemas.go_schema import GODetailsResponse
 from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse, ProteinDomainResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
+from cgd.schemas.synteny_schema import SyntenyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,28 @@ def domain_details(name: str, db: Session = Depends(get_db)):
         return locus_service.get_locus_domain_details(db, name)
     except Exception as e:
         logger.error(f"Error in domain_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/synteny", response_model=SyntenyResponse)
+def synteny(name: str, flanking_count: int = 10, db: Session = Depends(get_db)):
+    """
+    Get synteny data for this locus across CGD species.
+
+    Returns flanking genes and ortholog connections for visualization
+    in the synteny viewer.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        flanking_count: Number of genes upstream/downstream to include (default: 10)
+    """
+    try:
+        return synteny_service.get_synteny_data(db, name, flanking_count)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in synteny for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
