@@ -41,7 +41,7 @@ def _get_chromosome_length(db: Session, chromosome_feature_no: int) -> int:
         .filter(
             Seq.feature_no == chromosome_feature_no,
             Seq.is_seq_current == 'Y',
-            Seq.seq_type == 'Genomic',
+            func.lower(Seq.seq_type) == 'genomic',
         )
         .first()
     )
@@ -70,7 +70,7 @@ def _get_seq_no_for_chromosome(db: Session, chromosome_feature_no: int) -> Optio
         .filter(
             Seq.feature_no == chromosome_feature_no,
             Seq.is_seq_current == 'Y',
-            Seq.seq_type == 'Genomic',
+            func.lower(Seq.seq_type) == 'genomic',
         )
         .first()
     )
