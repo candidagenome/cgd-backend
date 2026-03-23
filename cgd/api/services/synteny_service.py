@@ -13,6 +13,8 @@ from cgd.models.models import (
     FeatHomology,
     HomologyGroup,
     Seq,
+    FeatAlias,
+    Alias,
 )
 from cgd.schemas.synteny_schema import (
     SyntenyGene,
@@ -214,6 +216,53 @@ def _find_cgob_cluster_for_gene(
     return None
 
 
+def _select_preferred_feature(features: list) -> Optional[Feature]:
+    """
+    Select the preferred feature from a list of candidates.
+
+    Preference order:
+    1. Features with current location (is_loc_current == 'Y')
+    2. Features with feature_name starting with 'C' (Assembly 22 naming)
+    3. Features with gene_name set
+    4. First feature alphabetically by feature_name
+    """
+    if not features:
+        return None
+    if len(features) == 1:
+        return features[0]
+
+    # Filter to features with current location
+    with_location = [
+        f for f in features
+        if any(fl.is_loc_current == 'Y' for fl in f.feat_location)
+    ]
+    if with_location:
+        features = with_location
+
+    if len(features) == 1:
+        return features[0]
+
+    # Prefer Assembly 22 features (feature_name starts with 'C')
+    a22_features = [
+        f for f in features
+        if f.feature_name and f.feature_name.startswith('C')
+    ]
+    if a22_features:
+        features = a22_features
+
+    if len(features) == 1:
+        return features[0]
+
+    # Prefer features with gene_name set
+    with_gene_name = [f for f in features if f.gene_name]
+    if with_gene_name:
+        features = with_gene_name
+
+    # Sort by feature_name for deterministic selection
+    features.sort(key=lambda f: f.feature_name or '')
+    return features[0]
+
+
 def get_synteny_data(
     db: Session,
     name: str,
@@ -224,36 +273,66 @@ def get_synteny_data(
 
     Args:
         db: Database session
-        name: Locus name (gene_name, feature_name, or dbxref_id)
+        name: Locus name (gene_name, feature_name, dbxref_id, or alias)
         flanking_count: Number of genes upstream/downstream to include
 
     Returns:
         SyntenyResponse with query gene, synteny regions, and ortholog connections
     """
     n = name.strip()
+    upper_n = func.upper(n)
 
-    # Find the query feature
-    query_feature = (
+    # Define common query options
+    feature_options = [
+        joinedload(Feature.organism),
+        joinedload(Feature.feat_location),
+        joinedload(Feature.feat_homology)
+        .joinedload(FeatHomology.homology_group)
+        .joinedload(HomologyGroup.feat_homology)
+        .joinedload(FeatHomology.feature)
+        .joinedload(Feature.organism),
+    ]
+
+    # Query for direct matches (gene_name, feature_name, dbxref_id)
+    direct_features = (
         db.query(Feature)
-        .options(
-            joinedload(Feature.organism),
-            joinedload(Feature.feat_location),
-            joinedload(Feature.feat_homology)
-            .joinedload(FeatHomology.homology_group)
-            .joinedload(HomologyGroup.feat_homology)
-            .joinedload(FeatHomology.feature)
-            .joinedload(Feature.organism),
-        )
+        .options(*feature_options)
         .filter(
             or_(
-                func.upper(Feature.gene_name) == func.upper(n),
-                func.upper(Feature.feature_name) == func.upper(n),
-                func.upper(Feature.dbxref_id) == func.upper(n),
+                func.upper(Feature.gene_name) == upper_n,
+                func.upper(Feature.feature_name) == upper_n,
+                func.upper(Feature.dbxref_id) == upper_n,
             ),
             func.lower(Feature.feature_type) == 'orf',
         )
-        .first()
+        .all()
     )
+
+    # Track found feature_nos to avoid duplicates
+    found_feature_nos = {f.feature_no for f in direct_features}
+
+    # Also query for features with matching aliases (e.g., CDC60B -> CDC60)
+    alias_features = (
+        db.query(Feature)
+        .options(*feature_options)
+        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .filter(
+            func.upper(Alias.alias_name) == upper_n,
+            func.lower(Feature.feature_type) == 'orf',
+        )
+        .all()
+    )
+
+    # Combine results, avoiding duplicates
+    all_features = list(direct_features)
+    for feat in alias_features:
+        if feat.feature_no not in found_feature_nos:
+            all_features.append(feat)
+            found_feature_nos.add(feat.feature_no)
+
+    # Select the preferred feature from candidates
+    query_feature = _select_preferred_feature(all_features)
 
     if not query_feature:
         raise ValueError(f"Locus not found: {name}")
