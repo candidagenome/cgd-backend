@@ -308,31 +308,25 @@ def get_synteny_data(
         .all()
     )
 
-    # Track found feature_nos to avoid duplicates
-    found_feature_nos = {f.feature_no for f in direct_features}
+    # Prefer direct matches over alias matches
+    # This prevents aliases (e.g., "MDR1" as alias for GYP2) from being selected
+    # when there's an actual gene with that name (e.g., MDR1)
+    query_feature = _select_preferred_feature(direct_features)
 
-    # Also query for features with matching aliases (e.g., CDC60B -> CDC60)
-    alias_features = (
-        db.query(Feature)
-        .options(*feature_options)
-        .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
-        .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(
-            func.upper(Alias.alias_name) == upper_n,
-            func.lower(Feature.feature_type) == 'orf',
+    if not query_feature:
+        # No direct match found - try alias matches (e.g., CDC60B -> CDC60)
+        alias_features = (
+            db.query(Feature)
+            .options(*feature_options)
+            .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+            .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+            .filter(
+                func.upper(Alias.alias_name) == upper_n,
+                func.lower(Feature.feature_type) == 'orf',
+            )
+            .all()
         )
-        .all()
-    )
-
-    # Combine results, avoiding duplicates
-    all_features = list(direct_features)
-    for feat in alias_features:
-        if feat.feature_no not in found_feature_nos:
-            all_features.append(feat)
-            found_feature_nos.add(feat.feature_no)
-
-    # Select the preferred feature from candidates
-    query_feature = _select_preferred_feature(all_features)
+        query_feature = _select_preferred_feature(alias_features)
 
     if not query_feature:
         raise ValueError(f"Locus not found: {name}")
