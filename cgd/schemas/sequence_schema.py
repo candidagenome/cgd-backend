@@ -11,6 +11,8 @@ class SeqType(str, Enum):
     GENOMIC = "genomic"
     PROTEIN = "protein"
     CODING = "coding"  # Exons only (CDS)
+    GENOMIC_UTR = "genomic_utr"  # Full genomic sequence including UTR regions
+    CODING_UTR = "coding_utr"  # Transcript/mRNA - CDS with UTRs, introns spliced out
 
 
 class SeqFormat(str, Enum):

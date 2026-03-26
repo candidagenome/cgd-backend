@@ -3768,17 +3768,13 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
 
         # Add the best current sequence for each type
         for seq in seen_current_types.values():
-            residues = seq.residues
-            if residues and len(residues) > 1000:
-                residues = residues[:1000] + "..."
-
             sequences.append(SequenceOut(
                 seq_type=seq.seq_type,
                 seq_length=seq.seq_length,
                 source=seq.source,
                 seq_version=seq.seq_version,
                 is_current=True,
-                residues=residues,
+                residues=seq.residues,
             ))
 
         # Update locations with seq_version

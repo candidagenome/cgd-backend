@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from cgd.models.models import Feature, Seq, FeatLocation, Organism
+from cgd.models.models import Feature, Seq, FeatLocation, Organism, FeatRelationship
 from cgd.schemas.sequence_schema import (
     SeqType,
     SeqFormat,
@@ -24,6 +24,158 @@ COMPLEMENT_MAP = str.maketrans("ACGTacgt", "TGCAtgca")
 def _reverse_complement(seq: str) -> str:
     """Return the reverse complement of a DNA sequence."""
     return seq.translate(COMPLEMENT_MAP)[::-1]
+
+
+def _get_subfeatures(db: Session, feature: Feature) -> list:
+    """
+    Get subfeatures (CDS, UTR, exons) for a feature, ordered by start coordinate.
+
+    Returns list of tuples: (feature_type, start_coord, stop_coord)
+    """
+    subfeatures = (
+        db.query(
+            Feature.feature_type,
+            FeatLocation.start_coord,
+            FeatLocation.stop_coord,
+        )
+        .join(FeatRelationship, FeatRelationship.child_feature_no == Feature.feature_no)
+        .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+        .filter(
+            FeatRelationship.parent_feature_no == feature.feature_no,
+            FeatRelationship.rank == 2,  # rank 2 = subfeature
+            FeatLocation.is_loc_current == "Y",
+        )
+        .order_by(FeatLocation.start_coord)
+        .all()
+    )
+    return subfeatures
+
+
+def _get_genomic_utr_sequence(
+    db: Session,
+    feature: Feature,
+    location: FeatLocation,
+) -> Optional[str]:
+    """
+    Get genomic sequence including UTR regions.
+
+    This returns the full genomic span from the first subfeature to the last,
+    including any introns between them.
+    """
+    subfeatures = _get_subfeatures(db, feature)
+
+    if not subfeatures:
+        return None
+
+    # Find the extent from first to last subfeature
+    all_coords = []
+    for feat_type, start, stop in subfeatures:
+        all_coords.extend([start, stop])
+
+    if not all_coords:
+        return None
+
+    feat_start = min(all_coords)
+    feat_stop = max(all_coords)
+
+    # Get the chromosome/root sequence
+    root_seq = (
+        db.query(Seq)
+        .filter(
+            Seq.seq_no == location.root_seq_no,
+            Seq.is_seq_current == "Y"
+        )
+        .first()
+    )
+
+    if not root_seq or not root_seq.residues:
+        return None
+
+    chr_seq = root_seq.residues
+
+    # Extract the sequence (convert to 0-based indexing)
+    sequence = chr_seq[feat_start - 1:feat_stop]
+
+    # Reverse complement if on Crick strand
+    if location.strand == "C":
+        sequence = _reverse_complement(sequence)
+
+    return sequence
+
+
+def _get_coding_utr_sequence(
+    db: Session,
+    feature: Feature,
+    location: FeatLocation,
+) -> Optional[str]:
+    """
+    Get transcript/mRNA sequence - CDS with UTRs, introns spliced out.
+
+    This concatenates all CDS, UTR, and Noncoding_exon subfeatures,
+    excluding introns. This is the spliced transcript sequence.
+    """
+    subfeatures = _get_subfeatures(db, feature)
+
+    if not subfeatures:
+        return None
+
+    # Get the chromosome/root sequence
+    root_seq = (
+        db.query(Seq)
+        .filter(
+            Seq.seq_no == location.root_seq_no,
+            Seq.is_seq_current == "Y"
+        )
+        .first()
+    )
+
+    if not root_seq or not root_seq.residues:
+        return None
+
+    chr_seq = root_seq.residues
+    strand = location.strand
+
+    # Filter to only CDS, UTR, and Noncoding_exon subfeatures (not introns)
+    exon_types = ["cds", "utr", "noncoding_exon", "five_prime_utr", "three_prime_utr"]
+    exon_subfeatures = []
+    for feat_type, start, stop in subfeatures:
+        feat_type_lower = (feat_type or "").lower()
+        # Include if it matches any exon type and is NOT an intron
+        if any(et in feat_type_lower for et in exon_types) and "intron" not in feat_type_lower:
+            exon_subfeatures.append((feat_type, start, stop))
+
+    if not exon_subfeatures:
+        # Fall back to all non-intron subfeatures
+        for feat_type, start, stop in subfeatures:
+            feat_type_lower = (feat_type or "").lower()
+            if "intron" not in feat_type_lower:
+                exon_subfeatures.append((feat_type, start, stop))
+
+    if not exon_subfeatures:
+        return None
+
+    # Extract each exon segment and concatenate
+    segments = []
+    for feat_type, start, stop in exon_subfeatures:
+        # Ensure start < stop
+        if start > stop:
+            start, stop = stop, start
+
+        # Extract segment (convert to 0-based indexing)
+        segment = chr_seq[start - 1:stop]
+
+        # If Crick strand, reverse complement each segment
+        if strand == "C":
+            segment = _reverse_complement(segment)
+
+        segments.append(segment)
+
+    # For Crick strand, segments are ordered by genomic position but need to be
+    # reversed for the transcript order
+    if strand == "C":
+        segments.reverse()
+
+    return "".join(segments)
 
 
 def _format_fasta_header(
@@ -87,7 +239,12 @@ def get_sequence_by_feature(
     Args:
         db: Database session
         query: Gene name, feature name, or CGDID
-        seq_type: Type of sequence (genomic, protein, coding)
+        seq_type: Type of sequence:
+            - genomic: Full genomic DNA sequence
+            - protein: Translated protein sequence
+            - coding: CDS/exons only (introns removed)
+            - genomic_utr: Genomic sequence including UTR regions
+            - coding_utr: Transcript/mRNA - CDS with UTRs, introns spliced out
         flank_left: Base pairs to include upstream
         flank_right: Base pairs to include downstream
         reverse_complement: Whether to return reverse complement
@@ -126,30 +283,7 @@ def get_sequence_by_feature(
     if not feature:
         return None
 
-    # Determine which sequence type to retrieve from DB
-    # Note: Database stores lowercase values ("genomic", "protein")
-    if seq_type == SeqType.PROTEIN:
-        db_seq_type = "protein"
-    else:
-        db_seq_type = "genomic"
-
-    # Get current sequence for this feature
-    seq_record = (
-        db.query(Seq)
-        .filter(
-            Seq.feature_no == feature.feature_no,
-            Seq.seq_type == db_seq_type,
-            Seq.is_seq_current == "Y"
-        )
-        .first()
-    )
-
-    if not seq_record:
-        return None
-
-    sequence = seq_record.residues
-
-    # Get location info for coordinates
+    # Get location info for coordinates (needed for UTR sequence computation)
     location = (
         db.query(FeatLocation)
         .filter(
@@ -179,8 +313,70 @@ def get_sequence_by_feature(
         end_coord = location.stop_coord
         strand = location.strand
 
-    # Handle flanking regions for genomic sequence
-    if seq_type != SeqType.PROTEIN and (flank_left > 0 or flank_right > 0):
+    # Handle GENOMIC_UTR and CODING_UTR types (computed from subfeatures)
+    if seq_type == SeqType.GENOMIC_UTR:
+        if not location:
+            return None
+        sequence = _get_genomic_utr_sequence(db, feature, location)
+        if not sequence:
+            # Fall back to genomic sequence if UTR computation fails
+            seq_record = (
+                db.query(Seq)
+                .filter(
+                    Seq.feature_no == feature.feature_no,
+                    Seq.seq_type == "genomic",
+                    Seq.is_seq_current == "Y"
+                )
+                .first()
+            )
+            sequence = seq_record.residues if seq_record else None
+    elif seq_type == SeqType.CODING_UTR:
+        if not location:
+            return None
+        sequence = _get_coding_utr_sequence(db, feature, location)
+        if not sequence:
+            # Fall back to coding sequence if UTR computation fails
+            seq_record = (
+                db.query(Seq)
+                .filter(
+                    Seq.feature_no == feature.feature_no,
+                    Seq.seq_type == "coding",
+                    Seq.is_seq_current == "Y"
+                )
+                .first()
+            )
+            sequence = seq_record.residues if seq_record else None
+    else:
+        # Standard sequence types: retrieve from database
+        # Note: Database stores lowercase values ("genomic", "protein", "coding")
+        if seq_type == SeqType.PROTEIN:
+            db_seq_type = "protein"
+        elif seq_type == SeqType.CODING:
+            db_seq_type = "coding"
+        else:
+            db_seq_type = "genomic"
+
+        # Get current sequence for this feature
+        seq_record = (
+            db.query(Seq)
+            .filter(
+                Seq.feature_no == feature.feature_no,
+                Seq.seq_type == db_seq_type,
+                Seq.is_seq_current == "Y"
+            )
+            .first()
+        )
+
+        if not seq_record:
+            return None
+
+        sequence = seq_record.residues
+
+    if not sequence:
+        return None
+
+    # Handle flanking regions for genomic sequence types
+    if seq_type not in (SeqType.PROTEIN, SeqType.CODING_UTR) and (flank_left > 0 or flank_right > 0):
         sequence = _add_flanking_regions(
             db, feature, sequence, flank_left, flank_right, location
         )
