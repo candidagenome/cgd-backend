@@ -22,11 +22,11 @@ def get_organisms(db: Session = Depends(get_db)):
     """
     Get list of available organisms.
 
-    Returns all organisms (species level) with their abbreviations for dropdown filters.
+    Returns all organisms (strain level) with their abbreviations for dropdown filters.
     """
     organisms = (
         db.query(Organism)
-        .filter(Organism.taxonomic_rank == 'species')
+        .filter(Organism.taxonomic_rank == "Strain")
         .order_by(Organism.organism_order)
         .all()
     )
