@@ -116,18 +116,26 @@ def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -
     if not feature_nos:
         return set()
 
-    # Find Assembly 21 features that have Assembly 22 parents
-    a21_relationships = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.child_feature_no.in_(feature_nos),
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
-        )
-        .all()
-    )
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
+    feature_nos_list = list(feature_nos)
+    result = set()
 
-    return {rel[0] for rel in a21_relationships}
+    for i in range(0, len(feature_nos_list), CHUNK_SIZE):
+        chunk = feature_nos_list[i:i + CHUNK_SIZE]
+        # Find Assembly 21 features that have Assembly 22 parents
+        a21_relationships = (
+            db.query(FeatRelationship.child_feature_no)
+            .filter(
+                FeatRelationship.child_feature_no.in_(chunk),
+                FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                FeatRelationship.rank == 3,
+            )
+            .all()
+        )
+        result.update(rel[0] for rel in a21_relationships)
+
+    return result
 
 
 def _normalize_annotation_type(db_type: str) -> str:
