@@ -300,47 +300,59 @@ def _get_assembly21_feature_nos_to_exclude(db: Session, feature_nos: set[int]) -
 
     to_exclude = set()
 
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
+    feature_nos_list = list(feature_nos)
+
     # Find Assembly 21 features that have Assembly 22 parents
-    a21_relationships = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.child_feature_no.in_(feature_nos),
-            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
-            FeatRelationship.rank == 3,
+    for i in range(0, len(feature_nos_list), CHUNK_SIZE):
+        chunk = feature_nos_list[i:i + CHUNK_SIZE]
+        a21_relationships = (
+            db.query(FeatRelationship.child_feature_no)
+            .filter(
+                FeatRelationship.child_feature_no.in_(chunk),
+                FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                FeatRelationship.rank == 3,
+            )
+            .all()
         )
-        .all()
-    )
-    direct_a21_features = {rel[0] for rel in a21_relationships}
-    to_exclude.update(direct_a21_features)
+        to_exclude.update(rel[0] for rel in a21_relationships)
 
     # Also find alleles of Assembly 21 features that have Assembly 22 equivalents
     # These are features where parent has 'Assembly 21 Primary Allele' relationship
     # and the child is an allele (relationship_type='allele')
     if feature_nos:
         # Find features in our set that are alleles of any feature
-        allele_relationships = (
-            db.query(FeatRelationship.child_feature_no, FeatRelationship.parent_feature_no)
-            .filter(
-                FeatRelationship.child_feature_no.in_(feature_nos),
-                FeatRelationship.relationship_type == 'allele',
-                FeatRelationship.rank == 3,
-            )
-            .all()
-        )
-
-        # Check if parent features have Assembly 22 equivalents
-        parent_feature_nos = {rel[1] for rel in allele_relationships}
-        if parent_feature_nos:
-            parents_with_a22 = (
-                db.query(FeatRelationship.child_feature_no)
+        allele_relationships = []
+        for i in range(0, len(feature_nos_list), CHUNK_SIZE):
+            chunk = feature_nos_list[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(FeatRelationship.child_feature_no, FeatRelationship.parent_feature_no)
                 .filter(
-                    FeatRelationship.child_feature_no.in_(parent_feature_nos),
-                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.child_feature_no.in_(chunk),
+                    FeatRelationship.relationship_type == 'allele',
                     FeatRelationship.rank == 3,
                 )
                 .all()
             )
-            parents_to_exclude = {rel[0] for rel in parents_with_a22}
+            allele_relationships.extend(chunk_results)
+
+        # Check if parent features have Assembly 22 equivalents
+        parent_feature_nos = list({rel[1] for rel in allele_relationships})
+        if parent_feature_nos:
+            parents_to_exclude = set()
+            for i in range(0, len(parent_feature_nos), CHUNK_SIZE):
+                chunk = parent_feature_nos[i:i + CHUNK_SIZE]
+                parents_with_a22 = (
+                    db.query(FeatRelationship.child_feature_no)
+                    .filter(
+                        FeatRelationship.child_feature_no.in_(chunk),
+                        FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                        FeatRelationship.rank == 3,
+                    )
+                    .all()
+                )
+                parents_to_exclude.update(rel[0] for rel in parents_with_a22)
 
             # Exclude alleles whose parents have Assembly 22 equivalents
             for child_no, parent_no in allele_relationships:

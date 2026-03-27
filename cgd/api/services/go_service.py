@@ -306,18 +306,23 @@ def get_go_term_info(
                 ref_nos.add(go_ref.reference.reference_no)
 
     # Query RefUrl for all references (Full Text links, supplements, etc.)
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
     ref_url_map: dict[int, list] = {}  # reference_no -> list of RefUrl objects
     if ref_nos:
-        ref_url_query = (
-            db.query(RefUrl)
-            .options(joinedload(RefUrl.url))
-            .filter(RefUrl.reference_no.in_(ref_nos))
-            .all()
-        )
-        for ref_url in ref_url_query:
-            if ref_url.reference_no not in ref_url_map:
-                ref_url_map[ref_url.reference_no] = []
-            ref_url_map[ref_url.reference_no].append(ref_url)
+        CHUNK_SIZE = 999
+        ref_nos_list = list(ref_nos)
+        for i in range(0, len(ref_nos_list), CHUNK_SIZE):
+            chunk = ref_nos_list[i:i + CHUNK_SIZE]
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(chunk))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
 
     # Group annotations by type and qualifier status
     # Structure: {annotation_type: {"with_qualifier": {qualifier_key: {feature_no: gene_data}},

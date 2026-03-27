@@ -148,25 +148,30 @@ def _bulk_get_cgob_clusters(
     if not feature_nos:
         return {}
 
-    results = (
-        db.query(
-            FeatHomology.feature_no,
-            HomologyGroup.homology_group_id,
-            HomologyGroup.homology_group_no,
-        )
-        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
-        .filter(
-            FeatHomology.feature_no.in_(feature_nos),
-            HomologyGroup.homology_group_type == 'ortholog',
-            HomologyGroup.method == 'CGOB',
-        )
-        .all()
-    )
-
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
     feature_to_ortholog = {}
-    for feat_no, hg_id, hg_no in results:
-        ortholog_id = hg_id or f"CGOB_{hg_no}"
-        feature_to_ortholog[feat_no] = ortholog_id
+
+    for i in range(0, len(feature_nos), CHUNK_SIZE):
+        chunk = feature_nos[i:i + CHUNK_SIZE]
+        results = (
+            db.query(
+                FeatHomology.feature_no,
+                HomologyGroup.homology_group_id,
+                HomologyGroup.homology_group_no,
+            )
+            .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+            .filter(
+                FeatHomology.feature_no.in_(chunk),
+                HomologyGroup.homology_group_type == 'ortholog',
+                HomologyGroup.method == 'CGOB',
+            )
+            .all()
+        )
+
+        for feat_no, hg_id, hg_no in results:
+            ortholog_id = hg_id or f"CGOB_{hg_no}"
+            feature_to_ortholog[feat_no] = ortholog_id
 
     return feature_to_ortholog
 

@@ -233,20 +233,26 @@ def search_phenotypes(
     experiment_nos = [pa.experiment_no for pa in annotations if pa.experiment_no]
 
     # Load references in batch
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the queries
+    CHUNK_SIZE = 999
     ref_link_map: dict[int, list] = {}
     ref_url_map: dict[int, list] = {}
 
     if pheno_annotation_nos:
-        # Load all ref_links for phenotype annotations
-        all_ref_links = (
-            db.query(RefLink)
-            .options(joinedload(RefLink.reference).joinedload(Reference.journal))
-            .filter(
-                RefLink.tab_name == "PHENO_ANNOTATION",
-                RefLink.primary_key.in_(pheno_annotation_nos),
+        # Load all ref_links for phenotype annotations (chunked)
+        all_ref_links = []
+        for i in range(0, len(pheno_annotation_nos), CHUNK_SIZE):
+            chunk = pheno_annotation_nos[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(RefLink)
+                .options(joinedload(RefLink.reference).joinedload(Reference.journal))
+                .filter(
+                    RefLink.tab_name == "PHENO_ANNOTATION",
+                    RefLink.primary_key.in_(chunk),
+                )
+                .all()
             )
-            .all()
-        )
+            all_ref_links.extend(chunk_results)
 
         # Build ref_link map and collect reference_nos
         all_ref_nos = set()
@@ -257,29 +263,36 @@ def search_phenotypes(
                     ref_link_map[rl.primary_key] = []
                 ref_link_map[rl.primary_key].append(rl)
 
-        # Load ref_urls for all references
+        # Load ref_urls for all references (chunked)
         if all_ref_nos:
-            ref_url_query = (
-                db.query(RefUrl)
-                .options(joinedload(RefUrl.url))
-                .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
-                .all()
-            )
-            for ref_url in ref_url_query:
-                if ref_url.reference_no not in ref_url_map:
-                    ref_url_map[ref_url.reference_no] = []
-                ref_url_map[ref_url.reference_no].append(ref_url)
+            ref_nos_list = list(all_ref_nos)
+            for i in range(0, len(ref_nos_list), CHUNK_SIZE):
+                chunk = ref_nos_list[i:i + CHUNK_SIZE]
+                ref_url_query = (
+                    db.query(RefUrl)
+                    .options(joinedload(RefUrl.url))
+                    .filter(RefUrl.reference_no.in_(chunk))
+                    .all()
+                )
+                for ref_url in ref_url_query:
+                    if ref_url.reference_no not in ref_url_map:
+                        ref_url_map[ref_url.reference_no] = []
+                    ref_url_map[ref_url.reference_no].append(ref_url)
 
-    # Batch load all experiment properties
+    # Batch load all experiment properties (chunked)
     strain_map: dict[int, str] = {}
     details_map: dict[int, list] = defaultdict(list)
     if experiment_nos:
-        expt_props = (
-            db.query(ExptExptprop.experiment_no, ExptProperty.property_type, ExptProperty.property_value)
-            .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
-            .filter(ExptExptprop.experiment_no.in_(experiment_nos))
-            .all()
-        )
+        expt_props = []
+        for i in range(0, len(experiment_nos), CHUNK_SIZE):
+            chunk = experiment_nos[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(ExptExptprop.experiment_no, ExptProperty.property_type, ExptProperty.property_value)
+                .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+                .filter(ExptExptprop.experiment_no.in_(chunk))
+                .all()
+            )
+            expt_props.extend(chunk_results)
         for exp_no, prop_type, prop_value in expt_props:
             if prop_type == 'strain_background':
                 strain_map[exp_no] = prop_value
