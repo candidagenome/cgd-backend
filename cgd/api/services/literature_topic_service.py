@@ -216,16 +216,24 @@ def search_by_topics(
 
     if ref_no_set:
         # Query all RefProperty for these references to get all associated genes
-        all_ref_properties = (
-            db.query(RefProperty)
-            .options(
-                joinedload(RefProperty.refprop_feat)
-                .joinedload(RefpropFeat.feature)
-                .joinedload(Feature.organism),
+        # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+        CHUNK_SIZE = 999
+        ref_no_list = list(ref_no_set)
+        all_ref_properties = []
+
+        for i in range(0, len(ref_no_list), CHUNK_SIZE):
+            chunk = ref_no_list[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(RefProperty)
+                .options(
+                    joinedload(RefProperty.refprop_feat)
+                    .joinedload(RefpropFeat.feature)
+                    .joinedload(Feature.organism),
+                )
+                .filter(RefProperty.reference_no.in_(chunk))
+                .all()
             )
-            .filter(RefProperty.reference_no.in_(ref_no_set))
-            .all()
-        )
+            all_ref_properties.extend(chunk_results)
 
         # Build genes list per reference
         for rp in all_ref_properties:
