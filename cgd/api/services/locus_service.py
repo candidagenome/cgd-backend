@@ -1606,18 +1606,23 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                     all_ref_nos.add(gr.reference.reference_no)
 
     # Load ref_urls for all references in one query
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
     ref_url_map: dict[int, list] = {}
     if all_ref_nos:
-        ref_url_query = (
-            db.query(RefUrl)
-            .options(joinedload(RefUrl.url))
-            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
-            .all()
-        )
-        for ref_url in ref_url_query:
-            if ref_url.reference_no not in ref_url_map:
-                ref_url_map[ref_url.reference_no] = []
-            ref_url_map[ref_url.reference_no].append(ref_url)
+        ref_nos_list = list(all_ref_nos)
+        for i in range(0, len(ref_nos_list), CHUNK_SIZE):
+            chunk = ref_nos_list[i:i + CHUNK_SIZE]
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(chunk))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
 
     # Second pass: build annotations with links
     for f in features:
@@ -1804,18 +1809,23 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
             ref_link_map[rl.primary_key].append(rl)
 
     # Load ref_urls for all references in one query
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
     ref_url_map: dict[int, list] = {}
     if all_ref_nos:
-        ref_url_query = (
-            db.query(RefUrl)
-            .options(joinedload(RefUrl.url))
-            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
-            .all()
-        )
-        for ref_url in ref_url_query:
-            if ref_url.reference_no not in ref_url_map:
-                ref_url_map[ref_url.reference_no] = []
-            ref_url_map[ref_url.reference_no].append(ref_url)
+        ref_nos_list = list(all_ref_nos)
+        for i in range(0, len(ref_nos_list), CHUNK_SIZE):
+            chunk = ref_nos_list[i:i + CHUNK_SIZE]
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(chunk))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
 
     # Second pass: build annotations with links
     for f in features:
@@ -4226,18 +4236,23 @@ def _get_references_for_entity(
             all_ref_nos.add(rl.reference.reference_no)
 
     # Load ref_urls for all references in one query
+    # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+    CHUNK_SIZE = 999
     ref_url_map: dict[int, list] = {}
     if all_ref_nos:
-        ref_url_query = (
-            db.query(RefUrl)
-            .options(joinedload(RefUrl.url))
-            .filter(RefUrl.reference_no.in_(list(all_ref_nos)))
-            .all()
-        )
-        for ref_url in ref_url_query:
-            if ref_url.reference_no not in ref_url_map:
-                ref_url_map[ref_url.reference_no] = []
-            ref_url_map[ref_url.reference_no].append(ref_url)
+        ref_nos_list = list(all_ref_nos)
+        for i in range(0, len(ref_nos_list), CHUNK_SIZE):
+            chunk = ref_nos_list[i:i + CHUNK_SIZE]
+            ref_url_query = (
+                db.query(RefUrl)
+                .options(joinedload(RefUrl.url))
+                .filter(RefUrl.reference_no.in_(chunk))
+                .all()
+            )
+            for ref_url in ref_url_query:
+                if ref_url.reference_no not in ref_url_map:
+                    ref_url_map[ref_url.reference_no] = []
+                ref_url_map[ref_url.reference_no].append(ref_url)
 
     refs = []
     for rl in ref_links:
