@@ -51,6 +51,7 @@ ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # NCBI E-utilities
 ELINK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi"
+PMC_ID_CONVERTER_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 
 # How many days back to look for new references
 DAYS_LOOKBACK = 10
@@ -184,6 +185,9 @@ def get_fulltext_urls_from_ncbi(pmids: list[int]) -> dict[int, list[str]]:
         except ET.ParseError as e:
             logger.error(f"Error parsing XML response: {e}")
 
+        # Convert PMC pmid URLs to proper PMC ID format
+        urls_by_pmid = _convert_pmc_pmid_urls(urls_by_pmid)
+
         return urls_by_pmid
 
     except requests.RequestException as e:
@@ -212,6 +216,88 @@ def _is_fulltext_url(url: str) -> bool:
 
     # Accept all other URLs from Full Text Sources category
     return True
+
+
+def _convert_pmc_pmid_urls(urls_by_pmid: dict[int, list[str]]) -> dict[int, list[str]]:
+    """
+    Convert PMC URLs using /pmid/ format to proper /PMC#######/ format.
+
+    NCBI's ELink API returns PMC URLs like:
+        https://pmc.ncbi.nlm.nih.gov/articles/pmid/12345678/
+    But this format returns 403 Forbidden. The correct format is:
+        https://pmc.ncbi.nlm.nih.gov/articles/PMC1234567/
+
+    This function detects the broken format and uses NCBI's ID converter
+    to get the proper PMC ID.
+    """
+    import re
+
+    # Pattern to match PMC URLs with /pmid/ format
+    pmc_pmid_pattern = re.compile(
+        r"https?://pmc\.ncbi\.nlm\.nih\.gov/articles/pmid/(\d+)/?"
+    )
+
+    # Collect all PMIDs that need conversion
+    pmids_to_convert: set[int] = set()
+    url_pmid_map: dict[str, int] = {}  # Map URL to its PMID for replacement
+
+    for pmid, urls in urls_by_pmid.items():
+        for url in urls:
+            match = pmc_pmid_pattern.match(url)
+            if match:
+                url_pmid = int(match.group(1))
+                pmids_to_convert.add(url_pmid)
+                url_pmid_map[url] = url_pmid
+
+    if not pmids_to_convert:
+        return urls_by_pmid
+
+    logger.info(f"Converting {len(pmids_to_convert)} PMC pmid URLs to PMC ID format")
+
+    # Call NCBI ID converter API
+    pmid_to_pmcid: dict[int, str] = {}
+    try:
+        params = {
+            "ids": ",".join(str(p) for p in pmids_to_convert),
+            "format": "json",
+            "email": NCBI_EMAIL,
+            "tool": PROJECT_ACRONYM,
+        }
+        response = requests.get(PMC_ID_CONVERTER_URL, params=params, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+        for record in data.get("records", []):
+            if "pmid" in record and "pmcid" in record:
+                pmid_to_pmcid[record["pmid"]] = record["pmcid"]
+
+    except Exception as e:
+        logger.error(f"Error calling PMC ID converter: {e}")
+        # Return original URLs if conversion fails
+        return urls_by_pmid
+
+    # Replace URLs with corrected format
+    converted_count = 0
+    for pmid, urls in urls_by_pmid.items():
+        new_urls = []
+        for url in urls:
+            if url in url_pmid_map:
+                url_pmid = url_pmid_map[url]
+                if url_pmid in pmid_to_pmcid:
+                    pmcid = pmid_to_pmcid[url_pmid]
+                    new_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/"
+                    new_urls.append(new_url)
+                    converted_count += 1
+                    logger.debug(f"Converted PMC URL: {url} -> {new_url}")
+                else:
+                    # No PMC ID found, skip this URL
+                    logger.warning(f"No PMC ID found for PMID {url_pmid}, skipping URL")
+            else:
+                new_urls.append(url)
+        urls_by_pmid[pmid] = new_urls
+
+    logger.info(f"Converted {converted_count} PMC URLs to proper format")
+    return urls_by_pmid
 
 
 def get_existing_urls(session) -> tuple[dict, dict, dict]:
