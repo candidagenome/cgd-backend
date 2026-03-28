@@ -6,8 +6,11 @@
 # Usage:
 #   ./cgd_pub_update.sh
 #
-
-set -e
+# Note: We intentionally do NOT use 'set -e' here because:
+# - Transient PubMed API errors (502, timeouts) are expected and handled
+# - Duplicate key errors are harmless (data already exists)
+# - We want the pipeline to complete all steps even if some have minor errors
+#
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
