@@ -6,20 +6,23 @@
 # Usage:
 #   ./cgd_pub_update.sh
 #
-# Note: We intentionally do NOT use 'set -e' here because:
-# - Transient PubMed API errors (502, timeouts) are expected and handled
-# - Duplicate key errors are harmless (data already exists)
-# - We want the pipeline to complete all steps even if some have minor errors
-#
+
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Activate virtual environment if it exists
+# Activate virtual environment only if it has required packages
+# Otherwise use system Python (which may have packages in ~/.local)
 if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
-    source "$PROJECT_ROOT/venv/bin/activate"
+    # Check if venv has required packages
+    if "$PROJECT_ROOT/venv/bin/python3" -c "import requests, Bio" 2>/dev/null; then
+        source "$PROJECT_ROOT/venv/bin/activate"
+    fi
 elif [ -f "$PROJECT_ROOT/.venv/bin/activate" ]; then
-    source "$PROJECT_ROOT/.venv/bin/activate"
+    if "$PROJECT_ROOT/.venv/bin/python3" -c "import requests, Bio" 2>/dev/null; then
+        source "$PROJECT_ROOT/.venv/bin/activate"
+    fi
 fi
 
 # Change to project root for relative paths to work
