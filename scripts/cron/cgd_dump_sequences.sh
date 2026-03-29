@@ -58,9 +58,9 @@ run_dump() {
 }
 
 # C. albicans has multiple assemblies
-run_dump C_albicans_SC5314 "Assembly 22" "_A22"
-run_dump C_albicans_SC5314 "Assembly 21" "_A21"
-run_dump C_albicans_SC5314 "Assembly 19" "_A19"
+run_dump C_albicans_SC5314 "C. albicans SC5314 Assembly 22" "_A22"
+run_dump C_albicans_SC5314 "C. albicans SC5314 Assembly 21" "_A21"
+run_dump C_albicans_SC5314 "C. albicans SC5314 Assembly 19" "_A19"
 
 # Other species (auto-detect seq_source)
 run_dump C_dubliniensis_CD36
