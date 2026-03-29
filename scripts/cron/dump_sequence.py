@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump sequence files in FASTA format for a strain.
 
@@ -20,7 +22,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -28,31 +30,35 @@ import argparse
 import gzip
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
-# Configure logging
+# Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
@@ -422,11 +428,10 @@ def dump_feature_sequences(
             name = feat["gene_name"] or feat["feature_name"]
             desc_parts = [name, f"{PROJECT_ACRONYM}ID:{feat['dbxref_id']}"]
 
-            if loc_desc:
+            if 'loc_desc' in dir() and loc_desc:
                 desc_parts.append(loc_desc)
 
             # Add ORF classification if available
-            import re
             match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
             if match:
                 desc_parts.append(f"{match.group(1)} ORF")
@@ -463,7 +468,7 @@ def main() -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: current directory)",
+        help="Output directory (default: DOWNLOAD_DIR/sequence/<strain>)",
     )
     parser.add_argument(
         "--type",
@@ -481,20 +486,6 @@ def main() -> int:
     args = parser.parse_args()
 
     strain_abbrev = args.strain_abbrev
-
-    # Set up output directory
-    if args.output_dir:
-        output_dir = args.output_dir
-    else:
-        output_dir = Path(".")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set up logging to file
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"dump_sequence_{strain_abbrev}.log"
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(file_handler)
 
     logger.info(f"Dumping sequences for {strain_abbrev}")
 
@@ -516,8 +507,19 @@ def main() -> int:
 
             logger.info(f"Seq source: {seq_source}")
 
+            # Set up output directory
+            if args.output_dir:
+                output_dir = args.output_dir
+            else:
+                output_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Track counts for summary
+            summary = []
+
             def write_file(filename: str, count: int):
                 logger.info(f"Wrote {count} sequences to {filename}")
+                summary.append(f"{filename}: {count}")
                 if args.gzip:
                     with open(output_dir / filename, "rb") as f_in:
                         with gzip.open(output_dir / f"{filename}.gz", "wb") as f_out:
@@ -574,6 +576,11 @@ def main() -> int:
 
             logger.info("Done")
 
+            # Print summary to stdout for Slack
+            print(f"*{strain_abbrev}* ({seq_source}):")
+            for item in summary:
+                print(f"  {item}")
+
         return 0
 
     except Exception as e:
@@ -581,10 +588,6 @@ def main() -> int:
         import traceback
         logger.error(traceback.format_exc())
         return 1
-
-    finally:
-        logger.removeHandler(file_handler)
-        file_handler.close()
 
 
 if __name__ == "__main__":

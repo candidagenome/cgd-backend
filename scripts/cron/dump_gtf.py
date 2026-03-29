@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump gene annotation data in GTF (Gene Transfer Format) format.
 
@@ -22,7 +24,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    DATA_DIR: Base data directory
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -36,19 +38,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging to stderr so stdout can be used for GTF output
 logging.basicConfig(
@@ -290,8 +295,12 @@ def main() -> int:
                     with open(args.output, "w") as f:
                         count = dump_gtf(session, args.strain_abbrev, f)
                 logger.info(f"Output written to {args.output}")
+                # Print summary to stdout for Slack
+                print(f"*{args.strain_abbrev}*: {count} features exported to {args.output.name}")
             else:
                 count = dump_gtf(session, args.strain_abbrev)
+                # Print summary for Slack when not writing to file
+                print(f"*{args.strain_abbrev}*: {count} features exported", file=sys.stderr)
 
             if count == 0:
                 return 1

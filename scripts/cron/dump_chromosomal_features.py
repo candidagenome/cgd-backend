@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump chromosomal feature data to a tab-delimited file.
 
@@ -15,7 +17,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -31,26 +33,29 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 
-# Configure logging
+# Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
@@ -201,8 +206,8 @@ def get_reserved_gene_info(session, feature_no: int) -> tuple[str | None, str | 
 
 def write_chromosomal_features(
     session, strain_abbrev: str, seq_source: str, output_file: Path
-):
-    """Write chromosomal features to a tab-delimited file."""
+) -> int:
+    """Write chromosomal features to a tab-delimited file. Returns feature count."""
     features = get_all_features(session, strain_abbrev, seq_source)
     logger.info(f"Found {len(features)} features")
 
@@ -282,6 +287,8 @@ def write_chromosomal_features(
 
             f.write("\t".join(fields) + "\n")
 
+    return len(features)
+
 
 def archive_old_file(current_file: Path, archive_dir: Path):
     """Move old file to archive directory with date suffix."""
@@ -351,8 +358,7 @@ def main() -> int:
                 output_dir = args.output_dir
             else:
                 output_dir = (
-                    HTML_ROOT_DIR / "download" / "chromosomal_feature_files" /
-                    strain_abbrev
+                    DOWNLOAD_DIR / "chromosomal_feature_files" / strain_abbrev
                 )
 
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -364,7 +370,7 @@ def main() -> int:
                 archive_old_file(output_file, archive_dir)
 
             # Write new file
-            write_chromosomal_features(session, strain_abbrev, seq_source, output_file)
+            count = write_chromosomal_features(session, strain_abbrev, seq_source, output_file)
             logger.info(f"Chromosomal features written to {output_file}")
 
             # Create current symlink
@@ -373,6 +379,9 @@ def main() -> int:
                 current_link.unlink()
             current_link.symlink_to(output_file.name)
             logger.info(f"Created symlink: {current_link} -> {output_file.name}")
+
+            # Print summary to stdout for Slack
+            print(f"*{strain_abbrev}*: {count} features exported to {output_file.name}")
 
         return 0
 
