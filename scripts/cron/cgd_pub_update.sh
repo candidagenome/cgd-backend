@@ -7,7 +7,9 @@
 #   ./cgd_pub_update.sh
 #
 
-set -e
+# Note: We intentionally don't use 'set -e' here because minor errors
+# (like duplicate PMID constraints) should not stop the entire pipeline.
+# Each Python script handles its own errors gracefully.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

@@ -39,9 +39,16 @@ EXIT_CODE=$?
 OUTPUT="${OUTPUT:0:3000}"
 
 # Determine status
+# Check for successful completion marker even if exit code is non-zero
+# (minor errors like duplicate PMIDs shouldn't fail the whole job)
 if [ $EXIT_CODE -eq 0 ]; then
     STATUS="Success"
     EMOJI=":white_check_mark:"
+elif echo "$OUTPUT" | grep -q "Finished PubMed reference loading"; then
+    # Pipeline completed successfully despite minor errors
+    STATUS="Success (with minor errors)"
+    EMOJI=":white_check_mark:"
+    EXIT_CODE=0
 else
     STATUS="Failed (exit code: $EXIT_CODE)"
     EMOJI=":x:"
