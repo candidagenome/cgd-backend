@@ -4,10 +4,8 @@
 # Python equivalent of cgd-updateORFclassifications (Perl version).
 #
 # Usage:
-#   ./cgd_update_orf_classifications.sh
+#   ./slack-cron.sh ./cgd_update_orf_classifications.sh
 #
-
-set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -22,14 +20,36 @@ fi
 # Change to project root for relative paths to work
 cd "$PROJECT_ROOT"
 
-echo "Starting ORF classification update at $(date)"
+echo "CGD ORF Classification Update"
+echo "Generated: $(date)"
 echo "========================================"
 
-python3 "$SCRIPT_DIR/update_orf_classifications.py" C_albicans_SC5314
-python3 "$SCRIPT_DIR/update_orf_classifications.py" C_dubliniensis_CD36
-python3 "$SCRIPT_DIR/update_orf_classifications.py" C_glabrata_CBS138
-python3 "$SCRIPT_DIR/update_orf_classifications.py" C_parapsilosis_CDC317
-python3 "$SCRIPT_DIR/update_orf_classifications.py" C_auris_B8441
+# Track errors but continue processing all species
+errors=0
 
+run_update() {
+    local strain=$1
+    echo ""
+    echo "Updating $strain..."
+    if ! python3 "$SCRIPT_DIR/update_orf_classifications.py" "$strain" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
+        echo "ERROR: Failed to update $strain"
+        errors=$((errors + 1))
+    fi
+}
+
+run_update C_albicans_SC5314
+run_update C_dubliniensis_CD36
+run_update C_glabrata_CBS138
+run_update C_parapsilosis_CDC317
+run_update C_auris_B8441
+
+echo ""
 echo "========================================"
-echo "Finished ORF classification update at $(date)"
+
+if [ $errors -gt 0 ]; then
+    echo "ERROR: $errors species failed"
+    exit 1
+fi
+
+echo "All ORF classification updates completed successfully."
+exit 0
