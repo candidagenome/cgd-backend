@@ -318,7 +318,7 @@ def dump_gff(
     output_file.write(f"# Organism: {organism_name}\n")
     output_file.write(f"# Genome version: {genome_version}\n")
     output_file.write(f"# Date created: {datetime.now().strftime('%a %b %d %H:%M:%S %Y')}\n")
-    output_file.write(f"# Created by: The Candida Genome Database (http://www.candidagenome.org/)\n")
+    output_file.write(f"# Created by: The Candida Genome Database (https://www.candidagenome.org/)\n")
     output_file.write(f"# Contact Email: candida-curator AT lists DOT stanford DOT edu\n")
     output_file.write(f"# Funding: NIDCR at US NIH, grant number 1-R01-DE015873-01\n")
     output_file.write("#\n")
