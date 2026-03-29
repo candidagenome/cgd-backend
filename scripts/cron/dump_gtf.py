@@ -75,6 +75,8 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     if not result:
         return None
 
+    organism_no = result[0]
+
     # Get seq_source
     seq_query = text(f"""
         SELECT DISTINCT s.source
@@ -82,10 +84,11 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    seq_result = session.execute(seq_query, {"strain_abbrev": strain_abbrev}).fetchone()
+    seq_result = session.execute(seq_query, {"organism_no": organism_no}).fetchone()
 
     return {
         "organism_no": result[0],

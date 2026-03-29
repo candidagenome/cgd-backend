@@ -81,18 +81,19 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     }
 
 
-def get_seq_source(session, strain_abbrev: str) -> str | None:
-    """Get sequence source for a strain."""
+def get_seq_source(session, organism_no: int) -> str | None:
+    """Get sequence source for an organism."""
     query = text(f"""
         SELECT DISTINCT s.source
         FROM {DB_SCHEMA}.seq s
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    result = session.execute(query, {"strain_abbrev": strain_abbrev}).fetchone()
+    result = session.execute(query, {"organism_no": organism_no}).fetchone()
     return result[0] if result else None
 
 
@@ -500,7 +501,7 @@ def main() -> int:
             # Get or detect seq_source
             seq_source = args.seq_source
             if not seq_source:
-                seq_source = get_seq_source(session, strain_abbrev)
+                seq_source = get_seq_source(session, config["organism_no"])
                 if not seq_source:
                     logger.error(f"No seq_source found for {strain_abbrev}")
                     return 1
