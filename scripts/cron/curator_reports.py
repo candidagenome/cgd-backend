@@ -615,31 +615,37 @@ class CuratorReporter:
         no_go = self.get_genes_without_go()
         total_no_go = sum(no_go.values())
         manual_done, _ = self.get_go_progress(manual=True)
-        lines.append(f"  GO: {total_no_go} without | {manual_done} added this week")
+        lines.append(
+            f"  GO: {total_no_go} genes without annotations | "
+            f"{manual_done} annotated this week"
+        )
 
         # Literature Guide
         lit_stats = self.get_lit_guide_stats()
         lit_progress = self.get_lit_guide_progress()
         lines.append(
             f"  Lit: {lit_stats['refs_not_curated']} uncurated refs | "
-            f"{lit_progress['features_curated']} features curated"
+            f"{lit_progress['features_curated']} features curated this week"
         )
 
         # Phenotypes
         pheno_stats = self.get_phenotype_stats()
         lines.append(
-            f"  Pheno: {pheno_stats['genes_no_phenotype']} without | "
-            f"{pheno_stats['phenotypes_added']} added"
+            f"  Pheno: {pheno_stats['genes_no_phenotype']} genes without phenotypes | "
+            f"{pheno_stats['phenotypes_added']} added this week"
         )
 
         # Headlines
         headline_stats = self.get_headline_stats()
-        lines.append(f"  Headlines: {headline_stats['headlines_no_ref']} without refs")
+        lines.append(
+            f"  Headlines: {headline_stats['headlines_no_ref']} without refs | "
+            f"{headline_stats['headlines_with_ref_added']} refs added this week"
+        )
 
         # Expired reservations
         expired = self.get_expired_reservations()
         if expired:
-            lines.append(f"  ⚠️ Expired reservations: {len(expired)}")
+            lines.append(f"  ⚠️ Expired gene reservations: {len(expired)}")
 
         return "\n".join(lines)
 
