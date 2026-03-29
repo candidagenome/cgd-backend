@@ -351,12 +351,16 @@ def main() -> int:
             )
 
             if not phenotypes:
+                print(f"*{org_abbrev}*: No phenotype data found")
                 logger.warning(f"No phenotype data found for {org_abbrev}")
                 return 0
 
             # Write to file
             logger.info(f"Writing {len(phenotypes)} records to {output_file}")
             count = write_phenotype_file(phenotypes, output_file)
+
+            # Print summary to stdout for Slack
+            print(f"*{org_abbrev}*: {count} phenotype records exported")
 
             logger.info(f"Successfully wrote {count} phenotype records")
             logger.info(f"End execution: {datetime.now()}")
