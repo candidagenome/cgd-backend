@@ -13,6 +13,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="$PROJECT_ROOT/logs"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Activate virtual environment only if it has required packages
 # Otherwise use system Python (which may have packages in ~/.local)
@@ -30,53 +32,67 @@ fi
 # Change to project root for relative paths to work
 cd "$PROJECT_ROOT"
 
+# Arrays to track results
+declare -a SPECIES_LIST=("C_albicans" "C_dubliniensis" "C_glabrata" "C_parapsilosis" "C_auris")
+declare -a SPECIES_QUERIES=("Candida AND albicans" "Candida AND dubliniensis" "Candida AND glabrata" "Candida AND parapsilosis" "Candida AND auris")
+declare -a LOG_FILES=()
+declare -a REFS_LOADED=()
+declare -a ERRORS=()
+
 echo "Starting PubMed reference loading at $(date)"
 echo "========================================"
 
 # Load PubMed references for each organism
-python3 "$SCRIPT_DIR/load_pubmed_references.py" \
-    --species-query "Candida AND albicans" \
-    --species-abbrev C_albicans \
-    --link-genes Y
+for i in "${!SPECIES_LIST[@]}"; do
+    species="${SPECIES_LIST[$i]}"
+    query="${SPECIES_QUERIES[$i]}"
 
-python3 "$SCRIPT_DIR/load_pubmed_references.py" \
-    --species-query "Candida AND dubliniensis" \
-    --species-abbrev C_dubliniensis \
-    --link-genes Y
+    echo ""
+    echo "Processing $species..."
 
-python3 "$SCRIPT_DIR/load_pubmed_references.py" \
-    --species-query "Candida AND glabrata" \
-    --species-abbrev C_glabrata \
-    --link-genes Y
+    python3 "$SCRIPT_DIR/load_pubmed_references.py" \
+        --species-query "$query" \
+        --species-abbrev "$species" \
+        --link-genes Y
 
-python3 "$SCRIPT_DIR/load_pubmed_references.py" \
-    --species-query "Candida AND parapsilosis" \
-    --species-abbrev C_parapsilosis \
-    --link-genes Y
-
-python3 "$SCRIPT_DIR/load_pubmed_references.py" \
-    --species-query "Candida AND auris" \
-    --species-abbrev C_auris \
-    --link-genes Y
+    # Find the most recent log file for this species
+    log_file=$(ls -t "$LOG_DIR/${species}_PubMed_"*.log 2>/dev/null | head -1)
+    if [ -n "$log_file" ]; then
+        LOG_FILES+=("$log_file")
+        # Extract summary from log file
+        refs=$(grep "PubMed reference(s) were loaded" "$log_file" 2>/dev/null | grep -oE "^[0-9]+" || echo "0")
+        errs=$(grep "ERROR(s) occurred while loading PubMed" "$log_file" 2>/dev/null | grep -oE "^[0-9]+" || echo "0")
+        REFS_LOADED+=("$refs")
+        ERRORS+=("$errs")
+    else
+        LOG_FILES+=("N/A")
+        REFS_LOADED+=("0")
+        ERRORS+=("0")
+    fi
+done
 
 echo ""
 echo "Loading ref_temp entries..."
 echo "----------------------------------------"
 
 # Load ref_temp for species and synonyms
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "albicans"
+REF_TEMP_QUERIES=("albicans" "glabrata" "dubliniensis" "parapsilosis" "auris" "Torulopsis" "Candida" "Nakaseomyces AND glabratus" "Nakaseomyces AND glabrata" "Candidozyma AND auris" "Candida AND krusei" "Pichia AND kudriavzevii")
+REF_TEMP_SUCCESS=0
+REF_TEMP_TOTAL=${#REF_TEMP_QUERIES[@]}
+
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "albicans" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "glabrata" \
-    --exclude "Biomphalaria,Arachis,Vitex,Littorinopsis,Pera,Velleia,Magonia,Ficus,Serjania,Disonycha,Lasiosphaeria"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "dubliniensis"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "parapsilosis"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "auris"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Torulopsis"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida" --exclude "Folsomia"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabratus"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabrata"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candidozyma AND auris"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida AND krusei"
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Pichia AND kudriavzevii"
+    --exclude "Biomphalaria,Arachis,Vitex,Littorinopsis,Pera,Velleia,Magonia,Ficus,Serjania,Disonycha,Lasiosphaeria" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "dubliniensis" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "parapsilosis" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "auris" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Torulopsis" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida" --exclude "Folsomia" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabratus" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabrata" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candidozyma AND auris" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida AND krusei" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Pichia AND kudriavzevii" && ((REF_TEMP_SUCCESS++)) || true
 
 echo ""
 echo "Updating full text URLs..."
@@ -84,5 +100,42 @@ echo "----------------------------------------"
 
 python3 "$SCRIPT_DIR/fulltext_url_weekly_update.py"
 
+# Get fulltext URL summary
+FULLTEXT_LOG="$LOG_DIR/load/NCBIfulltextURL.log"
+FULLTEXT_INSERTED=$(tail -20 "$FULLTEXT_LOG" 2>/dev/null | grep "URLs inserted:" | tail -1 | grep -oE "[0-9]+" || echo "0")
+FULLTEXT_ERRORS=$(tail -20 "$FULLTEXT_LOG" 2>/dev/null | grep "Errors:" | tail -1 | grep -oE "[0-9]+" || echo "0")
+
+echo ""
+echo "========================================"
+echo "SUMMARY"
+echo "========================================"
+echo ""
+echo "PubMed References Loaded:"
+echo "----------------------------------------"
+total_refs=0
+total_errors=0
+for i in "${!SPECIES_LIST[@]}"; do
+    species="${SPECIES_LIST[$i]}"
+    refs="${REFS_LOADED[$i]}"
+    errs="${ERRORS[$i]}"
+    printf "  %-20s: %3s refs loaded, %s errors\n" "$species" "$refs" "$errs"
+    total_refs=$((total_refs + refs))
+    total_errors=$((total_errors + errs))
+done
+echo "----------------------------------------"
+printf "  %-20s: %3s refs loaded, %s errors\n" "TOTAL" "$total_refs" "$total_errors"
+echo ""
+echo "ref_temp Queries: $REF_TEMP_SUCCESS/$REF_TEMP_TOTAL completed"
+echo ""
+echo "Fulltext URLs: $FULLTEXT_INSERTED inserted, $FULLTEXT_ERRORS errors"
+echo ""
+echo "Log Files:"
+echo "----------------------------------------"
+for log in "${LOG_FILES[@]}"; do
+    echo "  $log"
+done
+echo "  $LOG_DIR/load/loadRefTemp.log"
+echo "  $LOG_DIR/load/NCBIfulltextURL.log"
+echo ""
 echo "========================================"
 echo "Finished PubMed reference loading at $(date)"

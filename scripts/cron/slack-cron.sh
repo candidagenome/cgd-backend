@@ -32,19 +32,16 @@ if [ -z "$SLACK_WEBHOOK_URL" ]; then
 fi
 
 # Run the command and capture output
-OUTPUT=$("$@" 2>&1)
+FULL_OUTPUT=$("$@" 2>&1)
 EXIT_CODE=$?
 
-# Truncate output if too long (Slack limit ~3000 chars for code blocks)
-OUTPUT="${OUTPUT:0:3000}"
-
-# Determine status
+# Determine status (check BEFORE truncating)
 # Check for successful completion marker even if exit code is non-zero
 # (minor errors like duplicate PMIDs shouldn't fail the whole job)
 if [ $EXIT_CODE -eq 0 ]; then
     STATUS="Success"
     EMOJI=":white_check_mark:"
-elif echo "$OUTPUT" | grep -q "Finished PubMed reference loading"; then
+elif echo "$FULL_OUTPUT" | grep -q "Finished PubMed reference loading"; then
     # Pipeline completed successfully despite minor errors
     STATUS="Success (with minor errors)"
     EMOJI=":white_check_mark:"
@@ -52,6 +49,16 @@ elif echo "$OUTPUT" | grep -q "Finished PubMed reference loading"; then
 else
     STATUS="Failed (exit code: $EXIT_CODE)"
     EMOJI=":x:"
+fi
+
+# Truncate output if too long (Slack limit ~3000 chars for code blocks)
+# Show the LAST 3000 chars (summary) instead of the first (progress logs)
+if [ ${#FULL_OUTPUT} -gt 3000 ]; then
+    OUTPUT="...(truncated)...
+
+${FULL_OUTPUT: -3000}"
+else
+    OUTPUT="$FULL_OUTPUT"
 fi
 
 # Determine environment label
