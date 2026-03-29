@@ -12,7 +12,8 @@ This script generates weekly progress reports for curation work including:
 - Expired gene reservations
 - Paragraph curation
 
-The report is emailed to curators and written to a log file.
+The report is written to a log file. Notifications are handled by the
+slack-cron.sh wrapper script.
 
 Usage:
     python curator_reports.py --strain C_albicans_SC5314
@@ -21,18 +22,13 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     HTML_ROOT_DIR: Root directory for HTML files
-    CURATOR_EMAIL: Email for notifications
-    ADMIN_EMAIL: Admin email address
-    SMTP_HOST: SMTP server host
 """
 
 import argparse
 import logging
 import os
-import smtplib
 import sys
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,11 +48,6 @@ from cgd.db.engine import SessionLocal
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", str(PROJECT_ROOT / "html")))
-CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
-SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
-PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 
 # Configure logging
 logging.basicConfig(
@@ -609,29 +600,6 @@ class CuratorReporter:
             lines.append("No expired gene name reservations this week.")
 
         return "\n".join(lines)
-
-
-def send_email(subject: str, body: str, to_email: str) -> bool:
-    """Send email notification."""
-    if not to_email:
-        logger.warning("No email recipient configured")
-        return False
-
-    try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = ADMIN_EMAIL
-        msg["To"] = to_email
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-            smtp.sendmail(ADMIN_EMAIL, [to_email], msg.as_string())
-
-        logger.info(f"Email sent to {to_email}")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to send email: {e}")
-        return False
 
 
 def generate_curator_report(strain_abbrev: str) -> bool:

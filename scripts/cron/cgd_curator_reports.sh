@@ -4,10 +4,8 @@
 # Python equivalent of cgd-curatorReports (Perl version).
 #
 # Usage:
-#   ./cgd_curator_reports.sh
+#   ./slack-cron.sh ./cgd_curator_reports.sh
 #
-
-set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -25,11 +23,23 @@ cd "$PROJECT_ROOT"
 echo "Starting curator reports generation at $(date)"
 echo "========================================"
 
-python3 "$SCRIPT_DIR/curator_reports.py" --strain C_albicans_SC5314
-python3 "$SCRIPT_DIR/curator_reports.py" --strain C_dubliniensis_CD36
-python3 "$SCRIPT_DIR/curator_reports.py" --strain C_glabrata_CBS138
-python3 "$SCRIPT_DIR/curator_reports.py" --strain C_parapsilosis_CDC317
-python3 "$SCRIPT_DIR/curator_reports.py" --strain C_auris_B8441
+# Track errors but continue processing all species
+errors=0
+
+for strain in C_albicans_SC5314 C_dubliniensis_CD36 C_glabrata_CBS138 C_parapsilosis_CDC317 C_auris_B8441; do
+    echo "Processing $strain..."
+    if ! python3 "$SCRIPT_DIR/curator_reports.py" --strain "$strain"; then
+        echo "ERROR: Failed to generate report for $strain"
+        errors=$((errors + 1))
+    fi
+done
 
 echo "========================================"
 echo "Finished curator reports generation at $(date)"
+
+if [ $errors -gt 0 ]; then
+    echo "ERROR: $errors species failed"
+    exit 1
+fi
+
+exit 0
