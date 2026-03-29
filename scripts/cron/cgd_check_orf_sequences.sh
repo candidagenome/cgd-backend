@@ -27,17 +27,22 @@ echo ""
 # Track errors but continue processing all species
 errors=0
 
-# C. albicans has both Assembly 19 and Assembly 22 ORFs, filter to Assembly 22 only
-for strain_args in "C_albicans_SC5314 --assembly Assembly 22" "C_dubliniensis_CD36" "C_glabrata_CBS138" "C_parapsilosis_CDC317" "C_auris_B8441"; do
-    strain=$(echo "$strain_args" | awk '{print $1}')
+run_check() {
+    local strain=$1
+    shift
     echo "Checking $strain..."
-
-    # shellcheck disable=SC2086
-    if ! python3 "$SCRIPT_DIR/check_orf_sequences.py" $strain_args 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*INFO"; then
+    if ! python3 "$SCRIPT_DIR/check_orf_sequences.py" "$strain" "$@" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-"; then
         echo "ERROR: Failed to check $strain"
         errors=$((errors + 1))
     fi
-done
+}
+
+# C. albicans has both Assembly 19 and Assembly 22 ORFs, filter to Assembly 22 only
+run_check C_albicans_SC5314 --assembly "Assembly 22"
+run_check C_dubliniensis_CD36
+run_check C_glabrata_CBS138
+run_check C_parapsilosis_CDC317
+run_check C_auris_B8441
 
 echo "========================================"
 

@@ -374,8 +374,8 @@ Report from checks run on {strain_abbrev} ORFs:
 
 """
 
+    # Print summary to stdout for Slack notification
     print(report)
-    logger.info(report)
 
     # Log details
     log_details = [
