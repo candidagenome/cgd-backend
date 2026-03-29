@@ -601,8 +601,50 @@ class CuratorReporter:
 
         return "\n".join(lines)
 
+    def generate_summary(self) -> str:
+        """Generate a condensed summary for Slack notification."""
+        if not self.organism_no:
+            if not self.get_organism_info():
+                return f"Error: Strain {self.strain_abbrev} not found"
+            self.get_feature_types()
 
-def generate_curator_report(strain_abbrev: str) -> bool:
+        lines = []
+        lines.append(f"*{self.species_abbrev}* ({self.previous_date} to {self.current_date})")
+
+        # GO stats
+        no_go = self.get_genes_without_go()
+        total_no_go = sum(no_go.values())
+        manual_done, _ = self.get_go_progress(manual=True)
+        lines.append(f"  GO: {total_no_go} without | {manual_done} added this week")
+
+        # Literature Guide
+        lit_stats = self.get_lit_guide_stats()
+        lit_progress = self.get_lit_guide_progress()
+        lines.append(
+            f"  Lit: {lit_stats['refs_not_curated']} uncurated refs | "
+            f"{lit_progress['features_curated']} features curated"
+        )
+
+        # Phenotypes
+        pheno_stats = self.get_phenotype_stats()
+        lines.append(
+            f"  Pheno: {pheno_stats['genes_no_phenotype']} without | "
+            f"{pheno_stats['phenotypes_added']} added"
+        )
+
+        # Headlines
+        headline_stats = self.get_headline_stats()
+        lines.append(f"  Headlines: {headline_stats['headlines_no_ref']} without refs")
+
+        # Expired reservations
+        expired = self.get_expired_reservations()
+        if expired:
+            lines.append(f"  ⚠️ Expired reservations: {len(expired)}")
+
+        return "\n".join(lines)
+
+
+def generate_curator_report(strain_abbrev: str) -> tuple[bool, str]:
     """
     Main function to generate curator report.
 
@@ -610,12 +652,13 @@ def generate_curator_report(strain_abbrev: str) -> bool:
         strain_abbrev: Strain abbreviation
 
     Returns:
-        True on success, False on failure
+        Tuple of (success, summary_string)
     """
     try:
         with SessionLocal() as session:
             reporter = CuratorReporter(session, strain_abbrev)
             report = reporter.generate_report()
+            summary = reporter.generate_summary()
 
             # Write to log file
             report_dir = HTML_ROOT_DIR / "reports"
@@ -632,11 +675,11 @@ def generate_curator_report(strain_abbrev: str) -> bool:
 
             logger.info(f"Report written to {log_file}")
 
-            return True
+            return True, summary
 
     except Exception as e:
         logger.exception(f"Error generating curator report: {e}")
-        return False
+        return False, f"Error: {e}"
 
 
 def main() -> int:
@@ -652,7 +695,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    success = generate_curator_report(args.strain)
+    success, summary = generate_curator_report(args.strain)
+
+    # Print summary to stdout for Slack notification
+    print(summary)
+
     return 0 if success else 1
 
 
