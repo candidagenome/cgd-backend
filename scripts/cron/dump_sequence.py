@@ -118,24 +118,25 @@ def get_chromosomes(session, seq_source: str) -> list[dict]:
     return chromosomes
 
 
-def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
+def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get features with their sequences and location info."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.dbxref_id,
                f.feature_type, f.feature_qualifier, f.headline,
                fl.start_coord, fl.stop_coord, fl.strand,
-               s.seq_name as root_name
+               root_feat.feature_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
-        WHERE f.organism_abbrev = :strain_abbrev
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
         ORDER BY f.feature_name
     """)
 
     features = []
     for row in session.execute(
-        query, {"strain_abbrev": strain_abbrev, "seq_source": seq_source}
+        query, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         feature_qualifier = row[5] or ""
 
@@ -375,7 +376,7 @@ def dump_chromosomes(
 
 def dump_feature_sequences(
     session,
-    strain_abbrev: str,
+    organism_no: int,
     seq_source: str,
     output_file: Path,
     coding_only: bool = True,
@@ -395,7 +396,7 @@ def dump_feature_sequences(
         coding_seq: If True, remove introns
         translate: If True, translate to protein
     """
-    features = get_features(session, strain_abbrev, seq_source)
+    features = get_features(session, organism_no, seq_source)
 
     count = 0
     with open(output_file, "w") as f:
@@ -537,7 +538,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_genomic"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_genomic.fasta",
                     coding_only=True
                 )
@@ -545,7 +546,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_genomic_1000"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_genomic_1000.fasta",
                     coding_only=True, upstream=1000, downstream=1000
                 )
@@ -553,7 +554,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_coding"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_coding.fasta",
                     coding_only=True, coding_seq=True
                 )
@@ -561,7 +562,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_trans"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_trans_all.fasta",
                     coding_only=True, translate=True
                 )
@@ -569,7 +570,7 @@ def main() -> int:
 
             if args.type in ("all", "other_features"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "other_features_genomic.fasta",
                     coding_only=False
                 )

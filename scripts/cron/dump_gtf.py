@@ -102,14 +102,15 @@ def get_features(session, seq_source: str) -> list[dict]:
     """Get ORF features with their location information."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_qualifier,
-               fl.strand, s.seq_name as chr_name
+               fl.strand, root_feat.feature_name as chr_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl
             ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s
             ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
         WHERE f.feature_type = 'ORF'
-        ORDER BY s.seq_name, fl.start_coord
+        ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
     features = []

@@ -94,7 +94,7 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     }
 
 
-def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
+def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get all features for a strain with their details."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
@@ -108,14 +108,14 @@ def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]
             AND s.is_seq_current = 'Y'
             AND s.source = :seq_source
         LEFT JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
-        WHERE f.organism_abbrev = :strain_abbrev
+        WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
         ORDER BY chr.feature_name, fl.start_coord, f.feature_name
     """)
 
     features = []
     for row in session.execute(
-        query, {"strain_abbrev": strain_abbrev, "seq_source": seq_source}
+        query, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         features.append({
             "feature_no": row[0],
@@ -175,9 +175,10 @@ def get_orthologs(session, feature_no: int) -> list[str]:
         SELECT f2.feature_name
         FROM {DB_SCHEMA}.feat_relationship fr
         JOIN {DB_SCHEMA}.feature f2 ON fr.child_feature_no = f2.feature_no
+        JOIN {DB_SCHEMA}.organism o ON f2.organism_no = o.organism_no
         WHERE fr.parent_feature_no = :feature_no
         AND fr.relationship_type = 'ortholog'
-        AND f2.organism_abbrev = 'S_cerevisiae'
+        AND o.organism_abbrev = 'S_cerevisiae'
     """)
     return [row[0] for row in session.execute(query, {"feature_no": feature_no}).fetchall()]
 
@@ -208,10 +209,10 @@ def get_reserved_gene_info(session, feature_no: int) -> tuple[str | None, str | 
 
 
 def write_chromosomal_features(
-    session, strain_abbrev: str, seq_source: str, output_file: Path
+    session, organism_no: int, strain_abbrev: str, seq_source: str, output_file: Path
 ) -> int:
     """Write chromosomal features to a tab-delimited file. Returns feature count."""
-    features = get_all_features(session, strain_abbrev, seq_source)
+    features = get_all_features(session, organism_no, seq_source)
     logger.info(f"Found {len(features)} features")
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -373,7 +374,7 @@ def main() -> int:
                 archive_old_file(output_file, archive_dir)
 
             # Write new file
-            count = write_chromosomal_features(session, strain_abbrev, seq_source, output_file)
+            count = write_chromosomal_features(session, config["organism_no"], strain_abbrev, seq_source, output_file)
             logger.info(f"Chromosomal features written to {output_file}")
 
             # Create current symlink
