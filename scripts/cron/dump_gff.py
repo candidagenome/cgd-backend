@@ -23,7 +23,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    DATA_DIR: Directory for output files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -54,7 +54,7 @@ from cgd.db.engine import SessionLocal
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging to stderr so stdout can be used for GFF output
@@ -472,8 +472,11 @@ def main() -> int:
                     with open(args.output, "w") as f:
                         count = dump_gff(session, config["organism_no"], args.strain_abbrev, args.seq_source, f)
                 logger.info(f"Output written to {args.output}")
+                # Print summary to stdout for Slack
+                print(f"*{args.strain_abbrev}*: {count} features exported to {args.output.name}")
             else:
                 count = dump_gff(session, config["organism_no"], args.strain_abbrev, args.seq_source)
+                print(f"*{args.strain_abbrev}*: {count} features exported")
 
             if count == 0:
                 return 1
