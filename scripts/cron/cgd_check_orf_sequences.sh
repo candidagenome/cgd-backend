@@ -30,8 +30,9 @@ errors=0
 run_check() {
     local strain=$1
     shift
+    echo ""
     echo "Checking $strain..."
-    if ! python3 "$SCRIPT_DIR/check_orf_sequences.py" "$strain" "$@" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-"; then
+    if ! python3 "$SCRIPT_DIR/check_orf_sequences.py" "$strain" "$@" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
         echo "ERROR: Failed to check $strain"
         errors=$((errors + 1))
     fi
