@@ -36,7 +36,7 @@ Usage:
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name (default: MULTI)
-    DATA_DIR: Directory for data files (default: PROJECT_ROOT/data)
+    DOWNLOAD_DIR: Directory for download files (default: PROJECT_ROOT/data)
     LOG_DIR: Directory for log files
 """
 
@@ -64,7 +64,7 @@ from cgd.db.engine import SessionLocal
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging
@@ -309,13 +309,13 @@ def main() -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: DATA_DIR/phenotype/)",
+        help="Output directory (default: DOWNLOAD_DIR/phenotype/)",
     )
 
     args = parser.parse_args()
 
     org_abbrev = args.organism_abbrev
-    output_dir = args.output_dir or DATA_DIR / "phenotype"
+    output_dir = args.output_dir or DOWNLOAD_DIR / "phenotype"
 
     # Ensure log directory exists
     LOG_DIR.mkdir(parents=True, exist_ok=True)
