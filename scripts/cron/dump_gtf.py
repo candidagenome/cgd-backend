@@ -109,7 +109,7 @@ def get_features(session, seq_source: str) -> list[dict]:
         JOIN {DB_SCHEMA}.seq s
             ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
         WHERE f.feature_type = 'ORF'
-        ORDER BY s.seq_name, fl.min_coord
+        ORDER BY s.seq_name, fl.start_coord
     """)
 
     features = []

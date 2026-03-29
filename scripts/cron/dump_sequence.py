@@ -123,7 +123,7 @@ def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.dbxref_id,
                f.feature_type, f.feature_qualifier, f.headline,
-               fl.min_coord, fl.max_coord, fl.strand,
+               fl.start_coord, fl.stop_coord, fl.strand,
                s.seq_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
@@ -151,8 +151,8 @@ def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
             "feature_type": row[4],
             "feature_qualifier": feature_qualifier,
             "headline": row[6],
-            "min_coord": row[7],
-            "max_coord": row[8],
+            "start_coord": row[7],
+            "stop_coord": row[8],
             "strand": row[9],
             "root_name": row[10],
         })
@@ -190,7 +190,7 @@ def get_feature_sequence(
     """
     # Get feature location
     loc_query = text(f"""
-        SELECT fl.min_coord, fl.max_coord, fl.strand, s.seq_no, s.residues as chr_seq
+        SELECT fl.start_coord, fl.stop_coord, fl.strand, s.seq_no, s.residues as chr_seq
         FROM {DB_SCHEMA}.feat_location fl
         JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
         WHERE fl.feature_no = :feature_no
@@ -205,14 +205,14 @@ def get_feature_sequence(
     if not loc_result:
         return None, ""
 
-    min_coord, max_coord, strand, seq_no, chr_seq = loc_result
+    start_coord, stop_coord, strand, seq_no, chr_seq = loc_result
 
     if not chr_seq:
         return None, ""
 
     # Calculate coordinates with flanking
-    start = min_coord - 1  # 0-based
-    end = max_coord
+    start = start_coord - 1  # 0-based
+    end = stop_coord
 
     # Adjust for flanking regions based on strand
     if strand == "W" or strand == "+":
@@ -261,7 +261,7 @@ def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> st
 
     # Get chromosome sequence and feature location
     loc_query = text(f"""
-        SELECT fl.min_coord, fl.strand, s.residues as chr_seq
+        SELECT fl.start_coord, fl.strand, s.residues as chr_seq
         FROM {DB_SCHEMA}.feat_location fl
         JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
         WHERE fl.feature_no = :feature_no
@@ -276,7 +276,7 @@ def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> st
     if not loc_result:
         return None
 
-    min_coord, strand, chr_seq = loc_result
+    start_coord, strand, chr_seq = loc_result
 
     if not chr_seq:
         return None

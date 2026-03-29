@@ -99,7 +99,7 @@ def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                f.dbxref_id, f.headline, f.date_created,
-               fl.min_coord, fl.max_coord, fl.strand,
+               fl.start_coord, fl.stop_coord, fl.strand,
                chr.feature_name as chromosome
         FROM {DB_SCHEMA}.feature f
         LEFT JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
@@ -110,7 +110,7 @@ def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]
         LEFT JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
         WHERE f.organism_abbrev = :strain_abbrev
         AND f.feature_type NOT IN ('chromosome', 'contig')
-        ORDER BY chr.feature_name, fl.min_coord, f.feature_name
+        ORDER BY chr.feature_name, fl.start_coord, f.feature_name
     """)
 
     features = []
