@@ -240,17 +240,21 @@ def get_feature_sequence(
 
 def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> str | None:
     """Get coding sequence (introns removed) for a feature."""
-    # Get subfeatures (CDS)
+    # Get CDS subfeatures using feat_relationship
     sf_query = text(f"""
-        SELECT sf.relative_coord_start, sf.relative_coord_end
-        FROM {DB_SCHEMA}.subfeature sf
-        WHERE sf.feature_no = :feature_no
-        AND sf.subfeature_type = 'CDS'
-        ORDER BY sf.relative_coord_start
+        SELECT fl.start_coord, fl.stop_coord
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        WHERE fr.parent_feature_no = :feature_no
+        AND fr.rank = 2
+        AND f.feature_type = 'CDS'
+        ORDER BY fl.start_coord
     """)
 
     subfeatures = []
-    for row in session.execute(sf_query, {"feature_no": feature_no}).fetchall():
+    for row in session.execute(sf_query, {"feature_no": feature_no, "seq_source": seq_source}).fetchall():
         start, end = row
         if start > end:
             start, end = end, start
