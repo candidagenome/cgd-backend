@@ -122,13 +122,14 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get features with their sequences and location info."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.dbxref_id,
-               f.feature_type, f.feature_qualifier, f.headline,
+               f.feature_type, fp.property_value as feature_qualifier, f.headline,
                fl.start_coord, fl.stop_coord, fl.strand,
                root_feat.feature_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
         JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
         ORDER BY f.feature_name
