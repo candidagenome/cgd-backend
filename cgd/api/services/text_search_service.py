@@ -77,6 +77,14 @@ CATEGORY_ORDER = [
 # Ortholog sources (from other MODs)
 ORTHOLOG_SOURCES = ["SGD", "POMBASE", "AspGD", "CGD"]
 
+# Valid feature types for gene search (excludes proteins, polypeptides, etc.)
+# Matching the locus page valid types
+GENE_FEATURE_TYPES = [
+    'ORF', 'blocked_reading_frame', 'pseudogene',
+    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+]
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -467,10 +475,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     # Exclude Assembly 21 features directly in SQL
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -498,6 +508,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
         ))
 
     # Search aliases if we need more results
+    # Filter by valid gene feature types
     remaining = limit - len(results)
     if remaining > 0:
         alias_query = (
@@ -506,6 +517,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             .join(Alias, FeatAlias.alias_no == Alias.alias_no)
             .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
             .filter(
+                Feature.feature_type.in_(GENE_FEATURE_TYPES),
                 func.upper(Alias.alias_name).like(upper_pattern),
                 ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
             )
@@ -1293,9 +1305,11 @@ def _count_genes(db: Session, query: str) -> int:
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1305,11 +1319,15 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
     )
 
     # Union of both to get all matching feature_nos (distinct)
@@ -1341,12 +1359,14 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     upper_pattern = like_pattern.upper()
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     direct_subq = (
         db.query(
             Feature.feature_no.label('fno'),
             Feature.organism_no.label('org_no')
         )
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1356,6 +1376,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -1363,7 +1384,10 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         )
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
     )
 
     # Union of both to get all matching features with their organism_no
