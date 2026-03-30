@@ -6,8 +6,12 @@ multiple testing correction (Bonferroni or Benjamini-Hochberg FDR).
 """
 from __future__ import annotations
 
+import logging
+import time
 from collections import defaultdict
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from scipy.stats import hypergeom
 from sqlalchemy import and_, func, or_
@@ -514,12 +518,17 @@ def run_go_term_finder(
     Returns:
         GoTermFinderResponse with enriched terms or error
     """
+    start_time = time.time()
     warnings = []
 
+    logger.info(f"GO Term Finder started with {len(request.genes)} genes")
+
     # Step 1: Validate and get query genes
+    step_start = time.time()
     query_feature_nos, not_found_genes = _get_feature_nos_for_genes(
         db, request.genes, request.organism_no
     )
+    logger.info(f"Step 1 (validate genes): {time.time() - step_start:.2f}s - found {len(query_feature_nos)} genes")
 
     if not query_feature_nos:
         return GoTermFinderResponse(
@@ -529,6 +538,7 @@ def run_go_term_finder(
         )
 
     # Step 2: Build background set
+    step_start = time.time()
     background_type = "default"
     if request.background_genes:
         # Custom background
@@ -554,6 +564,7 @@ def run_go_term_finder(
             bg_query = bg_query.filter(f)
 
         background_feature_nos = list(set(row.feature_no for row in bg_query.distinct().all()))
+    logger.info(f"Step 2 (background set): {time.time() - step_start:.2f}s - {len(background_feature_nos)} genes")
 
     if not background_feature_nos:
         return GoTermFinderResponse(
@@ -573,6 +584,7 @@ def run_go_term_finder(
         )
 
     # Step 3: Get GO annotations with ancestors
+    step_start = time.time()
     query_annotations = _get_go_annotations_with_ancestors(
         db,
         query_feature_nos,
@@ -580,7 +592,9 @@ def run_go_term_finder(
         request.evidence_codes,
         request.annotation_types,
     )
+    logger.info(f"Step 3a (query GO annotations): {time.time() - step_start:.2f}s")
 
+    step_start = time.time()
     background_annotations = _get_go_annotations_with_ancestors(
         db,
         background_feature_nos,
@@ -588,6 +602,7 @@ def run_go_term_finder(
         request.evidence_codes,
         request.annotation_types,
     )
+    logger.info(f"Step 3b (background GO annotations): {time.time() - step_start:.2f}s")
 
     # Filter to genes with GO annotations
     query_genes_with_go = [f for f in query_feature_nos if f in query_annotations]
@@ -600,19 +615,23 @@ def run_go_term_finder(
         )
 
     # Step 4: Calculate enrichment
+    step_start = time.time()
     enrichment_results = _calculate_enrichment(
         {f: query_annotations[f] for f in query_genes_with_go},
         background_annotations,
         request.p_value_cutoff,
         request.min_genes_in_term,
     )
+    logger.info(f"Step 4 (calculate enrichment): {time.time() - step_start:.2f}s - {len(enrichment_results)} terms")
 
     # Step 5: Apply multiple testing correction
+    step_start = time.time()
     corrected_results = _apply_multiple_testing_correction(
         enrichment_results,
         request.correction_method,
         request.p_value_cutoff,
     )
+    logger.info(f"Step 5 (multiple testing correction): {time.time() - step_start:.2f}s - {len(corrected_results)} terms")
 
     if not corrected_results:
         # Build result with no enriched terms
@@ -640,7 +659,9 @@ def run_go_term_finder(
         )
 
     # Step 6: Build enriched term objects
+    step_start = time.time()
     go_nos = [r[0] for r in corrected_results]
+    go_nos_set = set(go_nos)
     go_records = []
     for chunk in _chunk_list(go_nos):
         go_records.extend(db.query(Go).filter(Go.go_no.in_(chunk)).all())
@@ -652,23 +673,27 @@ def run_go_term_finder(
         feature_records.extend(db.query(Feature).filter(Feature.feature_no.in_(chunk)).all())
     feature_no_to_feature = {f.feature_no: f for f in feature_records}
 
-    # Build gene-to-evidence mapping for enriched terms (chunked queries)
+    # Build gene-to-evidence mapping for enriched terms
+    # Query all GO annotations for query genes, then filter to enriched terms in Python
+    # This is faster than O(features × go_terms) queries
     ann_filters = _build_annotation_filters(request.evidence_codes, request.annotation_types)
     gene_evidence_results = []
     for feature_chunk in _chunk_list(query_genes_with_go):
-        for go_chunk in _chunk_list(go_nos):
-            query = (
-                db.query(
-                    GoAnnotation.feature_no,
-                    GoAnnotation.go_no,
-                    GoAnnotation.go_evidence,
-                )
-                .filter(GoAnnotation.feature_no.in_(feature_chunk))
-                .filter(GoAnnotation.go_no.in_(go_chunk))
+        query = (
+            db.query(
+                GoAnnotation.feature_no,
+                GoAnnotation.go_no,
+                GoAnnotation.go_evidence,
             )
-            for f in ann_filters:
-                query = query.filter(f)
-            gene_evidence_results.extend(query.all())
+            .filter(GoAnnotation.feature_no.in_(feature_chunk))
+        )
+        for f in ann_filters:
+            query = query.filter(f)
+        # Filter to enriched terms in Python (faster than nested DB queries)
+        for row in query.all():
+            if row.go_no in go_nos_set:
+                gene_evidence_results.append(row)
+    logger.info(f"Step 6a (fetch GO/feature info): {time.time() - step_start:.2f}s")
 
     # Build mapping: go_no -> feature_no -> evidence_codes
     go_to_gene_evidence: dict[int, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
@@ -754,6 +779,9 @@ def run_go_term_finder(
         component_terms=component_terms,
         total_enriched_terms=len(process_terms) + len(function_terms) + len(component_terms),
     )
+
+    total_time = time.time() - start_time
+    logger.info(f"GO Term Finder completed in {total_time:.2f}s - {result.total_enriched_terms} enriched terms")
 
     return GoTermFinderResponse(
         success=True,
