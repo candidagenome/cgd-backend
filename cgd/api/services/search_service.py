@@ -31,6 +31,14 @@ from cgd.models.models import (
     Url,
 )
 
+# Valid feature types for gene search (excludes proteins, polypeptides, etc.)
+# Matching the locus page valid types
+GENE_FEATURE_TYPES = [
+    'ORF', 'blocked_reading_frame', 'pseudogene',
+    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+]
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -380,10 +388,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     # Use inner join to only include features with a valid organism
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     feature_query = (
         db.query(Feature)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -399,12 +409,16 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
 
     # Search aliases
     # Use inner join to only include features with a valid organism
+    # Filter by valid gene feature types
     alias_query = (
         db.query(Feature, Alias)
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .join(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
         .limit(fetch_limit)
     )
 
@@ -727,6 +741,7 @@ def get_autocomplete_suggestions(
     remaining = limit
 
     # 1. Search genes (highest priority) - prefix match on gene_name and feature_name
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     if remaining > 0:
         gene_limit = min(remaining, 5)  # Cap genes at 5 to leave room for others
 
@@ -735,6 +750,7 @@ def get_autocomplete_suggestions(
             db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
             .filter(
                 Feature.gene_name.isnot(None),
+                Feature.feature_type.in_(GENE_FEATURE_TYPES),
                 func.upper(Feature.gene_name).like(prefix_pattern)
             )
             .distinct()
@@ -761,7 +777,10 @@ def get_autocomplete_suggestions(
             extra_needed = gene_limit - len(suggestions)
             feat_prefix_query = (
                 db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
-                .filter(func.upper(Feature.feature_name).like(prefix_pattern))
+                .filter(
+                    Feature.feature_type.in_(GENE_FEATURE_TYPES),
+                    func.upper(Feature.feature_name).like(prefix_pattern)
+                )
                 .distinct()
                 .limit(extra_needed + len(seen_genes))
                 .all()
@@ -893,11 +912,12 @@ def _count_genes(db: Session, query: str) -> int:
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
-    # Filter to only include features with a valid organism and exclude Assembly 21
+    # Filter to only include features with a valid organism, valid feature types, and exclude Assembly 21
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -908,13 +928,14 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
-    # Filter to only include features with a valid organism and exclude Assembly 21
+    # Filter to only include features with a valid organism, valid feature types, and exclude Assembly 21
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
@@ -945,6 +966,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     a21_subq = _get_a21_exclusion_subquery(db)
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Filter by valid gene feature types
     direct_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -952,6 +974,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         )
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -962,6 +985,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -971,6 +995,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
@@ -1146,11 +1171,12 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
     # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
     a21_subq = _get_a21_exclusion_subquery(db)
 
-    # Get all features matching directly (excluding Assembly 21)
+    # Get all features matching directly (excluding Assembly 21, filtering by feature type)
     feature_query = (
         db.query(Feature)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1175,13 +1201,14 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
             highlighted_description=_highlight_text(feat.headline, query),
         ))
 
-    # Also search aliases
+    # Also search aliases (filtering by feature type)
     alias_query = (
         db.query(Feature, Alias)
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             func.upper(Alias.alias_name).like(upper_pattern),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
