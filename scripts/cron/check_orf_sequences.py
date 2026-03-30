@@ -362,20 +362,18 @@ def main() -> int:
     internal_stop, multi_stop = check_protein_sequences(protein_seqs, orfs)
 
     # Report summary
-    report = f"""
-Report from checks run on {strain_abbrev} ORFs:
+    report = (
+        f"Report from checks run on {strain_abbrev} ORFs:\n"
+        f"   - ORFs with ambiguous sequence            => {len(ambiguous)}\n"
+        f"   - ORFs without Start codon                => {len(no_start)}\n"
+        f"   - ORFs with partial terminal Stop codon   => {len(partial_stop)}\n"
+        f"   - ORFs without terminal Stop codon        => {len(no_stop)}\n"
+        f"   - ORFs with internal Stop codon(s)        => {len(internal_stop)}\n"
+        f"   - ORFs with multiple terminal Stop codons => {len(multi_stop)}"
+    )
 
-   - ORFs with ambiguous sequence            => {len(ambiguous)}
-   - ORFs without Start codon                => {len(no_start)}
-   - ORFs with partial terminal Stop codon   => {len(partial_stop)}
-   - ORFs without terminal Stop codon        => {len(no_stop)}
-   - ORFs with internal Stop codon(s)        => {len(internal_stop)}
-   - ORFs with multiple terminal Stop codons => {len(multi_stop)}
-
-"""
-
+    # Print summary to stdout for Slack notification
     print(report)
-    logger.info(report)
 
     # Log details
     log_details = [

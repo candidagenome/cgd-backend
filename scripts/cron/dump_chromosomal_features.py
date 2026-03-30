@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump chromosomal feature data to a tab-delimited file.
 
@@ -15,7 +17,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -31,26 +33,29 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
 
-# Configure logging
+# Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,8 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     if not result:
         return None
 
+    organism_no = result[0]
+
     # Get seq_source
     seq_query = text(f"""
         SELECT DISTINCT s.source
@@ -73,10 +80,11 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    seq_result = session.execute(seq_query, {"strain_abbrev": strain_abbrev}).fetchone()
+    seq_result = session.execute(seq_query, {"organism_no": organism_no}).fetchone()
 
     return {
         "organism_no": result[0],
@@ -86,12 +94,12 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     }
 
 
-def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
+def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get all features for a strain with their details."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                f.dbxref_id, f.headline, f.date_created,
-               fl.min_coord, fl.max_coord, fl.strand,
+               fl.start_coord, fl.stop_coord, fl.strand,
                chr.feature_name as chromosome
         FROM {DB_SCHEMA}.feature f
         LEFT JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
@@ -100,14 +108,14 @@ def get_all_features(session, strain_abbrev: str, seq_source: str) -> list[dict]
             AND s.is_seq_current = 'Y'
             AND s.source = :seq_source
         LEFT JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
-        WHERE f.organism_abbrev = :strain_abbrev
+        WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
-        ORDER BY chr.feature_name, fl.min_coord, f.feature_name
+        ORDER BY chr.feature_name, fl.start_coord, f.feature_name
     """)
 
     features = []
     for row in session.execute(
-        query, {"strain_abbrev": strain_abbrev, "seq_source": seq_source}
+        query, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         features.append({
             "feature_no": row[0],
@@ -167,9 +175,10 @@ def get_orthologs(session, feature_no: int) -> list[str]:
         SELECT f2.feature_name
         FROM {DB_SCHEMA}.feat_relationship fr
         JOIN {DB_SCHEMA}.feature f2 ON fr.child_feature_no = f2.feature_no
+        JOIN {DB_SCHEMA}.organism o ON f2.organism_no = o.organism_no
         WHERE fr.parent_feature_no = :feature_no
         AND fr.relationship_type = 'ortholog'
-        AND f2.organism_abbrev = 'S_cerevisiae'
+        AND o.organism_abbrev = 'S_cerevisiae'
     """)
     return [row[0] for row in session.execute(query, {"feature_no": feature_no}).fetchall()]
 
@@ -200,10 +209,10 @@ def get_reserved_gene_info(session, feature_no: int) -> tuple[str | None, str | 
 
 
 def write_chromosomal_features(
-    session, strain_abbrev: str, seq_source: str, output_file: Path
-):
-    """Write chromosomal features to a tab-delimited file."""
-    features = get_all_features(session, strain_abbrev, seq_source)
+    session, organism_no: int, strain_abbrev: str, seq_source: str, output_file: Path
+) -> int:
+    """Write chromosomal features to a tab-delimited file. Returns feature count."""
+    features = get_all_features(session, organism_no, seq_source)
     logger.info(f"Found {len(features)} features")
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -282,6 +291,8 @@ def write_chromosomal_features(
 
             f.write("\t".join(fields) + "\n")
 
+    return len(features)
+
 
 def archive_old_file(current_file: Path, archive_dir: Path):
     """Move old file to archive directory with date suffix."""
@@ -351,8 +362,7 @@ def main() -> int:
                 output_dir = args.output_dir
             else:
                 output_dir = (
-                    HTML_ROOT_DIR / "download" / "chromosomal_feature_files" /
-                    strain_abbrev
+                    DOWNLOAD_DIR / "chromosomal_feature_files" / strain_abbrev
                 )
 
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -364,7 +374,7 @@ def main() -> int:
                 archive_old_file(output_file, archive_dir)
 
             # Write new file
-            write_chromosomal_features(session, strain_abbrev, seq_source, output_file)
+            count = write_chromosomal_features(session, config["organism_no"], strain_abbrev, seq_source, output_file)
             logger.info(f"Chromosomal features written to {output_file}")
 
             # Create current symlink
@@ -373,6 +383,9 @@ def main() -> int:
                 current_link.unlink()
             current_link.symlink_to(output_file.name)
             logger.info(f"Created symlink: {current_link} -> {output_file.name}")
+
+            # Print summary to stdout for Slack
+            print(f"*{strain_abbrev}*: {count} features exported to {output_file.name}")
 
         return 0
 

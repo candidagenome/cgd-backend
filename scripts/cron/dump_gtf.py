@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump gene annotation data in GTF (Gene Transfer Format) format.
 
@@ -22,7 +24,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    DATA_DIR: Base data directory
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -36,19 +38,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/var/data/cgd"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Configure logging to stderr so stdout can be used for GTF output
 logging.basicConfig(
@@ -70,6 +75,8 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     if not result:
         return None
 
+    organism_no = result[0]
+
     # Get seq_source
     seq_query = text(f"""
         SELECT DISTINCT s.source
@@ -77,10 +84,11 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    seq_result = session.execute(seq_query, {"strain_abbrev": strain_abbrev}).fetchone()
+    seq_result = session.execute(seq_query, {"organism_no": organism_no}).fetchone()
 
     return {
         "organism_no": result[0],
@@ -93,15 +101,19 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
 def get_features(session, seq_source: str) -> list[dict]:
     """Get ORF features with their location information."""
     query = text(f"""
-        SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_qualifier,
-               fl.strand, s.seq_name as chr_name
+        SELECT f.feature_no, f.feature_name, f.gene_name,
+               fp.property_value as feature_qualifier,
+               fl.strand, root_feat.feature_name as chr_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl
             ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s
             ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        LEFT JOIN {DB_SCHEMA}.feat_property fp
+            ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.feature_type = 'ORF'
-        ORDER BY s.seq_name, fl.min_coord
+        ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
     features = []
@@ -121,18 +133,22 @@ def get_features(session, seq_source: str) -> list[dict]:
     return features
 
 
-def get_subfeatures(session, feature_no: int) -> list[dict]:
-    """Get CDS subfeatures (exons) for a feature."""
+def get_subfeatures(session, feature_no: int, seq_source: str) -> list[dict]:
+    """Get CDS subfeatures (exons) for a feature using feat_relationship."""
     query = text(f"""
-        SELECT sf.subfeature_type, sf.relative_coord_start, sf.relative_coord_end
-        FROM {DB_SCHEMA}.subfeature sf
-        WHERE sf.feature_no = :feature_no
-        AND sf.subfeature_type = 'CDS'
-        ORDER BY sf.relative_coord_start
+        SELECT f.feature_type, fl.start_coord, fl.stop_coord
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        WHERE fr.parent_feature_no = :feature_no
+        AND fr.rank = 2
+        AND f.feature_type = 'CDS'
+        ORDER BY fl.start_coord
     """)
 
     subfeatures = []
-    for row in session.execute(query, {"feature_no": feature_no}).fetchall():
+    for row in session.execute(query, {"feature_no": feature_no, "seq_source": seq_source}).fetchall():
         start = row[1]
         end = row[2]
         # Ensure start < end
@@ -211,7 +227,7 @@ def dump_gtf(
         strand = feat["strand"]
 
         # Get subfeatures (exons/CDS)
-        subfeatures = get_subfeatures(session, feat["feature_no"])
+        subfeatures = get_subfeatures(session, feat["feature_no"], seq_source)
 
         if not subfeatures:
             continue
@@ -290,8 +306,12 @@ def main() -> int:
                     with open(args.output, "w") as f:
                         count = dump_gtf(session, args.strain_abbrev, f)
                 logger.info(f"Output written to {args.output}")
+                # Print summary to stdout for Slack
+                print(f"*{args.strain_abbrev}*: {count} features exported to {args.output.name}")
             else:
                 count = dump_gtf(session, args.strain_abbrev)
+                # Print summary for Slack when not writing to file
+                print(f"*{args.strain_abbrev}*: {count} features exported", file=sys.stderr)
 
             if count == 0:
                 return 1

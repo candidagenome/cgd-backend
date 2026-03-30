@@ -12,7 +12,8 @@ This script generates weekly progress reports for curation work including:
 - Expired gene reservations
 - Paragraph curation
 
-The report is emailed to curators and written to a log file.
+The report is written to a log file. Notifications are handled by the
+slack-cron.sh wrapper script.
 
 Usage:
     python curator_reports.py --strain C_albicans_SC5314
@@ -21,18 +22,13 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     HTML_ROOT_DIR: Root directory for HTML files
-    CURATOR_EMAIL: Email for notifications
-    ADMIN_EMAIL: Admin email address
-    SMTP_HOST: SMTP server host
 """
 
 import argparse
 import logging
 import os
-import smtplib
 import sys
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,11 +48,6 @@ from cgd.db.engine import SessionLocal
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", str(PROJECT_ROOT / "html")))
-CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
-SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
-PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 
 # Configure logging
 logging.basicConfig(
@@ -610,31 +601,56 @@ class CuratorReporter:
 
         return "\n".join(lines)
 
+    def generate_summary(self) -> str:
+        """Generate a condensed summary for Slack notification."""
+        if not self.organism_no:
+            if not self.get_organism_info():
+                return f"Error: Strain {self.strain_abbrev} not found"
+            self.get_feature_types()
 
-def send_email(subject: str, body: str, to_email: str) -> bool:
-    """Send email notification."""
-    if not to_email:
-        logger.warning("No email recipient configured")
-        return False
+        lines = []
+        lines.append(f"*{self.species_abbrev}* ({self.previous_date} to {self.current_date})")
 
-    try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = ADMIN_EMAIL
-        msg["To"] = to_email
+        # GO stats
+        no_go = self.get_genes_without_go()
+        total_no_go = sum(no_go.values())
+        manual_done, _ = self.get_go_progress(manual=True)
+        lines.append(
+            f"  GO: {total_no_go} genes without annotations | "
+            f"{manual_done} annotated this week"
+        )
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-            smtp.sendmail(ADMIN_EMAIL, [to_email], msg.as_string())
+        # Literature Guide
+        lit_stats = self.get_lit_guide_stats()
+        lit_progress = self.get_lit_guide_progress()
+        lines.append(
+            f"  Lit: {lit_stats['refs_not_curated']} uncurated refs | "
+            f"{lit_progress['features_curated']} features curated this week"
+        )
 
-        logger.info(f"Email sent to {to_email}")
-        return True
+        # Phenotypes
+        pheno_stats = self.get_phenotype_stats()
+        lines.append(
+            f"  Pheno: {pheno_stats['genes_no_phenotype']} genes without phenotypes | "
+            f"{pheno_stats['phenotypes_added']} added this week"
+        )
 
-    except Exception as e:
-        logger.error(f"Failed to send email: {e}")
-        return False
+        # Headlines
+        headline_stats = self.get_headline_stats()
+        lines.append(
+            f"  Headlines: {headline_stats['headlines_no_ref']} without refs | "
+            f"{headline_stats['headlines_with_ref_added']} refs added this week"
+        )
+
+        # Expired reservations
+        expired = self.get_expired_reservations()
+        if expired:
+            lines.append(f"  ⚠️ Expired gene reservations: {len(expired)}")
+
+        return "\n".join(lines)
 
 
-def generate_curator_report(strain_abbrev: str) -> bool:
+def generate_curator_report(strain_abbrev: str) -> tuple[bool, str]:
     """
     Main function to generate curator report.
 
@@ -642,12 +658,13 @@ def generate_curator_report(strain_abbrev: str) -> bool:
         strain_abbrev: Strain abbreviation
 
     Returns:
-        True on success, False on failure
+        Tuple of (success, summary_string)
     """
     try:
         with SessionLocal() as session:
             reporter = CuratorReporter(session, strain_abbrev)
             report = reporter.generate_report()
+            summary = reporter.generate_summary()
 
             # Write to log file
             report_dir = HTML_ROOT_DIR / "reports"
@@ -664,11 +681,11 @@ def generate_curator_report(strain_abbrev: str) -> bool:
 
             logger.info(f"Report written to {log_file}")
 
-            return True
+            return True, summary
 
     except Exception as e:
         logger.exception(f"Error generating curator report: {e}")
-        return False
+        return False, f"Error: {e}"
 
 
 def main() -> int:
@@ -684,7 +701,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    success = generate_curator_report(args.strain)
+    success, summary = generate_curator_report(args.strain)
+
+    # Print summary to stdout for Slack notification
+    print(summary)
+
     return 0 if success else 1
 
 

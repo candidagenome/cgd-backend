@@ -9,16 +9,18 @@ with gene, mRNA, and CDS features for all ORFs.
 Based on makeEmblFiles.pl by Prachi Shah (Jun 2011).
 
 Usage:
-    python make_embl_files.py <strain_abbrev>
     python make_embl_files.py C_albicans_SC5314
+    python make_embl_files.py --all
+    python make_embl_files.py C_albicans_SC5314 --output-dir ./embl
 
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
+from __future__ import annotations
 
 import argparse
 import logging
@@ -30,29 +32,50 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
 # Translation tables (genetic code)
 DEFAULT_NUCLEAR_TRANS_TABLE = 12  # Alternative yeast nuclear code
-DEFAULT_MITO_TRANS_TABLE = 3     # Yeast mitochondrial code
+DEFAULT_MITO_TRANS_TABLE = 3      # Yeast mitochondrial code
+
+# Strain configurations
+STRAIN_ABBREVS = [
+    "C_albicans_SC5314",
+    "C_dubliniensis_CD36",
+    "C_glabrata_CBS138",
+    "C_parapsilosis_CDC317",
+    "C_auris_B8441",
+]
+
+# Mitochondrial feature names by strain
+MITO_FEATURES = {
+    "C_albicans_SC5314": ["Ca19-mtDNA"],
+    "C_dubliniensis_CD36": ["Cd36-mtDNA"],
+    "C_glabrata_CBS138": ["ChrMT", "Mito"],
+    "C_parapsilosis_CDC317": ["ChrMT"],
+    "C_auris_B8441": [],
+}
 
 # Configure logging
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
@@ -75,10 +98,11 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    seq_result = session.execute(seq_query, {"strain_abbrev": strain_abbrev}).fetchone()
+    seq_result = session.execute(seq_query, {"organism_no": result[0]}).fetchone()
 
     return {
         "organism_no": result[0],
@@ -106,7 +130,7 @@ def get_chromosomes(session, seq_source: str) -> dict[str, str]:
     return chromosomes
 
 
-def get_chromosome_sequence(session, chr_name: str) -> str | None:
+def get_chromosome_sequence(session, chr_name: str, seq_source: str) -> str | None:
     """Get the sequence for a chromosome."""
     query = text(f"""
         SELECT s.residues
@@ -114,12 +138,13 @@ def get_chromosome_sequence(session, chr_name: str) -> str | None:
         JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
         WHERE f.feature_name = :chr_name
         AND s.is_seq_current = 'Y'
+        AND s.source = :seq_source
     """)
-    result = session.execute(query, {"chr_name": chr_name}).fetchone()
+    result = session.execute(query, {"chr_name": chr_name, "seq_source": seq_source}).fetchone()
     return result[0] if result else None
 
 
-def get_chromosome_orfs(session, chr_name: str, seq_source: str) -> list[dict]:
+def get_chromosome_orfs(session, chr_name: str) -> list[dict]:
     """Get ORF features for a chromosome."""
     query = text(f"""
         SELECT f1.feature_no, f1.feature_name, f1.dbxref_id, f1.gene_name, f1.headline
@@ -152,7 +177,7 @@ def get_chromosome_orfs(session, chr_name: str, seq_source: str) -> list[dict]:
 def get_feature_location(session, feature_no: int, seq_source: str) -> dict | None:
     """Get location information for a feature."""
     query = text(f"""
-        SELECT fl.min_coord, fl.max_coord, fl.strand
+        SELECT fl.start_coord, fl.stop_coord, fl.strand
         FROM {DB_SCHEMA}.feat_location fl
         JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
         WHERE fl.feature_no = :feature_no
@@ -167,25 +192,38 @@ def get_feature_location(session, feature_no: int, seq_source: str) -> dict | No
     if not result:
         return None
 
+    # Normalize coordinates (start should be less than stop)
+    start_coord = result[0]
+    stop_coord = result[1]
+    if start_coord > stop_coord:
+        start_coord, stop_coord = stop_coord, start_coord
+
     return {
-        "min_coord": result[0],
-        "max_coord": result[1],
+        "min_coord": start_coord,
+        "max_coord": stop_coord,
         "strand": result[2],
     }
 
 
-def get_feature_subfeatures(session, feature_no: int) -> list[dict]:
-    """Get CDS subfeatures (exons) for a feature."""
+def get_feature_subfeatures(session, feature_no: int, seq_source: str) -> list[dict]:
+    """Get CDS subfeatures (exons) for a feature via feat_relationship."""
     query = text(f"""
-        SELECT sf.subfeature_type, sf.relative_coord_start, sf.relative_coord_end
-        FROM {DB_SCHEMA}.subfeature sf
-        WHERE sf.feature_no = :feature_no
-        AND sf.subfeature_type = 'CDS'
-        ORDER BY sf.relative_coord_start
+        SELECT f.feature_type, fl.start_coord, fl.stop_coord
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
+        JOIN {DB_SCHEMA}.seq s ON fl.seq_no = s.seq_no
+        WHERE fr.parent_feature_no = :feature_no
+        AND fr.rank = 2
+        AND f.feature_type = 'CDS'
+        AND fl.is_loc_current = 'Y'
+        AND s.is_seq_current = 'Y'
+        AND s.source = :seq_source
+        ORDER BY fl.start_coord
     """)
 
     subfeatures = []
-    for row in session.execute(query, {"feature_no": feature_no}).fetchall():
+    for row in session.execute(query, {"feature_no": feature_no, "seq_source": seq_source}).fetchall():
         start = row[1]
         end = row[2]
         if start > end:
@@ -206,6 +244,7 @@ def get_feature_aliases(session, feature_no: int) -> list[str]:
         FROM {DB_SCHEMA}.alias a
         JOIN {DB_SCHEMA}.feat_alias fa ON a.alias_no = fa.alias_no
         WHERE fa.feature_no = :feature_no
+        AND a.alias_type IN ('Uniform', 'Non-uniform', 'CGDID')
     """)
     return [row[0] for row in session.execute(query, {"feature_no": feature_no}).fetchall()]
 
@@ -221,7 +260,38 @@ def get_feature_go_annotations(session, feature_no: int) -> list[str]:
     return [f"GO:{str(row[0]).zfill(7)}" for row in session.execute(query, {"feature_no": feature_no}).fetchall()]
 
 
-def format_embl_location(start: int, end: int, strand: str, is_complement: bool = False) -> str:
+def get_feature_phenotypes(session, feature_no: int) -> list[str]:
+    """Get phenotype annotations for a feature."""
+    try:
+        query = text(f"""
+            SELECT DISTINCT
+                pa.qualifier,
+                p.observable,
+                pa.mutant_type
+            FROM {DB_SCHEMA}.phenotype_annotation pa
+            JOIN {DB_SCHEMA}.phenotype p ON pa.phenotype_no = p.phenotype_no
+            WHERE pa.feature_no = :feature_no
+        """)
+
+        phenotypes = []
+        for row in session.execute(query, {"feature_no": feature_no}).fetchall():
+            qualifier = row[0] or ""
+            observable = row[1] or ""
+            mutant_type = row[2] or ""
+
+            pheno_str = ""
+            if qualifier:
+                pheno_str = f"{qualifier} "
+            pheno_str += f"{observable} ({mutant_type})"
+            phenotypes.append(pheno_str)
+
+        return list(set(phenotypes))  # Remove duplicates
+    except Exception:
+        # Table may not exist in all schemas
+        return []
+
+
+def format_embl_location(start: int, end: int, strand: str) -> str:
     """Format a location string for EMBL format."""
     if strand == "C" or strand == "-":
         return f"complement({start}..{end})"
@@ -230,11 +300,28 @@ def format_embl_location(start: int, end: int, strand: str, is_complement: bool 
 
 def format_embl_join(locations: list[tuple[int, int]], strand: str) -> str:
     """Format a join location string for EMBL format."""
+    if not locations:
+        return ""
+
     loc_strs = [f"{s}..{e}" for s, e in locations]
-    joined = f"join({','.join(loc_strs)})"
+
+    if len(loc_strs) == 1:
+        joined = loc_strs[0]
+    else:
+        joined = f"join({','.join(loc_strs)})"
+
     if strand == "C" or strand == "-":
         return f"complement({joined})"
     return joined
+
+
+def is_mito_chromosome(chr_name: str, strain_abbrev: str) -> bool:
+    """Check if chromosome is mitochondrial."""
+    mito_names = MITO_FEATURES.get(strain_abbrev, [])
+    for mito_name in mito_names:
+        if mito_name.lower() in chr_name.lower() or chr_name.lower() in mito_name.lower():
+            return True
+    return "mito" in chr_name.lower() or "mtdna" in chr_name.lower()
 
 
 def write_embl_file(
@@ -244,23 +331,29 @@ def write_embl_file(
     seq_source: str,
     output_file: Path,
     strain_abbrev: str,
-    trans_table: int = DEFAULT_NUCLEAR_TRANS_TABLE,
 ) -> int:
     """
     Write EMBL format file for a chromosome.
 
     Returns number of features written.
     """
+    # Determine translation table
+    is_mito = is_mito_chromosome(chr_name, strain_abbrev)
+    trans_table = DEFAULT_MITO_TRANS_TABLE if is_mito else DEFAULT_NUCLEAR_TRANS_TABLE
+
     # Get chromosome sequence
-    sequence = get_chromosome_sequence(session, chr_name)
+    sequence = get_chromosome_sequence(session, chr_name, seq_source)
     if not sequence:
         logger.warning(f"No sequence found for {chr_name}")
         return 0
 
     # Get ORFs
-    orfs = get_chromosome_orfs(session, chr_name, seq_source)
+    orfs = get_chromosome_orfs(session, chr_name)
 
-    with open(output_file, "w") as f:
+    # Write to temp file first
+    temp_file = output_file.with_suffix(".embl.temp")
+
+    with open(temp_file, "w") as f:
         # EMBL header
         f.write(f"ID   {chr_name}; SV 1; linear; genomic DNA; STD; FUN; {len(sequence)} BP.\n")
         f.write("XX\n")
@@ -288,9 +381,10 @@ def write_embl_file(
             if not location:
                 continue
 
-            subfeatures = get_feature_subfeatures(session, orf["feature_no"])
+            subfeatures = get_feature_subfeatures(session, orf["feature_no"], seq_source)
             aliases = get_feature_aliases(session, orf["feature_no"])
             go_terms = get_feature_go_annotations(session, orf["feature_no"])
+            phenotypes = get_feature_phenotypes(session, orf["feature_no"])
 
             strand = location["strand"]
             min_coord = location["min_coord"]
@@ -324,10 +418,17 @@ def write_embl_file(
             f.write(f'FT                   /db_xref="{PROJECT_ACRONYM}:{orf["dbxref_id"]}"\n')
             f.write(f'FT                   /transl_table={trans_table}\n')
 
+            # Note with headline and phenotypes
+            note_parts = []
             if orf["headline"]:
-                # Clean headline for EMBL format
                 headline = orf["headline"].replace('"', "'")[:200]
-                f.write(f'FT                   /note="{headline}"\n')
+                note_parts.append(headline)
+            if phenotypes:
+                pheno_str = "Phenotype: " + ", ".join(phenotypes[:5])
+                note_parts.append(pheno_str)
+            if note_parts:
+                note = "; ".join(note_parts)
+                f.write(f'FT                   /note="{note}"\n')
 
             if aliases:
                 alias_str = ", ".join(aliases[:5])  # Limit aliases
@@ -355,7 +456,102 @@ def write_embl_file(
 
         f.write("//\n")
 
+    # Move temp file to final location
+    temp_file.rename(output_file)
+
     return feat_count
+
+
+def make_embl_files(strain_abbrev: str, output_dir: Path | None = None) -> tuple[bool, dict]:
+    """
+    Generate EMBL files for a strain.
+
+    Returns tuple of (success, stats_dict).
+    """
+    stats = {
+        "strain": strain_abbrev,
+        "chromosomes": 0,
+        "features": 0,
+        "errors": [],
+    }
+
+    # Set up logging
+    log_file = LOG_DIR / f"make_embl_files_{strain_abbrev}.log"
+    file_handler = logging.FileHandler(log_file, mode="w")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.addHandler(file_handler)
+
+    logger.info(f"Generating EMBL files for {strain_abbrev}")
+    logger.info(f"Started: {datetime.now()}")
+
+    try:
+        with SessionLocal() as session:
+            # Get strain config
+            config = get_strain_config(session, strain_abbrev)
+            if not config:
+                logger.error(f"Strain not found: {strain_abbrev}")
+                stats["errors"].append("Strain not found in database")
+                return False, stats
+
+            seq_source = config["seq_source"]
+            if not seq_source:
+                logger.error(f"No seq_source found for {strain_abbrev}")
+                stats["errors"].append("No seq_source found")
+                return False, stats
+
+            logger.info(f"Seq source: {seq_source}")
+
+            # Determine output directory
+            if output_dir:
+                out_dir = output_dir
+            else:
+                # Default: DOWNLOAD_DIR/embl/{strain}/
+                out_dir = DOWNLOAD_DIR / "embl" / strain_abbrev
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Output directory: {out_dir}")
+
+            # Get chromosomes
+            chromosomes = get_chromosomes(session, seq_source)
+            logger.info(f"Found {len(chromosomes)} chromosomes/contigs")
+            stats["chromosomes"] = len(chromosomes)
+
+            total_features = 0
+            for chr_name, chr_type in chromosomes.items():
+                output_file = out_dir / f"{chr_name}.embl"
+                logger.info(f"Writing {output_file}")
+
+                try:
+                    count = write_embl_file(
+                        session,
+                        chr_name,
+                        chr_type,
+                        seq_source,
+                        output_file,
+                        strain_abbrev,
+                    )
+                    logger.info(f"  {count} features written")
+                    total_features += count
+                except Exception as e:
+                    logger.error(f"Error writing {chr_name}: {e}")
+                    stats["errors"].append(f"Error writing {chr_name}: {e}")
+
+            stats["features"] = total_features
+            logger.info(f"Total: {total_features} features across {len(chromosomes)} files")
+            logger.info(f"Completed: {datetime.now()}")
+
+            print(f"{strain_abbrev}: {len(chromosomes)} chromosomes, {total_features} features")
+
+        return len(stats["errors"]) == 0, stats
+
+    except Exception as e:
+        logger.exception(f"Error: {e}")
+        stats["errors"].append(str(e))
+        return False, stats
+
+    finally:
+        logger.removeHandler(file_handler)
+        file_handler.close()
 
 
 def main() -> int:
@@ -364,95 +560,58 @@ def main() -> int:
         description="Generate EMBL format files for chromosome sequences"
     )
     parser.add_argument(
-        "strain_abbrev",
+        "strain",
+        nargs="?",
         help="Strain abbreviation (e.g., C_albicans_SC5314)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process all strains",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: auto-generated)",
-    )
-    parser.add_argument(
-        "--trans-table",
-        type=int,
-        default=DEFAULT_NUCLEAR_TRANS_TABLE,
-        help=f"Translation table (default: {DEFAULT_NUCLEAR_TRANS_TABLE})",
+        help="Output directory (default: DOWNLOAD_DIR/embl/{strain}/)",
     )
 
     args = parser.parse_args()
 
-    strain_abbrev = args.strain_abbrev
-
-    # Set up logging
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"make_embl_files_{strain_abbrev}.log"
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(file_handler)
-
-    logger.info(f"Generating EMBL files for {strain_abbrev}")
-
-    try:
-        with SessionLocal() as session:
-            # Get strain config
-            config = get_strain_config(session, strain_abbrev)
-            if not config:
-                logger.error(f"Strain not found: {strain_abbrev}")
-                return 1
-
-            seq_source = config["seq_source"]
-            if not seq_source:
-                logger.error(f"No seq_source found for {strain_abbrev}")
-                return 1
-
-            logger.info(f"Seq source: {seq_source}")
-
-            # Determine output directory
-            if args.output_dir:
-                output_dir = args.output_dir
-            else:
-                output_dir = (
-                    HTML_ROOT_DIR / "download" / "sequence" /
-                    strain_abbrev / "current" / "EMBL_format"
-                )
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Output directory: {output_dir}")
-
-            # Get chromosomes
-            chromosomes = get_chromosomes(session, seq_source)
-            logger.info(f"Found {len(chromosomes)} chromosomes/contigs")
-
-            total_features = 0
-            for chr_name, chr_type in chromosomes.items():
-                output_file = output_dir / f"{chr_name}.embl"
-                logger.info(f"Writing {output_file}")
-
-                count = write_embl_file(
-                    session,
-                    chr_name,
-                    chr_type,
-                    seq_source,
-                    output_file,
-                    strain_abbrev,
-                    args.trans_table,
-                )
-
-                logger.info(f"  {count} features written")
-                total_features += count
-
-            logger.info(f"Total: {total_features} features across {len(chromosomes)} files")
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
+    if args.all:
+        strains = STRAIN_ABBREVS
+    elif args.strain:
+        strains = [args.strain]
+    else:
+        parser.print_help()
         return 1
 
-    finally:
-        logger.removeHandler(file_handler)
-        file_handler.close()
+    all_success = True
+    all_stats = []
+
+    for strain in strains:
+        print(f"\nProcessing {strain}...")
+        success, stats = make_embl_files(strain, args.output_dir)
+        all_stats.append(stats)
+        if not success:
+            all_success = False
+
+    # Print summary
+    print("\n" + "=" * 50)
+    print("SUMMARY")
+    print("=" * 50)
+
+    for stats in all_stats:
+        status = "OK" if len(stats["errors"]) == 0 else "FAILED"
+        print(f"\n{stats['strain']}: {status}")
+        print(f"  Chromosomes: {stats['chromosomes']}")
+        print(f"  Features: {stats['features']}")
+        if stats["errors"]:
+            print(f"  Errors: {len(stats['errors'])}")
+            for err in stats["errors"][:3]:
+                print(f"    - {err}")
+
+    return 0 if all_success else 1
 
 
 if __name__ == "__main__":

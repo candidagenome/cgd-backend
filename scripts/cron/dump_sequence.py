@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Dump sequence files in FASTA format for a strain.
 
@@ -20,7 +22,7 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
-    HTML_ROOT_DIR: Root directory for download files
+    DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
 """
 
@@ -28,31 +30,35 @@ import argparse
 import gzip
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
+# Add parent directories to path
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
-
-# Load environment variables
-load_dotenv()
 
 # Configuration from environment
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
-HTML_ROOT_DIR = Path(os.getenv("HTML_ROOT_DIR", "/var/www/html"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/cgd"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
-# Configure logging
+# Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
 
@@ -75,18 +81,19 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
     }
 
 
-def get_seq_source(session, strain_abbrev: str) -> str | None:
-    """Get sequence source for a strain."""
+def get_seq_source(session, organism_no: int) -> str | None:
+    """Get sequence source for an organism."""
     query = text(f"""
         SELECT DISTINCT s.source
         FROM {DB_SCHEMA}.seq s
         JOIN {DB_SCHEMA}.feat_location fl ON s.seq_no = fl.root_seq_no
         JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
         WHERE s.is_seq_current = 'Y'
-        AND f.organism_abbrev = :strain_abbrev
+        AND f.organism_no = :organism_no
+        ORDER BY s.source DESC
         FETCH FIRST 1 ROW ONLY
     """)
-    result = session.execute(query, {"strain_abbrev": strain_abbrev}).fetchone()
+    result = session.execute(query, {"organism_no": organism_no}).fetchone()
     return result[0] if result else None
 
 
@@ -111,24 +118,26 @@ def get_chromosomes(session, seq_source: str) -> list[dict]:
     return chromosomes
 
 
-def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
+def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get features with their sequences and location info."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.dbxref_id,
-               f.feature_type, f.feature_qualifier, f.headline,
-               fl.min_coord, fl.max_coord, fl.strand,
-               s.seq_name as root_name
+               f.feature_type, fp.property_value as feature_qualifier, f.headline,
+               fl.start_coord, fl.stop_coord, fl.strand,
+               root_feat.feature_name as root_name
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
-        WHERE f.organism_abbrev = :strain_abbrev
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
+        WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
         ORDER BY f.feature_name
     """)
 
     features = []
     for row in session.execute(
-        query, {"strain_abbrev": strain_abbrev, "seq_source": seq_source}
+        query, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         feature_qualifier = row[5] or ""
 
@@ -144,8 +153,8 @@ def get_features(session, strain_abbrev: str, seq_source: str) -> list[dict]:
             "feature_type": row[4],
             "feature_qualifier": feature_qualifier,
             "headline": row[6],
-            "min_coord": row[7],
-            "max_coord": row[8],
+            "start_coord": row[7],
+            "stop_coord": row[8],
             "strand": row[9],
             "root_name": row[10],
         })
@@ -183,7 +192,7 @@ def get_feature_sequence(
     """
     # Get feature location
     loc_query = text(f"""
-        SELECT fl.min_coord, fl.max_coord, fl.strand, s.seq_no, s.residues as chr_seq
+        SELECT fl.start_coord, fl.stop_coord, fl.strand, s.seq_no, s.residues as chr_seq
         FROM {DB_SCHEMA}.feat_location fl
         JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
         WHERE fl.feature_no = :feature_no
@@ -198,14 +207,14 @@ def get_feature_sequence(
     if not loc_result:
         return None, ""
 
-    min_coord, max_coord, strand, seq_no, chr_seq = loc_result
+    start_coord, stop_coord, strand, seq_no, chr_seq = loc_result
 
     if not chr_seq:
         return None, ""
 
     # Calculate coordinates with flanking
-    start = min_coord - 1  # 0-based
-    end = max_coord
+    start = start_coord - 1  # 0-based
+    end = stop_coord
 
     # Adjust for flanking regions based on strand
     if strand == "W" or strand == "+":
@@ -231,17 +240,21 @@ def get_feature_sequence(
 
 def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> str | None:
     """Get coding sequence (introns removed) for a feature."""
-    # Get subfeatures (CDS)
+    # Get CDS subfeatures using feat_relationship
     sf_query = text(f"""
-        SELECT sf.relative_coord_start, sf.relative_coord_end
-        FROM {DB_SCHEMA}.subfeature sf
-        WHERE sf.feature_no = :feature_no
-        AND sf.subfeature_type = 'CDS'
-        ORDER BY sf.relative_coord_start
+        SELECT fl.start_coord, fl.stop_coord
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        WHERE fr.parent_feature_no = :feature_no
+        AND fr.rank = 2
+        AND f.feature_type = 'CDS'
+        ORDER BY fl.start_coord
     """)
 
     subfeatures = []
-    for row in session.execute(sf_query, {"feature_no": feature_no}).fetchall():
+    for row in session.execute(sf_query, {"feature_no": feature_no, "seq_source": seq_source}).fetchall():
         start, end = row
         if start > end:
             start, end = end, start
@@ -254,7 +267,7 @@ def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> st
 
     # Get chromosome sequence and feature location
     loc_query = text(f"""
-        SELECT fl.min_coord, fl.strand, s.residues as chr_seq
+        SELECT fl.start_coord, fl.strand, s.residues as chr_seq
         FROM {DB_SCHEMA}.feat_location fl
         JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
         WHERE fl.feature_no = :feature_no
@@ -269,7 +282,7 @@ def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> st
     if not loc_result:
         return None
 
-    min_coord, strand, chr_seq = loc_result
+    start_coord, strand, chr_seq = loc_result
 
     if not chr_seq:
         return None
@@ -368,7 +381,7 @@ def dump_chromosomes(
 
 def dump_feature_sequences(
     session,
-    strain_abbrev: str,
+    organism_no: int,
     seq_source: str,
     output_file: Path,
     coding_only: bool = True,
@@ -388,7 +401,7 @@ def dump_feature_sequences(
         coding_seq: If True, remove introns
         translate: If True, translate to protein
     """
-    features = get_features(session, strain_abbrev, seq_source)
+    features = get_features(session, organism_no, seq_source)
 
     count = 0
     with open(output_file, "w") as f:
@@ -422,11 +435,10 @@ def dump_feature_sequences(
             name = feat["gene_name"] or feat["feature_name"]
             desc_parts = [name, f"{PROJECT_ACRONYM}ID:{feat['dbxref_id']}"]
 
-            if loc_desc:
+            if 'loc_desc' in dir() and loc_desc:
                 desc_parts.append(loc_desc)
 
             # Add ORF classification if available
-            import re
             match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
             if match:
                 desc_parts.append(f"{match.group(1)} ORF")
@@ -463,7 +475,7 @@ def main() -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: current directory)",
+        help="Output directory (default: DOWNLOAD_DIR/sequence/<strain>)",
     )
     parser.add_argument(
         "--type",
@@ -482,20 +494,6 @@ def main() -> int:
 
     strain_abbrev = args.strain_abbrev
 
-    # Set up output directory
-    if args.output_dir:
-        output_dir = args.output_dir
-    else:
-        output_dir = Path(".")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set up logging to file
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"dump_sequence_{strain_abbrev}.log"
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(file_handler)
-
     logger.info(f"Dumping sequences for {strain_abbrev}")
 
     try:
@@ -509,15 +507,26 @@ def main() -> int:
             # Get or detect seq_source
             seq_source = args.seq_source
             if not seq_source:
-                seq_source = get_seq_source(session, strain_abbrev)
+                seq_source = get_seq_source(session, config["organism_no"])
                 if not seq_source:
                     logger.error(f"No seq_source found for {strain_abbrev}")
                     return 1
 
             logger.info(f"Seq source: {seq_source}")
 
+            # Set up output directory
+            if args.output_dir:
+                output_dir = args.output_dir
+            else:
+                output_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Track counts for summary
+            summary = []
+
             def write_file(filename: str, count: int):
                 logger.info(f"Wrote {count} sequences to {filename}")
+                summary.append(f"{filename}: {count}")
                 if args.gzip:
                     with open(output_dir / filename, "rb") as f_in:
                         with gzip.open(output_dir / f"{filename}.gz", "wb") as f_out:
@@ -534,7 +543,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_genomic"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_genomic.fasta",
                     coding_only=True
                 )
@@ -542,7 +551,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_genomic_1000"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_genomic_1000.fasta",
                     coding_only=True, upstream=1000, downstream=1000
                 )
@@ -550,7 +559,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_coding"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_coding.fasta",
                     coding_only=True, coding_seq=True
                 )
@@ -558,7 +567,7 @@ def main() -> int:
 
             if args.type in ("all", "orf_trans"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "orf_trans_all.fasta",
                     coding_only=True, translate=True
                 )
@@ -566,13 +575,18 @@ def main() -> int:
 
             if args.type in ("all", "other_features"):
                 count = dump_feature_sequences(
-                    session, strain_abbrev, seq_source,
+                    session, config["organism_no"], seq_source,
                     output_dir / "other_features_genomic.fasta",
                     coding_only=False
                 )
                 write_file("other_features_genomic.fasta", count)
 
             logger.info("Done")
+
+            # Print summary to stdout for Slack
+            print(f"*{strain_abbrev}* ({seq_source}):")
+            for item in summary:
+                print(f"  {item}")
 
         return 0
 
@@ -581,10 +595,6 @@ def main() -> int:
         import traceback
         logger.error(traceback.format_exc())
         return 1
-
-    finally:
-        logger.removeHandler(file_handler)
-        file_handler.close()
 
 
 if __name__ == "__main__":

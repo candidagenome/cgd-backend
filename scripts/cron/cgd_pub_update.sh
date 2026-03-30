@@ -100,10 +100,17 @@ echo "----------------------------------------"
 
 python3 "$SCRIPT_DIR/fulltext_url_weekly_update.py"
 
-# Get fulltext URL summary
+# Get fulltext URL summary (extract value after label, default to 0 if empty)
 FULLTEXT_LOG="$LOG_DIR/load/NCBIfulltextURL.log"
-FULLTEXT_INSERTED=$(tail -20 "$FULLTEXT_LOG" 2>/dev/null | grep "URLs inserted:" | tail -1 | grep -oE "[0-9]+" || echo "0")
-FULLTEXT_ERRORS=$(tail -20 "$FULLTEXT_LOG" 2>/dev/null | grep "Errors:" | tail -1 | grep -oE "[0-9]+" || echo "0")
+_extract_value() {
+    local val
+    val=$(tail -20 "$FULLTEXT_LOG" 2>/dev/null | grep "$1" | tail -1 | sed "s/.*$1//" | tr -d ' ')
+    echo "${val:-0}"
+}
+FULLTEXT_CHECKED=$(_extract_value "PubMed IDs checked: ")
+FULLTEXT_FOUND=$(_extract_value "URLs found: ")
+FULLTEXT_INSERTED=$(_extract_value "URLs inserted: ")
+FULLTEXT_ERRORS=$(_extract_value "Errors: ")
 
 echo ""
 echo "========================================"
@@ -127,7 +134,7 @@ printf "  %-20s: %3s refs loaded, %s errors\n" "TOTAL" "$total_refs" "$total_err
 echo ""
 echo "ref_temp Queries: $REF_TEMP_SUCCESS/$REF_TEMP_TOTAL completed"
 echo ""
-echo "Fulltext URLs: $FULLTEXT_INSERTED inserted, $FULLTEXT_ERRORS errors"
+echo "Fulltext URLs: $FULLTEXT_CHECKED checked, $FULLTEXT_FOUND found, $FULLTEXT_INSERTED inserted, $FULLTEXT_ERRORS errors"
 echo ""
 echo "Log Files:"
 echo "----------------------------------------"

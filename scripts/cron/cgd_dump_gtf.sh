@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Dump phenotype data for all CGD organisms.
+# Dump GTF files for all CGD organisms.
 #
 # Usage:
-#   ./slack-cron.sh ./cgd_dump_phenotype_data.sh
+#   ./slack-cron.sh ./cgd_dump_gtf.sh
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,8 +19,13 @@ fi
 # Change to project root for relative paths to work
 cd "$PROJECT_ROOT"
 
-echo "CGD Phenotype Data Dump"
+# Output directory
+OUTPUT_DIR="${DOWNLOAD_DIR:-$PROJECT_ROOT/data}/gtf"
+mkdir -p "$OUTPUT_DIR"
+
+echo "CGD GTF Dump"
 echo "Generated: $(date)"
+echo "Output directory: $OUTPUT_DIR"
 echo "========================================"
 
 # Track errors but continue processing all species
@@ -30,7 +35,7 @@ run_dump() {
     local strain=$1
     echo ""
     echo "Dumping $strain..."
-    if ! python3 "$SCRIPT_DIR/dump_phenotype_data.py" "$strain" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
+    if ! python3 "$SCRIPT_DIR/dump_gtf.py" "$strain" --output "$OUTPUT_DIR/${strain}.gtf" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
         echo "ERROR: Failed to dump $strain"
         errors=$((errors + 1))
     fi
@@ -50,5 +55,5 @@ if [ $errors -gt 0 ]; then
     exit 1
 fi
 
-echo "All phenotype data dumps completed successfully."
+echo "All GTF dumps completed successfully."
 exit 0

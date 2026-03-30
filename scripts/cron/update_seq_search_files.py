@@ -12,54 +12,68 @@ It processes gzipped weekly sequence download files and:
 - Separates mitochondrial sequences if configured
 - Creates seq.count file for PatMatch
 
+Based on updateSeqSearchFiles.pl by Jon Binkley (November 2010)
+
 Usage:
     python update_seq_search_files.py --strain C_albicans_SC5314
+    python update_seq_search_files.py --all
 
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
-    DATA_DIR: Directory for data files
+    DOWNLOAD_DIR: Directory for sequence download files
     LOG_DIR: Directory for log files
     BLAST_DIR: Directory for BLAST databases
     FASTA_DIR: Directory for FASTA files
     BLAST_FORMAT_CMD: Path to makeblastdb command
-    CURATOR_EMAIL: Email for notifications
 """
+from __future__ import annotations
 
 import argparse
 import gzip
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+# Project root directory (cgd-backend/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Load environment variables BEFORE importing cgd modules (settings validation)
+load_dotenv(PROJECT_ROOT / ".env")
+
 # Add parent directory to path to import cgd modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
 
-# Load environment variables
-load_dotenv()
-
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
-DATA_DIR = Path(os.getenv("DATA_DIR", "/tmp"))
-LOG_DIR = Path(os.getenv("LOG_DIR", "/tmp"))
-CGD_DATA_DIR = os.getenv("CGD_DATA_DIR", "/data")
-BLAST_DIR = Path(os.getenv("BLAST_DIR", f"{CGD_DATA_DIR}/blast"))
-FASTA_DIR = Path(os.getenv("FASTA_DIR", f"{CGD_DATA_DIR}/fasta"))
+DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data" / "download")))
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+CGD_DATA_DIR = Path(os.getenv("CGD_DATA_DIR", "/data"))
+BLAST_DIR = Path(os.getenv("BLAST_DIR", str(CGD_DATA_DIR / "blast")))
+FASTA_DIR = Path(os.getenv("FASTA_DIR", str(CGD_DATA_DIR / "fasta")))
 BLAST_FORMAT_CMD = os.getenv("BLAST_FORMAT_CMD", "makeblastdb")
-CURATOR_EMAIL = os.getenv("CURATOR_EMAIL")
-SEQUENCE_FILES_CONFIG = os.getenv("SEQUENCE_FILES_CONFIG", "")
+
+# Strain configurations
+STRAIN_ABBREVS = [
+    "C_albicans_SC5314",
+    "C_dubliniensis_CD36",
+    "C_glabrata_CBS138",
+    "C_parapsilosis_CDC317",
+    "C_auris_B8441",
+]
 
 # Configure logging
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -77,16 +91,22 @@ class SequenceProcessor:
         self.mito_features: set[str] = set()
         self.seq_counts: dict[str, int] = {}
         self.log_messages: list[str] = []
+        self.errors: list[str] = []
 
-        # Directory setup
+        # Directory setup - use DOWNLOAD_DIR/sequence/{strain} for source files
         self.fasta_dir = FASTA_DIR / strain_abbrev
         self.blast_dir = BLAST_DIR / strain_abbrev
-        self.download_dir = DATA_DIR / "download" / strain_abbrev
+        self.download_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
 
     def log(self, message: str) -> None:
         """Log a message to both logger and internal list."""
         logger.info(message)
         self.log_messages.append(message)
+
+    def log_error(self, message: str) -> None:
+        """Log an error message."""
+        logger.error(message)
+        self.errors.append(message)
 
     def get_organism_no(self) -> int | None:
         """Get organism number from database."""
@@ -201,7 +221,6 @@ class SequenceProcessor:
             return combined, ""
 
         # Keep only coordinate information if present
-        import re
         match = re.search(r"(COORDS:[^:]+:\d+-\d+[CW])", desc)
         if match:
             return seq_id, match.group(1)
@@ -290,25 +309,32 @@ class SequenceProcessor:
             True on success, False on failure
         """
         if not input_file.exists():
-            self.log(f"ERROR: Input file not found: {input_file}")
+            self.log_error(f"Input file not found: {input_file}")
             return False
 
         output_db.parent.mkdir(parents=True, exist_ok=True)
 
         # Create temp directory for formatting
         temp_dir = output_db.parent / "temp"
-        temp_dir.mkdir(exist_ok=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
         temp_db = temp_dir / output_db.name
 
         # Determine database type
         db_type = "prot" if seq_type == "protein" else "nucl"
 
-        # Build command: decompress and pipe to makeblastdb
-        cmd = (
-            f"zcat {input_file} | {BLAST_FORMAT_CMD} "
-            f"-dbtype {db_type} -input_type fasta "
-            f"-parse_seqids -title {dataset} -out {temp_db}"
-        )
+        # Build command: decompress if gzipped, then pipe to makeblastdb
+        if str(input_file).endswith(".gz"):
+            cmd = (
+                f"zcat {input_file} | {BLAST_FORMAT_CMD} "
+                f"-dbtype {db_type} -input_type fasta "
+                f"-parse_seqids -title {dataset} -out {temp_db}"
+            )
+        else:
+            cmd = (
+                f"cat {input_file} | {BLAST_FORMAT_CMD} "
+                f"-dbtype {db_type} -input_type fasta "
+                f"-parse_seqids -title {dataset} -out {temp_db}"
+            )
 
         self.log(f"Executing: {cmd}")
 
@@ -321,8 +347,34 @@ class SequenceProcessor:
             )
 
             if result.returncode != 0:
-                self.log(f"ERROR: makeblastdb failed: {result.stderr}")
-                return False
+                # If duplicate seq_ids, retry without -parse_seqids
+                if "Duplicate seq_ids" in result.stderr:
+                    self.log("Duplicate seq_ids detected, retrying without -parse_seqids")
+                    if str(input_file).endswith(".gz"):
+                        cmd_retry = (
+                            f"zcat {input_file} | {BLAST_FORMAT_CMD} "
+                            f"-dbtype {db_type} -input_type fasta "
+                            f"-title {dataset} -out {temp_db}"
+                        )
+                    else:
+                        cmd_retry = (
+                            f"cat {input_file} | {BLAST_FORMAT_CMD} "
+                            f"-dbtype {db_type} -input_type fasta "
+                            f"-title {dataset} -out {temp_db}"
+                        )
+                    self.log(f"Executing: {cmd_retry}")
+                    result = subprocess.run(
+                        cmd_retry,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode != 0:
+                        self.log_error(f"makeblastdb failed: {result.stderr}")
+                        return False
+                else:
+                    self.log_error(f"makeblastdb failed: {result.stderr}")
+                    return False
 
             # Move files to final location
             suffixes = (
@@ -341,7 +393,7 @@ class SequenceProcessor:
             return True
 
         except Exception as e:
-            self.log(f"ERROR formatting BLAST database: {e}")
+            self.log_error(f"Error formatting BLAST database: {e}")
             return False
 
     def separate_mito_sequences(
@@ -395,7 +447,7 @@ class SequenceProcessor:
         fasta_file: Path | None,
         blast_db: Path | None,
         seq_type: str,
-    ) -> None:
+    ) -> bool:
         """
         Process a single dataset for PatMatch and/or BLAST.
 
@@ -405,12 +457,17 @@ class SequenceProcessor:
             fasta_file: Output PatMatch FASTA file (or None)
             blast_db: Output BLAST database path (or None)
             seq_type: Sequence type ('protein' or 'dna')
+
+        Returns:
+            True on success, False on failure
         """
         self.log(f"Processing dataset: {dataset}")
 
         if not source_file.exists():
-            self.log(f"ERROR: Source file not found: {source_file}")
-            return
+            self.log_error(f"Source file not found: {source_file}")
+            return False
+
+        success = True
 
         # Check if we need to separate mito sequences
         needs_mito_separation = (
@@ -423,7 +480,7 @@ class SequenceProcessor:
             if needs_mito_separation:
                 # Create temp files for separated sequences
                 temp_dir = blast_db.parent / "temp"
-                temp_dir.mkdir(exist_ok=True)
+                temp_dir.mkdir(parents=True, exist_ok=True)
 
                 nuclear_file = temp_dir / f"{dataset}_nuclear.fasta.gz"
                 mito_file = temp_dir / f"{dataset}_mito.fasta.gz"
@@ -433,12 +490,14 @@ class SequenceProcessor:
                 )
 
                 # Format nuclear BLAST database
-                self.format_blast_db(nuclear_file, blast_db, dataset, seq_type)
+                if not self.format_blast_db(nuclear_file, blast_db, dataset, seq_type):
+                    success = False
 
                 # Format mito BLAST database if there are mito sequences
                 if mito_count > 0:
                     mito_blast_db = blast_db.parent / f"mito_{blast_db.name}"
-                    self.format_blast_db(mito_file, mito_blast_db, f"mito_{dataset}", seq_type)
+                    if not self.format_blast_db(mito_file, mito_blast_db, f"mito_{dataset}", seq_type):
+                        success = False
 
                 # Cleanup temp files
                 if nuclear_file.exists():
@@ -446,14 +505,22 @@ class SequenceProcessor:
                 if mito_file.exists():
                     mito_file.unlink()
             else:
-                self.format_blast_db(source_file, blast_db, dataset, seq_type)
+                if not self.format_blast_db(source_file, blast_db, dataset, seq_type):
+                    success = False
 
         # Process for PatMatch
         if fasta_file:
-            count = self.reformat_fasta(dataset, source_file, fasta_file, seq_type)
-            self.seq_counts[dataset] = count
+            try:
+                count = self.reformat_fasta(dataset, source_file, fasta_file, seq_type)
+                self.seq_counts[dataset] = count
+            except Exception as e:
+                self.log_error(f"Error reformatting {dataset}: {e}")
+                success = False
 
-        self.log(f"Successfully processed dataset: {dataset}")
+        if success:
+            self.log(f"Successfully processed dataset: {dataset}")
+
+        return success
 
     def write_seq_count_file(self, output_file: Path) -> None:
         """Write sequence count file for PatMatch."""
@@ -470,49 +537,50 @@ def get_dataset_config(strain_abbrev: str) -> list[dict]:
     """
     Get dataset configuration for a strain.
 
-    This should be loaded from a config file or database in production.
+    Source file names match those produced by dump_sequence.py.
+
     Returns list of dataset configurations.
     """
-    # Default datasets - in production, load from config
+    # Datasets matching dump_sequence.py output
     datasets = [
         {
             "name": "orf_coding",
-            "source": f"{strain_abbrev}_current_orf_coding.fasta.gz",
+            "source": "orf_coding.fasta",  # from dump_sequence.py
             "fasta": f"{strain_abbrev}_orf_coding.fasta",
             "blast": f"{strain_abbrev}_orf_coding",
             "type": "dna",
         },
         {
             "name": "orf_trans",
-            "source": f"{strain_abbrev}_current_orf_trans.fasta.gz",
+            "source": "orf_trans_all.fasta",  # from dump_sequence.py
             "fasta": f"{strain_abbrev}_orf_trans.fasta",
             "blast": f"{strain_abbrev}_orf_trans",
             "type": "protein",
         },
         {
             "name": "orf_genomic",
-            "source": f"{strain_abbrev}_current_orf_genomic.fasta.gz",
+            "source": "orf_genomic.fasta",  # from dump_sequence.py
             "fasta": f"{strain_abbrev}_orf_genomic.fasta",
             "blast": f"{strain_abbrev}_orf_genomic",
             "type": "dna",
         },
         {
             "name": "1000_up",
-            "source": f"{strain_abbrev}_current_1000_bp_upstream.fasta.gz",
+            "source": "orf_genomic_1000.fasta",  # from dump_sequence.py (1000bp flanking)
             "fasta": f"{strain_abbrev}_1000_up.fasta",
             "blast": None,
             "type": "dna",
         },
         {
-            "name": "not_feature",
-            "source": f"{strain_abbrev}_current_intergenic.fasta.gz",
-            "fasta": f"{strain_abbrev}_not_feature.fasta",
+            "name": "other_features",
+            "source": "other_features_genomic.fasta",  # from dump_sequence.py
+            "fasta": f"{strain_abbrev}_other_features.fasta",
             "blast": None,
             "type": "dna",
         },
         {
             "name": "genomic",
-            "source": f"{strain_abbrev}_current_chromosomes.fasta.gz",
+            "source": f"{strain_abbrev}_chromosomes.fasta",  # from dump_sequence.py
             "fasta": None,
             "blast": f"{strain_abbrev}_genomic",
             "type": "dna",
@@ -524,8 +592,6 @@ def get_dataset_config(strain_abbrev: str) -> list[dict]:
 
 def get_mito_features(session, strain_abbrev: str) -> list[str]:
     """Get mitochondrial feature names for a strain from database."""
-    # This should be loaded from config or database
-    # For now, return empty list - configure as needed
     query = text(f"""
         SELECT f.feature_name
         FROM {DB_SCHEMA}.feature f
@@ -539,7 +605,7 @@ def get_mito_features(session, strain_abbrev: str) -> list[str]:
     return [row[0] for row in result]
 
 
-def update_seq_search_files(strain_abbrev: str) -> bool:
+def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
     """
     Main function to update sequence search files.
 
@@ -547,8 +613,17 @@ def update_seq_search_files(strain_abbrev: str) -> bool:
         strain_abbrev: Strain abbreviation
 
     Returns:
-        True on success, False on failure
+        Tuple of (success, stats_dict)
     """
+    stats = {
+        "strain": strain_abbrev,
+        "datasets_processed": 0,
+        "datasets_failed": 0,
+        "fasta_files": 0,
+        "blast_dbs": 0,
+        "errors": [],
+    }
+
     # Set up logging for this strain
     log_file = LOG_DIR / f"{strain_abbrev}_fasta_file_creation.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -567,7 +642,13 @@ def update_seq_search_files(strain_abbrev: str) -> bool:
             processor.organism_no = processor.get_organism_no()
             if not processor.organism_no:
                 logger.error(f"Strain {strain_abbrev} not found in database")
-                return False
+                stats["errors"].append(f"Strain not found in database")
+                return False, stats
+
+            logger.info(f"Organism: {strain_abbrev} (organism_no={processor.organism_no})")
+            logger.info(f"Download dir: {processor.download_dir}")
+            logger.info(f"FASTA dir: {processor.fasta_dir}")
+            logger.info(f"BLAST dir: {processor.blast_dir}")
 
             # Identify mito features
             mito_features = get_mito_features(session, strain_abbrev)
@@ -578,7 +659,14 @@ def update_seq_search_files(strain_abbrev: str) -> bool:
 
             # Process each dataset
             for ds_config in datasets:
+                # Try both plain and gzipped versions of source file
                 source_file = processor.download_dir / ds_config["source"]
+                if not source_file.exists():
+                    # Try gzipped version
+                    source_file_gz = processor.download_dir / f"{ds_config['source']}.gz"
+                    if source_file_gz.exists():
+                        source_file = source_file_gz
+
                 fasta_file = (
                     processor.fasta_dir / ds_config["fasta"]
                     if ds_config["fasta"]
@@ -590,7 +678,7 @@ def update_seq_search_files(strain_abbrev: str) -> bool:
                     else None
                 )
 
-                processor.process_dataset(
+                success = processor.process_dataset(
                     dataset=ds_config["name"],
                     source_file=source_file,
                     fasta_file=fasta_file,
@@ -598,16 +686,33 @@ def update_seq_search_files(strain_abbrev: str) -> bool:
                     seq_type=ds_config["type"],
                 )
 
-            # Write sequence count file
-            seq_count_file = processor.fasta_dir / "seq.count"
-            processor.write_seq_count_file(seq_count_file)
+                if success:
+                    stats["datasets_processed"] += 1
+                    if fasta_file:
+                        stats["fasta_files"] += 1
+                    if blast_db:
+                        stats["blast_dbs"] += 1
+                else:
+                    stats["datasets_failed"] += 1
 
+            # Write sequence count file
+            if processor.seq_counts:
+                seq_count_file = processor.fasta_dir / "seq.count"
+                processor.write_seq_count_file(seq_count_file)
+
+            stats["errors"] = processor.errors
             logger.info(f"Complete: {datetime.now()}")
-            return True
+
+            return stats["datasets_failed"] == 0, stats
 
     except Exception as e:
         logger.exception(f"Error updating sequence search files: {e}")
-        return False
+        stats["errors"].append(str(e))
+        return False, stats
+
+    finally:
+        logger.removeHandler(file_handler)
+        file_handler.close()
 
 
 def main() -> int:
@@ -616,15 +721,54 @@ def main() -> int:
         description="Update sequence search files for PatMatch and BLAST"
     )
     parser.add_argument(
-        "--strain",
-        required=True,
+        "strain",
+        nargs="?",
         help="Strain abbreviation (e.g., C_albicans_SC5314)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process all strains",
     )
 
     args = parser.parse_args()
 
-    success = update_seq_search_files(args.strain)
-    return 0 if success else 1
+    if args.all:
+        strains = STRAIN_ABBREVS
+    elif args.strain:
+        strains = [args.strain]
+    else:
+        parser.print_help()
+        return 1
+
+    all_success = True
+    all_stats = []
+
+    for strain in strains:
+        print(f"\nProcessing {strain}...")
+        success, stats = update_seq_search_files(strain)
+        all_stats.append(stats)
+        if not success:
+            all_success = False
+
+    # Print summary
+    print("\n" + "=" * 50)
+    print("SUMMARY")
+    print("=" * 50)
+
+    for stats in all_stats:
+        status = "OK" if stats["datasets_failed"] == 0 else "FAILED"
+        print(f"\n{stats['strain']}: {status}")
+        print(f"  Datasets processed: {stats['datasets_processed']}")
+        print(f"  Datasets failed: {stats['datasets_failed']}")
+        print(f"  FASTA files created: {stats['fasta_files']}")
+        print(f"  BLAST databases created: {stats['blast_dbs']}")
+        if stats["errors"]:
+            print(f"  Errors: {len(stats['errors'])}")
+            for err in stats["errors"][:3]:
+                print(f"    - {err}")
+
+    return 0 if all_success else 1
 
 
 if __name__ == "__main__":

@@ -431,11 +431,18 @@ def main() -> int:
                 session.commit()
                 logger.info("Changes committed to database")
 
-            # Summary
-            logger.info(f"Summary:")
-            logger.info(f"  Dubious updates: {dubious_updates}")
-            logger.info(f"  Verified updates: {verified_updates}")
-            logger.info(f"  Uncharacterized updates: {uncharacterized_updates}")
+            # Summary - print to stdout for Slack
+            summary = (
+                f"*{strain_abbrev}*\n"
+                f"  Total features: {len(all_features)} | "
+                f"Deleted: {len(deleted_features)} | "
+                f"Dubious: {len(dubious_orfs)}\n"
+                f"  Updates: Dubious={dubious_updates}, "
+                f"Verified={verified_updates}, "
+                f"Uncharacterized={uncharacterized_updates}"
+            )
+            print(summary)
+            logger.info(f"Summary: Dubious={dubious_updates}, Verified={verified_updates}, Uncharacterized={uncharacterized_updates}")
 
         logger.info(f"Completed at {datetime.now()}")
         return 0
