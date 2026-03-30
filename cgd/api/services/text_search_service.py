@@ -85,6 +85,26 @@ GENE_FEATURE_TYPES = [
     'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
 ]
 
+# Organism display priority (lower index = higher priority)
+# C. albicans SC5314 is the primary organism and should appear first in search results
+ORGANISM_PRIORITY = [
+    'Candida albicans SC5314',
+    'Candida glabrata CBS138',
+    'Candida auris B8441',
+    'Candida dubliniensis CD36',
+    'Candida parapsilosis CDC317',
+]
+
+
+def _get_organism_priority(organism_name: Optional[str]) -> int:
+    """Get sort priority for an organism (lower = higher priority)."""
+    if not organism_name:
+        return 999
+    try:
+        return ORGANISM_PRIORITY.index(organism_name)
+    except ValueError:
+        return 998  # Unknown organisms come before None but after known
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -544,6 +564,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 if len(results) >= limit:
                     break
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -602,6 +624,8 @@ def search_descriptions(
             highlighted_description=_highlight_text(feat.headline, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -877,6 +901,8 @@ def search_paragraphs(db: Session, query: str, limit: int = 20) -> list[TextSear
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -1075,6 +1101,8 @@ def search_name_descriptions(db: Session, query: str, limit: int = 20) -> list[T
             highlighted_description=_highlight_text(feat.name_description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -1195,6 +1223,8 @@ def search_notes(
                 highlighted_description=_highlight_text(description, query),
             ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 
@@ -1238,6 +1268,8 @@ def search_external_ids(db: Session, query: str, limit: int = 20) -> list[TextSe
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -1283,6 +1315,8 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 

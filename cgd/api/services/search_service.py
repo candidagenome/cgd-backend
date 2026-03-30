@@ -39,6 +39,26 @@ GENE_FEATURE_TYPES = [
     'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
 ]
 
+# Organism display priority (lower index = higher priority)
+# C. albicans SC5314 is the primary organism and should appear first in search results
+ORGANISM_PRIORITY = [
+    'Candida albicans SC5314',
+    'Candida glabrata CBS138',
+    'Candida auris B8441',
+    'Candida dubliniensis CD36',
+    'Candida parapsilosis CDC317',
+]
+
+
+def _get_organism_priority(organism_name: Optional[str]) -> int:
+    """Get sort priority for an organism (lower = higher priority)."""
+    if not organism_name:
+        return 999
+    try:
+        return ORGANISM_PRIORITY.index(organism_name)
+    except ValueError:
+        return 998  # Unknown organisms come before None but after known
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -469,6 +489,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 
@@ -1230,6 +1252,8 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
                 highlighted_description=_highlight_text(description, query),
             ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
