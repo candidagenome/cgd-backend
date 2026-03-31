@@ -315,13 +315,13 @@ def _get_organism_seq_source(db: Session, organism_no: int) -> Optional[str]:
     organism_name = organism.organism_name
 
     # Map organism names to their default assembly seq_source
-    # These match the Perl config files in lib/Config/project_base/CGD/
+    # These match the seq.source values in the database
     SEQ_SOURCE_MAP = {
         'Candida albicans SC5314': 'C. albicans SC5314 Assembly 22',
-        'Candida glabrata CBS138': 'C. glabrata CBS138 Assembly',
-        'Candida auris B8441': 'C. auris B8441 Assembly',
-        'Candida dubliniensis CD36': 'C. dubliniensis CD36 Assembly',
-        'Candida parapsilosis CDC317': 'C. parapsilosis CDC317 Assembly',
+        'Candida glabrata CBS138': 'C. glabrata CBS138',
+        'Candida auris B8441': 'C. auris B8441',
+        'Candida dubliniensis CD36': 'C. dubliniensis CD36',
+        'Candida parapsilosis CDC317': 'C. parapsilosis CDC317',
     }
 
     return SEQ_SOURCE_MAP.get(organism_name)
