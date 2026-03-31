@@ -40,7 +40,7 @@ def send_reminder() -> int:
         return 1
 
     message = {
-        "text": f"*Agenda Item Briefs Reminder*\n\nHi all,\n\nPlease send your briefs by Wednesday 5pm for Thursday's meeting.\n\nCordially,\nOn behalf of the {PROJECT_ACRONYM} Curators"
+        "text": f"*Agenda Item Briefs Reminder*\n\nPlease send your briefs by Wednesday 3pm.\n\nCordially,\nOn behalf of the {PROJECT_ACRONYM} Curators"
     }
 
     try:
