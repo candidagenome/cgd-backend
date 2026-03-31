@@ -532,6 +532,7 @@ def _calculate_enrichment(
     background_annotations: dict[int, set[int]],
     query_direct_annotations: dict[int, set[int]],
     background_direct_annotations: dict[int, set[int]],
+    query_size: int,
     background_size: int,
     p_value_cutoff: float,
     min_genes_in_term: int,
@@ -544,7 +545,7 @@ def _calculate_enrichment(
     Where:
     - N = background set size (total genes in background)
     - K = genes in background annotated to term
-    - n = query set size
+    - n = query set size (ALL query genes, including those without GO annotations)
     - k = genes in query annotated to term
 
     For aspect nodes (biological_process, molecular_function, cellular_component),
@@ -554,8 +555,10 @@ def _calculate_enrichment(
     Returns list of (go_no, k, n, K, N, p_value) tuples for significant terms.
     """
     # Calculate N and n
-    N = background_size  # Total background genes (all genes, not just those with GO annotations)
-    n = len(query_annotations)  # Total query genes
+    # N = total background genes
+    # n = ALL query genes (including those without GO annotations) - matches Perl behavior
+    N = background_size
+    n = query_size
 
     if N == 0 or n == 0:
         return []
@@ -801,7 +804,8 @@ def run_go_term_finder(
         background_annotations,
         {f: query_direct_annotations.get(f, set()) for f in query_genes_with_go},
         background_direct_annotations,
-        len(background_feature_nos),  # Use total background size, not just genes with GO annotations
+        len(query_feature_nos),  # ALL query genes (including those without GO annotations) - matches Perl
+        len(background_feature_nos),  # Total background size
         request.p_value_cutoff,
         request.min_genes_in_term,
     )
