@@ -431,16 +431,19 @@ def _get_go_annotations_with_ancestors(
     ontology: GoOntology,
     evidence_codes: Optional[list[str]] = None,
     annotation_types: Optional[list[str]] = None,
-) -> dict[int, set[int]]:
+) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
     """
     Get GO annotations for features, including inherited ancestor terms.
 
     A gene annotated to a child term is implicitly annotated to all ancestors.
 
-    Returns: dict mapping feature_no -> set of go_no values
+    Returns:
+        Tuple of (full_annotations, direct_annotations) where:
+        - full_annotations: dict mapping feature_no -> set of go_no values (direct + ancestors)
+        - direct_annotations: dict mapping feature_no -> set of go_no values (direct only)
     """
     if not feature_nos:
-        return {}
+        return {}, {}
 
     # Build annotation filters
     ann_filters = _build_annotation_filters(evidence_codes, annotation_types)
@@ -453,7 +456,7 @@ def _get_go_annotations_with_ancestors(
     }
 
     # Query direct annotations in batches (Oracle IN clause limit is 1000)
-    direct_annotations = []
+    direct_annotation_rows = []
     for chunk in _chunk_list(feature_nos):
         query = (
             db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
@@ -469,18 +472,18 @@ def _get_go_annotations_with_ancestors(
         for f in ann_filters:
             query = query.filter(f)
 
-        direct_annotations.extend(query.all())
+        direct_annotation_rows.extend(query.all())
 
-    # Build feature -> go_no set mapping
-    feature_to_go_nos: dict[int, set[int]] = defaultdict(set)
+    # Build feature -> go_no set mapping for direct annotations
+    direct_annotations: dict[int, set[int]] = defaultdict(set)
     all_go_nos = set()
 
-    for feature_no, go_no in direct_annotations:
-        feature_to_go_nos[feature_no].add(go_no)
+    for feature_no, go_no in direct_annotation_rows:
+        direct_annotations[feature_no].add(go_no)
         all_go_nos.add(go_no)
 
     if not all_go_nos:
-        return feature_to_go_nos
+        return dict(direct_annotations), dict(direct_annotations)
 
     # Query ancestors for all direct annotations (also in batches)
     ancestor_paths = []
@@ -505,19 +508,30 @@ def _get_go_annotations_with_ancestors(
     for child_go_no, ancestor_go_no in ancestor_paths:
         child_to_ancestors[child_go_no].add(ancestor_go_no)
 
-    # Add ancestors to each feature's annotation set
-    for feature_no, go_nos in feature_to_go_nos.items():
-        inherited_go_nos = set()
+    # Build full annotations (direct + ancestors)
+    full_annotations: dict[int, set[int]] = defaultdict(set)
+    for feature_no, go_nos in direct_annotations.items():
+        full_annotations[feature_no].update(go_nos)
         for go_no in go_nos:
-            inherited_go_nos.update(child_to_ancestors.get(go_no, set()))
-        feature_to_go_nos[feature_no].update(inherited_go_nos)
+            full_annotations[feature_no].update(child_to_ancestors.get(go_no, set()))
 
-    return feature_to_go_nos
+    return dict(full_annotations), dict(direct_annotations)
+
+
+# Aspect node go_nos (root terms for each ontology)
+# These get special handling: only direct annotations are counted
+ASPECT_NODE_GO_NOS = {
+    24318,  # biological_process (GO:0008150)
+    32814,  # molecular_function (GO:0003674)
+    39472,  # cellular_component (GO:0005575)
+}
 
 
 def _calculate_enrichment(
     query_annotations: dict[int, set[int]],
     background_annotations: dict[int, set[int]],
+    query_direct_annotations: dict[int, set[int]],
+    background_direct_annotations: dict[int, set[int]],
     background_size: int,
     p_value_cutoff: float,
     min_genes_in_term: int,
@@ -533,6 +547,10 @@ def _calculate_enrichment(
     - n = query set size
     - k = genes in query annotated to term
 
+    For aspect nodes (biological_process, molecular_function, cellular_component),
+    only direct annotations are counted to prevent generic terms from dominating.
+    This matches the Perl goTermFinder behavior.
+
     Returns list of (go_no, k, n, K, N, p_value) tuples for significant terms.
     """
     # Calculate N and n
@@ -542,7 +560,7 @@ def _calculate_enrichment(
     if N == 0 or n == 0:
         return []
 
-    # Count genes per GO term in query and background
+    # Count genes per GO term in query and background (full annotations)
     query_term_counts: dict[int, set[int]] = defaultdict(set)  # go_no -> set of feature_nos
     background_term_counts: dict[int, set[int]] = defaultdict(set)
 
@@ -554,11 +572,29 @@ def _calculate_enrichment(
         for go_no in go_nos:
             background_term_counts[go_no].add(feature_no)
 
+    # Count genes per GO term using DIRECT annotations only (for aspect nodes)
+    query_direct_term_counts: dict[int, set[int]] = defaultdict(set)
+    background_direct_term_counts: dict[int, set[int]] = defaultdict(set)
+
+    for feature_no, go_nos in query_direct_annotations.items():
+        for go_no in go_nos:
+            query_direct_term_counts[go_no].add(feature_no)
+
+    for feature_no, go_nos in background_direct_annotations.items():
+        for go_no in go_nos:
+            background_direct_term_counts[go_no].add(feature_no)
+
     # Calculate p-values for each term
     results = []
     for go_no, query_features in query_term_counts.items():
-        k = len(query_features)  # Genes in query with this term
-        K = len(background_term_counts.get(go_no, set()))  # Genes in background with this term
+        # For aspect nodes, use direct annotation counts only
+        # This prevents generic terms like "biological_process" from dominating
+        if go_no in ASPECT_NODE_GO_NOS:
+            k = len(query_direct_term_counts.get(go_no, set()))
+            K = len(background_direct_term_counts.get(go_no, set()))
+        else:
+            k = len(query_features)  # Genes in query with this term
+            K = len(background_term_counts.get(go_no, set()))  # Genes in background with this term
 
         if k < min_genes_in_term:
             continue
@@ -729,7 +765,7 @@ def run_go_term_finder(
 
     # Step 3: Get GO annotations with ancestors
     step_start = time.time()
-    query_annotations = _get_go_annotations_with_ancestors(
+    query_annotations, query_direct_annotations = _get_go_annotations_with_ancestors(
         db,
         query_feature_nos,
         request.ontology,
@@ -739,7 +775,7 @@ def run_go_term_finder(
     logger.info(f"Step 3a (query GO annotations): {time.time() - step_start:.2f}s")
 
     step_start = time.time()
-    background_annotations = _get_go_annotations_with_ancestors(
+    background_annotations, background_direct_annotations = _get_go_annotations_with_ancestors(
         db,
         background_feature_nos,
         request.ontology,
@@ -763,6 +799,8 @@ def run_go_term_finder(
     enrichment_results = _calculate_enrichment(
         {f: query_annotations[f] for f in query_genes_with_go},
         background_annotations,
+        {f: query_direct_annotations.get(f, set()) for f in query_genes_with_go},
+        background_direct_annotations,
         len(background_feature_nos),  # Use total background size, not just genes with GO annotations
         request.p_value_cutoff,
         request.min_genes_in_term,
