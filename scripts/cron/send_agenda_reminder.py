@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """
-Send agenda brief reminder email to curators.
+Send agenda brief reminder to Slack channel.
 
 Meeting is Thursday 12:30PM, so reminder is sent Monday morning.
 
 Usage:
     python send_agenda_reminder.py
-    ./slack-cron.sh ./send_agenda_reminder.py
+    ./slack-cron.sh ./cgd_send_agenda_reminder.sh
 
 Environment Variables:
-    SMTP_HOST: SMTP server (default: localhost)
-    CURATOR_EMAIL: Curator mailing list email
-    ADMIN_EMAIL: Admin email address
+    SLACK_WEBHOOK_URL: Slack incoming webhook URL (required)
     PROJECT_ACRONYM: Project acronym (default: CGD)
 """
 from __future__ import annotations
 
+import json
 import os
-import smtplib
 import sys
-from email.mime.text import MIMEText
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,37 +29,37 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 # Configuration
-SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
-CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "cgd-curators@lists.stanford.edu")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "cgd-admin@lists.stanford.edu")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 
 
 def send_reminder() -> int:
-    """Send agenda brief reminder email."""
-    subject = "Agenda Item Briefs"
+    """Send agenda brief reminder to Slack."""
+    if not SLACK_WEBHOOK_URL:
+        print("ERROR: SLACK_WEBHOOK_URL not set in environment", file=sys.stderr)
+        return 1
 
-    body = f"""Hi all,
-
-Please send your briefs by Wednesday 5pm for Thursday's meeting.
-
-Cordially,
-On behalf of the {PROJECT_ACRONYM} Curators
-"""
-
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = f"{PROJECT_ACRONYM} Admin <{ADMIN_EMAIL}>"
-    msg["To"] = f"{PROJECT_ACRONYM} Curators <{CURATOR_EMAIL}>"
-    msg["Reply-To"] = f"{PROJECT_ACRONYM} Curators <{CURATOR_EMAIL}>"
+    message = {
+        "text": f"*Agenda Item Briefs Reminder*\n\nHi all,\n\nPlease send your briefs by Wednesday 5pm for Thursday's meeting.\n\nCordially,\nOn behalf of the {PROJECT_ACRONYM} Curators"
+    }
 
     try:
-        with smtplib.SMTP(SMTP_HOST) as smtp:
-            smtp.send_message(msg)
-        print(f"Agenda reminder sent to {CURATOR_EMAIL}")
-        return 0
+        data = json.dumps(message).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                print("Agenda reminder sent to Slack")
+                return 0
+            else:
+                print(f"ERROR: Slack returned status {response.status}", file=sys.stderr)
+                return 1
     except Exception as e:
-        print(f"ERROR: Failed to send email: {e}", file=sys.stderr)
+        print(f"ERROR: Failed to send Slack message: {e}", file=sys.stderr)
         return 1
 
 

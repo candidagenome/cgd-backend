@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Send agenda brief reminder email to curators.
+# Send agenda brief reminder to Slack channel.
 #
 # Meeting is Thursday 12:30PM, reminder sent Monday 9am.
 #
