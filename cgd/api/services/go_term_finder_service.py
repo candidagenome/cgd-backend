@@ -687,24 +687,26 @@ def run_go_term_finder(
         # Filter custom background to valid features
         background_feature_nos = [f for f in background_feature_nos if f in valid_features]
     else:
-        # Default: all genes with GO annotations for this organism
-        # that are in the current assembly and not deleted
-        bg_query = (
-            db.query(GoAnnotation.feature_no)
-            .join(Feature, Feature.feature_no == GoAnnotation.feature_no)
+        # Default: all gene-level features in current assembly
+        # This matches the snapshot "Haploid Total" count
+        # Excludes sub-gene features (CDS, intron, noncoding_exon) and structural (chromosome)
+        GENE_LEVEL_FEATURE_TYPES = {
+            'ORF', 'tRNA', 'snoRNA', 'rRNA', 'snRNA', 'ncRNA',
+            'pseudogene', 'blocked_reading_frame',
+            'long_terminal_repeat', 'repeat_region', 'retrotransposon', 'centromere',
+        }
+
+        # Get all features of gene-level types for this organism
+        gene_level_features = set(
+            row.feature_no for row in
+            db.query(Feature.feature_no)
             .filter(Feature.organism_no == request.organism_no)
+            .filter(Feature.feature_type.in_(GENE_LEVEL_FEATURE_TYPES))
+            .all()
         )
 
-        # Apply annotation filters to background
-        ann_filters = _build_annotation_filters(
-            request.evidence_codes, request.annotation_types
-        )
-        for f in ann_filters:
-            bg_query = bg_query.filter(f)
-
-        all_go_feature_nos = set(row.feature_no for row in bg_query.distinct().all())
-        # Filter to features in current assembly and not deleted
-        background_feature_nos = list(all_go_feature_nos & valid_features)
+        # Intersect with valid features (in current assembly, not deleted)
+        background_feature_nos = list(valid_features & gene_level_features)
     logger.info(f"Step 2b (background set): {time.time() - step_start:.2f}s - {len(background_feature_nos)} genes")
 
     if not background_feature_nos:
