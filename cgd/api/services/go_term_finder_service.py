@@ -518,6 +518,7 @@ def _get_go_annotations_with_ancestors(
 def _calculate_enrichment(
     query_annotations: dict[int, set[int]],
     background_annotations: dict[int, set[int]],
+    background_size: int,
     p_value_cutoff: float,
     min_genes_in_term: int,
 ) -> list[tuple[int, int, int, int, int, float]]:
@@ -527,7 +528,7 @@ def _calculate_enrichment(
     P(X >= k) = 1 - P(X <= k-1) = hypergeom.sf(k-1, N, K, n)
 
     Where:
-    - N = background set size
+    - N = background set size (total genes in background)
     - K = genes in background annotated to term
     - n = query set size
     - k = genes in query annotated to term
@@ -535,7 +536,7 @@ def _calculate_enrichment(
     Returns list of (go_no, k, n, K, N, p_value) tuples for significant terms.
     """
     # Calculate N and n
-    N = len(background_annotations)  # Total background genes
+    N = background_size  # Total background genes (all genes, not just those with GO annotations)
     n = len(query_annotations)  # Total query genes
 
     if N == 0 or n == 0:
@@ -762,6 +763,7 @@ def run_go_term_finder(
     enrichment_results = _calculate_enrichment(
         {f: query_annotations[f] for f in query_genes_with_go},
         background_annotations,
+        len(background_feature_nos),  # Use total background size, not just genes with GO annotations
         request.p_value_cutoff,
         request.min_genes_in_term,
     )
