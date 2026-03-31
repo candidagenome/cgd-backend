@@ -300,6 +300,74 @@ def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
+def _get_organism_seq_source(db: Session, organism_no: int) -> Optional[str]:
+    """
+    Get the default seq_source (assembly) for an organism.
+
+    This maps to the Perl config's $DATA{seq_source} setting.
+    Returns None if not configured (will fall back to is_ver_current filtering).
+    """
+    # Query the organism to get its name for lookup
+    organism = db.query(Organism).filter(Organism.organism_no == organism_no).first()
+    if not organism:
+        return None
+
+    organism_name = organism.organism_name
+
+    # Map organism names to their default assembly seq_source
+    # These match the Perl config files in lib/Config/project_base/CGD/
+    SEQ_SOURCE_MAP = {
+        'Candida albicans SC5314': 'C. albicans SC5314 Assembly 22',
+        'Candida glabrata CBS138': 'C. glabrata CBS138 Assembly',
+        'Candida auris B8441': 'C. auris B8441 Assembly',
+        'Candida dubliniensis CD36': 'C. dubliniensis CD36 Assembly',
+        'Candida parapsilosis CDC317': 'C. parapsilosis CDC317 Assembly',
+    }
+
+    return SEQ_SOURCE_MAP.get(organism_name)
+
+
+def _get_features_in_current_assembly(db: Session, organism_no: int) -> set[int]:
+    """
+    Get feature_nos that are in the current genome assembly.
+
+    This matches the Perl goTermFinder logic which filters by:
+    - feat_location.is_loc_current = 'Y'
+    - seq.source = <organism's default assembly>
+    - seq.is_seq_current = 'Y'
+    - Excludes 'allele' feature type
+
+    Returns set of feature_nos in the current assembly.
+    """
+    # Get the organism's default seq_source (assembly)
+    seq_source = _get_organism_seq_source(db, organism_no)
+
+    # Build the base query
+    current_features_query = (
+        db.query(FeatLocation.feature_no)
+        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+        .join(Feature, Feature.feature_no == FeatLocation.feature_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(FeatLocation.is_loc_current == 'Y')
+        .filter(Seq.is_seq_current == 'Y')
+        # Exclude 'allele' feature type (matches Perl GoAnnotation.pm logic)
+        .filter(Feature.feature_type != 'allele')
+    )
+
+    # If we have a specific seq_source, filter by it
+    if seq_source:
+        current_features_query = current_features_query.filter(Seq.source == seq_source)
+    else:
+        # Fall back to genome version current flag
+        current_features_query = (
+            current_features_query
+            .join(GenomeVersion, GenomeVersion.genome_version_no == Seq.genome_version_no)
+            .filter(GenomeVersion.is_ver_current == 'Y')
+        )
+
+    return set(row.feature_no for row in current_features_query.distinct().all())
+
+
 def _get_deleted_feature_nos(db: Session, organism_no: int) -> set[int]:
     """
     Get feature_nos for deleted features.
@@ -320,32 +388,6 @@ def _get_deleted_feature_nos(db: Session, organism_no: int) -> set[int]:
     return set(row.feature_no for row in deleted_query.all())
 
 
-def _get_features_in_current_assembly(db: Session, organism_no: int) -> set[int]:
-    """
-    Get feature_nos that are in the current genome assembly.
-
-    This matches the Perl goTermFinder logic which filters by:
-    - feat_location.is_loc_current = 'Y'
-    - seq.is_seq_current = 'Y'
-    - genome_version.is_ver_current = 'Y'
-
-    Returns set of feature_nos in the current assembly.
-    """
-    # Query features that have a current location in the current genome version
-    current_features_query = (
-        db.query(FeatLocation.feature_no)
-        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
-        .join(GenomeVersion, GenomeVersion.genome_version_no == Seq.genome_version_no)
-        .join(Feature, Feature.feature_no == FeatLocation.feature_no)
-        .filter(Feature.organism_no == organism_no)
-        .filter(FeatLocation.is_loc_current == 'Y')
-        .filter(Seq.is_seq_current == 'Y')
-        .filter(GenomeVersion.is_ver_current == 'Y')
-        .distinct()
-    )
-    return set(row.feature_no for row in current_features_query.all())
-
-
 def _get_valid_background_feature_nos(
     db: Session,
     organism_no: int,
@@ -355,8 +397,9 @@ def _get_valid_background_feature_nos(
     Get valid feature_nos for the GO Term Finder background set.
 
     Applies the same filters as the Perl goTermFinder:
-    1. Features must be in the current genome assembly
+    1. Features must be in the current genome assembly (specific seq_source)
     2. Deleted features are excluded
+    3. 'allele' feature type is excluded
 
     Args:
         db: Database session
@@ -366,7 +409,7 @@ def _get_valid_background_feature_nos(
     Returns:
         Set of valid feature_nos
     """
-    # Get features in current assembly
+    # Get features in current assembly (already excludes 'allele' type)
     current_assembly_features = _get_features_in_current_assembly(db, organism_no)
 
     # Get deleted features to exclude
