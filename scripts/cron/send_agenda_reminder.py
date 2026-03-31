@@ -53,7 +53,6 @@ def send_reminder() -> int:
         )
         with urllib.request.urlopen(req) as response:
             if response.status == 200:
-                print("Agenda reminder sent to Slack")
                 return 0
             else:
                 print(f"ERROR: Slack returned status {response.status}", file=sys.stderr)
