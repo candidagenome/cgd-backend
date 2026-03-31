@@ -22,10 +22,14 @@ from cgd.models.models import (
     Code,
     Feature,
     FeatAlias,
+    FeatLocation,
+    FeatProperty,
+    GenomeVersion,
     Go,
     GoAnnotation,
     GoPath,
     Organism,
+    Seq,
 )
 from cgd.schemas.go_term_finder_schema import (
     AnnotationTypeOption,
@@ -296,6 +300,88 @@ def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
+def _get_deleted_feature_nos(db: Session, organism_no: int) -> set[int]:
+    """
+    Get feature_nos for deleted features.
+
+    Deleted features have a feat_property record with:
+    - property_type = 'feature_qualifier'
+    - property_value LIKE 'Delete%'
+
+    This matches the Perl goTermFinder logic.
+    """
+    deleted_query = (
+        db.query(Feature.feature_no)
+        .join(FeatProperty, FeatProperty.feature_no == Feature.feature_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(FeatProperty.property_type == 'feature_qualifier')
+        .filter(FeatProperty.property_value.like('Delete%'))
+    )
+    return set(row.feature_no for row in deleted_query.all())
+
+
+def _get_features_in_current_assembly(db: Session, organism_no: int) -> set[int]:
+    """
+    Get feature_nos that are in the current genome assembly.
+
+    This matches the Perl goTermFinder logic which filters by:
+    - feat_location.is_loc_current = 'Y'
+    - seq.is_seq_current = 'Y'
+    - genome_version.is_ver_current = 'Y'
+
+    Returns set of feature_nos in the current assembly.
+    """
+    # Query features that have a current location in the current genome version
+    current_features_query = (
+        db.query(FeatLocation.feature_no)
+        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+        .join(GenomeVersion, GenomeVersion.genome_version_no == Seq.genome_version_no)
+        .join(Feature, Feature.feature_no == FeatLocation.feature_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(FeatLocation.is_loc_current == 'Y')
+        .filter(Seq.is_seq_current == 'Y')
+        .filter(GenomeVersion.is_ver_current == 'Y')
+        .distinct()
+    )
+    return set(row.feature_no for row in current_features_query.all())
+
+
+def _get_valid_background_feature_nos(
+    db: Session,
+    organism_no: int,
+    feature_nos: Optional[list[int]] = None,
+) -> set[int]:
+    """
+    Get valid feature_nos for the GO Term Finder background set.
+
+    Applies the same filters as the Perl goTermFinder:
+    1. Features must be in the current genome assembly
+    2. Deleted features are excluded
+
+    Args:
+        db: Database session
+        organism_no: Organism number to filter by
+        feature_nos: Optional list of feature_nos to filter (if None, all features)
+
+    Returns:
+        Set of valid feature_nos
+    """
+    # Get features in current assembly
+    current_assembly_features = _get_features_in_current_assembly(db, organism_no)
+
+    # Get deleted features to exclude
+    deleted_features = _get_deleted_feature_nos(db, organism_no)
+
+    # Filter to valid features (in current assembly and not deleted)
+    valid_features = current_assembly_features - deleted_features
+
+    # If specific feature_nos provided, intersect with them
+    if feature_nos is not None:
+        valid_features = valid_features & set(feature_nos)
+
+    return valid_features
+
+
 def _get_go_annotations_with_ancestors(
     db: Session,
     feature_nos: list[int],
@@ -540,6 +626,13 @@ def run_go_term_finder(
     # Step 2: Build background set
     step_start = time.time()
     background_type = "default"
+
+    # Get valid features (in current assembly and not deleted)
+    # This matches the Perl goTermFinder logic
+    valid_features = _get_valid_background_feature_nos(db, request.organism_no)
+    logger.info(f"Step 2a (valid features in current assembly): {time.time() - step_start:.2f}s - {len(valid_features)} features")
+
+    step_start = time.time()
     if request.background_genes:
         # Custom background
         background_type = "custom"
@@ -548,8 +641,11 @@ def run_go_term_finder(
         )
         if bg_not_found:
             warnings.append(f"{len(bg_not_found)} background genes not found")
+        # Filter custom background to valid features
+        background_feature_nos = [f for f in background_feature_nos if f in valid_features]
     else:
         # Default: all genes with GO annotations for this organism
+        # that are in the current assembly and not deleted
         bg_query = (
             db.query(GoAnnotation.feature_no)
             .join(Feature, Feature.feature_no == GoAnnotation.feature_no)
@@ -563,8 +659,10 @@ def run_go_term_finder(
         for f in ann_filters:
             bg_query = bg_query.filter(f)
 
-        background_feature_nos = list(set(row.feature_no for row in bg_query.distinct().all()))
-    logger.info(f"Step 2 (background set): {time.time() - step_start:.2f}s - {len(background_feature_nos)} genes")
+        all_go_feature_nos = set(row.feature_no for row in bg_query.distinct().all())
+        # Filter to features in current assembly and not deleted
+        background_feature_nos = list(all_go_feature_nos & valid_features)
+    logger.info(f"Step 2b (background set): {time.time() - step_start:.2f}s - {len(background_feature_nos)} genes")
 
     if not background_feature_nos:
         return GoTermFinderResponse(
