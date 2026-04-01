@@ -200,6 +200,18 @@ def _get_organism_name(organism: Optional[Organism]) -> Optional[str]:
     return None
 
 
+def _format_ortholog_source(source: str) -> str:
+    """Format ortholog source name for display."""
+    # Map verbose source names to concise display names
+    source_map = {
+        'SGD': 'S. cerevisiae',
+        'POMBASE': 'S. pombe',
+        'AspGD': 'A. nidulans',
+        'CGD': 'CGD',
+    }
+    return source_map.get(source, source)
+
+
 def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
     """
     Highlight matching query text with <mark> tags.
@@ -1375,6 +1387,7 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
             feature_to_homology_group[feat.feature_no] = hg_no
 
         # Get external orthologs from DbxrefHomology
+        # Only include key external sources (SGD, POMBASE, AspGD) - skip verbose Candida species list
         external_orthologs = (
             db.query(DbxrefHomology, Dbxref)
             .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
@@ -1383,11 +1396,17 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
         )
 
         for dh, dbx in external_orthologs:
-            # Format: "S. cerevisiae HOG1" or use the source name
             source_name = dbx.source if dbx else 'External'
+            # Skip verbose "Orthologous genes in Candida species" entries
+            # These are redundant since we already show CGOB orthologs
+            if source_name == 'Orthologous genes in Candida species':
+                continue
+            # Format source name for display
+            display_source = _format_ortholog_source(source_name)
             homology_group_data[hg_no]['external_orthologs'].append({
                 'name': dh.name,
                 'source': source_name,
+                'display_source': display_source,
             })
 
     # 3. Build results with relationship data
@@ -1404,10 +1423,11 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
                 link=f"/locus/{feat_data['gene_name'] or feat_data['feature_name']}",
             ))
 
-        # Add external orthologs
+        # Add external orthologs (e.g., S. cerevisiae HOG1)
         for ext in data['external_orthologs']:
+            display_source = ext.get('display_source', ext['source'])
             related_orthologs.append(OrthologRelation(
-                name=f"{ext['source']} {ext['name']}",
+                name=f"{display_source} {ext['name']}",
                 organism=None,
                 source=ext['source'],
                 link=None,
