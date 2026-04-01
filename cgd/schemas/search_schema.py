@@ -93,6 +93,14 @@ class AutocompleteResponse(BaseModel):
 
 # --- Text Search Schemas ---
 
+class OrthologRelation(BaseModel):
+    """Represents an ortholog relationship for display in relationship table."""
+    name: str  # Gene name or external ortholog name (e.g., "HOG1", "S. cerevisiae HOG1")
+    organism: Optional[str] = None  # Organism name (None for external orthologs)
+    source: str  # "CGOB" for internal orthologs, "SGD"/"POMBASE" etc for external
+    link: Optional[str] = None  # Link to locus page (for CGD genes only)
+
+
 class TextSearchResult(BaseModel):
     """Single text search result item."""
     category: str
@@ -106,6 +114,10 @@ class TextSearchResult(BaseModel):
     # Highlighted versions with <mark> tags around matching text
     highlighted_name: Optional[str] = None
     highlighted_description: Optional[str] = None
+    # For ortholog results - grouping and relationship data
+    gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
+    homology_group_no: Optional[int] = None  # CGOB homology group ID for grouping
+    related_orthologs: Optional[list[OrthologRelation]] = None  # Related orthologs for relationship table
 
 
 class TextSearchCategoryResult(BaseModel):
