@@ -1463,10 +1463,12 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
         for ext in data['external_orthologs']:
             display_source = ext.get('display_source', ext['source'])
             ext_name = ext['name']
+            ext_link = None
 
-            # For S. cerevisiae, use the common gene name from CGD features
+            # For S. cerevisiae, use the common gene name from CGD features and add SGD link
             if display_source == 'S. cerevisiae' and common_gene_name:
                 ortholog_display = f"S. cerevisiae {common_gene_name}"
+                ext_link = f"https://www.yeastgenome.org/locus/{common_gene_name}"
             else:
                 ortholog_display = f"{display_source} {ext_name}"
 
@@ -1474,7 +1476,7 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
                 name=ortholog_display,
                 organism=None,
                 source=ext['source'],
-                link=None,
+                link=ext_link,
             ))
 
         # Create a result for each CGD feature in this group
