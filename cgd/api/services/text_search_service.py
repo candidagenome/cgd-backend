@@ -1402,9 +1402,9 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
             # Handle "Orthologous genes in Candida species" entries
             if source_name == 'Orthologous genes in Candida species':
                 # Keep S. cerevisiae entries, skip other Candida species (redundant with CGOB)
-                if ortholog_name.startswith('S. cerevisiae'):
-                    # Format: "S. cerevisiae S288C (YLR113W)" -> "S. cerevisiae HOG1"
-                    # Extract just "S. cerevisiae" and use the query gene name
+                # Name format: "Saccharomyces cerevisiae S288C" (full genus name)
+                if ortholog_name.startswith('Saccharomyces cerevisiae') or ortholog_name.startswith('S. cerevisiae'):
+                    # Format as "S. cerevisiae" and use the query gene name later
                     display_name = "S. cerevisiae"
                     display_source = "S. cerevisiae"
                 else:
