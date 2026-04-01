@@ -1168,11 +1168,13 @@ def search_category(
     Args:
         db: Database session
         query: Search query string
-        category: Category to search (genes, go_terms, phenotypes, references)
+        category: Category to search (genes, go_terms, phenotypes, references, orthologs)
 
     Returns:
         CategorySearchResponse with all results
     """
+    from cgd.api.services.text_search_service import search_orthologs, _count_orthologs
+
     organism_counts = None
 
     # Get total count and all results based on category
@@ -1189,6 +1191,30 @@ def search_category(
     elif category == "references":
         total_count = _count_references(db, query)
         results = _search_references_all(db, query)
+    elif category == "orthologs":
+        total_count = _count_orthologs(db, query)
+        ortholog_results = search_orthologs(db, query, limit=1000)
+        # Convert TextSearchResult to SearchResult
+        results = [
+            SearchResult(
+                category="orthologs",
+                id=r.id or "",
+                name=r.name,
+                description=r.description,
+                link=r.link or f"/locus/{r.name}",
+                organism=r.organism,
+                highlighted_name=r.highlighted_name,
+                highlighted_description=r.highlighted_description,
+            )
+            for r in ortholog_results
+        ]
+        # Calculate organism counts from results
+        org_counts = {}
+        for r in results:
+            if r.organism:
+                org_counts[r.organism] = org_counts.get(r.organism, 0) + 1
+        if org_counts:
+            organism_counts = org_counts
     else:
         total_count = 0
         results = []
