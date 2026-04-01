@@ -430,7 +430,11 @@ def _add_flanking_regions(
     flank_right: int,
     location: Optional[FeatLocation],
 ) -> str:
-    """Add flanking regions to a sequence."""
+    """Add flanking regions to a sequence.
+
+    Uses subfeatures to determine the true genomic span for accurate flanking
+    extraction, since FeatLocation coordinates may not represent the full span.
+    """
     if not location:
         return sequence
 
@@ -444,32 +448,45 @@ def _add_flanking_regions(
         .first()
     )
 
-    if not root_seq:
+    if not root_seq or not root_seq.residues:
         return sequence
 
     chr_seq = root_seq.residues
-    start = location.start_coord
-    end = location.stop_coord
     strand = location.strand
 
-    # Adjust for strand
+    # Get the true genomic span from subfeatures (like _get_genomic_utr_sequence does)
+    # FeatLocation.start_coord/stop_coord may not represent the full gene span
+    subfeatures = _get_subfeatures(db, feature)
+
+    if subfeatures:
+        # Find min/max coordinates from all subfeatures
+        all_coords = []
+        for feat_type, start, stop in subfeatures:
+            all_coords.extend([start, stop])
+        feat_start = min(all_coords)
+        feat_stop = max(all_coords)
+    else:
+        # Fall back to location coordinates if no subfeatures
+        feat_start = location.start_coord
+        feat_stop = location.stop_coord
+
+    # Extract flanking regions from chromosome
     if strand == "W":
         # Watson strand: left flank is upstream, right flank is downstream
-        left_start = max(0, start - 1 - flank_left)
-        left_flank = chr_seq[left_start:start - 1] if flank_left > 0 else ""
-        right_flank = chr_seq[end:end + flank_right] if flank_right > 0 else ""
+        left_start = max(0, feat_start - 1 - flank_left)
+        left_flank = chr_seq[left_start:feat_start - 1] if flank_left > 0 else ""
+        right_flank = chr_seq[feat_stop:feat_stop + flank_right] if flank_right > 0 else ""
         return left_flank + sequence + right_flank
     else:
         # Crick strand: need to reverse complement flanking regions
-        right_start = max(0, start - 1 - flank_right)
-        right_flank = chr_seq[right_start:start - 1] if flank_right > 0 else ""
-        left_flank = chr_seq[end:end + flank_left] if flank_left > 0 else ""
+        # For Crick strand genes, "left" flank (5') is downstream on chromosome
+        right_start = max(0, feat_start - 1 - flank_right)
+        right_flank = chr_seq[right_start:feat_start - 1] if flank_right > 0 else ""
+        left_flank = chr_seq[feat_stop:feat_stop + flank_left] if flank_left > 0 else ""
         # Reverse complement the flanks
         left_flank = _reverse_complement(left_flank) if left_flank else ""
         right_flank = _reverse_complement(right_flank) if right_flank else ""
         return left_flank + sequence + right_flank
-
-    return sequence
 
 
 def get_sequence_by_coordinates(
