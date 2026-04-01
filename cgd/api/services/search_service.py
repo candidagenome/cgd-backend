@@ -686,21 +686,40 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
 def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     """
-    Search all categories (genes, GO terms, phenotypes, references).
+    Search all categories (genes, GO terms, phenotypes, references, orthologs).
 
     Returns results grouped by category with actual total counts.
     """
+    from cgd.api.services.text_search_service import search_orthologs, _count_orthologs
+
     # Search all categories with the same limit per category
     genes = search_genes(db, query, limit)
     go_terms = search_go_terms(db, query, limit)
     phenotypes = search_phenotypes(db, query, limit)
     references = search_references(db, query, limit)
 
+    # Search orthologs (convert TextSearchResult to SearchResult)
+    ortholog_results = search_orthologs(db, query, limit)
+    orthologs = [
+        SearchResult(
+            category="orthologs",
+            id=r.id or "",
+            name=r.name,
+            description=r.description,
+            link=r.link or f"/locus/{r.name}",
+            organism=r.organism,
+            highlighted_name=r.highlighted_name,
+            highlighted_description=r.highlighted_description,
+        )
+        for r in ortholog_results
+    ]
+
     # Get actual total counts for each category
     genes_count = _count_genes(db, query)
     go_terms_count = _count_go_terms(db, query)
     phenotypes_count = _count_phenotypes(db, query)
     references_count = _count_references(db, query)
+    orthologs_count = _count_orthologs(db, query)
 
     # Build response
     results_by_category = {}
@@ -718,8 +737,11 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     if references or references_count > 0:
         results_by_category["references"] = references
         counts_by_category["references"] = references_count
+    if orthologs or orthologs_count > 0:
+        results_by_category["orthologs"] = orthologs
+        counts_by_category["orthologs"] = orthologs_count
 
-    total = genes_count + go_terms_count + phenotypes_count + references_count
+    total = genes_count + go_terms_count + phenotypes_count + references_count + orthologs_count
 
     return SearchResponse(
         query=query,
