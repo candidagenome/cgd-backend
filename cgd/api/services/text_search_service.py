@@ -1397,14 +1397,26 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
 
         for dh, dbx in external_orthologs:
             source_name = dbx.source if dbx else 'External'
-            # Skip verbose "Orthologous genes in Candida species" entries
-            # These are redundant since we already show CGOB orthologs
+            ortholog_name = dh.name
+
+            # Handle "Orthologous genes in Candida species" entries
             if source_name == 'Orthologous genes in Candida species':
-                continue
-            # Format source name for display
-            display_source = _format_ortholog_source(source_name)
+                # Keep S. cerevisiae entries, skip other Candida species (redundant with CGOB)
+                if ortholog_name.startswith('S. cerevisiae'):
+                    # Format: "S. cerevisiae S288C (YLR113W)" -> "S. cerevisiae HOG1"
+                    # Extract just "S. cerevisiae" and use the query gene name
+                    display_name = "S. cerevisiae"
+                    display_source = "S. cerevisiae"
+                else:
+                    # Skip other Candida species entries (redundant)
+                    continue
+            else:
+                # Format source name for display (SGD, POMBASE, etc.)
+                display_source = _format_ortholog_source(source_name)
+                display_name = ortholog_name
+
             homology_group_data[hg_no]['external_orthologs'].append({
-                'name': dh.name,
+                'name': display_name,
                 'source': source_name,
                 'display_source': display_source,
             })
@@ -1415,19 +1427,51 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
         related_orthologs = []
 
         # Add CGD features as related orthologs
+        # Format: "C. albicans C2_03330C_A/HOG1" or "C. albicans C2_03330C_A" if no gene_name
         for feat_data in data['cgd_features']:
+            org_name = feat_data['organism']
+            # Format organism: "Candida albicans SC5314" -> "C. albicans"
+            if org_name:
+                parts = org_name.split()
+                if len(parts) >= 2:
+                    short_org = f"{parts[0][0]}. {parts[1]}"  # "C. albicans"
+                else:
+                    short_org = org_name
+            else:
+                short_org = "Unknown"
+
+            # Format name: "C2_03330C_A/HOG1" or just feature_name
+            feature_name = feat_data['feature_name']
+            gene_name = feat_data['gene_name']
+            if gene_name and gene_name != feature_name:
+                display_name = f"{short_org} {feature_name}/{gene_name}"
+            else:
+                display_name = f"{short_org} {feature_name or gene_name}"
+
             related_orthologs.append(OrthologRelation(
-                name=f"{feat_data['organism'].split()[1] if feat_data['organism'] else 'Unknown'} {feat_data['name']}",
+                name=display_name,
                 organism=feat_data['organism'],
                 source='CGOB',
                 link=f"/locus/{feat_data['gene_name'] or feat_data['feature_name']}",
             ))
 
         # Add external orthologs (e.g., S. cerevisiae HOG1)
+        # Get the most common gene name from CGD features to use for external orthologs
+        cgd_gene_names = [f['gene_name'] for f in data['cgd_features'] if f['gene_name']]
+        common_gene_name = cgd_gene_names[0] if cgd_gene_names else None
+
         for ext in data['external_orthologs']:
             display_source = ext.get('display_source', ext['source'])
+            ext_name = ext['name']
+
+            # For S. cerevisiae, use the common gene name from CGD features
+            if display_source == 'S. cerevisiae' and common_gene_name:
+                ortholog_display = f"S. cerevisiae {common_gene_name}"
+            else:
+                ortholog_display = f"{display_source} {ext_name}"
+
             related_orthologs.append(OrthologRelation(
-                name=f"{display_source} {ext['name']}",
+                name=ortholog_display,
                 organism=None,
                 source=ext['source'],
                 link=None,
