@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Send agenda brief reminder email to curators.
+# Send agenda brief reminder to Slack channel.
 #
 # Meeting is Thursday 12:30PM, reminder sent Monday 9am.
 #
@@ -24,17 +24,10 @@ fi
 # Change to project root for relative paths to work
 cd "$PROJECT_ROOT"
 
-echo "CGD Send Agenda Reminder"
-echo "Generated: $(date)"
-echo "========================================="
-
-if python3 "$SCRIPT_DIR/send_agenda_reminder.py" 2>&1; then
-    echo ""
-    echo "========================================="
-    echo "Agenda reminder sent successfully."
-    exit 0
-else
-    echo ""
+# Run silently on success, only output on error
+if ! python3 "$SCRIPT_DIR/send_agenda_reminder.py" 2>&1; then
+    echo "CGD Send Agenda Reminder"
+    echo "Generated: $(date)"
     echo "========================================="
     echo "ERROR: Failed to send agenda reminder."
     exit 1

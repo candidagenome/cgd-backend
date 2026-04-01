@@ -51,6 +51,15 @@ class AlleleSubfeatureOut(BaseModel):
     seq_version: t.Optional[datetime.datetime] = None
 
 
+class AlleleSequenceOut(BaseModel):
+    """Sequence information for an allele"""
+    seq_type: str
+    seq_length: int
+    source: t.Optional[str] = None
+    seq_version: t.Optional[datetime.datetime] = None
+    residues: t.Optional[str] = None
+
+
 class AlleleLocationOut(BaseModel):
     """Location information for an allele"""
     feature_no: int
@@ -63,6 +72,7 @@ class AlleleLocationOut(BaseModel):
     coord_version: t.Optional[datetime.datetime] = None
     seq_version: t.Optional[datetime.datetime] = None
     subfeatures: list[AlleleSubfeatureOut] = []
+    sequences: list[AlleleSequenceOut] = []
 
 
 # --- Candida Ortholog (internal CGD species) ---

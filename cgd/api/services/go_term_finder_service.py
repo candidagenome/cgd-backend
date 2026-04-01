@@ -6,8 +6,12 @@ multiple testing correction (Bonferroni or Benjamini-Hochberg FDR).
 """
 from __future__ import annotations
 
+import logging
+import time
 from collections import defaultdict
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from scipy.stats import hypergeom
 from sqlalchemy import and_, func, or_
@@ -18,10 +22,14 @@ from cgd.models.models import (
     Code,
     Feature,
     FeatAlias,
+    FeatLocation,
+    FeatProperty,
+    GenomeVersion,
     Go,
     GoAnnotation,
     GoPath,
     Organism,
+    Seq,
 )
 from cgd.schemas.go_term_finder_schema import (
     AnnotationTypeOption,
@@ -292,22 +300,150 @@ def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
+def _get_organism_seq_source(db: Session, organism_no: int) -> Optional[str]:
+    """
+    Get the default seq_source (assembly) for an organism.
+
+    This maps to the Perl config's $DATA{seq_source} setting.
+    Returns None if not configured (will fall back to is_ver_current filtering).
+    """
+    # Query the organism to get its name for lookup
+    organism = db.query(Organism).filter(Organism.organism_no == organism_no).first()
+    if not organism:
+        return None
+
+    organism_name = organism.organism_name
+
+    # Map organism names to their default assembly seq_source
+    # These match the seq.source values in the database
+    SEQ_SOURCE_MAP = {
+        'Candida albicans SC5314': 'C. albicans SC5314 Assembly 22',
+        'Candida glabrata CBS138': 'C. glabrata CBS138',
+        'Candida auris B8441': 'C. auris B8441',
+        'Candida dubliniensis CD36': 'C. dubliniensis CD36',
+        'Candida parapsilosis CDC317': 'C. parapsilosis CDC317',
+    }
+
+    return SEQ_SOURCE_MAP.get(organism_name)
+
+
+def _get_features_in_current_assembly(db: Session, organism_no: int) -> set[int]:
+    """
+    Get feature_nos that are in the current genome assembly.
+
+    This matches the Perl goTermFinder logic which filters by:
+    - feat_location.is_loc_current = 'Y'
+    - seq.source = <organism's default assembly>
+    - seq.is_seq_current = 'Y'
+    - Excludes 'allele' feature type
+
+    Returns set of feature_nos in the current assembly.
+    """
+    # Get the organism's default seq_source (assembly)
+    seq_source = _get_organism_seq_source(db, organism_no)
+
+    # Build the base query
+    current_features_query = (
+        db.query(FeatLocation.feature_no)
+        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+        .join(Feature, Feature.feature_no == FeatLocation.feature_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(FeatLocation.is_loc_current == 'Y')
+        .filter(Seq.is_seq_current == 'Y')
+        # Exclude 'allele' feature type (matches Perl GoAnnotation.pm logic)
+        .filter(Feature.feature_type != 'allele')
+    )
+
+    # If we have a specific seq_source, filter by it
+    if seq_source:
+        current_features_query = current_features_query.filter(Seq.source == seq_source)
+    else:
+        # Fall back to genome version current flag
+        current_features_query = (
+            current_features_query
+            .join(GenomeVersion, GenomeVersion.genome_version_no == Seq.genome_version_no)
+            .filter(GenomeVersion.is_ver_current == 'Y')
+        )
+
+    return set(row.feature_no for row in current_features_query.distinct().all())
+
+
+def _get_deleted_feature_nos(db: Session, organism_no: int) -> set[int]:
+    """
+    Get feature_nos for deleted features.
+
+    Deleted features have a feat_property record with:
+    - property_type = 'feature_qualifier'
+    - property_value LIKE 'Delete%'
+
+    This matches the Perl goTermFinder logic.
+    """
+    deleted_query = (
+        db.query(Feature.feature_no)
+        .join(FeatProperty, FeatProperty.feature_no == Feature.feature_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(FeatProperty.property_type == 'feature_qualifier')
+        .filter(FeatProperty.property_value.like('Delete%'))
+    )
+    return set(row.feature_no for row in deleted_query.all())
+
+
+def _get_valid_background_feature_nos(
+    db: Session,
+    organism_no: int,
+    feature_nos: Optional[list[int]] = None,
+) -> set[int]:
+    """
+    Get valid feature_nos for the GO Term Finder background set.
+
+    Applies the same filters as the Perl goTermFinder:
+    1. Features must be in the current genome assembly (specific seq_source)
+    2. Deleted features are excluded
+    3. 'allele' feature type is excluded
+
+    Args:
+        db: Database session
+        organism_no: Organism number to filter by
+        feature_nos: Optional list of feature_nos to filter (if None, all features)
+
+    Returns:
+        Set of valid feature_nos
+    """
+    # Get features in current assembly (already excludes 'allele' type)
+    current_assembly_features = _get_features_in_current_assembly(db, organism_no)
+
+    # Get deleted features to exclude
+    deleted_features = _get_deleted_feature_nos(db, organism_no)
+
+    # Filter to valid features (in current assembly and not deleted)
+    valid_features = current_assembly_features - deleted_features
+
+    # If specific feature_nos provided, intersect with them
+    if feature_nos is not None:
+        valid_features = valid_features & set(feature_nos)
+
+    return valid_features
+
+
 def _get_go_annotations_with_ancestors(
     db: Session,
     feature_nos: list[int],
     ontology: GoOntology,
     evidence_codes: Optional[list[str]] = None,
     annotation_types: Optional[list[str]] = None,
-) -> dict[int, set[int]]:
+) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
     """
     Get GO annotations for features, including inherited ancestor terms.
 
     A gene annotated to a child term is implicitly annotated to all ancestors.
 
-    Returns: dict mapping feature_no -> set of go_no values
+    Returns:
+        Tuple of (full_annotations, direct_annotations) where:
+        - full_annotations: dict mapping feature_no -> set of go_no values (direct + ancestors)
+        - direct_annotations: dict mapping feature_no -> set of go_no values (direct only)
     """
     if not feature_nos:
-        return {}
+        return {}, {}
 
     # Build annotation filters
     ann_filters = _build_annotation_filters(evidence_codes, annotation_types)
@@ -320,7 +456,7 @@ def _get_go_annotations_with_ancestors(
     }
 
     # Query direct annotations in batches (Oracle IN clause limit is 1000)
-    direct_annotations = []
+    direct_annotation_rows = []
     for chunk in _chunk_list(feature_nos):
         query = (
             db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
@@ -336,18 +472,18 @@ def _get_go_annotations_with_ancestors(
         for f in ann_filters:
             query = query.filter(f)
 
-        direct_annotations.extend(query.all())
+        direct_annotation_rows.extend(query.all())
 
-    # Build feature -> go_no set mapping
-    feature_to_go_nos: dict[int, set[int]] = defaultdict(set)
+    # Build feature -> go_no set mapping for direct annotations
+    direct_annotations: dict[int, set[int]] = defaultdict(set)
     all_go_nos = set()
 
-    for feature_no, go_no in direct_annotations:
-        feature_to_go_nos[feature_no].add(go_no)
+    for feature_no, go_no in direct_annotation_rows:
+        direct_annotations[feature_no].add(go_no)
         all_go_nos.add(go_no)
 
     if not all_go_nos:
-        return feature_to_go_nos
+        return dict(direct_annotations), dict(direct_annotations)
 
     # Query ancestors for all direct annotations (also in batches)
     ancestor_paths = []
@@ -372,19 +508,32 @@ def _get_go_annotations_with_ancestors(
     for child_go_no, ancestor_go_no in ancestor_paths:
         child_to_ancestors[child_go_no].add(ancestor_go_no)
 
-    # Add ancestors to each feature's annotation set
-    for feature_no, go_nos in feature_to_go_nos.items():
-        inherited_go_nos = set()
+    # Build full annotations (direct + ancestors)
+    full_annotations: dict[int, set[int]] = defaultdict(set)
+    for feature_no, go_nos in direct_annotations.items():
+        full_annotations[feature_no].update(go_nos)
         for go_no in go_nos:
-            inherited_go_nos.update(child_to_ancestors.get(go_no, set()))
-        feature_to_go_nos[feature_no].update(inherited_go_nos)
+            full_annotations[feature_no].update(child_to_ancestors.get(go_no, set()))
 
-    return feature_to_go_nos
+    return dict(full_annotations), dict(direct_annotations)
+
+
+# Aspect node go_nos (root terms for each ontology)
+# These get special handling: only direct annotations are counted
+ASPECT_NODE_GO_NOS = {
+    24318,  # biological_process (GO:0008150)
+    32814,  # molecular_function (GO:0003674)
+    39472,  # cellular_component (GO:0005575)
+}
 
 
 def _calculate_enrichment(
     query_annotations: dict[int, set[int]],
     background_annotations: dict[int, set[int]],
+    query_direct_annotations: dict[int, set[int]],
+    background_direct_annotations: dict[int, set[int]],
+    query_size: int,
+    background_size: int,
     p_value_cutoff: float,
     min_genes_in_term: int,
 ) -> list[tuple[int, int, int, int, int, float]]:
@@ -394,21 +543,27 @@ def _calculate_enrichment(
     P(X >= k) = 1 - P(X <= k-1) = hypergeom.sf(k-1, N, K, n)
 
     Where:
-    - N = background set size
+    - N = background set size (total genes in background)
     - K = genes in background annotated to term
-    - n = query set size
+    - n = query set size (ALL query genes, including those without GO annotations)
     - k = genes in query annotated to term
+
+    For aspect nodes (biological_process, molecular_function, cellular_component),
+    only direct annotations are counted to prevent generic terms from dominating.
+    This matches the Perl goTermFinder behavior.
 
     Returns list of (go_no, k, n, K, N, p_value) tuples for significant terms.
     """
     # Calculate N and n
-    N = len(background_annotations)  # Total background genes
-    n = len(query_annotations)  # Total query genes
+    # N = total background genes
+    # n = ALL query genes (including those without GO annotations) - matches Perl behavior
+    N = background_size
+    n = query_size
 
     if N == 0 or n == 0:
         return []
 
-    # Count genes per GO term in query and background
+    # Count genes per GO term in query and background (full annotations)
     query_term_counts: dict[int, set[int]] = defaultdict(set)  # go_no -> set of feature_nos
     background_term_counts: dict[int, set[int]] = defaultdict(set)
 
@@ -420,11 +575,29 @@ def _calculate_enrichment(
         for go_no in go_nos:
             background_term_counts[go_no].add(feature_no)
 
+    # Count genes per GO term using DIRECT annotations only (for aspect nodes)
+    query_direct_term_counts: dict[int, set[int]] = defaultdict(set)
+    background_direct_term_counts: dict[int, set[int]] = defaultdict(set)
+
+    for feature_no, go_nos in query_direct_annotations.items():
+        for go_no in go_nos:
+            query_direct_term_counts[go_no].add(feature_no)
+
+    for feature_no, go_nos in background_direct_annotations.items():
+        for go_no in go_nos:
+            background_direct_term_counts[go_no].add(feature_no)
+
     # Calculate p-values for each term
     results = []
     for go_no, query_features in query_term_counts.items():
-        k = len(query_features)  # Genes in query with this term
-        K = len(background_term_counts.get(go_no, set()))  # Genes in background with this term
+        # For aspect nodes, use direct annotation counts only
+        # This prevents generic terms like "biological_process" from dominating
+        if go_no in ASPECT_NODE_GO_NOS:
+            k = len(query_direct_term_counts.get(go_no, set()))
+            K = len(background_direct_term_counts.get(go_no, set()))
+        else:
+            k = len(query_features)  # Genes in query with this term
+            K = len(background_term_counts.get(go_no, set()))  # Genes in background with this term
 
         if k < min_genes_in_term:
             continue
@@ -514,12 +687,17 @@ def run_go_term_finder(
     Returns:
         GoTermFinderResponse with enriched terms or error
     """
+    start_time = time.time()
     warnings = []
 
+    logger.info(f"GO Term Finder started with {len(request.genes)} genes")
+
     # Step 1: Validate and get query genes
+    step_start = time.time()
     query_feature_nos, not_found_genes = _get_feature_nos_for_genes(
         db, request.genes, request.organism_no
     )
+    logger.info(f"Step 1 (validate genes): {time.time() - step_start:.2f}s - found {len(query_feature_nos)} genes")
 
     if not query_feature_nos:
         return GoTermFinderResponse(
@@ -529,7 +707,15 @@ def run_go_term_finder(
         )
 
     # Step 2: Build background set
+    step_start = time.time()
     background_type = "default"
+
+    # Get valid features (in current assembly and not deleted)
+    # This matches the Perl goTermFinder logic
+    valid_features = _get_valid_background_feature_nos(db, request.organism_no)
+    logger.info(f"Step 2a (valid features in current assembly): {time.time() - step_start:.2f}s - {len(valid_features)} features")
+
+    step_start = time.time()
     if request.background_genes:
         # Custom background
         background_type = "custom"
@@ -538,22 +724,30 @@ def run_go_term_finder(
         )
         if bg_not_found:
             warnings.append(f"{len(bg_not_found)} background genes not found")
+        # Filter custom background to valid features
+        background_feature_nos = [f for f in background_feature_nos if f in valid_features]
     else:
-        # Default: all genes with GO annotations for this organism
-        bg_query = (
-            db.query(GoAnnotation.feature_no)
-            .join(Feature, Feature.feature_no == GoAnnotation.feature_no)
+        # Default: all gene-level features in current assembly
+        # This matches the snapshot "Haploid Total" count
+        # Excludes sub-gene features (CDS, intron, noncoding_exon) and structural (chromosome)
+        GENE_LEVEL_FEATURE_TYPES = {
+            'ORF', 'tRNA', 'snoRNA', 'rRNA', 'snRNA', 'ncRNA',
+            'pseudogene', 'blocked_reading_frame',
+            'long_terminal_repeat', 'repeat_region', 'retrotransposon', 'centromere',
+        }
+
+        # Get all features of gene-level types for this organism
+        gene_level_features = set(
+            row.feature_no for row in
+            db.query(Feature.feature_no)
             .filter(Feature.organism_no == request.organism_no)
+            .filter(Feature.feature_type.in_(GENE_LEVEL_FEATURE_TYPES))
+            .all()
         )
 
-        # Apply annotation filters to background
-        ann_filters = _build_annotation_filters(
-            request.evidence_codes, request.annotation_types
-        )
-        for f in ann_filters:
-            bg_query = bg_query.filter(f)
-
-        background_feature_nos = list(set(row.feature_no for row in bg_query.distinct().all()))
+        # Intersect with valid features (in current assembly, not deleted)
+        background_feature_nos = list(valid_features & gene_level_features)
+    logger.info(f"Step 2b (background set): {time.time() - step_start:.2f}s - {len(background_feature_nos)} genes")
 
     if not background_feature_nos:
         return GoTermFinderResponse(
@@ -573,21 +767,25 @@ def run_go_term_finder(
         )
 
     # Step 3: Get GO annotations with ancestors
-    query_annotations = _get_go_annotations_with_ancestors(
+    step_start = time.time()
+    query_annotations, query_direct_annotations = _get_go_annotations_with_ancestors(
         db,
         query_feature_nos,
         request.ontology,
         request.evidence_codes,
         request.annotation_types,
     )
+    logger.info(f"Step 3a (query GO annotations): {time.time() - step_start:.2f}s")
 
-    background_annotations = _get_go_annotations_with_ancestors(
+    step_start = time.time()
+    background_annotations, background_direct_annotations = _get_go_annotations_with_ancestors(
         db,
         background_feature_nos,
         request.ontology,
         request.evidence_codes,
         request.annotation_types,
     )
+    logger.info(f"Step 3b (background GO annotations): {time.time() - step_start:.2f}s")
 
     # Filter to genes with GO annotations
     query_genes_with_go = [f for f in query_feature_nos if f in query_annotations]
@@ -600,19 +798,27 @@ def run_go_term_finder(
         )
 
     # Step 4: Calculate enrichment
+    step_start = time.time()
     enrichment_results = _calculate_enrichment(
         {f: query_annotations[f] for f in query_genes_with_go},
         background_annotations,
+        {f: query_direct_annotations.get(f, set()) for f in query_genes_with_go},
+        background_direct_annotations,
+        len(query_feature_nos),  # ALL query genes (including those without GO annotations) - matches Perl
+        len(background_feature_nos),  # Total background size
         request.p_value_cutoff,
         request.min_genes_in_term,
     )
+    logger.info(f"Step 4 (calculate enrichment): {time.time() - step_start:.2f}s - {len(enrichment_results)} terms")
 
     # Step 5: Apply multiple testing correction
+    step_start = time.time()
     corrected_results = _apply_multiple_testing_correction(
         enrichment_results,
         request.correction_method,
         request.p_value_cutoff,
     )
+    logger.info(f"Step 5 (multiple testing correction): {time.time() - step_start:.2f}s - {len(corrected_results)} terms")
 
     if not corrected_results:
         # Build result with no enriched terms
@@ -621,7 +827,7 @@ def run_go_term_finder(
             query_genes_found=len(query_feature_nos) + len(not_found_genes) - len(not_found_genes),
             query_genes_with_go=len(query_genes_with_go),
             query_genes_not_found=not_found_genes,
-            background_size=len(background_annotations),
+            background_size=len(background_feature_nos),
             background_type=background_type,
             ontology_filter=request.ontology.value,
             evidence_codes_used=request.evidence_codes or [],
@@ -640,7 +846,9 @@ def run_go_term_finder(
         )
 
     # Step 6: Build enriched term objects
+    step_start = time.time()
     go_nos = [r[0] for r in corrected_results]
+    go_nos_set = set(go_nos)
     go_records = []
     for chunk in _chunk_list(go_nos):
         go_records.extend(db.query(Go).filter(Go.go_no.in_(chunk)).all())
@@ -652,23 +860,27 @@ def run_go_term_finder(
         feature_records.extend(db.query(Feature).filter(Feature.feature_no.in_(chunk)).all())
     feature_no_to_feature = {f.feature_no: f for f in feature_records}
 
-    # Build gene-to-evidence mapping for enriched terms (chunked queries)
+    # Build gene-to-evidence mapping for enriched terms
+    # Query all GO annotations for query genes, then filter to enriched terms in Python
+    # This is faster than O(features × go_terms) queries
     ann_filters = _build_annotation_filters(request.evidence_codes, request.annotation_types)
     gene_evidence_results = []
     for feature_chunk in _chunk_list(query_genes_with_go):
-        for go_chunk in _chunk_list(go_nos):
-            query = (
-                db.query(
-                    GoAnnotation.feature_no,
-                    GoAnnotation.go_no,
-                    GoAnnotation.go_evidence,
-                )
-                .filter(GoAnnotation.feature_no.in_(feature_chunk))
-                .filter(GoAnnotation.go_no.in_(go_chunk))
+        query = (
+            db.query(
+                GoAnnotation.feature_no,
+                GoAnnotation.go_no,
+                GoAnnotation.go_evidence,
             )
-            for f in ann_filters:
-                query = query.filter(f)
-            gene_evidence_results.extend(query.all())
+            .filter(GoAnnotation.feature_no.in_(feature_chunk))
+        )
+        for f in ann_filters:
+            query = query.filter(f)
+        # Filter to enriched terms in Python (faster than nested DB queries)
+        for row in query.all():
+            if row.go_no in go_nos_set:
+                gene_evidence_results.append(row)
+    logger.info(f"Step 6a (fetch GO/feature info): {time.time() - step_start:.2f}s")
 
     # Build mapping: go_no -> feature_no -> evidence_codes
     go_to_gene_evidence: dict[int, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
@@ -742,7 +954,7 @@ def run_go_term_finder(
         query_genes_found=len(query_feature_nos),
         query_genes_with_go=len(query_genes_with_go),
         query_genes_not_found=not_found_genes,
-        background_size=len(background_annotations),
+        background_size=len(background_feature_nos),
         background_type=background_type,
         ontology_filter=request.ontology.value,
         evidence_codes_used=request.evidence_codes or [],
@@ -754,6 +966,9 @@ def run_go_term_finder(
         component_terms=component_terms,
         total_enriched_terms=len(process_terms) + len(function_terms) + len(component_terms),
     )
+
+    total_time = time.time() - start_time
+    logger.info(f"GO Term Finder completed in {total_time:.2f}s - {result.total_enriched_terms} enriched terms")
 
     return GoTermFinderResponse(
         success=True,

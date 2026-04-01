@@ -31,6 +31,34 @@ from cgd.models.models import (
     Url,
 )
 
+# Valid feature types for gene search (excludes proteins, polypeptides, etc.)
+# Matching the locus page valid types
+GENE_FEATURE_TYPES = [
+    'ORF', 'blocked_reading_frame', 'pseudogene',
+    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+]
+
+# Organism display priority (lower index = higher priority)
+# C. albicans SC5314 is the primary organism and should appear first in search results
+ORGANISM_PRIORITY = [
+    'Candida albicans SC5314',
+    'Candida glabrata CBS138',
+    'Candida auris B8441',
+    'Candida dubliniensis CD36',
+    'Candida parapsilosis CDC317',
+]
+
+
+def _get_organism_priority(organism_name: Optional[str]) -> int:
+    """Get sort priority for an organism (lower = higher priority)."""
+    if not organism_name:
+        return 999
+    try:
+        return ORGANISM_PRIORITY.index(organism_name)
+    except ValueError:
+        return 998  # Unknown organisms come before None but after known
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -380,10 +408,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     # Use inner join to only include features with a valid organism
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     feature_query = (
         db.query(Feature)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -399,12 +429,16 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
 
     # Search aliases
     # Use inner join to only include features with a valid organism
+    # Filter by valid gene feature types
     alias_query = (
         db.query(Feature, Alias)
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .join(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
         .limit(fetch_limit)
     )
 
@@ -455,6 +489,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 
@@ -650,21 +686,40 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
 def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     """
-    Search all categories (genes, GO terms, phenotypes, references).
+    Search all categories (genes, GO terms, phenotypes, references, orthologs).
 
     Returns results grouped by category with actual total counts.
     """
+    from cgd.api.services.text_search_service import search_orthologs, _count_orthologs
+
     # Search all categories with the same limit per category
     genes = search_genes(db, query, limit)
     go_terms = search_go_terms(db, query, limit)
     phenotypes = search_phenotypes(db, query, limit)
     references = search_references(db, query, limit)
 
+    # Search orthologs (convert TextSearchResult to SearchResult)
+    ortholog_results = search_orthologs(db, query, limit)
+    orthologs = [
+        SearchResult(
+            category="orthologs",
+            id=r.id or "",
+            name=r.name,
+            description=r.description,
+            link=r.link or f"/locus/{r.name}",
+            organism=r.organism,
+            highlighted_name=r.highlighted_name,
+            highlighted_description=r.highlighted_description,
+        )
+        for r in ortholog_results
+    ]
+
     # Get actual total counts for each category
     genes_count = _count_genes(db, query)
     go_terms_count = _count_go_terms(db, query)
     phenotypes_count = _count_phenotypes(db, query)
     references_count = _count_references(db, query)
+    orthologs_count = _count_orthologs(db, query)
 
     # Build response
     results_by_category = {}
@@ -682,8 +737,11 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     if references or references_count > 0:
         results_by_category["references"] = references
         counts_by_category["references"] = references_count
+    if orthologs or orthologs_count > 0:
+        results_by_category["orthologs"] = orthologs
+        counts_by_category["orthologs"] = orthologs_count
 
-    total = genes_count + go_terms_count + phenotypes_count + references_count
+    total = genes_count + go_terms_count + phenotypes_count + references_count + orthologs_count
 
     return SearchResponse(
         query=query,
@@ -727,6 +785,7 @@ def get_autocomplete_suggestions(
     remaining = limit
 
     # 1. Search genes (highest priority) - prefix match on gene_name and feature_name
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     if remaining > 0:
         gene_limit = min(remaining, 5)  # Cap genes at 5 to leave room for others
 
@@ -735,6 +794,7 @@ def get_autocomplete_suggestions(
             db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
             .filter(
                 Feature.gene_name.isnot(None),
+                Feature.feature_type.in_(GENE_FEATURE_TYPES),
                 func.upper(Feature.gene_name).like(prefix_pattern)
             )
             .distinct()
@@ -761,7 +821,10 @@ def get_autocomplete_suggestions(
             extra_needed = gene_limit - len(suggestions)
             feat_prefix_query = (
                 db.query(Feature.gene_name, Feature.feature_name, Feature.headline)
-                .filter(func.upper(Feature.feature_name).like(prefix_pattern))
+                .filter(
+                    Feature.feature_type.in_(GENE_FEATURE_TYPES),
+                    func.upper(Feature.feature_name).like(prefix_pattern)
+                )
                 .distinct()
                 .limit(extra_needed + len(seen_genes))
                 .all()
@@ -893,11 +956,12 @@ def _count_genes(db: Session, query: str) -> int:
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
-    # Filter to only include features with a valid organism and exclude Assembly 21
+    # Filter to only include features with a valid organism, valid feature types, and exclude Assembly 21
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -908,13 +972,14 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
-    # Filter to only include features with a valid organism and exclude Assembly 21
+    # Filter to only include features with a valid organism, valid feature types, and exclude Assembly 21
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
@@ -945,6 +1010,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     a21_subq = _get_a21_exclusion_subquery(db)
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Filter by valid gene feature types
     direct_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -952,6 +1018,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         )
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
@@ -962,6 +1029,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -971,6 +1039,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .filter(
             Feature.organism_no.isnot(None),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no)),
             func.upper(Alias.alias_name).like(upper_pattern)
         )
@@ -1099,11 +1168,13 @@ def search_category(
     Args:
         db: Database session
         query: Search query string
-        category: Category to search (genes, go_terms, phenotypes, references)
+        category: Category to search (genes, go_terms, phenotypes, references, orthologs)
 
     Returns:
         CategorySearchResponse with all results
     """
+    from cgd.api.services.text_search_service import search_orthologs, _count_orthologs
+
     organism_counts = None
 
     # Get total count and all results based on category
@@ -1120,6 +1191,45 @@ def search_category(
     elif category == "references":
         total_count = _count_references(db, query)
         results = _search_references_all(db, query)
+    elif category == "orthologs":
+        from cgd.schemas.search_schema import OrthologRelationQuick
+
+        total_count = _count_orthologs(db, query)
+        ortholog_results = search_orthologs(db, query, limit=1000)
+        # Convert TextSearchResult to SearchResult, including related_orthologs
+        results = []
+        for r in ortholog_results:
+            # Convert OrthologRelation to OrthologRelationQuick
+            related = None
+            if r.related_orthologs:
+                related = [
+                    OrthologRelationQuick(
+                        name=o.name,
+                        organism=o.organism,
+                        source=o.source,
+                        link=o.link,
+                    )
+                    for o in r.related_orthologs
+                ]
+            results.append(SearchResult(
+                category="orthologs",
+                id=r.id or "",
+                name=r.name,
+                description=r.description,
+                link=r.link or f"/locus/{r.name}",
+                organism=r.organism,
+                highlighted_name=r.highlighted_name,
+                highlighted_description=r.highlighted_description,
+                gene_name=r.gene_name,
+                related_orthologs=related,
+            ))
+        # Calculate organism counts from results
+        org_counts = {}
+        for r in results:
+            if r.organism:
+                org_counts[r.organism] = org_counts.get(r.organism, 0) + 1
+        if org_counts:
+            organism_counts = org_counts
     else:
         total_count = 0
         results = []
@@ -1146,11 +1256,12 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
     # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
     a21_subq = _get_a21_exclusion_subquery(db)
 
-    # Get all features matching directly (excluding Assembly 21)
+    # Get all features matching directly (excluding Assembly 21, filtering by feature type)
     feature_query = (
         db.query(Feature)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1175,13 +1286,14 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
             highlighted_description=_highlight_text(feat.headline, query),
         ))
 
-    # Also search aliases
+    # Also search aliases (filtering by feature type)
     alias_query = (
         db.query(Feature, Alias)
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             func.upper(Alias.alias_name).like(upper_pattern),
             ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
@@ -1203,6 +1315,8 @@ def _search_genes_all(db: Session, query: str) -> list[SearchResult]:
                 highlighted_description=_highlight_text(description, query),
             ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 

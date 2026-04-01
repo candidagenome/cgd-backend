@@ -18,6 +18,7 @@ from cgd.schemas.locus_schema import (
     ExternalLinkOut,
     AlleleOut,
     AlleleLocationOut,
+    AlleleSequenceOut,
     AlleleSubfeatureOut,
     CandidaOrthologOut,
     ExternalOrthologOut,
@@ -3599,11 +3600,19 @@ def _get_allele_locations(
                 allele_start = start_coord
                 break
 
-        # Get seq_version from current sequence
+        # Get seq_version and sequences from current sequences
+        allele_sequences = []
         for seq in allele.seq:
             if seq.is_seq_current == 'Y':
-                seq_version = seq.seq_version
-                break
+                if seq_version is None:
+                    seq_version = seq.seq_version
+                allele_sequences.append(AlleleSequenceOut(
+                    seq_type=seq.seq_type,
+                    seq_length=seq.seq_length,
+                    source=seq.source,
+                    seq_version=seq.seq_version,
+                    residues=seq.residues,
+                ))
 
         # Skip alleles without location
         if start_coord is None:
@@ -3682,6 +3691,7 @@ def _get_allele_locations(
             coord_version=coord_version,
             seq_version=seq_version,
             subfeatures=subfeatures,
+            sequences=allele_sequences,
         ))
 
     return allele_locations

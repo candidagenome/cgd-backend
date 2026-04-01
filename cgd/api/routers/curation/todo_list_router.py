@@ -30,8 +30,10 @@ from cgd.models.models import (
     Go,
     GoAnnotation,
     Organism,
+    Phenotype,
     RefLink,
     RefProperty,
+    RefpropFeat,
     Reference,
 )
 
@@ -314,6 +316,140 @@ def get_curation_status_values(
         .all()
     )
     return {"curation_statuses": [{"type": r[0], "value": r[1], "count": r[2]} for r in results]}
+
+
+@router.get("/debug/reference/{identifier}")
+def get_reference_curation_debug(
+    identifier: str,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Debug endpoint: Get all curation data for a specific reference.
+
+    Identifier can be:
+    - PubMed ID (numeric)
+    - Reference number (numeric)
+    - CGDID (starts with CAL)
+
+    Returns all REF_PROPERTY records, linked features, GO annotations, and phenotypes.
+    """
+    # Find the reference
+    reference = None
+
+    # Try as PubMed ID (numeric)
+    try:
+        pubmed = int(identifier)
+        reference = db.query(Reference).filter(Reference.pubmed == pubmed).first()
+        if not reference:
+            # Try as reference_no
+            reference = db.query(Reference).filter(Reference.reference_no == pubmed).first()
+    except ValueError:
+        pass
+
+    # Try as CGDID
+    if not reference:
+        reference = db.query(Reference).filter(
+            func.upper(Reference.dbxref_id) == identifier.upper()
+        ).first()
+
+    if not reference:
+        return {"error": f"Reference not found: {identifier}"}
+
+    # Get all REF_PROPERTY records
+    ref_properties = (
+        db.query(RefProperty)
+        .filter(RefProperty.reference_no == reference.reference_no)
+        .order_by(RefProperty.property_type, RefProperty.property_value)
+        .all()
+    )
+
+    properties_data = []
+    for prop in ref_properties:
+        prop_data = {
+            "ref_property_no": prop.ref_property_no,
+            "property_type": prop.property_type,
+            "property_value": prop.property_value,
+            "date_created": prop.date_created.isoformat() if prop.date_created else None,
+            "date_last_reviewed": prop.date_last_reviewed.isoformat() if prop.date_last_reviewed else None,
+            "created_by": prop.created_by,
+        }
+
+        # Get linked features for this property
+        linked_features = (
+            db.query(RefpropFeat, Feature)
+            .join(Feature, RefpropFeat.feature_no == Feature.feature_no)
+            .filter(RefpropFeat.ref_property_no == prop.ref_property_no)
+            .all()
+        )
+        if linked_features:
+            prop_data["linked_features"] = [
+                {
+                    "feature_no": f.feature_no,
+                    "feature_name": f.feature_name,
+                    "gene_name": f.gene_name,
+                }
+                for rpf, f in linked_features
+            ]
+
+        properties_data.append(prop_data)
+
+    # Get GO annotations for features linked to this reference
+    go_annotations = (
+        db.query(GoAnnotation, Feature, Go)
+        .join(Feature, GoAnnotation.feature_no == Feature.feature_no)
+        .join(Go, GoAnnotation.go_no == Go.go_no)
+        .filter(GoAnnotation.reference_no == reference.reference_no)
+        .all()
+    )
+
+    go_data = [
+        {
+            "go_annotation_no": ga.go_annotation_no,
+            "feature_name": f.feature_name,
+            "gene_name": f.gene_name,
+            "goid": ga.goid,
+            "go_term": go.go_term,
+            "go_aspect": go.go_aspect,
+            "go_evidence": ga.go_evidence,
+        }
+        for ga, f, go in go_annotations
+    ]
+
+    # Get phenotypes for this reference
+    phenotypes = (
+        db.query(Phenotype, Feature)
+        .join(Feature, Phenotype.feature_no == Feature.feature_no)
+        .filter(Phenotype.reference_no == reference.reference_no)
+        .all()
+    )
+
+    phenotype_data = [
+        {
+            "phenotype_no": p.phenotype_no,
+            "feature_name": f.feature_name,
+            "gene_name": f.gene_name,
+            "observable": p.observable,
+            "qualifier": p.qualifier,
+        }
+        for p, f in phenotypes
+    ]
+
+    return {
+        "reference": {
+            "reference_no": reference.reference_no,
+            "pubmed": reference.pubmed,
+            "dbxref_id": reference.dbxref_id,
+            "citation": reference.citation,
+            "year": reference.year,
+        },
+        "ref_properties": properties_data,
+        "ref_properties_count": len(properties_data),
+        "go_annotations": go_data,
+        "go_annotations_count": len(go_data),
+        "phenotypes": phenotype_data,
+        "phenotypes_count": len(phenotype_data),
+    }
 
 
 def _get_literature_topic_terms(db: Session) -> set:

@@ -14,10 +14,14 @@ WorkingDirectory=/opt/cgd_api
 EnvironmentFile=/opt/cgd_api/.env
 
 # Use venv gunicorn
+# --timeout 300: Allow 5 minutes for long-running requests (e.g., GO Term Finder with large gene lists)
+# --graceful-timeout 30: Time to finish existing requests on reload
 ExecStart=/opt/cgd_api/.venv/bin/gunicorn \
   -k uvicorn.workers.UvicornWorker \
   -w 2 \
   -b 127.0.0.1:8000 \
+  --timeout 300 \
+  --graceful-timeout 30 \
   cgd.main:app
 
 Restart=always

@@ -77,6 +77,34 @@ CATEGORY_ORDER = [
 # Ortholog sources (from other MODs)
 ORTHOLOG_SOURCES = ["SGD", "POMBASE", "AspGD", "CGD"]
 
+# Valid feature types for gene search (excludes proteins, polypeptides, etc.)
+# Matching the locus page valid types
+GENE_FEATURE_TYPES = [
+    'ORF', 'blocked_reading_frame', 'pseudogene',
+    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
+    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+]
+
+# Organism display priority (lower index = higher priority)
+# C. albicans SC5314 is the primary organism and should appear first in search results
+ORGANISM_PRIORITY = [
+    'Candida albicans SC5314',
+    'Candida glabrata CBS138',
+    'Candida auris B8441',
+    'Candida dubliniensis CD36',
+    'Candida parapsilosis CDC317',
+]
+
+
+def _get_organism_priority(organism_name: Optional[str]) -> int:
+    """Get sort priority for an organism (lower = higher priority)."""
+    if not organism_name:
+        return 999
+    try:
+        return ORGANISM_PRIORITY.index(organism_name)
+    except ValueError:
+        return 998  # Unknown organisms come before None but after known
+
 
 def _normalize_query(query: str) -> str:
     """
@@ -170,6 +198,18 @@ def _get_organism_name(organism: Optional[Organism]) -> Optional[str]:
     if organism:
         return organism.organism_name
     return None
+
+
+def _format_ortholog_source(source: str) -> str:
+    """Format ortholog source name for display."""
+    # Map verbose source names to concise display names
+    source_map = {
+        'SGD': 'S. cerevisiae',
+        'POMBASE': 'S. pombe',
+        'AspGD': 'A. nidulans',
+        'CGD': 'CGD',
+    }
+    return source_map.get(source, source)
 
 
 def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
@@ -467,10 +507,12 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
     # Exclude Assembly 21 features directly in SQL
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     feature_query = (
         db.query(Feature)
         .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -498,6 +540,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
         ))
 
     # Search aliases if we need more results
+    # Filter by valid gene feature types
     remaining = limit - len(results)
     if remaining > 0:
         alias_query = (
@@ -506,6 +549,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             .join(Alias, FeatAlias.alias_no == Alias.alias_no)
             .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
             .filter(
+                Feature.feature_type.in_(GENE_FEATURE_TYPES),
                 func.upper(Alias.alias_name).like(upper_pattern),
                 ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
             )
@@ -532,6 +576,8 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 if len(results) >= limit:
                     break
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -590,6 +636,8 @@ def search_descriptions(
             highlighted_description=_highlight_text(feat.headline, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -865,6 +913,8 @@ def search_paragraphs(db: Session, query: str, limit: int = 20) -> list[TextSear
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -1063,6 +1113,8 @@ def search_name_descriptions(db: Session, query: str, limit: int = 20) -> list[T
             highlighted_description=_highlight_text(feat.name_description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
@@ -1183,6 +1235,8 @@ def search_notes(
                 highlighted_description=_highlight_text(description, query),
             ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 
@@ -1226,20 +1280,250 @@ def search_external_ids(db: Session, query: str, limit: int = 20) -> list[TextSe
             highlighted_description=_highlight_text(description, query),
         ))
 
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results
 
 
 def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
     """
-    Search orthologs and best hits from other databases (SGD, POMBASE, AspGD, CGD).
-    Returns TextSearchResult list with category="orthologs".
+    Search orthologs and best hits from external databases (SGD, POMBASE, AspGD)
+    and internal CGOB orthologs across Candida species.
+
+    This enables searching for a gene name like "SAE2" and finding orthologs
+    in other species even if the gene isn't directly annotated with that name.
+
+    Returns TextSearchResult list with category="orthologs", including:
+    - homology_group_no for grouping related orthologs
+    - related_orthologs for displaying relationship tables
     """
+    from cgd.schemas.search_schema import OrthologRelation
+
     results = []
+    seen_feature_nos = set()  # Track to avoid duplicates
+    feature_to_homology_group = {}  # Map feature_no to homology_group_no
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    # Search in Dbxref where source is one of the ortholog sources
-    # and dbxref_id or description matches
+    # 1. Find matching CGOB homology groups
+    # Match by: gene_name, feature_name, alias, OR ortholog description (Dbxref)
+    matching_homology_groups_from_features = (
+        db.query(FeatHomology.homology_group_no)
+        .join(Feature, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .outerjoin(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
+        .outerjoin(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .outerjoin(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .outerjoin(Dbxref, and_(
+            DbxrefFeat.dbxref_no == Dbxref.dbxref_no,
+            Dbxref.source.in_(ORTHOLOG_SOURCES)
+        ))
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Alias.alias_name).like(upper_pattern),
+                func.upper(Dbxref.dbxref_id).like(upper_pattern),
+                func.upper(Dbxref.description).like(upper_pattern),
+            )
+        )
+        .distinct()
+    )
+
+    # Also find homology groups via DbxrefHomology (external orthologs like S. cerevisiae)
+    matching_homology_groups_from_external = (
+        db.query(DbxrefHomology.homology_group_no)
+        .join(HomologyGroup, DbxrefHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            func.upper(DbxrefHomology.name).like(upper_pattern),
+        )
+        .distinct()
+    )
+
+    # Combine and get distinct homology group numbers
+    matching_hg_nos = set()
+    for (hg_no,) in matching_homology_groups_from_features:
+        matching_hg_nos.add(hg_no)
+    for (hg_no,) in matching_homology_groups_from_external:
+        matching_hg_nos.add(hg_no)
+
+    if not matching_hg_nos:
+        # Fall back to external database ortholog search only
+        return _search_orthologs_dbxref_only(db, query, limit)
+
+    # 2. Build ortholog relationship data for each homology group
+    # Get all members (CGD features) and external orthologs for each group
+    homology_group_data = {}  # {hg_no: {'cgd_features': [...], 'external_orthologs': [...]}}
+
+    for hg_no in matching_hg_nos:
+        homology_group_data[hg_no] = {'cgd_features': [], 'external_orthologs': []}
+
+        # Get CGD features in this homology group
+        cgd_features = (
+            db.query(Feature, Organism)
+            .join(FeatHomology, Feature.feature_no == FeatHomology.feature_no)
+            .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(
+                FeatHomology.homology_group_no == hg_no,
+                Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            )
+            .all()
+        )
+
+        for feat, org in cgd_features:
+            org_name = _get_organism_name(org) if org else None
+            homology_group_data[hg_no]['cgd_features'].append({
+                'feature_no': feat.feature_no,
+                'name': feat.gene_name or feat.feature_name,
+                'feature_name': feat.feature_name,
+                'gene_name': feat.gene_name,
+                'organism': org_name,
+                'dbxref_id': feat.dbxref_id,
+            })
+            feature_to_homology_group[feat.feature_no] = hg_no
+
+        # Get external orthologs from DbxrefHomology
+        # Only include key external sources (SGD, POMBASE, AspGD) - skip verbose Candida species list
+        external_orthologs = (
+            db.query(DbxrefHomology, Dbxref)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .filter(DbxrefHomology.homology_group_no == hg_no)
+            .all()
+        )
+
+        for dh, dbx in external_orthologs:
+            source_name = dbx.source if dbx else 'External'
+            ortholog_name = dh.name
+
+            # Handle "Orthologous genes in Candida species" entries
+            if source_name == 'Orthologous genes in Candida species':
+                # Keep S. cerevisiae entries, skip other Candida species (redundant with CGOB)
+                # Name format: "Saccharomyces cerevisiae S288C" (full genus name)
+                if ortholog_name.startswith('Saccharomyces cerevisiae') or ortholog_name.startswith('S. cerevisiae'):
+                    # Format as "S. cerevisiae" and use the query gene name later
+                    display_name = "S. cerevisiae"
+                    display_source = "S. cerevisiae"
+                else:
+                    # Skip other Candida species entries (redundant)
+                    continue
+            else:
+                # Format source name for display (SGD, POMBASE, etc.)
+                display_source = _format_ortholog_source(source_name)
+                display_name = ortholog_name
+
+            homology_group_data[hg_no]['external_orthologs'].append({
+                'name': display_name,
+                'source': source_name,
+                'display_source': display_source,
+            })
+
+    # 3. Build results with relationship data
+    for hg_no, data in homology_group_data.items():
+        # Build related_orthologs list for this group
+        related_orthologs = []
+
+        # Add CGD features as related orthologs
+        # Format: "C. albicans C2_03330C_A/HOG1" or "C. albicans C2_03330C_A" if no gene_name
+        for feat_data in data['cgd_features']:
+            org_name = feat_data['organism']
+            # Format organism: "Candida albicans SC5314" -> "C. albicans"
+            if org_name:
+                parts = org_name.split()
+                if len(parts) >= 2:
+                    short_org = f"{parts[0][0]}. {parts[1]}"  # "C. albicans"
+                else:
+                    short_org = org_name
+            else:
+                short_org = "Unknown"
+
+            # Format name: "C2_03330C_A/HOG1" or just feature_name
+            feature_name = feat_data['feature_name']
+            gene_name = feat_data['gene_name']
+            if gene_name and gene_name != feature_name:
+                display_name = f"{short_org} {feature_name}/{gene_name}"
+            else:
+                display_name = f"{short_org} {feature_name or gene_name}"
+
+            related_orthologs.append(OrthologRelation(
+                name=display_name,
+                organism=feat_data['organism'],
+                source='CGOB',
+                link=f"/locus/{feat_data['gene_name'] or feat_data['feature_name']}",
+            ))
+
+        # Add external orthologs (e.g., S. cerevisiae HOG1)
+        # Get the most common gene name from CGD features to use for external orthologs
+        cgd_gene_names = [f['gene_name'] for f in data['cgd_features'] if f['gene_name']]
+        common_gene_name = cgd_gene_names[0] if cgd_gene_names else None
+
+        for ext in data['external_orthologs']:
+            display_source = ext.get('display_source', ext['source'])
+            ext_name = ext['name']
+            ext_link = None
+
+            # For S. cerevisiae, use the common gene name from CGD features and add SGD link
+            if display_source == 'S. cerevisiae' and common_gene_name:
+                ortholog_display = f"S. cerevisiae {common_gene_name}"
+                ext_link = f"https://www.yeastgenome.org/locus/{common_gene_name}"
+            else:
+                ortholog_display = f"{display_source} {ext_name}"
+
+            related_orthologs.append(OrthologRelation(
+                name=ortholog_display,
+                organism=None,
+                source=ext['source'],
+                link=ext_link,
+            ))
+
+        # Create a result for each CGD feature in this group
+        for feat_data in data['cgd_features']:
+            if feat_data['feature_no'] in seen_feature_nos:
+                continue
+            seen_feature_nos.add(feat_data['feature_no'])
+
+            display_name = feat_data['gene_name'] or feat_data['feature_name']
+            organism_name = feat_data['organism']
+
+            # Filter out self from related_orthologs for this result
+            other_orthologs = [
+                o for o in related_orthologs
+                if not (o.organism == organism_name and o.link and
+                        o.link.endswith(f"/{feat_data['gene_name'] or feat_data['feature_name']}"))
+            ]
+
+            results.append(TextSearchResult(
+                category="orthologs",
+                id=feat_data['dbxref_id'],
+                name=display_name,
+                description=f"Ortholog: {query} ({len(other_orthologs)} related)",
+                link=f"/locus/{feat_data['gene_name'] or feat_data['feature_name']}",
+                organism=organism_name,
+                gene_name=feat_data['gene_name'],
+                homology_group_no=hg_no,
+                related_orthologs=other_orthologs,
+                highlighted_name=_highlight_text(display_name, query),
+                highlighted_description=_highlight_text(f"Ortholog: {query}", query),
+            ))
+
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
+    return results[:limit]
+
+
+def _search_orthologs_dbxref_only(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+    """
+    Fallback ortholog search using only DbxrefFeat (external database links).
+    Used when no CGOB homology groups match.
+    """
+    results = []
+    seen_feature_nos = set()
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
     ortholog_query = (
         db.query(Dbxref, Feature)
         .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
@@ -1256,6 +1540,10 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
     )
 
     for dbxref, feat in ortholog_query:
+        if feat.feature_no in seen_feature_nos:
+            continue
+        seen_feature_nos.add(feat.feature_no)
+
         display_name = feat.gene_name or feat.feature_name
         ortholog_name = dbxref.description or dbxref.dbxref_id
         description = f"Ortholog: {ortholog_name} ({dbxref.source})"
@@ -1267,10 +1555,12 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
             description=description,
             link=f"/locus/{feat.gene_name or feat.feature_name}",
             organism=_get_organism_name(feat.organism) if hasattr(feat, 'organism') else None,
+            gene_name=feat.gene_name,
             highlighted_name=_highlight_text(display_name, query),
             highlighted_description=_highlight_text(description, query),
         ))
 
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
     return results[:limit]
 
 
@@ -1293,9 +1583,11 @@ def _count_genes(db: Session, query: str) -> int:
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
     # Use label() to ensure column name is consistent in UNION
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     direct_subq = (
         db.query(Feature.feature_no.label('fno'))
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1305,11 +1597,15 @@ def _count_genes(db: Session, query: str) -> int:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(Feature.feature_no.label('fno'))
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
     )
 
     # Union of both to get all matching feature_nos (distinct)
@@ -1341,12 +1637,14 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     upper_pattern = like_pattern.upper()
 
     # Subquery for features matching directly (gene_name, feature_name, or dbxref_id)
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     direct_subq = (
         db.query(
             Feature.feature_no.label('fno'),
             Feature.organism_no.label('org_no')
         )
         .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
             or_(
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
@@ -1356,6 +1654,7 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     )
 
     # Subquery for features matching via aliases
+    # Filter by valid gene feature types
     alias_subq = (
         db.query(
             Feature.feature_no.label('fno'),
@@ -1363,7 +1662,10 @@ def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
         )
         .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
         .join(Alias, FeatAlias.alias_no == Alias.alias_no)
-        .filter(func.upper(Alias.alias_name).like(upper_pattern))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Alias.alias_name).like(upper_pattern)
+        )
     )
 
     # Union of both to get all matching features with their organism_no
@@ -1694,12 +1996,13 @@ def _count_external_ids(db: Session, query: str) -> int:
 
 
 def _count_orthologs(db: Session, query: str) -> int:
-    """Count total orthologs matching the query."""
+    """Count total orthologs matching the query (external DB refs + CGOB orthologs)."""
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
-    return (
-        db.query(func.count(func.distinct(Feature.feature_no)))
+    # Count from external database orthologs (SGD, POMBASE, etc.)
+    dbxref_subq = (
+        db.query(Feature.feature_no.label('fno'))
         .join(DbxrefFeat, Feature.feature_no == DbxrefFeat.feature_no)
         .join(Dbxref, DbxrefFeat.dbxref_no == Dbxref.dbxref_no)
         .filter(
@@ -1709,8 +2012,66 @@ def _count_orthologs(db: Session, query: str) -> int:
                 func.upper(Dbxref.description).like(upper_pattern),
             )
         )
-        .scalar()
     )
+
+    # Count from CGOB orthologs
+    # First find homology groups with matching features (by name, alias, or ortholog description)
+    matching_homology_groups_from_features = (
+        db.query(FeatHomology.homology_group_no)
+        .join(Feature, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .outerjoin(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
+        .outerjoin(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .outerjoin(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .outerjoin(Dbxref, and_(
+            DbxrefFeat.dbxref_no == Dbxref.dbxref_no,
+            Dbxref.source.in_(ORTHOLOG_SOURCES)
+        ))
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            or_(
+                func.upper(Feature.gene_name).like(upper_pattern),
+                func.upper(Feature.feature_name).like(upper_pattern),
+                func.upper(Alias.alias_name).like(upper_pattern),
+                func.upper(Dbxref.dbxref_id).like(upper_pattern),
+                func.upper(Dbxref.description).like(upper_pattern),
+            )
+        )
+        .distinct()
+    )
+
+    # Also find homology groups via DbxrefHomology (external orthologs like S. cerevisiae)
+    matching_homology_groups_from_external = (
+        db.query(DbxrefHomology.homology_group_no)
+        .join(HomologyGroup, DbxrefHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            func.upper(DbxrefHomology.name).like(upper_pattern),
+        )
+        .distinct()
+    )
+
+    # Combine both sources of homology groups
+    matching_homology_groups = (
+        matching_homology_groups_from_features
+        .union(matching_homology_groups_from_external)
+        .subquery()
+    )
+
+    cgob_subq = (
+        db.query(Feature.feature_no.label('fno'))
+        .join(FeatHomology, Feature.feature_no == FeatHomology.feature_no)
+        .filter(
+            FeatHomology.homology_group_no.in_(matching_homology_groups),
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+        )
+    )
+
+    # Union both subqueries and count distinct features
+    union_query = dbxref_subq.union(cgob_subq).subquery()
+    return db.query(func.count(func.distinct(union_query.c.fno))).scalar()
 
 
 # =============================================================================
