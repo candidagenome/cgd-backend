@@ -1328,12 +1328,18 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
     # 2. Search CGOB orthologs across Candida species
     # This finds features that are CGOB orthologs of features matching the query
     # First, find homology groups containing features that match the query
+    # Match by: gene_name, feature_name, alias, OR ortholog description (Dbxref)
     matching_homology_groups = (
         db.query(FeatHomology.homology_group_no)
         .join(Feature, FeatHomology.feature_no == Feature.feature_no)
         .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
         .outerjoin(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
         .outerjoin(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .outerjoin(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .outerjoin(Dbxref, and_(
+            DbxrefFeat.dbxref_no == Dbxref.dbxref_no,
+            Dbxref.source.in_(ORTHOLOG_SOURCES)
+        ))
         .filter(
             HomologyGroup.method == 'CGOB',
             HomologyGroup.homology_group_type == 'ortholog',
@@ -1341,6 +1347,9 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Alias.alias_name).like(upper_pattern),
+                # Also match ortholog descriptions (e.g., "S. cerevisiae ortholog Sae2")
+                func.upper(Dbxref.dbxref_id).like(upper_pattern),
+                func.upper(Dbxref.description).like(upper_pattern),
             )
         )
         .distinct()
@@ -1837,13 +1846,18 @@ def _count_orthologs(db: Session, query: str) -> int:
     )
 
     # Count from CGOB orthologs
-    # First find homology groups with matching features
+    # First find homology groups with matching features (by name, alias, or ortholog description)
     matching_homology_groups = (
         db.query(FeatHomology.homology_group_no)
         .join(Feature, FeatHomology.feature_no == Feature.feature_no)
         .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
         .outerjoin(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
         .outerjoin(Alias, FeatAlias.alias_no == Alias.alias_no)
+        .outerjoin(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .outerjoin(Dbxref, and_(
+            DbxrefFeat.dbxref_no == Dbxref.dbxref_no,
+            Dbxref.source.in_(ORTHOLOG_SOURCES)
+        ))
         .filter(
             HomologyGroup.method == 'CGOB',
             HomologyGroup.homology_group_type == 'ortholog',
@@ -1851,6 +1865,8 @@ def _count_orthologs(db: Session, query: str) -> int:
                 func.upper(Feature.gene_name).like(upper_pattern),
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Alias.alias_name).like(upper_pattern),
+                func.upper(Dbxref.dbxref_id).like(upper_pattern),
+                func.upper(Dbxref.description).like(upper_pattern),
             )
         )
         .distinct()
