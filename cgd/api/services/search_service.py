@@ -1192,11 +1192,26 @@ def search_category(
         total_count = _count_references(db, query)
         results = _search_references_all(db, query)
     elif category == "orthologs":
+        from cgd.schemas.search_schema import OrthologRelationQuick
+
         total_count = _count_orthologs(db, query)
         ortholog_results = search_orthologs(db, query, limit=1000)
-        # Convert TextSearchResult to SearchResult
-        results = [
-            SearchResult(
+        # Convert TextSearchResult to SearchResult, including related_orthologs
+        results = []
+        for r in ortholog_results:
+            # Convert OrthologRelation to OrthologRelationQuick
+            related = None
+            if r.related_orthologs:
+                related = [
+                    OrthologRelationQuick(
+                        name=o.name,
+                        organism=o.organism,
+                        source=o.source,
+                        link=o.link,
+                    )
+                    for o in r.related_orthologs
+                ]
+            results.append(SearchResult(
                 category="orthologs",
                 id=r.id or "",
                 name=r.name,
@@ -1205,9 +1220,9 @@ def search_category(
                 organism=r.organism,
                 highlighted_name=r.highlighted_name,
                 highlighted_description=r.highlighted_description,
-            )
-            for r in ortholog_results
-        ]
+                gene_name=r.gene_name,
+                related_orthologs=related,
+            ))
         # Calculate organism counts from results
         org_counts = {}
         for r in results:

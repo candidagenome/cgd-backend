@@ -21,6 +21,14 @@ class SearchResultLink(BaseModel):
     link_type: str  # "internal" or "external"
 
 
+class OrthologRelationQuick(BaseModel):
+    """Represents an ortholog relationship for Quick Search display."""
+    name: str  # Gene name or external ortholog name (e.g., "HOG1", "S. cerevisiae HOG1")
+    organism: Optional[str] = None  # Organism name (None for external orthologs)
+    source: str  # "CGOB" for internal orthologs, "SGD"/"POMBASE" etc for external
+    link: Optional[str] = None  # Link to locus page (for CGD genes only)
+
+
 class SearchResult(BaseModel):
     """Single search result item."""
     category: str  # "gene", "go_term", "phenotype", "reference"
@@ -33,6 +41,9 @@ class SearchResult(BaseModel):
     # Highlighted versions with <mark> tags around matching text
     highlighted_name: Optional[str] = None
     highlighted_description: Optional[str] = None
+    # For ortholog results - relationship data
+    gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
+    related_orthologs: Optional[list[OrthologRelationQuick]] = None  # Related orthologs
 
 
 class PaginationInfo(BaseModel):
