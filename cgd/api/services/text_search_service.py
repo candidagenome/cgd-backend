@@ -1329,7 +1329,7 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
     # This finds features that are CGOB orthologs of features matching the query
     # First, find homology groups containing features that match the query
     # Match by: gene_name, feature_name, alias, OR ortholog description (Dbxref)
-    matching_homology_groups = (
+    matching_homology_groups_from_features = (
         db.query(FeatHomology.homology_group_no)
         .join(Feature, FeatHomology.feature_no == Feature.feature_no)
         .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
@@ -1353,6 +1353,25 @@ def search_orthologs(db: Session, query: str, limit: int = 20) -> list[TextSearc
             )
         )
         .distinct()
+    )
+
+    # Also find homology groups via DbxrefHomology (external orthologs like S. cerevisiae)
+    # This matches external gene names (e.g., "HOG1" from S. cerevisiae) linked to CGOB groups
+    matching_homology_groups_from_external = (
+        db.query(DbxrefHomology.homology_group_no)
+        .join(HomologyGroup, DbxrefHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            func.upper(DbxrefHomology.name).like(upper_pattern),
+        )
+        .distinct()
+    )
+
+    # Combine both sources of homology groups
+    matching_homology_groups = (
+        matching_homology_groups_from_features
+        .union(matching_homology_groups_from_external)
         .subquery()
     )
 
@@ -1847,7 +1866,7 @@ def _count_orthologs(db: Session, query: str) -> int:
 
     # Count from CGOB orthologs
     # First find homology groups with matching features (by name, alias, or ortholog description)
-    matching_homology_groups = (
+    matching_homology_groups_from_features = (
         db.query(FeatHomology.homology_group_no)
         .join(Feature, FeatHomology.feature_no == Feature.feature_no)
         .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
@@ -1870,6 +1889,24 @@ def _count_orthologs(db: Session, query: str) -> int:
             )
         )
         .distinct()
+    )
+
+    # Also find homology groups via DbxrefHomology (external orthologs like S. cerevisiae)
+    matching_homology_groups_from_external = (
+        db.query(DbxrefHomology.homology_group_no)
+        .join(HomologyGroup, DbxrefHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(
+            HomologyGroup.method == 'CGOB',
+            HomologyGroup.homology_group_type == 'ortholog',
+            func.upper(DbxrefHomology.name).like(upper_pattern),
+        )
+        .distinct()
+    )
+
+    # Combine both sources of homology groups
+    matching_homology_groups = (
+        matching_homology_groups_from_features
+        .union(matching_homology_groups_from_external)
         .subquery()
     )
 
