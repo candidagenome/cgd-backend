@@ -52,7 +52,7 @@
 # -----------------------------------------------------------------------------
 
 # Generate weekly curator progress reports per species:
-#   - GO annotation progress (genes without GO, manual vs automatic annotations)
+#   - GO annotation progress (genes without GO, manual vs computational annotations)
 #   - Literature Guide curation (uncurated refs, papers curated this week)
 #   - Phenotype curation (genes without phenotypes)
 #   - Headlines without references
@@ -68,9 +68,10 @@
 0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
 
 # Weekly PubMed update pipeline:
-#   - Load new references from PubMed for each Candida species
-#   - Link references to genes based on gene names in abstracts
-#   - Load ref_temp entries for species synonyms (Torulopsis, Nakaseomyces, etc.)
+#   - Search PubMed by species name (e.g., "Candida AND albicans") and load new references
+#   - Link references to genes based on gene names found in abstracts
+#   - Load ref_temp (staging table for curator review) for species synonyms
+#     (Torulopsis, Nakaseomyces, etc.) - curators accept to reference or reject to ref_bad
 #   - Update fulltext URLs from NCBI LinkOut
 0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
 
