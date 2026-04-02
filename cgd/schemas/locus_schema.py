@@ -155,12 +155,16 @@ class FeatureOut(ORMSchema):
 class LocusByOrganismResponse(BaseModel):
     """
     {
-      "Candida albicans": { ...FeatureOut... },
-      "Candida glabrata": { ...FeatureOut... },
-      ...
+      "results": {
+        "Candida albicans": { ...FeatureOut... },
+        "Candida glabrata": { ...FeatureOut... },
+        ...
+      },
+      "query_organism": "Candida auris B8441"  // organism of the searched gene
     }
     """
     results: dict[str, FeatureOut]
+    query_organism: t.Optional[str] = None  # organism that the queried gene belongs to
 
 
 # --- Sequence Info ---

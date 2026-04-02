@@ -1018,6 +1018,11 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             features.append(feat)
             found_feature_nos.add(feat.feature_no)
 
+    # Determine query_organism from the first direct match (the gene the user searched for)
+    query_organism: str | None = None
+    if direct_features:
+        query_organism, _ = _get_organism_info(direct_features[0])
+
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
 
@@ -1543,7 +1548,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         )
         out[organism_name] = feature_out
 
-    return LocusByOrganismResponse(results=out)
+    return LocusByOrganismResponse(results=out, query_organism=query_organism)
 
 
 def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
