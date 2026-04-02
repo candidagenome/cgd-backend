@@ -1,0 +1,27 @@
+# CGD CRON JOBS (UTC times - PST +8 hours, PDT +7 hours)
+
+# DAILY
+0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh  # Update Verified/Uncharacterized based on GO evidence
+0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh                  # Check data integrity rules, email violations to curators
+0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh             # Dump GO annotations to GAF 2.0 format
+0 5 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_go_slim_annotation.sh     # Dump GO Slim annotations
+0 6 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_go_complete.sh            # Assign root GO terms to unannotated features
+
+# TUESDAY (Wednesday 00:00 UTC)
+0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh                        # Send meeting agenda reminder to Slack
+
+# SATURDAY/SUNDAY
+0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh            # Generate weekly curator progress reports
+0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh        # Validate ORF sequences (start/stop codons)
+0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh                 # Load new PubMed references
+0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh                    # Generate GPI files for GO Consortium
+0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh                    # Dump GFF3 format annotations
+0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh                    # Dump GTF format annotations
+0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh   # Dump chromosomal feature tables
+0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh         # Dump phenotype data
+
+# MONTHLY (1st-4th of each month)
+0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh             # Dump FASTA sequences (genomic, CDS, protein)
+0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh            # Generate EMBL format files
+0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh    # Update PatMatch and BLAST databases
+0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh  # Generate ORF coordinates for web-primer
