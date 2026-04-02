@@ -24,6 +24,7 @@ from cgd.models.models import (
     FeatAlias,
     FeatLocation,
     FeatProperty,
+    FeatRelationship,
     GenomeVersion,
     Go,
     GoAnnotation,
@@ -262,12 +263,19 @@ def _get_feature_nos_for_genes(
     """
     Get feature_nos for a list of gene names.
 
+    Translates Assembly 21 features (orf19.XXXX) to their Assembly 22
+    equivalents to ensure they can be matched against the background set.
+
     Returns (feature_nos, not_found_genes).
     """
     request = ValidateGenesRequest(genes=genes, organism_no=organism_no)
     validation = validate_genes(db, request)
     feature_nos = [g.feature_no for g in validation.found]
     not_found = validation.not_found
+
+    # Translate any Assembly 21 features to their Assembly 22 equivalents
+    feature_nos = _translate_a21_to_a22_feature_nos(db, feature_nos)
+
     return feature_nos, not_found
 
 
@@ -298,6 +306,55 @@ def _build_annotation_filters(
 def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
     """Split a list into chunks of specified size (default 900 for Oracle's 1000 limit)."""
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+
+
+def _translate_a21_to_a22_feature_nos(
+    db: Session,
+    feature_nos: list[int],
+) -> list[int]:
+    """
+    Translate Assembly 21 feature_nos to their Assembly 22 equivalents.
+
+    In CGD, Assembly 21 features (orf19.XXXX) have a FeatRelationship with:
+    - relationship_type = 'Assembly 21 Primary Allele'
+    - child_feature_no = Assembly 21 feature (orf19.XXXX)
+    - parent_feature_no = Assembly 22 feature (C5_XXXXX_A)
+
+    This function returns a list of feature_nos where any Assembly 21 features
+    have been replaced with their Assembly 22 equivalents.
+    """
+    if not feature_nos:
+        return []
+
+    result = []
+    a21_to_a22_map: dict[int, int] = {}
+
+    # Find Assembly 21 -> Assembly 22 mappings in chunks
+    for chunk in _chunk_list(feature_nos):
+        relationships = (
+            db.query(
+                FeatRelationship.child_feature_no,
+                FeatRelationship.parent_feature_no,
+            )
+            .filter(
+                FeatRelationship.child_feature_no.in_(chunk),
+                FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                FeatRelationship.rank == 3,
+            )
+            .all()
+        )
+        for child_no, parent_no in relationships:
+            a21_to_a22_map[child_no] = parent_no
+
+    # Build result list, translating A21 to A22 where applicable
+    seen = set()
+    for fno in feature_nos:
+        translated = a21_to_a22_map.get(fno, fno)
+        if translated not in seen:
+            result.append(translated)
+            seen.add(translated)
+
+    return result
 
 
 def _get_organism_seq_source(db: Session, organism_no: int) -> Optional[str]:
