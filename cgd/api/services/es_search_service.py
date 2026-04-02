@@ -73,82 +73,92 @@ def _extract_highlight(highlights: dict, field: str, fallback: Optional[str]) ->
     return fallback
 
 
-def _build_es_query(query: str, size: int = 100) -> dict:
+def _build_quick_search_query(query: str, size: int = 100) -> dict:
     """
-    Build Elasticsearch query for multi-field search.
+    Build Elasticsearch query for quick search.
 
-    Uses multi_match with cross_fields for best relevance.
+    This is a RESTRICTIVE search matching the old Perl CGD quick search behavior:
+    - Gene names, aliases, ORF names (NOT descriptions/abstracts)
+    - GO term names and synonyms (NOT definitions)
+    - Phenotype observables
+    - Exact matches on: PubMed ID, GOID, External ID, CGDID
+    - Ortholog names
+
+    For full-text search across all content, use the /text endpoint instead.
     """
+    query_upper = query.upper()
+    query_lower = query.lower()
+
+    # Build should clauses
+    should_clauses = [
+        # === EXACT ID MATCHES (highest priority) ===
+        # CGDID (CAL0001234)
+        {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
+        # GOID (GO:0001234)
+        {"term": {"goid": {"value": query_upper, "boost": 20}}},
+        # External ID
+        {"term": {"external_id": {"value": query_upper, "boost": 15}}},
+        {"term": {"external_id": {"value": query_lower, "boost": 15}}},
+
+        # === GENE NAME MATCHES ===
+        # Exact gene name match
+        {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+        {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
+        # Prefix match on gene names
+        {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
+        {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
+        # Search in aliases
+        {"match": {"aliases": {"query": query, "boost": 8}}},
+
+        # === GO TERM MATCHES ===
+        # Prefix match on GO term names
+        {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
+        # Search GO term and synonyms (but NOT definitions)
+        {
+            "multi_match": {
+                "query": query,
+                "fields": ["go_term^3", "go_synonyms^2"],
+                "type": "phrase_prefix",
+                "boost": 5,
+            }
+        },
+
+        # === PHENOTYPE MATCHES ===
+        {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
+        {"match": {"observable": {"query": query, "boost": 5}}},
+
+        # === ORTHOLOG MATCHES ===
+        {
+            "multi_match": {
+                "query": query,
+                "fields": ["ortholog_name^3", "related_genes"],
+                "type": "phrase_prefix",
+                "boost": 5,
+            }
+        },
+    ]
+
+    # Only add PubMed ID search if query is numeric
+    if query.isdigit():
+        should_clauses.append({"term": {"pubmed": {"value": int(query), "boost": 20}}})
+
     return {
         "query": {
             "bool": {
-                "should": [
-                    # Exact matches on keyword fields (highest boost)
-                    {"term": {"gene_name.keyword": {"value": query.upper(), "boost": 10}}},
-                    {"term": {"feature_name": {"value": query.upper(), "boost": 10}}},
-                    {"term": {"goid": {"value": query.upper(), "boost": 10}}},
-                    # Prefix matches (high boost for autocomplete)
-                    {"prefix": {"gene_name.keyword": {"value": query.upper(), "boost": 5}}},
-                    {"prefix": {"feature_name": {"value": query.upper(), "boost": 5}}},
-                    {"prefix": {"go_term.keyword": {"value": query.lower(), "boost": 5}}},
-                    {"prefix": {"observable.keyword": {"value": query.lower(), "boost": 5}}},
-                    {"prefix": {"author_name.keyword": {"value": query, "boost": 5}}},
-                    {"prefix": {"last_name.keyword": {"value": query, "boost": 5}}},
-                    # Full-text search across all fields
-                    {
-                        "multi_match": {
-                            "query": query,
-                            "fields": [
-                                "name^3",
-                                "gene_name^3",
-                                "feature_name^2",
-                                "aliases^2",
-                                "headline",
-                                "name_description",
-                                "go_term^3",
-                                "go_definition",
-                                "go_synonyms",
-                                "observable^3",
-                                "citation",
-                                "abstract",
-                                "title",
-                                "paragraph_text",
-                                "author_name^2",
-                                "last_name^2",
-                                "pathway_name",
-                                "note_text",
-                                "external_id",
-                                "ortholog_name",
-                                "related_genes",
-                                "literature_topic",
-                            ],
-                            "type": "best_fields",
-                            "fuzziness": "AUTO",
-                        }
-                    },
-                ],
+                "should": should_clauses,
                 "minimum_should_match": 1,
             }
         },
         "size": size,
         "highlight": {
             "fields": {
-                "name": {},
                 "gene_name": {},
-                "headline": {},
-                "go_term": {},
-                "go_definition": {},
-                "observable": {},
-                "citation": {},
+                "feature_name": {},
                 "aliases": {},
-                "abstract": {},
-                "paragraph_text": {},
-                "author_name": {},
-                "last_name": {},
-                "pathway_name": {},
-                "note_text": {},
+                "go_term": {},
+                "go_synonyms": {},
+                "observable": {},
                 "ortholog_name": {},
-                "literature_topic": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
@@ -378,8 +388,8 @@ def quick_search(
 
     Returns results grouped by category with counts.
     """
-    # Build and execute ES query
-    es_query = _build_es_query(query, size=limit * 5)  # Fetch extra for filtering
+    # Build and execute ES query (restrictive quick search, not full-text)
+    es_query = _build_quick_search_query(query, size=limit * 5)  # Fetch extra for filtering
 
     try:
         response = es.search(index=INDEX_NAME, body=es_query)
