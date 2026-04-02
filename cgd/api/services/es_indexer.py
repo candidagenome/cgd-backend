@@ -76,17 +76,21 @@ def _get_a21_exclusion_set(db: Session) -> set[int]:
     )
     exclude_set = {r[0] for r in direct_a21}
 
-    # Alleles of Assembly 21 features
-    alleles_of_a21 = (
-        db.query(FeatRelationship.child_feature_no)
-        .filter(
-            FeatRelationship.relationship_type == 'allele',
-            FeatRelationship.rank == 3,
-            FeatRelationship.parent_feature_no.in_(exclude_set)
+    # Alleles of Assembly 21 features - batch to avoid Oracle 1000-item IN clause limit
+    exclude_list = list(exclude_set)
+    batch_size = 900  # Stay under Oracle's 1000 limit
+    for i in range(0, len(exclude_list), batch_size):
+        batch = exclude_list[i:i + batch_size]
+        alleles_of_a21 = (
+            db.query(FeatRelationship.child_feature_no)
+            .filter(
+                FeatRelationship.relationship_type == 'allele',
+                FeatRelationship.rank == 3,
+                FeatRelationship.parent_feature_no.in_(batch)
+            )
+            .all()
         )
-        .all()
-    )
-    exclude_set.update(r[0] for r in alleles_of_a21)
+        exclude_set.update(r[0] for r in alleles_of_a21)
 
     return exclude_set
 
