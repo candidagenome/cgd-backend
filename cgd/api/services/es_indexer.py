@@ -616,14 +616,6 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
             .all()
         )
 
-        # Get external orthologs (SGD, etc.) in this group
-        dbxref_homologies = (
-            db.query(DbxrefHomology, Dbxref)
-            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
-            .filter(DbxrefHomology.homology_group_no == hg.homology_group_no)
-            .all()
-        )
-
         # Filter out A21 features
         valid_features = [
             (fh, feat) for fh, feat in feat_homologies
@@ -635,11 +627,6 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
         for fh, feat in valid_features:
             if feat.gene_name:
                 all_ortholog_names.append(feat.gene_name)
-        for dh, dbx in dbxref_homologies:
-            if dh.name:
-                all_ortholog_names.append(dh.name)
-            elif dbx.description:
-                all_ortholog_names.append(dbx.description)
 
         # For each CGD gene, create docs for its orthologs
         for fh, cgd_gene in valid_features:
@@ -684,14 +671,25 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                 }
                 yield doc
 
-            # External DB orthologs (SGD, POMBASE, AspGD)
-            for dh, dbx in dbxref_homologies:
-                orth_name = dh.name or dbx.description or dbx.dbxref_id
+            # External DB orthologs (SGD) - stored in DbxrefFeat, not DbxrefHomology
+            # Query DbxrefFeat for this gene to find external orthologs
+            external_orthologs = (
+                db.query(Dbxref)
+                .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+                .filter(
+                    DbxrefFeat.feature_no == cgd_gene.feature_no,
+                    Dbxref.source == 'SGD'  # Only SGD for now
+                )
+                .all()
+            )
+
+            for dbx in external_orthologs:
+                orth_name = dbx.description or dbx.dbxref_id
                 source_organism = _get_organism_for_source(dbx.source)
 
                 doc = {
                     "_index": INDEX_NAME,
-                    "_id": f"ortholog_ext_{hg.homology_group_no}_{cgd_gene.feature_no}_{dbx.dbxref_no}",
+                    "_id": f"ortholog_ext_{cgd_gene.feature_no}_{dbx.dbxref_no}",
                     "_source": {
                         "type": "ortholog",
                         "id": cgd_gene.dbxref_id,
