@@ -225,6 +225,7 @@ class JBrowseInfo(BaseModel):
 
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
+    feature_name: str  # Systematic name (e.g., B9J08_001448) for sequence API calls
     taxon_id: int
     locations: list[SequenceLocationOut] = []
     sequences: list[SequenceOut] = []

@@ -3910,6 +3910,7 @@ def get_locus_sequence_details(db: Session, name: str) -> SequenceDetailsRespons
 
         out[organism_name] = SequenceDetailsForOrganism(
             locus_display_name=locus_display_name,
+            feature_name=f.feature_name,
             taxon_id=taxon_id,
             locations=locations,
             sequences=sequences,
