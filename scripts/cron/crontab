@@ -1,5 +1,13 @@
 # =============================================================================
-# CGD CRON JOBS (UTC times - converted from PST +8 hours)
+# CGD CRON JOBS (UTC times)
+# =============================================================================
+#
+# Note: These times are in UTC. The offset from Pacific time varies:
+#   - PST (Nov-Mar): UTC = PST + 8 hours
+#   - PDT (Mar-Nov): UTC = PDT + 7 hours
+#
+# These cron times are set for PST (+8). During daylight saving time (PDT),
+# jobs will run 1 hour later in local Pacific time.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
