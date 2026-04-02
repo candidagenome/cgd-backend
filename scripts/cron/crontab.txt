@@ -72,7 +72,7 @@
 #   - Link references to genes based on gene names found in abstracts
 #   - Load ref_temp (staging table for curator review) for species synonyms
 #     (Torulopsis, Nakaseomyces, etc.) - curators accept to reference or reject to ref_bad
-#   - Update fulltext URLs from NCBI LinkOut
+#   - Fetch fulltext URLs via NCBI ELink API for references added in last 10 days
 0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
 
 # Generate GPI 2.0 (Gene Product Information) files for GO Consortium submission
