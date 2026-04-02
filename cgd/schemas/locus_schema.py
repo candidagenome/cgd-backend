@@ -155,12 +155,16 @@ class FeatureOut(ORMSchema):
 class LocusByOrganismResponse(BaseModel):
     """
     {
-      "Candida albicans": { ...FeatureOut... },
-      "Candida glabrata": { ...FeatureOut... },
-      ...
+      "results": {
+        "Candida albicans": { ...FeatureOut... },
+        "Candida glabrata": { ...FeatureOut... },
+        ...
+      },
+      "query_organism": "Candida auris B8441"  // organism of the searched gene
     }
     """
     results: dict[str, FeatureOut]
+    query_organism: t.Optional[str] = None  # organism that the queried gene belongs to
 
 
 # --- Sequence Info ---
@@ -221,6 +225,7 @@ class JBrowseInfo(BaseModel):
 
 class SequenceDetailsForOrganism(BaseModel):
     locus_display_name: str
+    feature_name: str  # Systematic name (e.g., B9J08_001448) for sequence API calls
     taxon_id: int
     locations: list[SequenceLocationOut] = []
     sequences: list[SequenceOut] = []

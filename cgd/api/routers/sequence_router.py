@@ -14,8 +14,8 @@ router = APIRouter(prefix="/api/sequence", tags=["sequence"])
 
 
 def _get_filename(gene_name: str, feature_name: str, seq_type: SeqType) -> str:
-    """Generate filename like ACT1_protein.fsa or orf19.5007_dna.fsa"""
-    name = gene_name or feature_name or "sequence"
+    """Generate filename using systematic name (feature_name) like B9J08_001448_dna.fsa"""
+    name = feature_name or gene_name or "sequence"
     type_suffix = "protein" if seq_type == SeqType.PROTEIN else "coding" if seq_type == SeqType.CODING else "dna"
     return f"{name}_{type_suffix}.fsa"
 
