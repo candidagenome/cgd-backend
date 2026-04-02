@@ -1,0 +1,73 @@
+# =============================================================================
+# CGD CRON JOBS (UTC times - converted from PST +8 hours)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# DAILY RUNS (Every day)
+# -----------------------------------------------------------------------------
+
+# Update ORF classifications (Verified/Uncharacterized/Dubious) for all Candida species
+0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh
+
+# Check data integrity rules and report violations to curators
+0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
+
+# Dump GO annotations to GAF 2.0 format for GO Consortium submission
+0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh
+
+# Dump GO Slim annotations mapping GO terms to GO Slim categories
+0 5 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_go_slim_annotation.sh
+
+# Assign root GO terms (with ND evidence) to features lacking annotations
+0 6 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_go_complete.sh
+
+# -----------------------------------------------------------------------------
+# TUESDAY RUN (moves to Wednesday UTC due to timezone shift)
+# -----------------------------------------------------------------------------
+
+# Send meeting agenda reminder to Slack (for Thursday 12:30PM meeting)
+0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh
+
+# -----------------------------------------------------------------------------
+# SATURDAY RUNS (some shift to Sunday UTC due to timezone)
+# -----------------------------------------------------------------------------
+
+# Generate curator progress reports for all CGD organisms
+0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh
+
+# Validate ORF sequences (start codons, stop codons, lengths) for all species
+0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
+
+# Load new PubMed references, link to genes, and update fulltext URLs
+0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
+
+# Generate GPI 2.0 (Gene Product Information) files for GO Consortium
+0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
+
+# Dump genome annotations in GFF3 format for all species
+0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh
+
+# Dump genome annotations in GTF format for all species
+0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh
+
+# Dump chromosomal feature tables for all species
+0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh
+
+# Dump phenotype data (mutant phenotypes, conditions) for all species
+0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
+
+# -----------------------------------------------------------------------------
+# MONTHLY RUNS (1st-4th of each month)
+# -----------------------------------------------------------------------------
+
+# Dump all sequence files (FASTA: genomic, CDS, protein) for all assemblies
+0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
+
+# Generate EMBL format files with chromosome sequences and ORF annotations
+0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh
+
+# Update sequence search files for PatMatch and BLAST databases
+0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh
+
+# Generate ORF coordinate files for web-primer interface
+0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh
