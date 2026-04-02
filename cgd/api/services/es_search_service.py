@@ -337,25 +337,47 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     source = hit["_source"]
     highlights = hit.get("highlight", {})
 
-    display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+    # CGD gene info (the gene this ortholog maps to)
+    cgd_gene_name = source.get("cgd_gene_name") or source.get("gene_name") or source.get("name")
+    cgd_feature_name = source.get("cgd_feature_name") or source.get("feature_name")
+    cgd_gene_id = source.get("cgd_gene_id") or source.get("id")
+
+    # Ortholog info (the related gene from another organism)
+    ortholog_display = source.get("ortholog_display")
     ortholog_name = source.get("ortholog_name")
+    ortholog_organism = source.get("ortholog_organism")
+    ortholog_type = source.get("ortholog_type", "Ortholog")
     ortholog_source = source.get("ortholog_source")
 
-    description = f"{ortholog_source}: {ortholog_name}" if ortholog_name and ortholog_source else None
+    # Build description for display
+    if ortholog_display:
+        description = f"{ortholog_display} ({ortholog_type})"
+    elif ortholog_name:
+        description = f"{ortholog_source}: {ortholog_name}"
+    else:
+        description = None
 
-    highlighted_name = _extract_highlight(highlights, "gene_name", None)
+    highlighted_name = _extract_highlight(highlights, "cgd_gene_name", None)
     if not highlighted_name:
-        highlighted_name = _highlight_text(display_name, query)
+        highlighted_name = _extract_highlight(highlights, "gene_name", None)
+    if not highlighted_name:
+        highlighted_name = _highlight_text(cgd_gene_name, query)
 
     return SearchResult(
         category="orthologs",
-        id=source.get("dbxref_id") or source.get("id", ""),
-        name=display_name or "",
+        id=cgd_gene_id or "",
+        name=cgd_gene_name or "",
         description=description,
-        link=source.get("link") or f"/locus/{display_name}",
-        organism=source.get("organism"),
+        link=source.get("link") or f"/locus/{cgd_feature_name or cgd_gene_name}",
+        organism=source.get("organism"),  # Organism of the CGD gene
         highlighted_name=highlighted_name,
-        highlighted_description=_highlight_text(description, query) if description else None,
+        highlighted_description=_highlight_text(ortholog_display, query) if ortholog_display else None,
+        # New ortholog relationship fields
+        ortholog_display=ortholog_display,
+        ortholog_organism=ortholog_organism,
+        ortholog_type=ortholog_type,
+        cgd_gene_name=cgd_gene_name,
+        cgd_gene_id=cgd_gene_id,
     )
 
 

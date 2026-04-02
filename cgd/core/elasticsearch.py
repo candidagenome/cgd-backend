@@ -107,6 +107,16 @@ INDEX_MAPPING = {
                 "fields": {"keyword": {"type": "keyword"}}
             },
             "ortholog_source": {"type": "keyword"},
+            "ortholog_organism": {"type": "keyword"},
+            "ortholog_display": {"type": "text"},
+            "ortholog_type": {"type": "keyword"},
+            "ortholog_feature_name": {"type": "keyword"},
+            "cgd_gene_name": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "cgd_feature_name": {"type": "keyword"},
+            "cgd_gene_id": {"type": "keyword"},
             "related_genes": {"type": "text"},
 
             # Literature topic fields
