@@ -17,7 +17,7 @@
 # Update ORF classifications based on GO annotation evidence codes:
 #   - Verified: has GO annotation with experimental evidence (not IEA/ISS/RCA/ISA/ISM/ISO/NAS/ND)
 #   - Uncharacterized: not deleted, not dubious, lacks strong GO evidence
-#   - Dubious: marked dubious in database
+# Note: Dubious status is assigned manually by curators, not by this script
 0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh
 
 # Check data integrity and business rules, email violations to curators:
