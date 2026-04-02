@@ -26,6 +26,8 @@
 #   - Locus name vs alias name conflicts
 #   - Pseudogenes with GO annotations (should have none)
 #   - Headlines linked to both auto-generated and manual references
+#     (The "auto-generated ref" is internal reference_no 56824, used when
+#     headlines are derived from S. cerevisiae orthologs or transferred GO)
 0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
 
 # Dump GO annotations to GAF 2.0 format (gene_association.cgd) for GO Consortium
