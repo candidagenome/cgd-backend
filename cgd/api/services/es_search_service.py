@@ -738,6 +738,56 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     }
 
 
+def _build_restrictive_gene_query(query: str, es_type: str, size: int = 1000) -> dict:
+    """
+    Build restrictive ES query for genes/orthologs category search.
+
+    Matches quick search behavior: only gene names, aliases, feature names.
+    NOT full-text search in descriptions/abstracts.
+    """
+    query_upper = query.upper()
+
+    return {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"type": es_type}},
+                ],
+                "should": [
+                    # Exact gene name match
+                    {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+                    {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
+                    # Prefix match on gene names
+                    {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
+                    {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
+                    # Search in aliases
+                    {"match": {"aliases": {"query": query, "boost": 8}}},
+                    # For orthologs, also search ortholog_name and related_genes
+                    {"match": {"ortholog_name": {"query": query, "boost": 8}}},
+                    {"match": {"related_genes": {"query": query, "boost": 5}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "size": size,
+        "highlight": {
+            "fields": {
+                "gene_name": {},
+                "feature_name": {},
+                "aliases": {},
+                "ortholog_name": {},
+            },
+            "pre_tags": ["<mark>"],
+            "post_tags": ["</mark>"],
+        },
+        "aggs": {
+            "by_organism": {
+                "terms": {"field": "organism", "size": 20}
+            }
+        },
+    }
+
+
 def search_category(
     es: Elasticsearch,
     query: str,
@@ -752,7 +802,12 @@ def search_category(
         return None
 
     es_type = CATEGORY_TO_ES_TYPE[category]
-    es_query = _build_category_query(query, es_type)
+
+    # Use restrictive query for genes and orthologs (match quick search behavior)
+    if category in ("genes", "orthologs"):
+        es_query = _build_restrictive_gene_query(query, es_type)
+    else:
+        es_query = _build_category_query(query, es_type)
 
     try:
         response = es.search(index=INDEX_NAME, body=es_query)
