@@ -1,121 +1,27 @@
-# =============================================================================
-# CGD CRON JOBS (UTC times)
-# =============================================================================
-#
-# Note: These times are in UTC. The offset from Pacific time varies:
-#   - PST (Nov-Mar): UTC = PST + 8 hours
-#   - PDT (Mar-Nov): UTC = PDT + 7 hours
-#
-# These cron times are set for PST (+8). During daylight saving time (PDT),
-# jobs will run 1 hour later in local Pacific time.
-# =============================================================================
+# CGD CRON JOBS (UTC times - PST +8 hours, PDT +7 hours)
 
-# -----------------------------------------------------------------------------
-# DAILY RUNS (Every day)
-# -----------------------------------------------------------------------------
+# DAILY
+0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh  # Update Verified/Uncharacterized based on GO evidence
+0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh                  # Check data integrity rules, email violations to curators
+0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh             # Dump GO annotations to GAF 2.0 format
+0 5 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_go_slim_annotation.sh     # Dump GO Slim annotations
+0 6 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_go_complete.sh            # Assign root GO terms to unannotated features
 
-# Update ORF classifications based on GO annotation evidence codes:
-#   - Verified: has GO annotation with experimental evidence (not IEA/ISS/RCA/ISA/ISM/ISO/NAS/ND)
-#   - Uncharacterized: not deleted, not dubious, lacks strong GO evidence
-# Note: Dubious status is assigned manually by curators, not by this script
-0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh
+# TUESDAY (Wednesday 00:00 UTC)
+0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh                        # Send meeting agenda reminder to Slack
 
-# Check data integrity and business rules, email violations to curators:
-#   - Duplicate URL types per feature
-#   - Gene reservations with missing colleague emails
-#   - Locus name vs alias name conflicts
-#   - Pseudogenes with GO annotations (should have none)
-#   - Headlines linked to both auto-generated and manual references
-#     (The "auto-generated ref" is internal reference_no 56824, used when
-#     headlines are derived from S. cerevisiae orthologs or transferred GO)
-0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
+# SATURDAY/SUNDAY
+0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh            # Generate weekly curator progress reports
+0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh        # Validate ORF sequences (start/stop codons)
+0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh                 # Load new PubMed references
+0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh                    # Generate GPI files for GO Consortium
+0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh                    # Dump GFF3 format annotations
+0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh                    # Dump GTF format annotations
+0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh   # Dump chromosomal feature tables
+0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh         # Dump phenotype data
 
-# Dump GO annotations to GAF 2.0 format (gene_association.cgd) for GO Consortium
-0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh
-
-# Dump GO Slim annotations (GOslim_gene_association.cgd) mapping GO terms to slim categories
-0 5 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_go_slim_annotation.sh
-
-# Make GO-complete: assign root GO terms (GO:0008150, GO:0003674, GO:0005575)
-# with ND evidence to features lacking annotations in each aspect (P, F, C)
-0 6 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_go_complete.sh
-
-# -----------------------------------------------------------------------------
-# TUESDAY RUN (moves to Wednesday UTC due to timezone shift)
-# -----------------------------------------------------------------------------
-
-# Send meeting agenda reminder to Slack (for Thursday 12:30PM meeting)
-0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh
-
-# -----------------------------------------------------------------------------
-# SATURDAY RUNS (some shift to Sunday UTC due to timezone)
-# -----------------------------------------------------------------------------
-
-# Generate weekly curator progress reports per species:
-#   - GO annotation progress (genes without GO, manual vs automatic annotations)
-#   - Literature Guide curation (uncurated refs, papers curated this week)
-#   - Phenotype curation (genes without phenotypes)
-#   - Headlines without references
-#   - Expired gene name reservations
-0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh
-
-# Validate ORF sequences from FASTA files:
-#   - Ambiguous bases (non-ACGT)
-#   - Missing start codon (ATG)
-#   - Partial/missing terminal stop codon
-#   - Internal stop codons in protein
-#   - Multiple terminal stop codons
-0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
-
-# Weekly PubMed update pipeline:
-#   - Load new references from PubMed for each Candida species
-#   - Link references to genes based on gene names in abstracts
-#   - Load ref_temp entries for species synonyms (Torulopsis, Nakaseomyces, etc.)
-#   - Update fulltext URLs from NCBI LinkOut
-0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
-
-# Generate GPI 2.0 (Gene Product Information) files for GO Consortium submission
-# Contains gene product metadata: IDs, symbols, names, synonyms, taxon
-0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
-
-# Dump genome annotations in GFF3 format for all species
-# Used for genome browsers and bioinformatics pipelines
-0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh
-
-# Dump genome annotations in GTF format for all species
-# Used for RNA-seq analysis tools (e.g., STAR, HTSeq)
-0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh
-
-# Dump chromosomal feature tables (tab-delimited) for all species
-# Contains feature coordinates, types, names, and descriptions
-0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh
-
-# Dump phenotype data for all species
-# Contains mutant phenotypes, experimental conditions, and references
-0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
-
-# -----------------------------------------------------------------------------
-# MONTHLY RUNS (1st-4th of each month)
-# -----------------------------------------------------------------------------
-
-# Dump all sequence files in FASTA format:
-#   - Genomic sequences (chromosomes, contigs)
-#   - ORF coding sequences (CDS)
-#   - Protein translations
-#   - Includes all assemblies for C. albicans (A19, A21, A22)
-0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
-
-# Generate EMBL format files per chromosome with embedded ORF annotations
-# Used for sequence submission to ENA/GenBank
-0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh
-
-# Update sequence search databases from monthly sequence dumps:
-#   - Plain-text FASTA files for PatMatch pattern search
-#   - BLAST-formatted databases using makeblastdb
-0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh
-
-# Generate ORF coordinate files for web-primer interface:
-#   - orf_coordinates.table: ORF genomic coordinates
-#   - orf2locus.table: ORF to gene name mapping
-#   - locus2orf.table: Gene name to ORF mapping
-0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh
+# MONTHLY (1st-4th of each month)
+0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh             # Dump FASTA sequences (genomic, CDS, protein)
+0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh            # Generate EMBL format files
+0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh    # Update PatMatch and BLAST databases
+0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh  # Generate ORF coordinates for web-primer
