@@ -586,13 +586,13 @@ def index_external_ids(db: Session, es: Elasticsearch) -> int:
 
 def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
     """
-    Generate Elasticsearch documents for ortholog RELATIONSHIPS.
+    Generate Elasticsearch documents for ortholog relationships.
 
-    Each document represents a relationship between:
-    - A CGD gene (the gene in the target organism)
-    - An ortholog (from another CGD organism or external DB like SGD)
+    Each document represents ONE ortholog relationship:
+    - A CGD gene
+    - One of its orthologs (from another CGD organism OR external DB like SGD)
 
-    This supports the table view: "Ortholog → CGD Gene"
+    For a gene with 4 CGD orthologs + 1 SGD ortholog = 5 documents.
     """
     a21_exclude = _get_a21_exclusion_set(db)
 
@@ -641,21 +641,18 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
             elif dbx.description:
                 all_ortholog_names.append(dbx.description)
 
-        # Create ortholog relationship docs:
-        # For each CGD gene, create docs for all its orthologs (CGD + external)
+        # For each CGD gene, create docs for its orthologs
         for fh, cgd_gene in valid_features:
             cgd_name = cgd_gene.gene_name or cgd_gene.feature_name
             cgd_organism = cgd_gene.organism.organism_name if cgd_gene.organism else None
 
-            # CGD-to-CGD ortholog relationships (other organisms)
+            # CGD-to-CGD orthologs (other CGD organisms)
             for fh2, ortholog in valid_features:
                 if ortholog.feature_no == cgd_gene.feature_no:
                     continue  # Skip self
 
                 orth_name = ortholog.gene_name or ortholog.feature_name
                 orth_organism = ortholog.organism.organism_name if ortholog.organism else None
-
-                # Short organism name for display
                 short_organism = _get_short_organism_name(orth_organism)
 
                 doc = {
@@ -668,18 +665,18 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                         "cgd_gene_name": cgd_name,
                         "cgd_feature_name": cgd_gene.feature_name,
                         "cgd_gene_id": cgd_gene.dbxref_id,
-                        "organism": cgd_organism,  # Organism of the CGD gene
-                        # The ortholog (from another organism)
+                        "organism": cgd_organism,
+                        # The ortholog
                         "ortholog_name": orth_name,
                         "ortholog_feature_name": ortholog.feature_name,
                         "ortholog_organism": orth_organism,
                         "ortholog_display": f"{short_organism} {ortholog.feature_name}/{orth_name}",
                         "ortholog_type": "Ortholog",
                         "ortholog_source": "CGOB",
-                        # For searching
-                        "name": cgd_name,
-                        "gene_name": cgd_name,
-                        "feature_name": cgd_gene.feature_name,
+                        # For searching - search by ortholog name to find genes
+                        "name": orth_name,
+                        "gene_name": orth_name,
+                        "feature_name": ortholog.feature_name,
                         "homology_group_no": hg.homology_group_no,
                         "related_genes": " ".join(all_ortholog_names),
                         "link": f"/locus/{cgd_gene.feature_name}",
@@ -710,9 +707,9 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                         "ortholog_type": "Ortholog",
                         "ortholog_source": dbx.source,
                         "external_id": dbx.dbxref_id,
-                        # For searching
-                        "name": cgd_name,
-                        "gene_name": cgd_name,
+                        # For searching - search by ortholog name
+                        "name": orth_name,
+                        "gene_name": orth_name,
                         "feature_name": cgd_gene.feature_name,
                         "homology_group_no": hg.homology_group_no,
                         "related_genes": " ".join(all_ortholog_names),

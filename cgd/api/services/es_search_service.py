@@ -127,15 +127,10 @@ def _build_quick_search_query(query: str, size: int = 100) -> dict:
         {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
         {"match": {"observable": {"query": query, "boost": 5}}},
 
-        # === ORTHOLOG MATCHES ===
-        {
-            "multi_match": {
-                "query": query,
-                "fields": ["ortholog_name^3", "related_genes"],
-                "type": "phrase_prefix",
-                "boost": 5,
-            }
-        },
+        # === ORTHOLOG MATCHES (search by ortholog name) ===
+        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
+        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
+        {"match": {"ortholog_name": {"query": query, "boost": 5}}},
     ]
 
     # Only add PubMed ID search if query is numeric
@@ -764,50 +759,83 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 1000) ->
     """
     Build restrictive ES query for genes/orthologs category search.
 
-    Matches quick search behavior: only gene names, aliases, feature names.
-    NOT full-text search in descriptions/abstracts.
+    For genes: matches gene names, aliases, feature names.
+    For orthologs: matches ortholog names (the ortholog that points to a CGD gene).
     """
     query_upper = query.upper()
 
-    return {
-        "query": {
-            "bool": {
-                "must": [
-                    {"term": {"type": es_type}},
-                ],
-                "should": [
-                    # Exact gene name match
-                    {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
-                    {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
-                    # Prefix match on gene names
-                    {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
-                    {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
-                    # Search in aliases
-                    {"match": {"aliases": {"query": query, "boost": 8}}},
-                    # For orthologs, also search ortholog_name and related_genes
-                    {"match": {"ortholog_name": {"query": query, "boost": 8}}},
-                    {"match": {"related_genes": {"query": query, "boost": 5}}},
-                ],
-                "minimum_should_match": 1,
-            }
-        },
-        "size": size,
-        "highlight": {
-            "fields": {
-                "gene_name": {},
-                "feature_name": {},
-                "aliases": {},
-                "ortholog_name": {},
+    if es_type == "ortholog":
+        # For orthologs, search by the ORTHOLOG name (not CGD gene name)
+        # This finds: "CGD genes that have an ortholog matching the query"
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "ortholog"}},
+                    ],
+                    "should": [
+                        # Exact ortholog name match
+                        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 15}}},
+                        # Prefix match
+                        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
+                        # Text match
+                        {"match": {"ortholog_name": {"query": query, "boost": 8}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
             },
-            "pre_tags": ["<mark>"],
-            "post_tags": ["</mark>"],
-        },
-        "aggs": {
-            "by_organism": {
-                "terms": {"field": "organism", "size": 20}
-            }
-        },
-    }
+            "size": size,
+            "highlight": {
+                "fields": {
+                    "ortholog_name": {},
+                    "ortholog_display": {},
+                },
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {
+                    "terms": {"field": "organism", "size": 20}
+                }
+            },
+        }
+    else:
+        # For genes, search by gene name
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": es_type}},
+                    ],
+                    "should": [
+                        # Exact gene name match
+                        {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+                        {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
+                        # Prefix match on gene names
+                        {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
+                        {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
+                        # Search in aliases
+                        {"match": {"aliases": {"query": query, "boost": 8}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": size,
+            "highlight": {
+                "fields": {
+                    "gene_name": {},
+                    "feature_name": {},
+                    "aliases": {},
+                },
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {
+                    "terms": {"field": "organism", "size": 20}
+                }
+            },
+        }
 
 
 def search_category(
