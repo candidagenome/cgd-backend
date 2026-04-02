@@ -38,6 +38,8 @@ INDEX_MAPPING = {
             "dbxref_id": {"type": "keyword"},
             "aliases": {"type": "text"},
             "headline": {"type": "text"},
+            "name_description": {"type": "text"},
+            "feature_no": {"type": "integer"},
 
             # GO term fields
             "goid": {"type": "keyword"},
@@ -47,6 +49,7 @@ INDEX_MAPPING = {
             },
             "go_aspect": {"type": "keyword"},
             "go_definition": {"type": "text"},
+            "go_synonyms": {"type": "text"},
 
             # Phenotype fields
             "observable": {
@@ -59,6 +62,58 @@ INDEX_MAPPING = {
             "citation": {"type": "text"},
             "title": {"type": "text"},
             "year": {"type": "integer"},
+            "reference_no": {"type": "integer"},
+
+            # Abstract fields
+            "abstract": {"type": "text"},
+
+            # Paragraph fields (locus summaries)
+            "paragraph_text": {"type": "text"},
+
+            # Author fields
+            "author_name": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+
+            # Colleague fields
+            "last_name": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "other_last_name": {"type": "text"},
+            "first_name": {"type": "text"},
+            "institution": {"type": "text"},
+
+            # Pathway fields
+            "pathway_name": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "pathway_id": {"type": "keyword"},
+
+            # Note fields
+            "note_text": {"type": "text"},
+            "note_type": {"type": "keyword"},
+
+            # External ID fields
+            "external_id": {"type": "keyword"},
+            "source": {"type": "keyword"},
+
+            # Ortholog fields
+            "homology_group_no": {"type": "integer"},
+            "ortholog_name": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "ortholog_source": {"type": "keyword"},
+            "related_genes": {"type": "text"},
+
+            # Literature topic fields
+            "literature_topic": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
         }
     },
     "settings": {

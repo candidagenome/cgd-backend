@@ -92,6 +92,8 @@ def _build_es_query(query: str, size: int = 100) -> dict:
                     {"prefix": {"feature_name": {"value": query.upper(), "boost": 5}}},
                     {"prefix": {"go_term.keyword": {"value": query.lower(), "boost": 5}}},
                     {"prefix": {"observable.keyword": {"value": query.lower(), "boost": 5}}},
+                    {"prefix": {"author_name.keyword": {"value": query, "boost": 5}}},
+                    {"prefix": {"last_name.keyword": {"value": query, "boost": 5}}},
                     # Full-text search across all fields
                     {
                         "multi_match": {
@@ -102,10 +104,23 @@ def _build_es_query(query: str, size: int = 100) -> dict:
                                 "feature_name^2",
                                 "aliases^2",
                                 "headline",
+                                "name_description",
                                 "go_term^3",
                                 "go_definition",
+                                "go_synonyms",
                                 "observable^3",
                                 "citation",
+                                "abstract",
+                                "title",
+                                "paragraph_text",
+                                "author_name^2",
+                                "last_name^2",
+                                "pathway_name",
+                                "note_text",
+                                "external_id",
+                                "ortholog_name",
+                                "related_genes",
+                                "literature_topic",
                             ],
                             "type": "best_fields",
                             "fuzziness": "AUTO",
@@ -126,13 +141,21 @@ def _build_es_query(query: str, size: int = 100) -> dict:
                 "observable": {},
                 "citation": {},
                 "aliases": {},
+                "abstract": {},
+                "paragraph_text": {},
+                "author_name": {},
+                "last_name": {},
+                "pathway_name": {},
+                "note_text": {},
+                "ortholog_name": {},
+                "literature_topic": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
         },
         "aggs": {
             "by_type": {
-                "terms": {"field": "type", "size": 10}
+                "terms": {"field": "type", "size": 20}
             }
         },
     }
@@ -299,6 +322,33 @@ def _parse_reference_result(hit: dict, query: str) -> SearchResult:
     )
 
 
+def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
+    """Parse ES hit into SearchResult for ortholog type."""
+    source = hit["_source"]
+    highlights = hit.get("highlight", {})
+
+    display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+    ortholog_name = source.get("ortholog_name")
+    ortholog_source = source.get("ortholog_source")
+
+    description = f"{ortholog_source}: {ortholog_name}" if ortholog_name and ortholog_source else None
+
+    highlighted_name = _extract_highlight(highlights, "gene_name", None)
+    if not highlighted_name:
+        highlighted_name = _highlight_text(display_name, query)
+
+    return SearchResult(
+        category="orthologs",
+        id=source.get("dbxref_id") or source.get("id", ""),
+        name=display_name or "",
+        description=description,
+        link=source.get("link") or f"/locus/{display_name}",
+        organism=source.get("organism"),
+        highlighted_name=highlighted_name,
+        highlighted_description=_highlight_text(description, query) if description else None,
+    )
+
+
 def _parse_hit(hit: dict, query: str) -> Optional[SearchResult]:
     """Parse ES hit into SearchResult based on document type."""
     doc_type = hit["_source"].get("type")
@@ -311,6 +361,8 @@ def _parse_hit(hit: dict, query: str) -> Optional[SearchResult]:
         return _parse_phenotype_result(hit, query)
     elif doc_type == "reference":
         return _parse_reference_result(hit, query)
+    elif doc_type == "ortholog":
+        return _parse_ortholog_result(hit, query)
     else:
         logger.warning(f"Unknown document type: {doc_type}")
         return None
@@ -347,6 +399,7 @@ def quick_search(
         "go_terms": [],
         "phenotypes": [],
         "references": [],
+        "orthologs": [],
     }
 
     for hit in response["hits"]["hits"]:
@@ -360,17 +413,19 @@ def quick_search(
             "go_term": "go_terms",
             "phenotype": "phenotypes",
             "reference": "references",
+            "orthologs": "orthologs",
         }
         cat_key = category_map.get(result.category, result.category)
 
         if cat_key in results_by_category and len(results_by_category[cat_key]) < limit:
             results_by_category[cat_key].append(result)
 
-    # Sort genes by organism priority
-    if results_by_category["genes"]:
-        results_by_category["genes"].sort(
-            key=lambda r: (_get_organism_priority(r.organism), r.name or '')
-        )
+    # Sort genes and orthologs by organism priority
+    for cat in ["genes", "orthologs"]:
+        if results_by_category[cat]:
+            results_by_category[cat].sort(
+                key=lambda r: (_get_organism_priority(r.organism), r.name or '')
+            )
 
     # Get counts from aggregations
     counts_by_category: dict[str, int] = {}
@@ -379,6 +434,7 @@ def quick_search(
         "go_term": "go_terms",
         "phenotype": "phenotypes",
         "reference": "references",
+        "ortholog": "orthologs",
     }
 
     for bucket in response.get("aggregations", {}).get("by_type", {}).get("buckets", []):
@@ -553,18 +609,28 @@ CATEGORY_TO_ES_TYPE = {
     "go_terms": "go_term",
     "phenotypes": "phenotype",
     "references": "reference",
+    "orthologs": "ortholog",
 }
 
 # Categories supported by ES (others fall back to Oracle)
 ES_SUPPORTED_CATEGORIES = set(CATEGORY_TO_ES_TYPE.keys())
 
-# Text search category mapping (subset that ES supports)
+# Text search category mapping - ALL categories now supported by ES
 TEXT_CATEGORY_TO_ES_TYPE = {
     "genes": "gene",
-    "descriptions": "gene",  # Uses headline field
+    "descriptions": "gene",  # Uses headline/name_description field
     "go_terms": "go_term",
     "phenotypes": "phenotype",
-    "abstracts": "reference",  # Uses citation field (abstract not indexed yet)
+    "abstracts": "reference",  # Uses abstract field
+    "paragraphs": "paragraph",
+    "authors": "author",
+    "colleagues": "colleague",
+    "pathways": "pathway",
+    "notes": "note",
+    "external_ids": "external_id",
+    "orthologs": "ortholog",
+    "literature_topics": "literature_topic",
+    "name_descriptions": "gene",  # Uses name_description field
 }
 
 TEXT_CATEGORY_DISPLAY_NAMES = {
@@ -573,6 +639,15 @@ TEXT_CATEGORY_DISPLAY_NAMES = {
     "go_terms": "Gene ontology",
     "phenotypes": "Phenotypes",
     "abstracts": "Paper Abstracts",
+    "paragraphs": "Paragraphs",
+    "authors": "Authors",
+    "colleagues": "Colleagues",
+    "pathways": "Biochemical pathways",
+    "notes": "Notes",
+    "external_ids": "External IDs",
+    "orthologs": "Orthologs/Best Hits",
+    "literature_topics": "Literature Topics",
+    "name_descriptions": "Name Descriptions",
 }
 
 
@@ -580,10 +655,18 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     """Build ES query for a specific category/type."""
     # Define fields to search based on type
     fields_by_type = {
-        "gene": ["gene_name^3", "feature_name^2", "aliases^2", "headline", "dbxref_id"],
-        "go_term": ["go_term^3", "goid^2", "go_definition"],
+        "gene": ["gene_name^3", "feature_name^2", "aliases^2", "headline", "name_description", "dbxref_id"],
+        "go_term": ["go_term^3", "goid^2", "go_definition", "go_synonyms"],
         "phenotype": ["observable^3"],
-        "reference": ["citation^2", "title"],
+        "reference": ["citation^2", "title", "abstract"],
+        "paragraph": ["paragraph_text^3", "gene_name^2", "feature_name"],
+        "author": ["author_name^3", "citation"],
+        "colleague": ["last_name^3", "other_last_name^2", "first_name", "institution"],
+        "pathway": ["pathway_name^3", "pathway_id", "related_genes"],
+        "note": ["note_text^3", "gene_name", "feature_name"],
+        "external_id": ["external_id^3", "source", "description", "gene_name"],
+        "ortholog": ["gene_name^3", "feature_name^2", "ortholog_name^3", "related_genes", "external_id"],
+        "literature_topic": ["literature_topic^3", "citation"],
     }
 
     fields = fields_by_type.get(es_type, ["name"])
@@ -618,9 +701,21 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 "headline": {},
                 "go_term": {},
                 "go_definition": {},
+                "go_synonyms": {},
                 "observable": {},
                 "citation": {},
                 "aliases": {},
+                "abstract": {},
+                "paragraph_text": {},
+                "author_name": {},
+                "last_name": {},
+                "pathway_name": {},
+                "note_text": {},
+                "external_id": {},
+                "ortholog_name": {},
+                "related_genes": {},
+                "literature_topic": {},
+                "name_description": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
@@ -766,12 +861,19 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         pubmed = source.get("pubmed")
         dbxref_id = source.get("id")
         citation = source.get("citation")
+        abstract = source.get("abstract")
 
         name = f"PMID:{pubmed}" if pubmed else dbxref_id or ""
 
-        highlighted_desc = _extract_highlight(highlights, "citation", None)
-        if not highlighted_desc and citation:
-            highlighted_desc = _highlight_text(citation, query)
+        # Use abstract for abstracts category, citation otherwise
+        if category == "abstracts" and abstract:
+            match_context = _extract_highlight(highlights, "abstract", None)
+            if not match_context:
+                match_context = _highlight_text(abstract[:300] + "..." if len(abstract) > 300 else abstract, query)
+        else:
+            match_context = _extract_highlight(highlights, "citation", None)
+            if not match_context and citation:
+                match_context = _highlight_text(citation, query)
 
         return TextSearchResult(
             category="abstracts",
@@ -780,9 +882,168 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
             description=citation,
             link=source.get("link") or f"/reference/{dbxref_id}",
             organism=None,
-            match_context=highlighted_desc,
+            match_context=match_context,
             highlighted_name=_highlight_text(name, query),
-            highlighted_description=highlighted_desc,
+            highlighted_description=match_context,
+        )
+
+    elif doc_type == "paragraph":
+        display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+        paragraph_text = source.get("paragraph_text", "")
+
+        highlighted_name = _highlight_text(display_name, query)
+        match_context = _extract_highlight(highlights, "paragraph_text", None)
+        if not match_context and paragraph_text:
+            match_context = _highlight_text(paragraph_text[:300] + "..." if len(paragraph_text) > 300 else paragraph_text, query)
+
+        return TextSearchResult(
+            category="paragraphs",
+            id=source.get("id", ""),
+            name=display_name or "",
+            description=paragraph_text[:200] + "..." if len(paragraph_text) > 200 else paragraph_text,
+            link=source.get("link"),
+            organism=source.get("organism"),
+            match_context=match_context,
+            highlighted_name=highlighted_name,
+        )
+
+    elif doc_type == "author":
+        author_name = source.get("author_name") or source.get("name")
+        citation = source.get("citation")
+
+        highlighted_name = _extract_highlight(highlights, "author_name", None)
+        if not highlighted_name:
+            highlighted_name = _highlight_text(author_name, query)
+
+        return TextSearchResult(
+            category="authors",
+            id=source.get("id", ""),
+            name=author_name or "",
+            description=citation,
+            link=source.get("link"),
+            organism=None,
+            highlighted_name=highlighted_name,
+            highlighted_description=_highlight_text(citation, query) if citation else None,
+        )
+
+    elif doc_type == "colleague":
+        full_name = source.get("name")
+        description = source.get("description")
+
+        highlighted_name = _extract_highlight(highlights, "last_name", None)
+        if not highlighted_name:
+            highlighted_name = _highlight_text(full_name, query)
+
+        return TextSearchResult(
+            category="colleagues",
+            id=source.get("id", ""),
+            name=full_name or "",
+            description=description,
+            link=source.get("link"),
+            organism=None,
+            highlighted_name=highlighted_name,
+            highlighted_description=_highlight_text(description, query) if description else None,
+        )
+
+    elif doc_type == "pathway":
+        pathway_name = source.get("pathway_name") or source.get("name")
+        pathway_id = source.get("pathway_id")
+
+        highlighted_name = _extract_highlight(highlights, "pathway_name", None)
+        if not highlighted_name:
+            highlighted_name = _highlight_text(pathway_name, query)
+
+        return TextSearchResult(
+            category="pathways",
+            id=pathway_id or source.get("id", ""),
+            name=pathway_name or "",
+            description=None,
+            link=source.get("link"),
+            organism=None,
+            highlighted_name=highlighted_name,
+        )
+
+    elif doc_type == "note":
+        display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+        note_text = source.get("note_text", "")
+
+        highlighted_name = _highlight_text(display_name, query)
+        match_context = _extract_highlight(highlights, "note_text", None)
+        if not match_context and note_text:
+            match_context = _highlight_text(note_text[:300] + "..." if len(note_text) > 300 else note_text, query)
+
+        return TextSearchResult(
+            category="notes",
+            id=source.get("id", ""),
+            name=display_name or "",
+            description=note_text[:200] + "..." if len(note_text) > 200 else note_text,
+            link=source.get("link"),
+            organism=source.get("organism"),
+            match_context=match_context,
+            highlighted_name=highlighted_name,
+        )
+
+    elif doc_type == "external_id":
+        display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+        external_id = source.get("external_id")
+        ext_source = source.get("source")
+
+        description = f"{ext_source}: {external_id}" if ext_source else external_id
+
+        highlighted_name = _highlight_text(display_name, query)
+
+        return TextSearchResult(
+            category="external_ids",
+            id=external_id or source.get("id", ""),
+            name=display_name or "",
+            description=description,
+            link=source.get("link"),
+            organism=source.get("organism"),
+            highlighted_name=highlighted_name,
+            highlighted_description=_highlight_text(description, query),
+        )
+
+    elif doc_type == "ortholog":
+        display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+        ortholog_name = source.get("ortholog_name")
+        ortholog_source = source.get("ortholog_source")
+
+        description = f"{ortholog_source}: {ortholog_name}" if ortholog_name and ortholog_source else None
+
+        highlighted_name = _highlight_text(display_name, query)
+
+        return TextSearchResult(
+            category="orthologs",
+            id=source.get("id", ""),
+            name=display_name or "",
+            description=description,
+            link=source.get("link"),
+            organism=source.get("organism"),
+            homology_group_no=source.get("homology_group_no"),
+            highlighted_name=highlighted_name,
+            highlighted_description=_highlight_text(description, query) if description else None,
+        )
+
+    elif doc_type == "literature_topic":
+        topic = source.get("literature_topic")
+        citation = source.get("citation")
+        pubmed = source.get("pubmed")
+
+        name = f"PMID:{pubmed}" if pubmed else source.get("name", "")
+
+        highlighted_name = _extract_highlight(highlights, "literature_topic", None)
+        if not highlighted_name:
+            highlighted_name = _highlight_text(topic, query)
+
+        return TextSearchResult(
+            category="literature_topics",
+            id=source.get("id", ""),
+            name=name,
+            description=f"{topic}: {citation}" if citation else topic,
+            link=source.get("link"),
+            organism=None,
+            highlighted_name=highlighted_name,
+            highlighted_description=_highlight_text(citation, query) if citation else None,
         )
 
     # Fallback
@@ -808,16 +1069,30 @@ def _build_text_search_query(query: str, size_per_type: int = 10) -> dict:
                     "feature_name^2",
                     "aliases^2",
                     "headline^2",
+                    "name_description",
                     "go_term^3",
                     "go_definition",
+                    "go_synonyms",
                     "observable^3",
                     "citation",
+                    "abstract",
+                    "title",
+                    "paragraph_text",
+                    "author_name^2",
+                    "last_name^2",
+                    "other_last_name",
+                    "pathway_name",
+                    "note_text",
+                    "external_id",
+                    "ortholog_name",
+                    "related_genes",
+                    "literature_topic",
                 ],
                 "type": "best_fields",
                 "fuzziness": "AUTO",
             }
         },
-        "size": size_per_type * 5,  # Fetch extra to distribute across categories
+        "size": size_per_type * 15,  # Fetch extra to distribute across all categories
         "highlight": {
             "fields": {
                 "name": {},
@@ -825,16 +1100,26 @@ def _build_text_search_query(query: str, size_per_type: int = 10) -> dict:
                 "headline": {},
                 "go_term": {},
                 "go_definition": {},
+                "go_synonyms": {},
                 "observable": {},
                 "citation": {},
                 "aliases": {},
+                "abstract": {},
+                "paragraph_text": {},
+                "author_name": {},
+                "last_name": {},
+                "pathway_name": {},
+                "note_text": {},
+                "external_id": {},
+                "ortholog_name": {},
+                "literature_topic": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
         },
         "aggs": {
             "by_type": {
-                "terms": {"field": "type", "size": 10}
+                "terms": {"field": "type", "size": 20}
             }
         },
     }
@@ -846,13 +1131,10 @@ def text_search(
     limit: int = 10,
 ) -> Optional[TextSearchResponse]:
     """
-    Text search across ES-indexed categories.
+    Text search across all ES-indexed categories.
 
-    Returns results for categories: genes, descriptions, go_terms, phenotypes, abstracts.
+    Returns results for all categories now that ES indexes everything.
     Returns None on error (caller should fall back to Oracle).
-
-    Note: This only covers ES-indexed categories. Oracle-only categories like
-    colleagues, authors, pathways, paragraphs, etc. require Oracle fallback.
     """
     es_query = _build_text_search_query(query, limit)
 
@@ -862,20 +1144,29 @@ def text_search(
         logger.error(f"Elasticsearch text search failed: {e}")
         return None
 
-    # Group results by category
+    # Group results by category - all categories now supported
     results_by_category: dict[str, list[TextSearchResult]] = {
         "genes": [],
         "descriptions": [],
         "go_terms": [],
         "phenotypes": [],
         "abstracts": [],
+        "paragraphs": [],
+        "authors": [],
+        "colleagues": [],
+        "pathways": [],
+        "notes": [],
+        "external_ids": [],
+        "orthologs": [],
+        "literature_topics": [],
+        "name_descriptions": [],
     }
 
     for hit in response["hits"]["hits"]:
         doc_type = hit["_source"].get("type")
 
         if doc_type == "gene":
-            # Add to both genes and descriptions (if headline matches)
+            # Add to genes category
             gene_result = _parse_text_search_result(hit, query, "genes")
             if len(results_by_category["genes"]) < limit:
                 results_by_category["genes"].append(gene_result)
@@ -886,6 +1177,13 @@ def text_search(
                 desc_result = _parse_text_search_result(hit, query, "descriptions")
                 if len(results_by_category["descriptions"]) < limit:
                     results_by_category["descriptions"].append(desc_result)
+
+            # Check if name_description contains the query
+            name_desc = hit["_source"].get("name_description", "")
+            if name_desc and query.lower() in name_desc.lower():
+                nd_result = _parse_text_search_result(hit, query, "name_descriptions")
+                if len(results_by_category["name_descriptions"]) < limit:
+                    results_by_category["name_descriptions"].append(nd_result)
 
         elif doc_type == "go_term":
             result = _parse_text_search_result(hit, query, "go_terms")
@@ -902,11 +1200,52 @@ def text_search(
             if len(results_by_category["abstracts"]) < limit:
                 results_by_category["abstracts"].append(result)
 
-    # Sort genes by organism priority
-    if results_by_category["genes"]:
-        results_by_category["genes"].sort(
-            key=lambda r: (_get_organism_priority(r.organism), r.name or '')
-        )
+        elif doc_type == "paragraph":
+            result = _parse_text_search_result(hit, query, "paragraphs")
+            if len(results_by_category["paragraphs"]) < limit:
+                results_by_category["paragraphs"].append(result)
+
+        elif doc_type == "author":
+            result = _parse_text_search_result(hit, query, "authors")
+            if len(results_by_category["authors"]) < limit:
+                results_by_category["authors"].append(result)
+
+        elif doc_type == "colleague":
+            result = _parse_text_search_result(hit, query, "colleagues")
+            if len(results_by_category["colleagues"]) < limit:
+                results_by_category["colleagues"].append(result)
+
+        elif doc_type == "pathway":
+            result = _parse_text_search_result(hit, query, "pathways")
+            if len(results_by_category["pathways"]) < limit:
+                results_by_category["pathways"].append(result)
+
+        elif doc_type == "note":
+            result = _parse_text_search_result(hit, query, "notes")
+            if len(results_by_category["notes"]) < limit:
+                results_by_category["notes"].append(result)
+
+        elif doc_type == "external_id":
+            result = _parse_text_search_result(hit, query, "external_ids")
+            if len(results_by_category["external_ids"]) < limit:
+                results_by_category["external_ids"].append(result)
+
+        elif doc_type == "ortholog":
+            result = _parse_text_search_result(hit, query, "orthologs")
+            if len(results_by_category["orthologs"]) < limit:
+                results_by_category["orthologs"].append(result)
+
+        elif doc_type == "literature_topic":
+            result = _parse_text_search_result(hit, query, "literature_topics")
+            if len(results_by_category["literature_topics"]) < limit:
+                results_by_category["literature_topics"].append(result)
+
+    # Sort gene-related categories by organism priority
+    for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
+        if results_by_category[cat]:
+            results_by_category[cat].sort(
+                key=lambda r: (_get_organism_priority(r.organism), r.name or '')
+            )
 
     # Build category results
     categories: list[TextSearchCategoryResult] = []
@@ -945,7 +1284,7 @@ def text_search_category(
 
     es_type = TEXT_CATEGORY_TO_ES_TYPE[category]
 
-    # Special handling for descriptions - search headline field specifically
+    # Special handling for certain gene-based categories
     if category == "descriptions":
         es_query = {
             "query": {
@@ -959,6 +1298,26 @@ def text_search_category(
             "size": 1000,
             "highlight": {
                 "fields": {"headline": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {"terms": {"field": "organism", "size": 20}}
+            },
+        }
+    elif category == "name_descriptions":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "gene"}},
+                        {"match": {"name_description": query}},
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"name_description": {}},
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
             },

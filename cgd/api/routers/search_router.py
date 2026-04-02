@@ -128,10 +128,10 @@ def search_category(
     Search within a specific category.
 
     Returns all results for a single category.
-    Uses Elasticsearch when enabled and available for supported categories.
+    Uses Elasticsearch when enabled and available.
     """
-    # Try Elasticsearch first if enabled (not for orthologs - Oracle only)
-    if settings.use_elasticsearch and category != "orthologs":
+    # Try Elasticsearch first if enabled
+    if settings.use_elasticsearch:
         try:
             es = get_es_client()
             if es_search_service.check_es_available(es):
@@ -178,42 +178,19 @@ def text_search(
     Use search_field to limit paper search to title, abstract, or both.
     Use match_mode to specify AND (all) or OR (any) for multi-term queries.
 
-    Note: Elasticsearch is used for ES-indexed categories (genes, descriptions,
-    go_terms, phenotypes, abstracts). Other categories use Oracle.
+    Uses Elasticsearch when enabled for all categories, falls back to Oracle.
     """
     category_filter = "orthologs" if type == "homolog" else None
 
-    # For full text search, we use a hybrid approach:
-    # - ES for supported categories (faster)
-    # - Oracle for remaining categories
-    # If category_filter is set to an Oracle-only category, skip ES entirely
+    # Use ES for full text search when enabled
     if settings.use_elasticsearch and category_filter is None:
         try:
             es = get_es_client()
             if es_search_service.check_es_available(es):
-                logger.debug("Using Elasticsearch for text search (ES-indexed categories)")
+                logger.debug("Using Elasticsearch for text search")
                 es_result = es_search_service.text_search(es, query, limit)
                 if es_result is not None:
-                    # Get Oracle results for remaining categories and merge
-                    oracle_result = text_search_service.text_search(
-                        db, query, limit, category_filter,
-                        search_field=search_field, match_mode=match_mode,
-                        exclude_categories=es_search_service.get_es_supported_categories()
-                    )
-                    # Merge ES and Oracle results
-                    merged_categories = list(es_result.categories)
-                    merged_total = es_result.total_results
-
-                    for oracle_cat in oracle_result.categories:
-                        merged_categories.append(oracle_cat)
-                        merged_total += oracle_cat.count
-
-                    return TextSearchResponse(
-                        query=query,
-                        total_results=merged_total,
-                        categories=merged_categories,
-                        redirect_url=oracle_result.redirect_url,
-                    )
+                    return es_result
         except Exception as e:
             logger.warning(f"Elasticsearch error, falling back to Oracle: {e}")
 
