@@ -844,13 +844,13 @@ def search_category(
         if result:
             results.append(result)
 
-    # Sort genes by organism priority
-    if category == "genes":
+    # Sort genes and orthologs by organism priority
+    if category in ("genes", "orthologs"):
         results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
 
     # Get organism counts from aggregations
     organism_counts: Optional[dict[str, int]] = None
-    if category == "genes":
+    if category in ("genes", "orthologs"):
         org_buckets = response.get("aggregations", {}).get("by_organism", {}).get("buckets", [])
         if org_buckets:
             organism_counts = {
