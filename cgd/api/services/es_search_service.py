@@ -324,11 +324,12 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
             {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
         ]
     elif doc_type == "go_term":
-        # Match Oracle behavior: search only go_term field (not synonyms/definitions)
+        # Search go_term and go_synonyms
         should_clauses = [
             {"term": {"goid": {"value": query_upper, "boost": 20}}},
             {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
             {"match": {"go_term": {"query": query, "boost": 5}}},
+            {"match": {"go_synonyms": {"query": query, "boost": 3}}},
         ]
     elif doc_type == "phenotype":
         should_clauses = [
@@ -336,15 +337,15 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
             {"match": {"observable": {"query": query, "boost": 5}}},
         ]
     elif doc_type == "reference":
-        # Match Oracle behavior: search by PubMed ID (numeric) or citation only
+        # Search by PubMed ID (numeric) or title
         if query.isdigit():
             should_clauses = [
                 {"term": {"pubmed": {"value": int(query), "boost": 20}}},
             ]
         else:
-            # For non-numeric queries, search citation only (like Oracle's LIKE '%query%')
+            # For non-numeric queries, search title
             should_clauses = [
-                {"match": {"citation": {"query": query, "boost": 5}}},
+                {"match": {"title": {"query": query, "boost": 5}}},
             ]
     elif doc_type == "ortholog":
         should_clauses = [
@@ -374,9 +375,10 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
                 "feature_name": {},
                 "aliases": {},
                 "go_term": {},
+                "go_synonyms": {},
                 "observable": {},
                 "ortholog_name": {},
-                "citation": {},
+                "title": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
@@ -403,10 +405,11 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
         {"match": {"aliases": {"query": query, "boost": 8}}},
 
-        # GO term fields - match Oracle: search only go_term (not synonyms/definitions)
+        # GO term fields - search go_term and go_synonyms
         {"term": {"goid": {"value": query_upper, "boost": 20}}},
         {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
         {"match": {"go_term": {"query": query, "boost": 5}}},
+        {"match": {"go_synonyms": {"query": query, "boost": 3}}},
 
         # Phenotype fields
         {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
@@ -417,8 +420,8 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
         {"match": {"ortholog_name": {"query": query, "boost": 5}}},
 
-        # Reference fields - match Oracle: search only citation (not title)
-        {"match": {"citation": {"query": query, "boost": 3}}},
+        # Reference fields - search title
+        {"match": {"title": {"query": query, "boost": 3}}},
 
         # External ID
         {"term": {"external_id": {"value": query_upper, "boost": 15}}},
@@ -731,11 +734,11 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     # Define fields to search based on type
     fields_by_type = {
         "gene": ["gene_name^3", "feature_name^2", "aliases^2", "headline", "name_description", "dbxref_id"],
-        # Match Oracle behavior: search only go_term (not synonyms/definitions)
-        "go_term": ["go_term^3", "goid^2"],
+        # Search go_term and go_synonyms
+        "go_term": ["go_term^3", "goid^2", "go_synonyms^2"],
         "phenotype": ["observable^3"],
-        # Match Oracle behavior: search only citation (not title/abstract)
-        "reference": ["citation^2"],
+        # Search title (+ pubmed handled separately for numeric queries)
+        "reference": ["title^2"],
         "paragraph": ["paragraph_text^3", "gene_name^2", "feature_name"],
         "author": ["author_name^3", "citation"],
         "colleague": ["last_name^3", "other_last_name^2", "first_name", "institution"],
@@ -777,8 +780,9 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
+                "go_synonyms": {},
                 "observable": {},
-                "citation": {},
+                "title": {},
                 "aliases": {},
                 "paragraph_text": {},
                 "author_name": {},
@@ -1222,9 +1226,9 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
 def _get_text_search_fields() -> list[str]:
     """Get the list of fields to search for text search.
 
-    Note: To match Oracle behavior:
-    - GO terms: search only go_term (not go_definition, go_synonyms)
-    - References: search only citation (not title, abstract)
+    Search fields:
+    - GO terms: go_term + go_synonyms
+    - References: title (+ pubmed for numeric queries)
     """
     return [
         "name^3",
@@ -1234,10 +1238,9 @@ def _get_text_search_fields() -> list[str]:
         "headline^2",
         "name_description",
         "go_term^3",
-        # go_definition and go_synonyms excluded to match Oracle
+        "go_synonyms^2",
         "observable^3",
-        "citation",
-        # title and abstract excluded to match Oracle
+        "title",
         "paragraph_text",
         "author_name^2",
         "last_name^2",
@@ -1296,8 +1299,9 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
+                "go_synonyms": {},
                 "observable": {},
-                "citation": {},
+                "title": {},
                 "aliases": {},
                 "paragraph_text": {},
                 "author_name": {},

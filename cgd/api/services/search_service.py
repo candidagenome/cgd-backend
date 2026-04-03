@@ -22,6 +22,8 @@ from cgd.models.models import (
     Feature,
     FeatRelationship,
     Go,
+    GoGosyn,
+    GoSynonym,
     Phenotype,
     Reference,
     Alias,
@@ -496,7 +498,7 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[SearchResult]
 
 def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
     """
-    Search GO terms by go_term or goid.
+    Search GO terms by go_term, go_synonyms, or goid.
 
     Returns SearchResult list with category="go_term".
     """
@@ -532,7 +534,7 @@ def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResu
                 highlighted_description=_highlight_text(description, query),
             ))
 
-    # Search by term name
+    # Search by term name and synonyms
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
@@ -540,6 +542,7 @@ def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResu
     if remaining > 0:
         found_goids = {r.id for r in results}
 
+        # Search by go_term
         go_query = (
             db.query(Go)
             .filter(func.upper(Go.go_term).like(upper_pattern))
@@ -560,6 +563,37 @@ def search_go_terms(db: Session, query: str, limit: int = 20) -> list[SearchResu
                     highlighted_name=_highlight_text(go.go_term, query),
                     highlighted_description=_highlight_text(description, query),
                 ))
+                found_goids.add(formatted_goid)
+                if len(results) >= limit:
+                    break
+
+    # Search by synonyms if we still need more results
+    remaining = limit - len(results)
+    if remaining > 0:
+        # Search GO terms via synonyms
+        synonym_query = (
+            db.query(Go)
+            .join(GoGosyn, Go.go_no == GoGosyn.go_no)
+            .join(GoSynonym, GoGosyn.go_synonym_no == GoSynonym.go_synonym_no)
+            .filter(func.upper(GoSynonym.go_synonym).like(upper_pattern))
+            .limit(remaining + len(found_goids))
+        )
+
+        for go in synonym_query:
+            formatted_goid = _format_goid(go.goid)
+            if formatted_goid not in found_goids:
+                description = go.go_definition[:200] + "..." if go.go_definition and len(go.go_definition) > 200 else go.go_definition
+                results.append(SearchResult(
+                    category="go_term",
+                    id=formatted_goid,
+                    name=go.go_term,
+                    description=description,
+                    link=f"/go/{formatted_goid}",
+                    organism=None,
+                    highlighted_name=_highlight_text(go.go_term, query),
+                    highlighted_description=_highlight_text(description, query),
+                ))
+                found_goids.add(formatted_goid)
                 if len(results) >= limit:
                     break
 
@@ -601,13 +635,12 @@ def search_phenotypes(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
 def search_references(db: Session, query: str, limit: int = 20) -> list[SearchResult]:
     """
-    Search references by PubMed ID, dbxref_id (CGDID), or citation.
+    Search references by PubMed ID or title.
 
     Returns SearchResult list with category="reference".
     """
     results = []
     normalized = _normalize_query(query)
-    upper_query = normalized.upper()
 
     # Check if query is a numeric PubMed ID
     pubmed_id = None
@@ -625,32 +658,15 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                 category="reference",
                 id=ref_exact.dbxref_id,
                 name=name,
-                description=ref_exact.citation,
+                description=ref_exact.title,
                 link=f"/reference/{ref_exact.dbxref_id}",
                 organism=None,
                 links=_build_reference_links(db, ref_exact),
                 highlighted_name=_highlight_text(name, query),
-                highlighted_description=_highlight_text(ref_exact.citation, query),
+                highlighted_description=_highlight_text(ref_exact.title, query),
             ))
 
-    # Check if query matches a dbxref_id (CGDID like CAL0080639)
-    if not results:
-        ref_by_dbxref = db.query(Reference).filter(func.upper(Reference.dbxref_id) == upper_query).first()
-        if ref_by_dbxref:
-            name = f"PMID:{ref_by_dbxref.pubmed}" if ref_by_dbxref.pubmed else ref_by_dbxref.dbxref_id
-            results.append(SearchResult(
-                category="reference",
-                id=ref_by_dbxref.dbxref_id,
-                name=name,
-                description=ref_by_dbxref.citation,
-                link=f"/reference/{ref_by_dbxref.dbxref_id}",
-                organism=None,
-                links=_build_reference_links(db, ref_by_dbxref),
-                highlighted_name=_highlight_text(name, query),
-                highlighted_description=_highlight_text(ref_by_dbxref.citation, query),
-            ))
-
-    # Search by citation text
+    # Search by title
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
 
@@ -660,7 +676,8 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
 
         ref_query = (
             db.query(Reference)
-            .filter(func.upper(Reference.citation).like(upper_pattern))
+            .filter(Reference.title.isnot(None))
+            .filter(func.upper(Reference.title).like(upper_pattern))
             .limit(remaining + len(found_ref_nos))
         )
 
@@ -671,12 +688,12 @@ def search_references(db: Session, query: str, limit: int = 20) -> list[SearchRe
                     category="reference",
                     id=ref.dbxref_id,
                     name=name,
-                    description=ref.citation,
+                    description=ref.title,
                     link=f"/reference/{ref.dbxref_id}",
                     links=_build_reference_links(db, ref),
                     organism=None,
                     highlighted_name=_highlight_text(name, query),
-                    highlighted_description=_highlight_text(ref.citation, query),
+                    highlighted_description=_highlight_text(ref.title, query),
                 ))
                 if len(results) >= limit:
                     break
