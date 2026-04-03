@@ -672,37 +672,56 @@ def quick_search(db: Session, query: str, limit: int = 20) -> SearchResponse:
     Search all categories (genes, GO terms, phenotypes, references, orthologs).
 
     Returns results grouped by category with actual total counts.
+    Uses text search functions for consistent counts between quick and text search.
     """
-    from cgd.api.services.text_search_service import search_orthologs, _count_orthologs
+    from cgd.api.services.text_search_service import (
+        search_genes as ts_search_genes,
+        search_go_terms as ts_search_go_terms,
+        search_phenotypes as ts_search_phenotypes,
+        search_paper_titles as ts_search_paper_titles,
+        search_orthologs as ts_search_orthologs,
+        _count_genes as ts_count_genes,
+        _count_go_terms as ts_count_go_terms,
+        _count_phenotypes as ts_count_phenotypes,
+        _count_paper_titles as ts_count_paper_titles,
+        _count_orthologs as ts_count_orthologs,
+    )
 
-    # Search all categories with the same limit per category
-    genes = search_genes(db, query, limit)
-    go_terms = search_go_terms(db, query, limit)
-    phenotypes = search_phenotypes(db, query, limit)
-    references = search_references(db, query, limit)
-
-    # Search orthologs (convert TextSearchResult to SearchResult)
-    ortholog_results = search_orthologs(db, query, limit)
-    orthologs = [
-        SearchResult(
-            category="orthologs",
+    def _convert_to_search_result(r, category: str) -> SearchResult:
+        """Convert TextSearchResult to SearchResult."""
+        return SearchResult(
+            category=category,
             id=r.id or "",
             name=r.name,
             description=r.description,
-            link=r.link or f"/locus/{r.name}",
+            link=r.link or "",
             organism=r.organism,
             highlighted_name=r.highlighted_name,
             highlighted_description=r.highlighted_description,
         )
-        for r in ortholog_results
-    ]
 
-    # Get actual total counts for each category
-    genes_count = _count_genes(db, query)
-    go_terms_count = _count_go_terms(db, query)
-    phenotypes_count = _count_phenotypes(db, query)
-    references_count = _count_references(db, query)
-    orthologs_count = _count_orthologs(db, query)
+    # Search all categories using text search functions
+    gene_results = ts_search_genes(db, query, limit)
+    genes = [_convert_to_search_result(r, "genes") for r in gene_results]
+
+    go_results = ts_search_go_terms(db, query, limit)
+    go_terms = [_convert_to_search_result(r, "go_terms") for r in go_results]
+
+    pheno_results = ts_search_phenotypes(db, query, limit)
+    phenotypes = [_convert_to_search_result(r, "phenotypes") for r in pheno_results]
+
+    ref_results = ts_search_paper_titles(db, query, limit)
+    references = [_convert_to_search_result(r, "references") for r in ref_results]
+
+    ortho_results = ts_search_orthologs(db, query, limit)
+    orthologs = [_convert_to_search_result(r, "orthologs") for r in ortho_results]
+
+    # Get actual total counts using text search count functions
+    genes_count = ts_count_genes(db, query)
+    go_terms_count = ts_count_go_terms(db, query)
+    phenotypes_count = ts_count_phenotypes(db, query)
+    references_count = ts_count_paper_titles(db, query)
+    orthologs_count = ts_count_orthologs(db, query)
 
     # Build response
     results_by_category = {}

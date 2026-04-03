@@ -454,64 +454,23 @@ def quick_search(
     Quick search across all categories using Elasticsearch.
 
     Returns results grouped by category with counts.
-    Similar to text_search, queries each category separately for accurate counts.
+    Uses the same query logic as text search (via search_category) for consistent counts.
     """
-    # Mapping from ES doc type to API category name
-    type_to_category = {
-        "gene": "genes",
-        "go_term": "go_terms",
-        "phenotype": "phenotypes",
-        "reference": "references",
-        "ortholog": "orthologs",
-    }
-
-    # Types to search in quick search
-    quick_search_types = ["gene", "go_term", "phenotype", "reference", "ortholog"]
+    # Categories to search in quick search
+    quick_search_categories = ["genes", "go_terms", "phenotypes", "references", "orthologs"]
 
     try:
-        # Step 1: Get counts per type using aggregation
-        counts_query = _build_quick_search_counts_query(query)
-        counts_response = es.search(index=INDEX_NAME, body=counts_query)
-
-        type_counts = {}
-        for bucket in counts_response.get("aggregations", {}).get("by_type", {}).get("buckets", []):
-            doc_type = bucket["key"]
-            if doc_type in quick_search_types:
-                type_counts[doc_type] = bucket["doc_count"]
-
-        # Step 2: Query each type that has results to get sample results
         results_by_category: dict[str, list[SearchResult]] = {}
         counts_by_category: dict[str, int] = {}
 
-        for doc_type in quick_search_types:
-            count = type_counts.get(doc_type, 0)
-            category = type_to_category.get(doc_type)
+        for category in quick_search_categories:
+            # Use search_category which uses the same query logic as text search
+            cat_response = search_category(es, query, category)
 
-            if not category or count == 0:
-                continue
-
-            # Store the actual count
-            counts_by_category[category] = count
-
-            # Fetch sample results for this type
-            type_query = _build_quick_search_type_query(query, doc_type, limit)
-            type_response = es.search(index=INDEX_NAME, body=type_query)
-
-            results = []
-            for hit in type_response["hits"]["hits"]:
-                result = _parse_hit(hit, query)
-                if result:
-                    results.append(result)
-
-            if results:
-                results_by_category[category] = results
-
-        # Sort genes and orthologs by organism priority
-        for cat in ["genes", "orthologs"]:
-            if cat in results_by_category and results_by_category[cat]:
-                results_by_category[cat].sort(
-                    key=lambda r: (_get_organism_priority(r.organism), r.name or '')
-                )
+            if cat_response and cat_response.total_count > 0:
+                counts_by_category[category] = cat_response.total_count
+                # Limit results for quick search
+                results_by_category[category] = cat_response.results[:limit]
 
         total = sum(counts_by_category.values())
 
