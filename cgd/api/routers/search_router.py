@@ -198,10 +198,16 @@ def text_search(
             logger.warning(f"Elasticsearch error, falling back to Oracle: {e}")
 
     # Fall back to Oracle-based search for all categories
-    return text_search_service.text_search(
-        db, query, limit, category_filter,
-        search_field=search_field, match_mode=match_mode
-    )
+    try:
+        return text_search_service.text_search(
+            db, query, limit, category_filter,
+            search_field=search_field, match_mode=match_mode
+        )
+    except Exception as e:
+        logger.error(f"Oracle text search failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.get("/text/category", response_model=TextSearchCategoryPagedResponse)
