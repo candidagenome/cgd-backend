@@ -712,11 +712,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
             "bool": {
                 "must": [
                     {"term": {"type": es_type}},
-                ],
-                "should": [
-                    # Exact/prefix matches
-                    {"prefix": {"name.keyword": {"value": query, "boost": 5}}},
-                    # Full-text search
+                    # Full-text search - same logic as text search counts query
                     {
                         "multi_match": {
                             "query": query,
@@ -726,7 +722,6 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                         }
                     },
                 ],
-                "minimum_should_match": 1,
             }
         },
         "size": size,
