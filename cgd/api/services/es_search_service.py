@@ -798,6 +798,25 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 },
             }
 
+    # For phenotype type, use wildcard to match Oracle's LIKE behavior
+    if es_type == "phenotype":
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": es_type}},
+                        {"wildcard": {"observable.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                    ]
+                }
+            },
+            "size": size,
+            "highlight": {
+                "fields": {"observable": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+
     return {
         "query": {
             "bool": {
@@ -1623,6 +1642,39 @@ def text_search(
                     go_results.append(result)
                 if go_results:
                     results_by_category["go_terms"] = go_results
+
+        # Step 6: Override phenotypes count with wildcard query to match Oracle LIKE behavior
+        if "phenotype" in type_counts and type_counts["phenotype"] > 0:
+            ph_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "phenotype"}},
+                            {"wildcard": {"observable.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"observable": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            ph_response = es.search(index=INDEX_NAME, body=ph_query)
+            ph_count = ph_response["hits"]["total"]["value"]
+            # Override the fuzzy count with the exact wildcard count
+            counts_by_category["phenotypes"] = ph_count
+            if ph_count > 0:
+                ph_results = []
+                for hit in ph_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "phenotypes")
+                    ph_results.append(result)
+                if ph_results:
+                    results_by_category["phenotypes"] = ph_results
+            else:
+                # Remove phenotypes from results if count is 0
+                results_by_category.pop("phenotypes", None)
 
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
