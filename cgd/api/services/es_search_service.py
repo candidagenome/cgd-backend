@@ -125,25 +125,29 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     Build Elasticsearch query optimized for autocomplete.
 
     Prioritizes prefix matching for fast suggestions.
+    Uses case-insensitive wildcard for genes to match regardless of case.
     """
+    query_upper = query.upper()
+    query_lower = query.lower()
+
     return {
         "query": {
             "bool": {
                 "should": [
-                    # Exact match (highest priority)
-                    {"term": {"gene_name.keyword": {"value": query.upper(), "boost": 20}}},
-                    {"term": {"feature_name": {"value": query.upper(), "boost": 20}}},
-                    # Prefix match (high priority for autocomplete)
-                    {"prefix": {"gene_name.keyword": {"value": query.upper(), "boost": 10}}},
-                    {"prefix": {"feature_name": {"value": query.upper(), "boost": 8}}},
-                    {"prefix": {"name.keyword": {"value": query, "boost": 5}}},
-                    {"prefix": {"go_term.keyword": {"value": query.lower(), "boost": 5}}},
-                    {"prefix": {"observable.keyword": {"value": query.lower(), "boost": 5}}},
+                    # Exact match (highest priority) - genes
+                    {"term": {"gene_name.keyword": {"value": query_upper, "boost": 30}}},
+                    {"term": {"feature_name": {"value": query_upper, "boost": 30}}},
+                    # Case-insensitive wildcard for gene prefix (high priority)
+                    {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 25}}},
+                    {"wildcard": {"feature_name": {"value": f"{query_upper}*", "boost": 20}}},
+                    # Prefix match for GO terms and phenotypes
+                    {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
+                    {"prefix": {"observable.keyword": {"value": query_lower, "boost": 5}}},
                     # Fallback to contains match
                     {
                         "multi_match": {
                             "query": query,
-                            "fields": ["name^2", "gene_name^2", "go_term^2", "observable^2"],
+                            "fields": ["gene_name^3", "feature_name^2", "go_term^2", "observable^2"],
                             "type": "phrase_prefix",
                         }
                     },
