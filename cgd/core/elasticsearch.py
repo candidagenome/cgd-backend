@@ -36,9 +36,18 @@ INDEX_MAPPING = {
             },
             "feature_name": {"type": "keyword"},
             "dbxref_id": {"type": "keyword"},
-            "aliases": {"type": "text"},
-            "headline": {"type": "text"},
-            "name_description": {"type": "text"},
+            "aliases": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "headline": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
+            "name_description": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
             "feature_no": {"type": "integer"},
 
             # GO term fields
@@ -71,7 +80,10 @@ INDEX_MAPPING = {
             "abstract": {"type": "text"},
 
             # Paragraph fields (locus summaries)
-            "paragraph_text": {"type": "text"},
+            "paragraph_text": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword", "ignore_above": 32766}}
+            },
 
             # Author fields
             "author_name": {
@@ -96,7 +108,10 @@ INDEX_MAPPING = {
             "pathway_id": {"type": "keyword"},
 
             # Note fields
-            "note_text": {"type": "text"},
+            "note_text": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword", "ignore_above": 32766}}
+            },
             "note_type": {"type": "keyword"},
 
             # External ID fields
