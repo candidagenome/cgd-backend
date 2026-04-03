@@ -1182,7 +1182,7 @@ def _get_text_search_fields() -> list[str]:
     """Get the list of fields to search for text search.
 
     Search fields:
-    - GO terms: go_term only
+    - GO terms: go_term + goid
     - References: title (+ pubmed for numeric queries)
     """
     return [
@@ -1193,6 +1193,7 @@ def _get_text_search_fields() -> list[str]:
         "headline^2",
         "name_description",
         "go_term^3",
+        "goid^2",
         "observable^3",
         "title",
         "paragraph_text",
