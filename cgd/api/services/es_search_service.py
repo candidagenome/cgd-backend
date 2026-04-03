@@ -656,6 +656,7 @@ TEXT_CATEGORY_TO_ES_TYPE = {
     "go_terms": "go_term",
     "phenotypes": "phenotype",
     "abstracts": "reference",  # Uses abstract field
+    "paper_titles": "reference",  # Uses title field
     "paragraphs": "paragraph",
     "authors": "author",
     "colleagues": "colleague",
@@ -673,6 +674,7 @@ TEXT_CATEGORY_DISPLAY_NAMES = {
     "go_terms": "Gene ontology",
     "phenotypes": "Phenotypes",
     "abstracts": "Paper Abstracts",
+    "paper_titles": "Paper Titles",
     "paragraphs": "Paragraphs",
     "authors": "Authors",
     "colleagues": "Colleagues",
@@ -1031,21 +1033,29 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         dbxref_id = source.get("id")
         citation = source.get("citation")
         abstract = source.get("abstract")
+        title = source.get("title")
 
         name = f"PMID:{pubmed}" if pubmed else dbxref_id or ""
 
-        # Use abstract for abstracts category, citation otherwise
+        # Use appropriate field based on category
         if category == "abstracts" and abstract:
             match_context = _extract_highlight(highlights, "abstract", None)
             if not match_context:
                 match_context = _highlight_text(abstract[:300] + "..." if len(abstract) > 300 else abstract, query)
+        elif category == "paper_titles" and title:
+            match_context = _extract_highlight(highlights, "title", None)
+            if not match_context:
+                match_context = _highlight_text(title, query)
         else:
             match_context = _extract_highlight(highlights, "citation", None)
             if not match_context and citation:
                 match_context = _highlight_text(citation, query)
 
+        # Use the category passed in (paper_titles or abstracts)
+        result_category = category if category in ("paper_titles", "abstracts") else "abstracts"
+
         return TextSearchResult(
-            category="abstracts",
+            category=result_category,
             id=dbxref_id or "",
             name=name,
             description=citation,
@@ -1516,6 +1526,36 @@ def text_search(
                 if nd_results:
                     results_by_category["name_descriptions"] = nd_results
 
+        # Step 4: Handle paper_titles category (references with title matching)
+        # This is separate from abstracts which searches abstract field
+        if "reference" in type_counts and type_counts["reference"] > 0:
+            pt_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "reference"}},
+                            {"match": {"title": query}},
+                        ]
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"title": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            pt_response = es.search(index=INDEX_NAME, body=pt_query)
+            pt_count = pt_response["hits"]["total"]["value"]
+            if pt_count > 0:
+                counts_by_category["paper_titles"] = pt_count
+                pt_results = []
+                for hit in pt_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "paper_titles")
+                    pt_results.append(result)
+                if pt_results:
+                    results_by_category["paper_titles"] = pt_results
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
@@ -1604,6 +1644,23 @@ def text_search_category(
             },
             "aggs": {
                 "by_organism": {"terms": {"field": "organism", "size": 20}}
+            },
+        }
+    elif category == "paper_titles":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "reference"}},
+                        {"match": {"title": query}},
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"title": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
             },
         }
     else:
