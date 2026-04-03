@@ -731,9 +731,11 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     # Define fields to search based on type
     fields_by_type = {
         "gene": ["gene_name^3", "feature_name^2", "aliases^2", "headline", "name_description", "dbxref_id"],
-        "go_term": ["go_term^3", "goid^2", "go_definition", "go_synonyms"],
+        # Match Oracle behavior: search only go_term (not synonyms/definitions)
+        "go_term": ["go_term^3", "goid^2"],
         "phenotype": ["observable^3"],
-        "reference": ["citation^2", "title", "abstract"],
+        # Match Oracle behavior: search only citation (not title/abstract)
+        "reference": ["citation^2"],
         "paragraph": ["paragraph_text^3", "gene_name^2", "feature_name"],
         "author": ["author_name^3", "citation"],
         "colleague": ["last_name^3", "other_last_name^2", "first_name", "institution"],
@@ -775,12 +777,9 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
-                "go_definition": {},
-                "go_synonyms": {},
                 "observable": {},
                 "citation": {},
                 "aliases": {},
-                "abstract": {},
                 "paragraph_text": {},
                 "author_name": {},
                 "last_name": {},
@@ -1221,7 +1220,12 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
 
 
 def _get_text_search_fields() -> list[str]:
-    """Get the list of fields to search for text search."""
+    """Get the list of fields to search for text search.
+
+    Note: To match Oracle behavior:
+    - GO terms: search only go_term (not go_definition, go_synonyms)
+    - References: search only citation (not title, abstract)
+    """
     return [
         "name^3",
         "gene_name^3",
@@ -1230,12 +1234,10 @@ def _get_text_search_fields() -> list[str]:
         "headline^2",
         "name_description",
         "go_term^3",
-        "go_definition",
-        "go_synonyms",
+        # go_definition and go_synonyms excluded to match Oracle
         "observable^3",
         "citation",
-        "abstract",
-        "title",
+        # title and abstract excluded to match Oracle
         "paragraph_text",
         "author_name^2",
         "last_name^2",
@@ -1294,12 +1296,9 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
-                "go_definition": {},
-                "go_synonyms": {},
                 "observable": {},
                 "citation": {},
                 "aliases": {},
-                "abstract": {},
                 "paragraph_text": {},
                 "author_name": {},
                 "last_name": {},
