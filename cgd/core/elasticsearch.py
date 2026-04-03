@@ -60,7 +60,10 @@ INDEX_MAPPING = {
             # Reference fields
             "pubmed": {"type": "integer"},
             "citation": {"type": "text"},
-            "title": {"type": "text"},
+            "title": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword"}}
+            },
             "year": {"type": "integer"},
             "reference_no": {"type": "integer"},
 
