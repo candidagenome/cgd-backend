@@ -143,11 +143,11 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     # Prefix match for GO terms and phenotypes
                     {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
                     {"prefix": {"observable.keyword": {"value": query_lower, "boost": 5}}},
-                    # Fallback to contains match
+                    # Fallback to contains match (only on text fields, not keyword)
                     {
                         "multi_match": {
                             "query": query,
-                            "fields": ["gene_name^3", "feature_name^2", "go_term^2", "observable^2"],
+                            "fields": ["gene_name^3", "go_term^2", "observable^2"],
                             "type": "phrase_prefix",
                         }
                     },
