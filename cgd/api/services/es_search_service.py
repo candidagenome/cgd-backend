@@ -324,17 +324,11 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
             {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
         ]
     elif doc_type == "go_term":
+        # Match Oracle behavior: search only go_term field (not synonyms/definitions)
         should_clauses = [
             {"term": {"goid": {"value": query_upper, "boost": 20}}},
             {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
-            {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["go_term^3", "go_synonyms^2"],
-                    "type": "phrase_prefix",
-                    "boost": 5,
-                }
-            },
+            {"match": {"go_term": {"query": query, "boost": 5}}},
         ]
     elif doc_type == "phenotype":
         should_clauses = [
@@ -342,16 +336,15 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
             {"match": {"observable": {"query": query, "boost": 5}}},
         ]
     elif doc_type == "reference":
-        # For references, search by PubMed ID (numeric) or CGDID
+        # Match Oracle behavior: search by PubMed ID (numeric) or citation only
         if query.isdigit():
             should_clauses = [
                 {"term": {"pubmed": {"value": int(query), "boost": 20}}},
             ]
         else:
-            # For non-numeric queries, search citation/title
+            # For non-numeric queries, search citation only (like Oracle's LIKE '%query%')
             should_clauses = [
                 {"match": {"citation": {"query": query, "boost": 5}}},
-                {"match": {"title": {"query": query, "boost": 5}}},
             ]
     elif doc_type == "ortholog":
         should_clauses = [
@@ -381,11 +374,9 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
                 "feature_name": {},
                 "aliases": {},
                 "go_term": {},
-                "go_synonyms": {},
                 "observable": {},
                 "ortholog_name": {},
                 "citation": {},
-                "title": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
@@ -412,17 +403,10 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
         {"match": {"aliases": {"query": query, "boost": 8}}},
 
-        # GO term fields
+        # GO term fields - match Oracle: search only go_term (not synonyms/definitions)
         {"term": {"goid": {"value": query_upper, "boost": 20}}},
         {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
-        {
-            "multi_match": {
-                "query": query,
-                "fields": ["go_term^3", "go_synonyms^2"],
-                "type": "phrase_prefix",
-                "boost": 5,
-            }
-        },
+        {"match": {"go_term": {"query": query, "boost": 5}}},
 
         # Phenotype fields
         {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
@@ -433,9 +417,8 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
         {"match": {"ortholog_name": {"query": query, "boost": 5}}},
 
-        # Reference fields - search citation and title for all queries
+        # Reference fields - match Oracle: search only citation (not title)
         {"match": {"citation": {"query": query, "boost": 3}}},
-        {"match": {"title": {"query": query, "boost": 3}}},
 
         # External ID
         {"term": {"external_id": {"value": query_upper, "boost": 15}}},
