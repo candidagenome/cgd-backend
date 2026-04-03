@@ -73,99 +73,6 @@ def _extract_highlight(highlights: dict, field: str, fallback: Optional[str]) ->
     return fallback
 
 
-def _build_quick_search_query(query: str, size: int = 100) -> dict:
-    """
-    Build Elasticsearch query for quick search.
-
-    This is a RESTRICTIVE search matching the old Perl CGD quick search behavior:
-    - Gene names, aliases, ORF names (NOT descriptions/abstracts)
-    - GO term names and synonyms (NOT definitions)
-    - Phenotype observables
-    - Exact matches on: PubMed ID, GOID, External ID, CGDID
-    - Ortholog names
-
-    For full-text search across all content, use the /text endpoint instead.
-    """
-    query_upper = query.upper()
-    query_lower = query.lower()
-
-    # Build should clauses
-    should_clauses = [
-        # === EXACT ID MATCHES (highest priority) ===
-        # CGDID (CAL0001234)
-        {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
-        # GOID (GO:0001234)
-        {"term": {"goid": {"value": query_upper, "boost": 20}}},
-        # External ID
-        {"term": {"external_id": {"value": query_upper, "boost": 15}}},
-        {"term": {"external_id": {"value": query_lower, "boost": 15}}},
-
-        # === GENE NAME MATCHES ===
-        # Exact gene name match
-        {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
-        {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
-        # Prefix match on gene names
-        {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
-        {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
-        # Search in aliases
-        {"match": {"aliases": {"query": query, "boost": 8}}},
-
-        # === GO TERM MATCHES ===
-        # Prefix match on GO term names
-        {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
-        # Search GO term and synonyms (but NOT definitions)
-        {
-            "multi_match": {
-                "query": query,
-                "fields": ["go_term^3", "go_synonyms^2"],
-                "type": "phrase_prefix",
-                "boost": 5,
-            }
-        },
-
-        # === PHENOTYPE MATCHES ===
-        {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
-        {"match": {"observable": {"query": query, "boost": 5}}},
-
-        # === ORTHOLOG MATCHES (search by ortholog name) ===
-        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
-        {"match": {"ortholog_name": {"query": query, "boost": 5}}},
-    ]
-
-    # Only add PubMed ID search if query is numeric
-    if query.isdigit():
-        should_clauses.append({"term": {"pubmed": {"value": int(query), "boost": 20}}})
-
-    return {
-        "query": {
-            "bool": {
-                "should": should_clauses,
-                "minimum_should_match": 1,
-            }
-        },
-        "size": size,
-        "highlight": {
-            "fields": {
-                "gene_name": {},
-                "feature_name": {},
-                "aliases": {},
-                "go_term": {},
-                "go_synonyms": {},
-                "observable": {},
-                "ortholog_name": {},
-            },
-            "pre_tags": ["<mark>"],
-            "post_tags": ["</mark>"],
-        },
-        "aggs": {
-            "by_type": {
-                "terms": {"field": "type", "size": 20}
-            }
-        },
-    }
-
-
 def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     """
     Build Elasticsearch query optimized for autocomplete.
@@ -395,6 +302,166 @@ def _parse_hit(hit: dict, query: str) -> Optional[SearchResult]:
         return None
 
 
+def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) -> dict:
+    """
+    Build ES query for quick search filtered to a specific document type.
+
+    Uses the same restrictive matching as the main quick search query.
+    """
+    query_upper = query.upper()
+    query_lower = query.lower()
+
+    # Build type-specific should clauses
+    should_clauses = []
+
+    if doc_type == "gene":
+        should_clauses = [
+            {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+            {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
+            {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
+            {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
+            {"match": {"aliases": {"query": query, "boost": 8}}},
+            {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
+        ]
+    elif doc_type == "go_term":
+        should_clauses = [
+            {"term": {"goid": {"value": query_upper, "boost": 20}}},
+            {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
+            {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["go_term^3", "go_synonyms^2"],
+                    "type": "phrase_prefix",
+                    "boost": 5,
+                }
+            },
+        ]
+    elif doc_type == "phenotype":
+        should_clauses = [
+            {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
+            {"match": {"observable": {"query": query, "boost": 5}}},
+        ]
+    elif doc_type == "reference":
+        # For references, search by PubMed ID (numeric) or CGDID
+        if query.isdigit():
+            should_clauses = [
+                {"term": {"pubmed": {"value": int(query), "boost": 20}}},
+            ]
+        else:
+            # For non-numeric queries, search citation/title
+            should_clauses = [
+                {"match": {"citation": {"query": query, "boost": 5}}},
+                {"match": {"title": {"query": query, "boost": 5}}},
+            ]
+    elif doc_type == "ortholog":
+        should_clauses = [
+            {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
+            {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
+            {"match": {"ortholog_name": {"query": query, "boost": 5}}},
+        ]
+
+    if not should_clauses:
+        # Fallback to generic name match
+        should_clauses = [{"match": {"name": {"query": query}}}]
+
+    return {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"type": doc_type}},
+                ],
+                "should": should_clauses,
+                "minimum_should_match": 1,
+            }
+        },
+        "size": size,
+        "highlight": {
+            "fields": {
+                "gene_name": {},
+                "feature_name": {},
+                "aliases": {},
+                "go_term": {},
+                "go_synonyms": {},
+                "observable": {},
+                "ortholog_name": {},
+                "citation": {},
+                "title": {},
+            },
+            "pre_tags": ["<mark>"],
+            "post_tags": ["</mark>"],
+        },
+    }
+
+
+def _build_quick_search_counts_query(query: str) -> dict:
+    """
+    Build ES query to get counts per type for quick search.
+
+    Uses the same restrictive matching as the main quick search query.
+    """
+    query_upper = query.upper()
+    query_lower = query.lower()
+
+    # Build should clauses for all searchable fields
+    should_clauses = [
+        # Gene fields
+        {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
+        {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+        {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
+        {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
+        {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
+        {"match": {"aliases": {"query": query, "boost": 8}}},
+
+        # GO term fields
+        {"term": {"goid": {"value": query_upper, "boost": 20}}},
+        {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
+        {
+            "multi_match": {
+                "query": query,
+                "fields": ["go_term^3", "go_synonyms^2"],
+                "type": "phrase_prefix",
+                "boost": 5,
+            }
+        },
+
+        # Phenotype fields
+        {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
+        {"match": {"observable": {"query": query, "boost": 5}}},
+
+        # Ortholog fields
+        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
+        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
+        {"match": {"ortholog_name": {"query": query, "boost": 5}}},
+
+        # Reference fields - search citation and title for all queries
+        {"match": {"citation": {"query": query, "boost": 3}}},
+        {"match": {"title": {"query": query, "boost": 3}}},
+
+        # External ID
+        {"term": {"external_id": {"value": query_upper, "boost": 15}}},
+        {"term": {"external_id": {"value": query_lower, "boost": 15}}},
+    ]
+
+    # Add PubMed ID search if query is numeric
+    if query.isdigit():
+        should_clauses.append({"term": {"pubmed": {"value": int(query), "boost": 20}}})
+
+    return {
+        "query": {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1,
+            }
+        },
+        "size": 0,
+        "aggs": {
+            "by_type": {
+                "terms": {"field": "type", "size": 20}
+            }
+        },
+    }
+
+
 def quick_search(
     es: Elasticsearch,
     query: str,
@@ -404,58 +471,9 @@ def quick_search(
     Quick search across all categories using Elasticsearch.
 
     Returns results grouped by category with counts.
+    Similar to text_search, queries each category separately for accurate counts.
     """
-    # Build and execute ES query (restrictive quick search, not full-text)
-    es_query = _build_quick_search_query(query, size=limit * 5)  # Fetch extra for filtering
-
-    try:
-        response = es.search(index=INDEX_NAME, body=es_query)
-    except Exception as e:
-        logger.error(f"Elasticsearch query failed: {e}")
-        # Return empty response on error
-        return SearchResponse(
-            query=query,
-            total_results=0,
-            results_by_category={},
-            counts_by_category={},
-        )
-
-    # Parse results by category
-    results_by_category: dict[str, list[SearchResult]] = {
-        "genes": [],
-        "go_terms": [],
-        "phenotypes": [],
-        "references": [],
-        "orthologs": [],
-    }
-
-    for hit in response["hits"]["hits"]:
-        result = _parse_hit(hit, query)
-        if not result:
-            continue
-
-        # Map category names
-        category_map = {
-            "gene": "genes",
-            "go_term": "go_terms",
-            "phenotype": "phenotypes",
-            "reference": "references",
-            "orthologs": "orthologs",
-        }
-        cat_key = category_map.get(result.category, result.category)
-
-        if cat_key in results_by_category and len(results_by_category[cat_key]) < limit:
-            results_by_category[cat_key].append(result)
-
-    # Sort genes and orthologs by organism priority
-    for cat in ["genes", "orthologs"]:
-        if results_by_category[cat]:
-            results_by_category[cat].sort(
-                key=lambda r: (_get_organism_priority(r.organism), r.name or '')
-            )
-
-    # Get counts from aggregations
-    counts_by_category: dict[str, int] = {}
+    # Mapping from ES doc type to API category name
     type_to_category = {
         "gene": "genes",
         "go_term": "go_terms",
@@ -464,25 +482,72 @@ def quick_search(
         "ortholog": "orthologs",
     }
 
-    for bucket in response.get("aggregations", {}).get("by_type", {}).get("buckets", []):
-        doc_type = bucket["key"]
-        count = bucket["doc_count"]
-        cat_key = type_to_category.get(doc_type)
-        if cat_key:
-            counts_by_category[cat_key] = count
+    # Types to search in quick search
+    quick_search_types = ["gene", "go_term", "phenotype", "reference", "ortholog"]
 
-    # Remove empty categories
-    results_by_category = {k: v for k, v in results_by_category.items() if v}
-    counts_by_category = {k: v for k, v in counts_by_category.items() if v > 0}
+    try:
+        # Step 1: Get counts per type using aggregation
+        counts_query = _build_quick_search_counts_query(query)
+        counts_response = es.search(index=INDEX_NAME, body=counts_query)
 
-    total = sum(counts_by_category.values())
+        type_counts = {}
+        for bucket in counts_response.get("aggregations", {}).get("by_type", {}).get("buckets", []):
+            doc_type = bucket["key"]
+            if doc_type in quick_search_types:
+                type_counts[doc_type] = bucket["doc_count"]
 
-    return SearchResponse(
-        query=query,
-        total_results=total,
-        results_by_category=results_by_category,
-        counts_by_category=counts_by_category,
-    )
+        # Step 2: Query each type that has results to get sample results
+        results_by_category: dict[str, list[SearchResult]] = {}
+        counts_by_category: dict[str, int] = {}
+
+        for doc_type in quick_search_types:
+            count = type_counts.get(doc_type, 0)
+            category = type_to_category.get(doc_type)
+
+            if not category or count == 0:
+                continue
+
+            # Store the actual count
+            counts_by_category[category] = count
+
+            # Fetch sample results for this type
+            type_query = _build_quick_search_type_query(query, doc_type, limit)
+            type_response = es.search(index=INDEX_NAME, body=type_query)
+
+            results = []
+            for hit in type_response["hits"]["hits"]:
+                result = _parse_hit(hit, query)
+                if result:
+                    results.append(result)
+
+            if results:
+                results_by_category[category] = results
+
+        # Sort genes and orthologs by organism priority
+        for cat in ["genes", "orthologs"]:
+            if cat in results_by_category and results_by_category[cat]:
+                results_by_category[cat].sort(
+                    key=lambda r: (_get_organism_priority(r.organism), r.name or '')
+                )
+
+        total = sum(counts_by_category.values())
+
+        return SearchResponse(
+            query=query,
+            total_results=total,
+            results_by_category=results_by_category,
+            counts_by_category=counts_by_category,
+        )
+
+    except Exception as e:
+        logger.error(f"Elasticsearch quick search failed: {e}")
+        # Return empty response on error
+        return SearchResponse(
+            query=query,
+            total_results=0,
+            results_by_category={},
+            counts_by_category={},
+        )
 
 
 def get_autocomplete_suggestions(
