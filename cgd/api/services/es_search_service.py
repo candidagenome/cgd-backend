@@ -324,12 +324,11 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
             {"term": {"dbxref_id": {"value": query_upper, "boost": 20}}},
         ]
     elif doc_type == "go_term":
-        # Search go_term and go_synonyms
+        # Search go_term only
         should_clauses = [
             {"term": {"goid": {"value": query_upper, "boost": 20}}},
             {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
             {"match": {"go_term": {"query": query, "boost": 5}}},
-            {"match": {"go_synonyms": {"query": query, "boost": 3}}},
         ]
     elif doc_type == "phenotype":
         should_clauses = [
@@ -375,8 +374,7 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
                 "feature_name": {},
                 "aliases": {},
                 "go_term": {},
-                "go_synonyms": {},
-                "observable": {},
+                                "observable": {},
                 "ortholog_name": {},
                 "title": {},
             },
@@ -405,11 +403,10 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
         {"match": {"aliases": {"query": query, "boost": 8}}},
 
-        # GO term fields - search go_term and go_synonyms
+        # GO term fields - search go_term only
         {"term": {"goid": {"value": query_upper, "boost": 20}}},
         {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
         {"match": {"go_term": {"query": query, "boost": 5}}},
-        {"match": {"go_synonyms": {"query": query, "boost": 3}}},
 
         # Phenotype fields
         {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
@@ -734,8 +731,8 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     # Define fields to search based on type
     fields_by_type = {
         "gene": ["gene_name^3", "feature_name^2", "aliases^2", "headline", "name_description", "dbxref_id"],
-        # Search go_term and go_synonyms
-        "go_term": ["go_term^3", "goid^2", "go_synonyms^2"],
+        # Search go_term only
+        "go_term": ["go_term^3", "goid^2"],
         "phenotype": ["observable^3"],
         # Search title (+ pubmed handled separately for numeric queries)
         "reference": ["title^2"],
@@ -780,8 +777,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
-                "go_synonyms": {},
-                "observable": {},
+                                "observable": {},
                 "title": {},
                 "aliases": {},
                 "paragraph_text": {},
@@ -1227,7 +1223,7 @@ def _get_text_search_fields() -> list[str]:
     """Get the list of fields to search for text search.
 
     Search fields:
-    - GO terms: go_term + go_synonyms
+    - GO terms: go_term only
     - References: title (+ pubmed for numeric queries)
     """
     return [
@@ -1238,7 +1234,6 @@ def _get_text_search_fields() -> list[str]:
         "headline^2",
         "name_description",
         "go_term^3",
-        "go_synonyms^2",
         "observable^3",
         "title",
         "paragraph_text",
@@ -1299,8 +1294,7 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
                 "gene_name": {},
                 "headline": {},
                 "go_term": {},
-                "go_synonyms": {},
-                "observable": {},
+                                "observable": {},
                 "title": {},
                 "aliases": {},
                 "paragraph_text": {},
