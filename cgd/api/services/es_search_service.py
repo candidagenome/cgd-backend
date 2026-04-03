@@ -693,7 +693,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
         # Search go_term only
         "go_term": ["go_term^3", "goid^2"],
         "phenotype": ["observable^3"],
-        # Search title (+ pubmed handled separately for numeric queries)
+        # Search title only (pubmed handled separately for numeric queries)
         "reference": ["title^2"],
         "paragraph": ["paragraph_text^3", "gene_name^2", "feature_name"],
         "author": ["author_name^3", "citation"],
@@ -706,6 +706,59 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     }
 
     fields = fields_by_type.get(es_type, ["name"])
+
+    # For reference type with numeric query, also search pubmed
+    if es_type == "reference" and query.isdigit():
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": es_type}},
+                    ],
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": fields,
+                                "type": "best_fields",
+                                "fuzziness": "AUTO",
+                            }
+                        },
+                        {"term": {"pubmed": {"value": int(query), "boost": 10}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": size,
+            "highlight": {
+                "fields": {
+                    "name": {},
+                    "gene_name": {},
+                    "headline": {},
+                    "go_term": {},
+                                    "observable": {},
+                    "title": {},
+                    "aliases": {},
+                    "paragraph_text": {},
+                    "author_name": {},
+                    "last_name": {},
+                    "pathway_name": {},
+                    "note_text": {},
+                    "external_id": {},
+                    "ortholog_name": {},
+                    "related_genes": {},
+                    "literature_topic": {},
+                    "name_description": {},
+                },
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {
+                    "terms": {"field": "organism", "size": 20}
+                }
+            },
+        }
 
     return {
         "query": {
@@ -1206,6 +1259,33 @@ def _get_text_search_fields() -> list[str]:
 
 def _build_text_search_counts_query(query: str) -> dict:
     """Build ES query to get counts per type for text search."""
+    # For numeric queries, also search pubmed field for references
+    if query.isdigit():
+        return {
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": _get_text_search_fields(),
+                                "type": "best_fields",
+                                "fuzziness": "AUTO",
+                            }
+                        },
+                        {"term": {"pubmed": {"value": int(query), "boost": 10}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "by_type": {
+                    "terms": {"field": "type", "size": 20}
+                }
+            },
+        }
+
     return {
         "query": {
             "multi_match": {
@@ -1226,6 +1306,52 @@ def _build_text_search_counts_query(query: str) -> dict:
 
 def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> dict:
     """Build ES query for text search filtered to a specific type."""
+    # For reference type with numeric query, also search pubmed
+    if doc_type == "reference" and query.isdigit():
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": doc_type}},
+                    ],
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": _get_text_search_fields(),
+                                "type": "best_fields",
+                                "fuzziness": "AUTO",
+                            }
+                        },
+                        {"term": {"pubmed": {"value": int(query), "boost": 10}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": size,
+            "highlight": {
+                "fields": {
+                    "name": {},
+                    "gene_name": {},
+                    "headline": {},
+                    "go_term": {},
+                                    "observable": {},
+                    "title": {},
+                    "aliases": {},
+                    "paragraph_text": {},
+                    "author_name": {},
+                    "last_name": {},
+                    "pathway_name": {},
+                    "note_text": {},
+                    "external_id": {},
+                    "ortholog_name": {},
+                    "literature_topic": {},
+                },
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+
     return {
         "query": {
             "bool": {
