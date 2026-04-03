@@ -743,7 +743,7 @@ TEXT_CATEGORY_DISPLAY_NAMES = {
 }
 
 
-def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
+def _build_category_query(query: str, es_type: str, size: int = 10000) -> dict:
     """Build ES query for a specific category/type."""
     # Define fields to search based on type
     fields_by_type = {
@@ -922,7 +922,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
     }
 
 
-def _build_restrictive_gene_query(query: str, es_type: str, size: int = 1000) -> dict:
+def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -> dict:
     """
     Build restrictive ES query for genes/orthologs category search.
 
@@ -2011,7 +2011,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"headline": {}},
                 "pre_tags": ["<mark>"],
@@ -2033,7 +2033,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"name_description": {}},
                 "pre_tags": ["<mark>"],
@@ -2055,7 +2055,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"title": {}},
                 "pre_tags": ["<mark>"],
@@ -2074,7 +2074,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"paragraph_text": {}},
                 "pre_tags": ["<mark>"],
@@ -2092,7 +2092,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"note_text": {}},
                 "pre_tags": ["<mark>"],
@@ -2111,7 +2111,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"author_name": {}},
                 "pre_tags": ["<mark>"],
@@ -2138,7 +2138,7 @@ def text_search_category(
                     "minimum_should_match": 1,
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"gene_name": {}, "feature_name": {}},
                 "pre_tags": ["<mark>"],
@@ -2160,7 +2160,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"go_term": {}},
                 "pre_tags": ["<mark>"],
@@ -2179,7 +2179,7 @@ def text_search_category(
                     ]
                 }
             },
-            "size": 1000,
+            "size": 10000,
             "highlight": {
                 "fields": {"observable": {}},
                 "pre_tags": ["<mark>"],
@@ -2187,7 +2187,7 @@ def text_search_category(
             },
         }
     else:
-        es_query = _build_category_query(query, es_type, size=1000)
+        es_query = _build_category_query(query, es_type, size=10000)
 
     try:
         response = es.search(index=INDEX_NAME, body=es_query)
