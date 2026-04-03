@@ -1593,6 +1593,37 @@ def text_search(
                 if pt_results:
                     results_by_category["paper_titles"] = pt_results
 
+        # Step 5: Override GO terms count with wildcard query to match Oracle LIKE behavior
+        # The aggregation uses fuzziness which returns more results than Oracle
+        if "go_term" in type_counts and type_counts["go_term"] > 0:
+            go_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "go_term"}},
+                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"go_term": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            go_response = es.search(index=INDEX_NAME, body=go_query)
+            go_count = go_response["hits"]["total"]["value"]
+            # Override the fuzzy count with the exact wildcard count
+            counts_by_category["go_terms"] = go_count
+            if go_count > 0:
+                go_results = []
+                for hit in go_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "go_terms")
+                    go_results.append(result)
+                if go_results:
+                    results_by_category["go_terms"] = go_results
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
