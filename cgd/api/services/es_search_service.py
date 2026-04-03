@@ -1172,42 +1172,74 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
     )
 
 
-def _build_text_search_query(query: str, size_per_type: int = 10) -> dict:
-    """Build ES query for text search across all types."""
+def _get_text_search_fields() -> list[str]:
+    """Get the list of fields to search for text search."""
+    return [
+        "name^3",
+        "gene_name^3",
+        "feature_name^2",
+        "aliases^2",
+        "headline^2",
+        "name_description",
+        "go_term^3",
+        "go_definition",
+        "go_synonyms",
+        "observable^3",
+        "citation",
+        "abstract",
+        "title",
+        "paragraph_text",
+        "author_name^2",
+        "last_name^2",
+        "other_last_name",
+        "pathway_name",
+        "note_text",
+        "external_id",
+        "ortholog_name",
+        "related_genes",
+        "literature_topic",
+    ]
+
+
+def _build_text_search_counts_query(query: str) -> dict:
+    """Build ES query to get counts per type for text search."""
     return {
         "query": {
             "multi_match": {
                 "query": query,
-                "fields": [
-                    "name^3",
-                    "gene_name^3",
-                    "feature_name^2",
-                    "aliases^2",
-                    "headline^2",
-                    "name_description",
-                    "go_term^3",
-                    "go_definition",
-                    "go_synonyms",
-                    "observable^3",
-                    "citation",
-                    "abstract",
-                    "title",
-                    "paragraph_text",
-                    "author_name^2",
-                    "last_name^2",
-                    "other_last_name",
-                    "pathway_name",
-                    "note_text",
-                    "external_id",
-                    "ortholog_name",
-                    "related_genes",
-                    "literature_topic",
-                ],
+                "fields": _get_text_search_fields(),
                 "type": "best_fields",
                 "fuzziness": "AUTO",
             }
         },
-        "size": size_per_type * 15,  # Fetch extra to distribute across all categories
+        "size": 0,
+        "aggs": {
+            "by_type": {
+                "terms": {"field": "type", "size": 20}
+            }
+        },
+    }
+
+
+def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> dict:
+    """Build ES query for text search filtered to a specific type."""
+    return {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"type": doc_type}},
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "fields": _get_text_search_fields(),
+                            "type": "best_fields",
+                            "fuzziness": "AUTO",
+                        }
+                    },
+                ]
+            }
+        },
+        "size": size,
         "highlight": {
             "fields": {
                 "name": {},
@@ -1232,11 +1264,6 @@ def _build_text_search_query(query: str, size_per_type: int = 10) -> dict:
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
         },
-        "aggs": {
-            "by_type": {
-                "terms": {"field": "type", "size": 20}
-            }
-        },
     }
 
 
@@ -1251,137 +1278,150 @@ def text_search(
     Returns results for all categories now that ES indexes everything.
     Returns None on error (caller should fall back to Oracle).
     """
-    es_query = _build_text_search_query(query, limit)
+    # Mapping from ES doc type to category name
+    type_to_category = {
+        "gene": "genes",
+        "go_term": "go_terms",
+        "phenotype": "phenotypes",
+        "reference": "abstracts",  # References show as "abstracts" category
+        "paragraph": "paragraphs",
+        "author": "authors",
+        "colleague": "colleagues",
+        "pathway": "pathways",
+        "note": "notes",
+        "external_id": "external_ids",
+        "ortholog": "orthologs",
+        "literature_topic": "literature_topics",
+    }
 
     try:
-        response = es.search(index=INDEX_NAME, body=es_query)
+        # Step 1: Get counts per type using aggregation
+        counts_query = _build_text_search_counts_query(query)
+        counts_response = es.search(index=INDEX_NAME, body=counts_query)
+
+        type_counts = {}
+        for bucket in counts_response.get("aggregations", {}).get("by_type", {}).get("buckets", []):
+            type_counts[bucket["key"]] = bucket["doc_count"]
+
+        # Step 2: Query each type that has results to get sample results
+        results_by_category: dict[str, list[TextSearchResult]] = {}
+        counts_by_category: dict[str, int] = {}
+
+        for doc_type, count in type_counts.items():
+            if count == 0:
+                continue
+
+            category = type_to_category.get(doc_type)
+            if not category:
+                continue
+
+            # Store the actual count
+            counts_by_category[category] = count
+
+            # Fetch sample results for this type
+            type_query = _build_text_search_type_query(query, doc_type, limit)
+            type_response = es.search(index=INDEX_NAME, body=type_query)
+
+            results = []
+            for hit in type_response["hits"]["hits"]:
+                result = _parse_text_search_result(hit, query, category)
+                results.append(result)
+
+            if results:
+                results_by_category[category] = results
+
+        # Step 3: Handle special categories derived from genes
+        # descriptions: genes with headline containing query
+        # name_descriptions: genes with name_description containing query
+        if "gene" in type_counts and type_counts["gene"] > 0:
+            # Query for descriptions (headline matches)
+            desc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "gene"}},
+                            {"match": {"headline": query}},
+                        ]
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"headline": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            desc_response = es.search(index=INDEX_NAME, body=desc_query)
+            desc_count = desc_response["hits"]["total"]["value"]
+            if desc_count > 0:
+                counts_by_category["descriptions"] = desc_count
+                desc_results = []
+                for hit in desc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "descriptions")
+                    desc_results.append(result)
+                if desc_results:
+                    results_by_category["descriptions"] = desc_results
+
+            # Query for name_descriptions
+            nd_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "gene"}},
+                            {"match": {"name_description": query}},
+                        ]
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"name_description": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            nd_response = es.search(index=INDEX_NAME, body=nd_query)
+            nd_count = nd_response["hits"]["total"]["value"]
+            if nd_count > 0:
+                counts_by_category["name_descriptions"] = nd_count
+                nd_results = []
+                for hit in nd_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "name_descriptions")
+                    nd_results.append(result)
+                if nd_results:
+                    results_by_category["name_descriptions"] = nd_results
+
+        # Sort gene-related categories by organism priority
+        for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
+            if cat in results_by_category and results_by_category[cat]:
+                results_by_category[cat].sort(
+                    key=lambda r: (_get_organism_priority(r.organism), r.name or '')
+                )
+
+        # Build category results with actual counts
+        categories: list[TextSearchCategoryResult] = []
+        total_results = 0
+
+        for cat_key, results in results_by_category.items():
+            if results:
+                display_name = TEXT_CATEGORY_DISPLAY_NAMES.get(cat_key, cat_key)
+                actual_count = counts_by_category.get(cat_key, len(results))
+                categories.append(TextSearchCategoryResult(
+                    category=cat_key,
+                    display_name=display_name,
+                    count=actual_count,  # Use actual count, not just sample size
+                    results=results,
+                ))
+                total_results += actual_count
+
+        return TextSearchResponse(
+            query=query,
+            total_results=total_results,
+            categories=categories,
+        )
+
     except Exception as e:
         logger.error(f"Elasticsearch text search failed: {e}")
         return None
-
-    # Group results by category - all categories now supported
-    results_by_category: dict[str, list[TextSearchResult]] = {
-        "genes": [],
-        "descriptions": [],
-        "go_terms": [],
-        "phenotypes": [],
-        "abstracts": [],
-        "paragraphs": [],
-        "authors": [],
-        "colleagues": [],
-        "pathways": [],
-        "notes": [],
-        "external_ids": [],
-        "orthologs": [],
-        "literature_topics": [],
-        "name_descriptions": [],
-    }
-
-    for hit in response["hits"]["hits"]:
-        doc_type = hit["_source"].get("type")
-
-        if doc_type == "gene":
-            # Add to genes category
-            gene_result = _parse_text_search_result(hit, query, "genes")
-            if len(results_by_category["genes"]) < limit:
-                results_by_category["genes"].append(gene_result)
-
-            # Check if headline contains the query for descriptions category
-            headline = hit["_source"].get("headline", "")
-            if headline and query.lower() in headline.lower():
-                desc_result = _parse_text_search_result(hit, query, "descriptions")
-                if len(results_by_category["descriptions"]) < limit:
-                    results_by_category["descriptions"].append(desc_result)
-
-            # Check if name_description contains the query
-            name_desc = hit["_source"].get("name_description", "")
-            if name_desc and query.lower() in name_desc.lower():
-                nd_result = _parse_text_search_result(hit, query, "name_descriptions")
-                if len(results_by_category["name_descriptions"]) < limit:
-                    results_by_category["name_descriptions"].append(nd_result)
-
-        elif doc_type == "go_term":
-            result = _parse_text_search_result(hit, query, "go_terms")
-            if len(results_by_category["go_terms"]) < limit:
-                results_by_category["go_terms"].append(result)
-
-        elif doc_type == "phenotype":
-            result = _parse_text_search_result(hit, query, "phenotypes")
-            if len(results_by_category["phenotypes"]) < limit:
-                results_by_category["phenotypes"].append(result)
-
-        elif doc_type == "reference":
-            result = _parse_text_search_result(hit, query, "abstracts")
-            if len(results_by_category["abstracts"]) < limit:
-                results_by_category["abstracts"].append(result)
-
-        elif doc_type == "paragraph":
-            result = _parse_text_search_result(hit, query, "paragraphs")
-            if len(results_by_category["paragraphs"]) < limit:
-                results_by_category["paragraphs"].append(result)
-
-        elif doc_type == "author":
-            result = _parse_text_search_result(hit, query, "authors")
-            if len(results_by_category["authors"]) < limit:
-                results_by_category["authors"].append(result)
-
-        elif doc_type == "colleague":
-            result = _parse_text_search_result(hit, query, "colleagues")
-            if len(results_by_category["colleagues"]) < limit:
-                results_by_category["colleagues"].append(result)
-
-        elif doc_type == "pathway":
-            result = _parse_text_search_result(hit, query, "pathways")
-            if len(results_by_category["pathways"]) < limit:
-                results_by_category["pathways"].append(result)
-
-        elif doc_type == "note":
-            result = _parse_text_search_result(hit, query, "notes")
-            if len(results_by_category["notes"]) < limit:
-                results_by_category["notes"].append(result)
-
-        elif doc_type == "external_id":
-            result = _parse_text_search_result(hit, query, "external_ids")
-            if len(results_by_category["external_ids"]) < limit:
-                results_by_category["external_ids"].append(result)
-
-        elif doc_type == "ortholog":
-            result = _parse_text_search_result(hit, query, "orthologs")
-            if len(results_by_category["orthologs"]) < limit:
-                results_by_category["orthologs"].append(result)
-
-        elif doc_type == "literature_topic":
-            result = _parse_text_search_result(hit, query, "literature_topics")
-            if len(results_by_category["literature_topics"]) < limit:
-                results_by_category["literature_topics"].append(result)
-
-    # Sort gene-related categories by organism priority
-    for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
-        if results_by_category[cat]:
-            results_by_category[cat].sort(
-                key=lambda r: (_get_organism_priority(r.organism), r.name or '')
-            )
-
-    # Build category results
-    categories: list[TextSearchCategoryResult] = []
-    total_results = 0
-
-    for cat_key, results in results_by_category.items():
-        if results:
-            display_name = TEXT_CATEGORY_DISPLAY_NAMES.get(cat_key, cat_key)
-            categories.append(TextSearchCategoryResult(
-                category=cat_key,
-                display_name=display_name,
-                count=len(results),
-                results=results,
-            ))
-            total_results += len(results)
-
-    return TextSearchResponse(
-        query=query,
-        total_results=total_results,
-        categories=categories,
-    )
 
 
 def text_search_category(
