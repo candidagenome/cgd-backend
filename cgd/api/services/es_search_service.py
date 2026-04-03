@@ -709,58 +709,48 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
 
     fields = fields_by_type.get(es_type, ["name"])
 
-    # For reference type with numeric query, also search pubmed
-    if es_type == "reference" and query.isdigit():
-        return {
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"type": es_type}},
-                    ],
-                    "should": [
-                        {
-                            "multi_match": {
-                                "query": query,
-                                "fields": fields,
-                                "type": "best_fields",
-                                "fuzziness": "AUTO",
-                            }
-                        },
-                        {"term": {"pubmed": {"value": int(query), "boost": 10}}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
-            "size": size,
-            "highlight": {
-                "fields": {
-                    "name": {},
-                    "gene_name": {},
-                    "headline": {},
-                    "go_term": {},
-                                    "observable": {},
-                    "title": {},
-                    "aliases": {},
-                    "paragraph_text": {},
-                    "author_name": {},
-                    "last_name": {},
-                    "pathway_name": {},
-                    "note_text": {},
-                    "external_id": {},
-                    "ortholog_name": {},
-                    "related_genes": {},
-                    "literature_topic": {},
-                    "name_description": {},
+    # For reference type, use wildcard to match Oracle's LIKE behavior
+    if es_type == "reference":
+        if query.isdigit():
+            # Numeric query: search pubmed
+            return {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": es_type}},
+                        ],
+                        "should": [
+                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"term": {"pubmed": {"value": int(query), "boost": 10}}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
                 },
-                "pre_tags": ["<mark>"],
-                "post_tags": ["</mark>"],
-            },
-            "aggs": {
-                "by_organism": {
-                    "terms": {"field": "organism", "size": 20}
-                }
-            },
-        }
+                "size": size,
+                "highlight": {
+                    "fields": {"title": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+        else:
+            # Non-numeric query: use wildcard on title
+            return {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": es_type}},
+                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": size,
+                "highlight": {
+                    "fields": {"title": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
 
     return {
         "query": {
