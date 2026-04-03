@@ -1715,6 +1715,136 @@ def text_search(
                 # Remove genes from results if count is 0
                 results_by_category.pop("genes", None)
 
+        # Step 8: Override descriptions count with wildcard query
+        if "gene" in type_counts:
+            desc_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "gene"}},
+                            {"wildcard": {"headline.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+            }
+            desc_wc_response = es.search(index=INDEX_NAME, body=desc_wc_query)
+            desc_wc_count = desc_wc_response["hits"]["total"]["value"]
+            counts_by_category["descriptions"] = desc_wc_count
+            if desc_wc_count > 0:
+                desc_wc_results = []
+                for hit in desc_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "descriptions")
+                    desc_wc_results.append(result)
+                if desc_wc_results:
+                    results_by_category["descriptions"] = desc_wc_results
+            else:
+                results_by_category.pop("descriptions", None)
+
+        # Step 9: Override name_descriptions count with wildcard query
+        if "gene" in type_counts:
+            nd_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "gene"}},
+                            {"wildcard": {"name_description.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+            }
+            nd_wc_response = es.search(index=INDEX_NAME, body=nd_wc_query)
+            nd_wc_count = nd_wc_response["hits"]["total"]["value"]
+            counts_by_category["name_descriptions"] = nd_wc_count
+            if nd_wc_count > 0:
+                nd_wc_results = []
+                for hit in nd_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "name_descriptions")
+                    nd_wc_results.append(result)
+                if nd_wc_results:
+                    results_by_category["name_descriptions"] = nd_wc_results
+            else:
+                results_by_category.pop("name_descriptions", None)
+
+        # Step 10: Override paragraphs count with wildcard query
+        if "paragraph" in type_counts:
+            para_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "paragraph"}},
+                            {"wildcard": {"paragraph_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+            }
+            para_wc_response = es.search(index=INDEX_NAME, body=para_wc_query)
+            para_wc_count = para_wc_response["hits"]["total"]["value"]
+            counts_by_category["paragraphs"] = para_wc_count
+            if para_wc_count > 0:
+                para_wc_results = []
+                for hit in para_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "paragraphs")
+                    para_wc_results.append(result)
+                if para_wc_results:
+                    results_by_category["paragraphs"] = para_wc_results
+            else:
+                results_by_category.pop("paragraphs", None)
+
+        # Step 11: Override notes count with wildcard query
+        if "note" in type_counts:
+            note_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "note"}},
+                            {"wildcard": {"note_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+            }
+            note_wc_response = es.search(index=INDEX_NAME, body=note_wc_query)
+            note_wc_count = note_wc_response["hits"]["total"]["value"]
+            counts_by_category["notes"] = note_wc_count
+            if note_wc_count > 0:
+                note_wc_results = []
+                for hit in note_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "notes")
+                    note_wc_results.append(result)
+                if note_wc_results:
+                    results_by_category["notes"] = note_wc_results
+            else:
+                results_by_category.pop("notes", None)
+
+        # Step 12: Override authors count with wildcard query
+        if "author" in type_counts:
+            auth_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "author"}},
+                            {"wildcard": {"author_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": limit,
+            }
+            auth_wc_response = es.search(index=INDEX_NAME, body=auth_wc_query)
+            auth_wc_count = auth_wc_response["hits"]["total"]["value"]
+            counts_by_category["authors"] = auth_wc_count
+            if auth_wc_count > 0:
+                auth_wc_results = []
+                for hit in auth_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "authors")
+                    auth_wc_results.append(result)
+                if auth_wc_results:
+                    results_by_category["authors"] = auth_wc_results
+            else:
+                results_by_category.pop("authors", None)
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
