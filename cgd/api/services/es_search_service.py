@@ -1676,8 +1676,9 @@ def text_search(
 
         # Step 5: Override GO terms count with wildcard query to match Oracle LIKE behavior
         # The aggregation uses fuzziness which returns more results than Oracle
+        # NOTE: Oracle doesn't apply match_mode to GO terms, so always use "exact" phrase matching
         if "go_term" in type_counts and type_counts["go_term"] > 0:
-            go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, match_mode)
+            go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, "exact")
             go_query = {
                 "query": {
                     "bool": {
@@ -1707,8 +1708,9 @@ def text_search(
                     results_by_category["go_terms"] = go_results
 
         # Step 6: Override phenotypes count with wildcard query to match Oracle LIKE behavior
+        # NOTE: Oracle doesn't apply match_mode to phenotypes, so always use "exact" phrase matching
         if "phenotype" in type_counts and type_counts["phenotype"] > 0:
-            ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, match_mode)
+            ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, "exact")
             ph_query = {
                 "query": {
                     "bool": {
@@ -1742,11 +1744,12 @@ def text_search(
 
         # Step 7: Override genes count with wildcard query to match Oracle LIKE behavior
         # Oracle searches gene_name, feature_name, dbxref_id - ES fuzzy match is too broad
+        # NOTE: Oracle doesn't apply match_mode to genes, so always use "exact" phrase matching
         if "gene" in type_counts and type_counts["gene"] > 0:
             # For genes, we search multiple fields - build wildcard for each field
-            gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, match_mode)
-            feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, match_mode, case_insensitive=False)
-            dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, match_mode, case_insensitive=False)
+            gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
+            feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
+            dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=False)
             gene_query = {
                 "query": {
                     "bool": {
@@ -1811,8 +1814,9 @@ def text_search(
                 results_by_category.pop("descriptions", None)
 
         # Step 9: Override name_descriptions count with wildcard query
+        # NOTE: Oracle doesn't apply match_mode to name_descriptions, so always use "exact" phrase matching
         if "gene" in type_counts:
-            nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, match_mode)
+            nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, "exact")
             nd_wc_query = {
                 "query": {
                     "bool": {
@@ -1838,8 +1842,9 @@ def text_search(
                 results_by_category.pop("name_descriptions", None)
 
         # Step 10: Override paragraphs count with wildcard query
+        # NOTE: Oracle doesn't apply match_mode to paragraphs, so always use "exact" phrase matching
         if "paragraph" in type_counts:
-            para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, match_mode)
+            para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, "exact")
             para_wc_query = {
                 "query": {
                     "bool": {
@@ -1892,8 +1897,9 @@ def text_search(
                 results_by_category.pop("notes", None)
 
         # Step 12: Override authors count with wildcard query
+        # NOTE: Oracle doesn't apply match_mode to authors, so always use "exact" phrase matching
         if "author" in type_counts:
-            auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, match_mode)
+            auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, "exact")
             auth_wc_query = {
                 "query": {
                     "bool": {
@@ -2011,7 +2017,8 @@ def text_search_category(
             },
         }
     elif category == "name_descriptions":
-        nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, match_mode)
+        # NOTE: Oracle doesn't apply match_mode to name_descriptions, so always use "exact"
+        nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, "exact")
         es_query = {
             "query": {
                 "bool": {
@@ -2051,7 +2058,8 @@ def text_search_category(
             },
         }
     elif category == "paragraphs":
-        para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, match_mode)
+        # NOTE: Oracle doesn't apply match_mode to paragraphs, so always use "exact"
+        para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, "exact")
         es_query = {
             "query": {
                 "bool": {
@@ -2087,7 +2095,8 @@ def text_search_category(
             },
         }
     elif category == "authors":
-        auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, match_mode)
+        # NOTE: Oracle doesn't apply match_mode to authors, so always use "exact"
+        auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, "exact")
         es_query = {
             "query": {
                 "bool": {
@@ -2106,9 +2115,10 @@ def text_search_category(
         }
     elif category == "genes":
         # For genes, we search multiple fields
-        gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, match_mode)
-        feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, match_mode, case_insensitive=False)
-        dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, match_mode, case_insensitive=False)
+        # NOTE: Oracle doesn't apply match_mode to genes, so always use "exact"
+        gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
+        feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
+        dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=False)
         es_query = {
             "query": {
                 "bool": {
@@ -2134,7 +2144,8 @@ def text_search_category(
             },
         }
     elif category == "go_terms":
-        go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, match_mode)
+        # NOTE: Oracle doesn't apply match_mode to go_terms, so always use "exact"
+        go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, "exact")
         es_query = {
             "query": {
                 "bool": {
@@ -2152,7 +2163,8 @@ def text_search_category(
             },
         }
     elif category == "phenotypes":
-        ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, match_mode)
+        # NOTE: Oracle doesn't apply match_mode to phenotypes, so always use "exact"
+        ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, "exact")
         es_query = {
             "query": {
                 "bool": {
