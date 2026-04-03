@@ -1918,6 +1918,14 @@ def text_search(
             else:
                 results_by_category.pop("authors", None)
 
+        # Step 13: Remove categories that don't have wildcard overrides
+        # These categories used fuzzy matching in Step 2 which doesn't respect match_mode
+        # Remove them to ensure total_results only counts properly filtered results
+        categories_without_override = ["abstracts", "colleagues", "pathways", "external_ids", "orthologs", "literature_topics"]
+        for cat in categories_without_override:
+            counts_by_category.pop(cat, None)
+            results_by_category.pop(cat, None)
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
@@ -1948,7 +1956,10 @@ def text_search(
         )
 
     except Exception as e:
+        import traceback
         logger.error(f"Elasticsearch text search failed: {e}")
+        logger.error(f"Query: {query}, match_mode: {match_mode}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
