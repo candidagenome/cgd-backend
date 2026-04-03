@@ -126,6 +126,7 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
 
     Prioritizes prefix matching for fast suggestions.
     Uses case-insensitive wildcard for genes to match regardless of case.
+    Only returns types that autocomplete handles: gene, go_term, phenotype, reference.
     """
     query_upper = query.upper()
     query_lower = query.lower()
@@ -133,6 +134,10 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     return {
         "query": {
             "bool": {
+                # Only return types that autocomplete handles
+                "filter": [
+                    {"terms": {"type": ["gene", "go_term", "phenotype", "reference"]}}
+                ],
                 "should": [
                     # Exact match (highest priority) - genes
                     {"term": {"gene_name.keyword": {"value": query_upper, "boost": 30}}},
