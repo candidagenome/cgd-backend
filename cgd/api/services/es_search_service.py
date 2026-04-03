@@ -597,7 +597,7 @@ def get_autocomplete_suggestions(
                 genes.append(AutocompleteSuggestion(
                     text=display_name,
                     category="gene",
-                    link=source.get("link") or f"/locus/{display_name}",
+                    link=f"/locus/{display_name}",  # Use gene_name for link, not feature_name
                     description=description,
                     highlighted_text=highlighted_text,
                     highlighted_description=_highlight_text(description, query) if description else None,
