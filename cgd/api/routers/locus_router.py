@@ -5,13 +5,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
-from cgd.api.services import locus_service, synteny_service
+from cgd.api.services import locus_service, synteny_service, es_search_service
+from cgd.core.elasticsearch import get_es_client
 from cgd.schemas.locus_schema import (
     LocusByOrganismResponse,
     SequenceDetailsResponse,
     LocusReferencesResponse,
     LocusSummaryNotesResponse,
     LocusHistoryResponse,
+    OrthologOrganismsResponse,
+    OrthologOrganismOut,
 )
 from cgd.schemas.phenotype_schema import PhenotypeDetailsResponse
 from cgd.schemas.go_schema import GODetailsResponse
@@ -187,5 +190,33 @@ def synteny(name: str, flanking_count: int = 10, db: Session = Depends(get_db)):
         logger.error(f"Error in synteny for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/ortholog_organisms", response_model=OrthologOrganismsResponse)
+def ortholog_organisms(name: str):
+    """
+    Get list of organisms that have orthologs for this locus.
+
+    Uses Elasticsearch for fast lookup. Returns organism names and
+    feature names for navigation to ortholog locus pages.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+    """
+    try:
+        es = get_es_client()
+        if not es:
+            return OrthologOrganismsResponse(organisms=[])
+
+        results = es_search_service.get_ortholog_organisms(es, name)
+        organisms = [
+            OrthologOrganismOut(organism=r["organism"], feature_name=r["feature_name"])
+            for r in results
+        ]
+        return OrthologOrganismsResponse(organisms=organisms)
+    except Exception as e:
+        logger.error(f"Error in ortholog_organisms for {name}: {e}")
+        logger.error(traceback.format_exc())
+        return OrthologOrganismsResponse(organisms=[])
 
 

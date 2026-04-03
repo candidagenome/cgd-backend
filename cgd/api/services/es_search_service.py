@@ -2228,3 +2228,83 @@ def text_search_category(
 def get_es_supported_categories() -> set[str]:
     """Return the set of categories supported by ES for text search."""
     return set(TEXT_CATEGORY_TO_ES_TYPE.keys())
+
+
+def get_ortholog_organisms(
+    es: Elasticsearch,
+    gene_name_or_feature: str,
+) -> list[dict]:
+    """
+    Get list of organisms that have orthologs for a given gene.
+
+    Uses ES aggregation to efficiently find unique ortholog organisms
+    and returns the feature_name for navigation.
+
+    Args:
+        es: Elasticsearch client
+        gene_name_or_feature: Gene name or feature name to search for
+
+    Returns:
+        List of dicts with {organism, feature_name} for each ortholog organism
+    """
+    query_upper = gene_name_or_feature.upper()
+
+    # Query ortholog docs where this gene is the CGD gene (not the ortholog)
+    # Use aggregation to get unique organisms with their feature names
+    es_query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"type": "ortholog"}},
+                ],
+                "should": [
+                    {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
+                    {"term": {"cgd_feature_name": {"value": query_upper, "boost": 10}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "size": 0,
+        "aggs": {
+            "by_organism": {
+                "terms": {
+                    "field": "ortholog_organism",
+                    "size": 50,
+                },
+                "aggs": {
+                    "feature_name": {
+                        "top_hits": {
+                            "size": 1,
+                            "_source": ["ortholog_feature_name", "ortholog_organism"],
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+    try:
+        response = es.search(index=INDEX_NAME, body=es_query)
+        buckets = response.get("aggregations", {}).get("by_organism", {}).get("buckets", [])
+
+        results = []
+        for bucket in buckets:
+            organism = bucket["key"]
+            # Get the feature_name from the top hit
+            top_hits = bucket.get("feature_name", {}).get("hits", {}).get("hits", [])
+            if top_hits:
+                source = top_hits[0].get("_source", {})
+                feature_name = source.get("ortholog_feature_name")
+                if organism and feature_name:
+                    results.append({
+                        "organism": organism,
+                        "feature_name": feature_name,
+                    })
+
+        # Sort by organism priority
+        results.sort(key=lambda x: _get_organism_priority(x["organism"]))
+        return results
+
+    except Exception as e:
+        logger.error(f"Error fetching ortholog organisms for {gene_name_or_feature}: {e}")
+        return []

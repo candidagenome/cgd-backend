@@ -407,3 +407,16 @@ class LocusHistoryForOrganism(BaseModel):
 
 class LocusHistoryResponse(BaseModel):
     results: dict[str, LocusHistoryForOrganism]
+
+
+# --- Ortholog Organisms ---
+
+class OrthologOrganismOut(BaseModel):
+    """An organism that has an ortholog for a given gene"""
+    organism: str  # Full organism name (e.g., "Candida glabrata CBS138")
+    feature_name: str  # Feature name for navigation (e.g., "CAGL0K12694g")
+
+
+class OrthologOrganismsResponse(BaseModel):
+    """Response containing list of organisms with orthologs for a gene"""
+    organisms: list[OrthologOrganismOut] = []
