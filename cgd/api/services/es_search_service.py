@@ -1894,14 +1894,14 @@ def text_search_category(
 
     es_type = TEXT_CATEGORY_TO_ES_TYPE[category]
 
-    # Special handling for certain gene-based categories
+    # Special handling for certain gene-based categories - use wildcard to match Oracle
     if category == "descriptions":
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "gene"}},
-                        {"match": {"headline": query}},
+                        {"wildcard": {"headline.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                     ]
                 }
             },
@@ -1921,7 +1921,7 @@ def text_search_category(
                 "bool": {
                     "must": [
                         {"term": {"type": "gene"}},
-                        {"match": {"name_description": query}},
+                        {"wildcard": {"name_description.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                     ]
                 }
             },
@@ -1951,6 +1951,82 @@ def text_search_category(
                 "fields": {"title": {}},
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
+            },
+        }
+    elif category == "paragraphs":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "paragraph"}},
+                        {"wildcard": {"paragraph_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"paragraph_text": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+    elif category == "notes":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "note"}},
+                        {"wildcard": {"note_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"note_text": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+    elif category == "authors":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "author"}},
+                        {"wildcard": {"author_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"author_name": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+    elif category == "genes":
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "gene"}},
+                    ],
+                    "should": [
+                        {"wildcard": {"gene_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        {"wildcard": {"feature_name": {"value": f"*{query.upper()}*"}}},
+                        {"wildcard": {"dbxref_id": {"value": f"*{query.upper()}*"}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"gene_name": {}, "feature_name": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {"terms": {"field": "organism", "size": 20}}
             },
         }
     else:
