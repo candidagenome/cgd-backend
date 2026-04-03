@@ -147,11 +147,19 @@ def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     Args:
         column: SQLAlchemy column to search
         query: Search query string (may contain multiple terms)
-        match_mode: "all" (AND) or "any" (OR)
+        match_mode: "all" (AND), "any" (OR), or "exact" (phrase)
 
     Returns:
         SQLAlchemy filter expression
     """
+    # For "exact" mode, search for the whole phrase as-is (no splitting)
+    if match_mode == "exact":
+        query_stripped = query.strip()
+        if not query_stripped:
+            return None
+        exact_pattern = f"%{query_stripped.upper()}%"
+        return func.upper(column).like(exact_pattern)
+
     terms = _parse_search_terms(query)
     if not terms:
         return None

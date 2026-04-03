@@ -162,8 +162,8 @@ def text_search(
     ),
     match_mode: str = Query(
         "all",
-        description="For multi-term queries: 'all' (AND) or 'any' (OR)",
-        pattern="^(all|any)$"
+        description="For multi-term queries: 'all' (AND), 'any' (OR), or 'exact' (phrase)",
+        pattern="^(all|any|exact)$"
     ),
     db: Session = Depends(get_db),
 ):
@@ -176,7 +176,10 @@ def text_search(
 
     Use type=homolog to search only orthologs/best hits.
     Use search_field to limit paper search to title, abstract, or both.
-    Use match_mode to specify AND (all) or OR (any) for multi-term queries.
+    Use match_mode to specify:
+      - 'all': All words must appear (AND logic) - default
+      - 'any': Any word can appear (OR logic)
+      - 'exact': Search for the exact phrase
 
     Uses Elasticsearch when enabled for all categories, falls back to Oracle.
     """
@@ -188,7 +191,7 @@ def text_search(
             es = get_es_client()
             if es_search_service.check_es_available(es):
                 logger.debug("Using Elasticsearch for text search")
-                es_result = es_search_service.text_search(es, query, limit)
+                es_result = es_search_service.text_search(es, query, limit, match_mode)
                 if es_result is not None:
                     return es_result
         except Exception as e:
@@ -212,8 +215,8 @@ def text_search_category(
     ),
     match_mode: str = Query(
         "all",
-        description="For multi-term queries: 'all' (AND) or 'any' (OR)",
-        pattern="^(all|any)$"
+        description="For multi-term queries: 'all' (AND), 'any' (OR), or 'exact' (phrase)",
+        pattern="^(all|any|exact)$"
     ),
     db: Session = Depends(get_db),
 ):
@@ -222,7 +225,10 @@ def text_search_category(
 
     Returns all results for a single category.
     Use search_field to limit paper search to title, abstract, or both.
-    Use match_mode to specify AND (all) or OR (any) for multi-term queries.
+    Use match_mode to specify:
+      - 'all': All words must appear (AND logic) - default
+      - 'any': Any word can appear (OR logic)
+      - 'exact': Search for the exact phrase
     Uses Elasticsearch when enabled for supported categories.
     """
     # Try Elasticsearch first if enabled and category is supported
@@ -231,7 +237,7 @@ def text_search_category(
             es = get_es_client()
             if es_search_service.check_es_available(es):
                 logger.debug(f"Using Elasticsearch for text search category: {category}")
-                result = es_search_service.text_search_category(es, query, category)
+                result = es_search_service.text_search_category(es, query, category, match_mode)
                 if result is not None:
                     return result
         except Exception as e:

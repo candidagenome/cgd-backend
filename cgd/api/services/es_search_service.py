@@ -65,6 +65,53 @@ def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
     return pattern.sub(replacer, text)
 
 
+def _build_wildcard_query_for_match_mode(
+    field: str,
+    query: str,
+    match_mode: str = "exact",
+    case_insensitive: bool = True,
+) -> dict:
+    """
+    Build wildcard query based on match_mode.
+
+    Args:
+        field: The field to search (should be a .keyword field for exact matching)
+        query: The search query
+        match_mode: One of "exact", "all", "any"
+            - exact: Search for the exact phrase (default, current behavior)
+            - all: All words must appear (AND logic)
+            - any: Any word can appear (OR logic)
+        case_insensitive: Whether to do case-insensitive matching
+
+    Returns:
+        ES query dict (bool clause or single wildcard)
+    """
+    query_lower = query.lower()
+
+    if match_mode == "exact":
+        # Current behavior: search for exact phrase
+        return {"wildcard": {field: {"value": f"*{query_lower}*", "case_insensitive": case_insensitive}}}
+
+    # Split query into words for all/any mode
+    words = query_lower.split()
+    if len(words) <= 1:
+        # Single word, same as exact
+        return {"wildcard": {field: {"value": f"*{query_lower}*", "case_insensitive": case_insensitive}}}
+
+    # Build wildcard for each word
+    word_queries = [
+        {"wildcard": {field: {"value": f"*{word}*", "case_insensitive": case_insensitive}}}
+        for word in words
+    ]
+
+    if match_mode == "all":
+        # All words must match (AND)
+        return {"bool": {"must": word_queries}}
+    else:  # match_mode == "any"
+        # Any word can match (OR)
+        return {"bool": {"should": word_queries, "minimum_should_match": 1}}
+
+
 def _extract_highlight(highlights: dict, field: str, fallback: Optional[str]) -> Optional[str]:
     """Extract highlighted text from ES response, or return fallback with manual highlighting."""
     if highlights and field in highlights:
@@ -1462,9 +1509,19 @@ def text_search(
     es: Elasticsearch,
     query: str,
     limit: int = 10,
+    match_mode: str = "all",
 ) -> Optional[TextSearchResponse]:
     """
     Text search across all ES-indexed categories.
+
+    Args:
+        es: Elasticsearch client
+        query: Search query string
+        limit: Max results per category
+        match_mode: One of "exact", "all", "any"
+            - exact: Search for the exact phrase
+            - all: All words must appear (AND logic) - default
+            - any: Any word can appear (OR logic)
 
     Returns results for all categories now that ES indexes everything.
     Returns None on error (caller should fall back to Oracle).
@@ -1585,12 +1642,13 @@ def text_search(
         # This is separate from abstracts which searches abstract field
         # Use wildcard to match Oracle's LIKE behavior (finds substring matches)
         if "reference" in type_counts and type_counts["reference"] > 0:
+            pt_wildcard = _build_wildcard_query_for_match_mode("title.keyword", query, match_mode)
             pt_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "reference"}},
-                            {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            pt_wildcard,
                         ]
                     }
                 },
@@ -1615,12 +1673,13 @@ def text_search(
         # Step 5: Override GO terms count with wildcard query to match Oracle LIKE behavior
         # The aggregation uses fuzziness which returns more results than Oracle
         if "go_term" in type_counts and type_counts["go_term"] > 0:
+            go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, match_mode)
             go_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "go_term"}},
-                            {"wildcard": {"go_term.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            go_wildcard,
                         ]
                     }
                 },
@@ -1645,12 +1704,13 @@ def text_search(
 
         # Step 6: Override phenotypes count with wildcard query to match Oracle LIKE behavior
         if "phenotype" in type_counts and type_counts["phenotype"] > 0:
+            ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, match_mode)
             ph_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "phenotype"}},
-                            {"wildcard": {"observable.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            ph_wildcard,
                         ]
                     }
                 },
@@ -1679,6 +1739,10 @@ def text_search(
         # Step 7: Override genes count with wildcard query to match Oracle LIKE behavior
         # Oracle searches gene_name, feature_name, dbxref_id - ES fuzzy match is too broad
         if "gene" in type_counts and type_counts["gene"] > 0:
+            # For genes, we search multiple fields - build wildcard for each field
+            gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, match_mode)
+            feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, match_mode, case_insensitive=False)
+            dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, match_mode, case_insensitive=False)
             gene_query = {
                 "query": {
                     "bool": {
@@ -1686,9 +1750,9 @@ def text_search(
                             {"term": {"type": "gene"}},
                         ],
                         "should": [
-                            {"wildcard": {"gene_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
-                            {"wildcard": {"feature_name": {"value": f"*{query.upper()}*"}}},
-                            {"wildcard": {"dbxref_id": {"value": f"*{query.upper()}*"}}},
+                            gene_name_wc,
+                            feature_name_wc,
+                            dbxref_wc,
                         ],
                         "minimum_should_match": 1,
                     }
@@ -1717,12 +1781,13 @@ def text_search(
 
         # Step 8: Override descriptions count with wildcard query
         if "gene" in type_counts:
+            desc_wildcard = _build_wildcard_query_for_match_mode("headline.keyword", query, match_mode)
             desc_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "gene"}},
-                            {"wildcard": {"headline.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            desc_wildcard,
                         ]
                     }
                 },
@@ -1743,12 +1808,13 @@ def text_search(
 
         # Step 9: Override name_descriptions count with wildcard query
         if "gene" in type_counts:
+            nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, match_mode)
             nd_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "gene"}},
-                            {"wildcard": {"name_description.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            nd_wildcard,
                         ]
                     }
                 },
@@ -1769,12 +1835,13 @@ def text_search(
 
         # Step 10: Override paragraphs count with wildcard query
         if "paragraph" in type_counts:
+            para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, match_mode)
             para_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "paragraph"}},
-                            {"wildcard": {"paragraph_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            para_wildcard,
                         ]
                     }
                 },
@@ -1795,12 +1862,13 @@ def text_search(
 
         # Step 11: Override notes count with wildcard query
         if "note" in type_counts:
+            note_wildcard = _build_wildcard_query_for_match_mode("note_text.keyword", query, match_mode)
             note_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "note"}},
-                            {"wildcard": {"note_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            note_wildcard,
                         ]
                     }
                 },
@@ -1821,12 +1889,13 @@ def text_search(
 
         # Step 12: Override authors count with wildcard query
         if "author" in type_counts:
+            auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, match_mode)
             auth_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "author"}},
-                            {"wildcard": {"author_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            auth_wildcard,
                         ]
                     }
                 },
@@ -1883,9 +1952,19 @@ def text_search_category(
     es: Elasticsearch,
     query: str,
     category: str,
+    match_mode: str = "all",
 ) -> Optional[TextSearchCategoryPagedResponse]:
     """
     Text search within a specific category using Elasticsearch.
+
+    Args:
+        es: Elasticsearch client
+        query: Search query string
+        category: Category to search
+        match_mode: One of "exact", "all", "any"
+            - exact: Search for the exact phrase
+            - all: All words must appear (AND logic) - default
+            - any: Any word can appear (OR logic)
 
     Returns None if category is not supported by ES (caller should fall back to Oracle).
     """
@@ -1896,12 +1975,13 @@ def text_search_category(
 
     # Special handling for certain gene-based categories - use wildcard to match Oracle
     if category == "descriptions":
+        desc_wildcard = _build_wildcard_query_for_match_mode("headline.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "gene"}},
-                        {"wildcard": {"headline.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        desc_wildcard,
                     ]
                 }
             },
@@ -1916,12 +1996,13 @@ def text_search_category(
             },
         }
     elif category == "name_descriptions":
+        nd_wildcard = _build_wildcard_query_for_match_mode("name_description.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "gene"}},
-                        {"wildcard": {"name_description.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        nd_wildcard,
                     ]
                 }
             },
@@ -1937,12 +2018,13 @@ def text_search_category(
         }
     elif category == "paper_titles":
         # Use wildcard to match Oracle's LIKE behavior (finds substring matches)
+        pt_wildcard = _build_wildcard_query_for_match_mode("title.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "reference"}},
-                        {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        pt_wildcard,
                     ]
                 }
             },
@@ -1954,12 +2036,13 @@ def text_search_category(
             },
         }
     elif category == "paragraphs":
+        para_wildcard = _build_wildcard_query_for_match_mode("paragraph_text.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "paragraph"}},
-                        {"wildcard": {"paragraph_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        para_wildcard,
                     ]
                 }
             },
@@ -1971,12 +2054,13 @@ def text_search_category(
             },
         }
     elif category == "notes":
+        note_wildcard = _build_wildcard_query_for_match_mode("note_text.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "note"}},
-                        {"wildcard": {"note_text.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        note_wildcard,
                     ]
                 }
             },
@@ -1988,12 +2072,13 @@ def text_search_category(
             },
         }
     elif category == "authors":
+        auth_wildcard = _build_wildcard_query_for_match_mode("author_name.keyword", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "author"}},
-                        {"wildcard": {"author_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        auth_wildcard,
                     ]
                 }
             },
@@ -2005,6 +2090,10 @@ def text_search_category(
             },
         }
     elif category == "genes":
+        # For genes, we search multiple fields
+        gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, match_mode)
+        feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, match_mode, case_insensitive=False)
+        dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, match_mode, case_insensitive=False)
         es_query = {
             "query": {
                 "bool": {
@@ -2012,9 +2101,9 @@ def text_search_category(
                         {"term": {"type": "gene"}},
                     ],
                     "should": [
-                        {"wildcard": {"gene_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
-                        {"wildcard": {"feature_name": {"value": f"*{query.upper()}*"}}},
-                        {"wildcard": {"dbxref_id": {"value": f"*{query.upper()}*"}}},
+                        gene_name_wc,
+                        feature_name_wc,
+                        dbxref_wc,
                     ],
                     "minimum_should_match": 1,
                 }
@@ -2027,6 +2116,42 @@ def text_search_category(
             },
             "aggs": {
                 "by_organism": {"terms": {"field": "organism", "size": 20}}
+            },
+        }
+    elif category == "go_terms":
+        go_wildcard = _build_wildcard_query_for_match_mode("go_term.keyword", query, match_mode)
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "go_term"}},
+                        go_wildcard,
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"go_term": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+        }
+    elif category == "phenotypes":
+        ph_wildcard = _build_wildcard_query_for_match_mode("observable.keyword", query, match_mode)
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "phenotype"}},
+                        ph_wildcard,
+                    ]
+                }
+            },
+            "size": 1000,
+            "highlight": {
+                "fields": {"observable": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
             },
         }
     else:
