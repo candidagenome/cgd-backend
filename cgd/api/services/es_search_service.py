@@ -1676,6 +1676,45 @@ def text_search(
                 # Remove phenotypes from results if count is 0
                 results_by_category.pop("phenotypes", None)
 
+        # Step 7: Override genes count with wildcard query to match Oracle LIKE behavior
+        # Oracle searches gene_name, feature_name, dbxref_id - ES fuzzy match is too broad
+        if "gene" in type_counts and type_counts["gene"] > 0:
+            gene_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "gene"}},
+                        ],
+                        "should": [
+                            {"wildcard": {"gene_name.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"feature_name": {"value": f"*{query.upper()}*"}}},
+                            {"wildcard": {"dbxref_id": {"value": f"*{query.upper()}*"}}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                },
+                "size": limit,
+                "highlight": {
+                    "fields": {"gene_name": {}, "feature_name": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+            gene_response = es.search(index=INDEX_NAME, body=gene_query)
+            gene_count = gene_response["hits"]["total"]["value"]
+            # Override the fuzzy count with the exact wildcard count
+            counts_by_category["genes"] = gene_count
+            if gene_count > 0:
+                gene_results = []
+                for hit in gene_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "genes")
+                    gene_results.append(result)
+                if gene_results:
+                    results_by_category["genes"] = gene_results
+            else:
+                # Remove genes from results if count is 0
+                results_by_category.pop("genes", None)
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
