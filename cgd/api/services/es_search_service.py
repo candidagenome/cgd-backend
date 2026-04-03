@@ -720,7 +720,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                             {"term": {"type": es_type}},
                         ],
                         "should": [
-                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                             {"term": {"pubmed": {"value": int(query), "boost": 10}}},
                         ],
                         "minimum_should_match": 1,
@@ -740,7 +740,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                     "bool": {
                         "must": [
                             {"term": {"type": es_type}},
-                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                         ]
                     }
                 },
@@ -766,7 +766,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                             {"term": {"type": es_type}},
                         ],
                         "should": [
-                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"go_term.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                             {"wildcard": {"goid": {"value": f"*{goid_value}*"}}},
                         ],
                         "minimum_should_match": 1,
@@ -786,7 +786,7 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                     "bool": {
                         "must": [
                             {"term": {"type": es_type}},
-                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"go_term.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                         ]
                     }
                 },
@@ -1571,7 +1571,7 @@ def text_search(
                     "bool": {
                         "must": [
                             {"term": {"type": "reference"}},
-                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                         ]
                     }
                 },
@@ -1601,7 +1601,7 @@ def text_search(
                     "bool": {
                         "must": [
                             {"term": {"type": "go_term"}},
-                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"go_term.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                         ]
                     }
                 },
@@ -1721,7 +1721,7 @@ def text_search_category(
                 "bool": {
                     "must": [
                         {"term": {"type": "reference"}},
-                        {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        {"wildcard": {"title.keyword": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                     ]
                 }
             },
