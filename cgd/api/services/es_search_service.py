@@ -2248,9 +2248,11 @@ def get_ortholog_organisms(
         List of dicts with {organism, feature_name} for each ortholog organism
     """
     query_upper = gene_name_or_feature.upper()
+    query_lower = gene_name_or_feature.lower()
 
     # Query ortholog docs where this gene is the CGD gene (not the ortholog)
     # Use aggregation to get unique organisms with their feature names
+    # Use case-insensitive matching to handle variations in gene name casing
     es_query = {
         "query": {
             "bool": {
@@ -2258,8 +2260,12 @@ def get_ortholog_organisms(
                     {"term": {"type": "ortholog"}},
                 ],
                 "should": [
-                    {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
+                    # Case-insensitive wildcard on gene name
+                    {"wildcard": {"cgd_gene_name.keyword": {"value": query_lower, "case_insensitive": True, "boost": 10}}},
+                    # Feature names are typically uppercase
                     {"term": {"cgd_feature_name": {"value": query_upper, "boost": 10}}},
+                    # Also try match query on analyzed field (case-insensitive by default)
+                    {"match": {"cgd_gene_name": {"query": gene_name_or_feature, "boost": 8}}},
                 ],
                 "minimum_should_match": 1,
             }
