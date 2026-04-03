@@ -752,6 +752,52 @@ def _build_category_query(query: str, es_type: str, size: int = 1000) -> dict:
                 },
             }
 
+    # For go_term type, use wildcard to match Oracle's LIKE behavior
+    if es_type == "go_term":
+        # Check if query looks like a GO ID
+        query_upper = query.upper()
+        if query_upper.startswith("GO:") or query.isdigit():
+            # Search by goid
+            goid_value = query_upper.replace("GO:", "") if query_upper.startswith("GO:") else query
+            return {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": es_type}},
+                        ],
+                        "should": [
+                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                            {"wildcard": {"goid": {"value": f"*{goid_value}*"}}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                },
+                "size": size,
+                "highlight": {
+                    "fields": {"go_term": {}, "goid": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+        else:
+            # Non-GO ID query: use wildcard on go_term only
+            return {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": es_type}},
+                            {"wildcard": {"go_term": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
+                        ]
+                    }
+                },
+                "size": size,
+                "highlight": {
+                    "fields": {"go_term": {}},
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+            }
+
     return {
         "query": {
             "bool": {
