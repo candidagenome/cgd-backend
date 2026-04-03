@@ -1528,13 +1528,14 @@ def text_search(
 
         # Step 4: Handle paper_titles category (references with title matching)
         # This is separate from abstracts which searches abstract field
+        # Use wildcard to match Oracle's LIKE behavior (finds substring matches)
         if "reference" in type_counts and type_counts["reference"] > 0:
             pt_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "reference"}},
-                            {"match": {"title": query}},
+                            {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                         ]
                     }
                 },
@@ -1647,12 +1648,13 @@ def text_search_category(
             },
         }
     elif category == "paper_titles":
+        # Use wildcard to match Oracle's LIKE behavior (finds substring matches)
         es_query = {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "reference"}},
-                        {"match": {"title": query}},
+                        {"wildcard": {"title": {"value": f"*{query.lower()}*", "case_insensitive": True}}},
                     ]
                 }
             },
