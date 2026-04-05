@@ -408,11 +408,11 @@ def _find_pam_sites(
     sequence: str,
     pam_type: PAMType,
     guide_length: int = 20
-) -> List[Tuple[str, int, str]]:
+) -> List[Tuple[str, str, int, str]]:
     """
     Find all PAM sites in a sequence and extract guide sequences.
 
-    Returns list of (guide_sequence, position, strand) tuples.
+    Returns list of (guide_sequence, pam_sequence, position, strand) tuples.
     Position is 1-based, relative to the input sequence.
     """
     pam_config = PAM_PATTERNS[pam_type]
@@ -427,6 +427,7 @@ def _find_pam_sites(
     for match in re.finditer(pattern, sequence):
         pam_start = match.start()
         pam_end = match.end()
+        pam_seq = sequence[pam_start:pam_end]
 
         if is_3prime:
             # PAM is 3' of guide (SpCas9 style)
@@ -436,7 +437,7 @@ def _find_pam_sites(
             if guide_start >= 0:
                 guide_seq = sequence[guide_start:guide_end]
                 position = guide_start + 1  # 1-based
-                guides.append((guide_seq, position, "+"))
+                guides.append((guide_seq, pam_seq, position, "+"))
         else:
             # PAM is 5' of guide (Cas12a style)
             # Guide is downstream of PAM
@@ -445,7 +446,7 @@ def _find_pam_sites(
             if guide_end <= len(sequence):
                 guide_seq = sequence[guide_start:guide_end]
                 position = pam_start + 1  # 1-based
-                guides.append((guide_seq, position, "+"))
+                guides.append((guide_seq, pam_seq, position, "+"))
 
     # Search reverse strand
     rev_sequence = _reverse_complement(sequence)
@@ -454,6 +455,7 @@ def _find_pam_sites(
     for match in re.finditer(pattern, rev_sequence):
         pam_start = match.start()
         pam_end = match.end()
+        pam_seq = rev_sequence[pam_start:pam_end]  # PAM as it appears on reverse strand
 
         if is_3prime:
             guide_start = pam_start - guide_length
@@ -462,23 +464,23 @@ def _find_pam_sites(
                 guide_seq = rev_sequence[guide_start:guide_end]
                 # Convert position back to forward strand coordinates
                 fwd_position = seq_len - pam_end + 1  # 1-based
-                guides.append((guide_seq, fwd_position, "-"))
+                guides.append((guide_seq, pam_seq, fwd_position, "-"))
         else:
             guide_start = pam_end
             guide_end = pam_end + guide_length
             if guide_end <= len(rev_sequence):
                 guide_seq = rev_sequence[guide_start:guide_end]
                 fwd_position = seq_len - pam_end + 1
-                guides.append((guide_seq, fwd_position, "-"))
+                guides.append((guide_seq, pam_seq, fwd_position, "-"))
 
     return guides
 
 
 def _filter_target_region(
-    guides: List[Tuple[str, int, str]],
+    guides: List[Tuple[str, str, int, str]],
     sequence_length: int,
     target_region: TargetRegion
-) -> List[Tuple[str, int, str]]:
+) -> List[Tuple[str, str, int, str]]:
     """Filter guides to those within the target region."""
     if target_region == TargetRegion.FULL_CDS or target_region == TargetRegion.CUSTOM:
         return guides
@@ -488,11 +490,11 @@ def _filter_target_region(
 
     if target_region == TargetRegion.FIVE_PRIME:
         # First 20%
-        return [(g, p, s) for g, p, s in guides if p <= region_size]
+        return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
     elif target_region == TargetRegion.THREE_PRIME:
         # Last 20%
         start = sequence_length - region_size
-        return [(g, p, s) for g, p, s in guides if p >= start]
+        return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
 
     return guides
 
@@ -692,7 +694,7 @@ def design_guides(
     guide_results = []
     pam_config = PAM_PATTERNS[request.pam]
 
-    for guide_seq, position, strand in all_guides:
+    for guide_seq, pam_seq, position, strand in all_guides:
         # Skip guides with non-ACGT characters
         if not re.match(r"^[ACGT]+$", guide_seq):
             continue
@@ -712,29 +714,7 @@ def design_guides(
         # Combined score (weighted average)
         combined_score = (efficiency_score * 0.5) + (specificity_score * 0.5)
 
-        # Get PAM sequence from target
-        if strand == "+":
-            if pam_config["position"] == "3prime":
-                pam_start = position - 1 + request.guide_length
-                pam_seq = target_sequence[pam_start:pam_start + pam_config["length"]]
-            else:
-                pam_start = position - 1 - pam_config["length"]
-                pam_seq = target_sequence[pam_start:pam_start + pam_config["length"]]
-        else:
-            # For reverse strand, extract PAM from forward strand and reverse complement
-            # Position is where the PAM region starts on forward strand (1-based)
-            if pam_config["position"] == "3prime":
-                # PAM is at position to position + pam_length on forward strand
-                pam_seq = _reverse_complement(
-                    target_sequence[position - 1:position - 1 + pam_config["length"]]
-                )
-            else:
-                # For 5' PAM (Cas12a), PAM is before the guide
-                pam_seq = _reverse_complement(
-                    target_sequence[position - 1 - pam_config["length"]:position - 1]
-                )
-
-        # Build full target sequence
+        # Build full target sequence (PAM is already captured from _find_pam_sites)
         if pam_config["position"] == "3prime":
             full_target = guide_seq + pam_seq
         else:
