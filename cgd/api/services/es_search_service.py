@@ -2361,9 +2361,8 @@ def search_virulence_factors(
 
     # Filter by organisms
     if organisms:
-        # Normalize organism abbreviations for matching
-        org_upper = [o.upper() for o in organisms]
-        must_clauses.append({"terms": {"organism_abbrev.keyword": org_upper}})
+        # Use organism abbreviations as-is (they come in correct format from frontend)
+        must_clauses.append({"terms": {"organism_abbrev.keyword": organisms}})
 
     # Search term filter
     if search_term:
@@ -2447,7 +2446,7 @@ def get_virulence_categories_es(
     must_clauses = [{"term": {"type": "virulence_factor"}}]
 
     if organism:
-        must_clauses.append({"term": {"organism_abbrev.keyword": organism.upper()}})
+        must_clauses.append({"term": {"organism_abbrev.keyword": organism}})
 
     es_query = {
         "query": {
