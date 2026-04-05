@@ -1,5 +1,7 @@
 """
 Virulence Factor Router - API endpoints for virulence factor browser.
+
+Uses Elasticsearch when enabled and available, falls back to Oracle.
 """
 from __future__ import annotations
 
@@ -12,13 +14,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from cgd.core.settings import settings
+from cgd.core.elasticsearch import get_es_client
 from cgd.db.deps import get_db
 from cgd.api.services import virulence_service
+from cgd.api.services import es_search_service
 from cgd.schemas.virulence_schema import (
     VirulenceCategoriesResponse,
     VirulenceFactorsResponse,
+    VirulenceFactor,
     VirulenceFactorDetail,
     VirulenceStats,
+    VirulenceCategoryStats,
+    VirulenceOrganismStats,
+    VirulenceCategory,
     VirulenceDownloadRequest,
 )
 
@@ -38,12 +47,32 @@ def get_virulence_categories(
     Returns the list of virulence categories (Adhesins, Secreted Enzymes, etc.)
     with the number of genes matching each category.
 
+    Uses Elasticsearch when enabled and available, falls back to Oracle.
+
     Args:
         organism: Optional organism abbreviation to filter counts
 
     Returns:
         List of categories with gene counts
     """
+    # Try Elasticsearch first if enabled
+    if settings.use_elasticsearch:
+        try:
+            es = get_es_client()
+            if es_search_service.check_es_available(es):
+                logger.debug("Using Elasticsearch for virulence categories")
+                result = es_search_service.get_virulence_categories_es(es, organism)
+                if result:
+                    return VirulenceCategoriesResponse(
+                        categories=[VirulenceCategory(**cat) for cat in result["categories"]],
+                        total_genes=result["total_genes"],
+                    )
+            else:
+                logger.warning("Elasticsearch index not available, falling back to Oracle")
+        except Exception as e:
+            logger.warning(f"Elasticsearch error, falling back to Oracle: {e}")
+
+    # Fall back to Oracle
     try:
         return virulence_service.get_virulence_categories(db=db, organism=organism)
     except Exception as e:
@@ -67,6 +96,8 @@ def get_virulence_factors(
     Returns genes matching the specified virulence categories, with optional
     filtering by organism and keyword search.
 
+    Uses Elasticsearch when enabled and available, falls back to Oracle.
+
     Args:
         categories: List of category keys (e.g., ["adhesins", "biofilm"])
         organisms: List of organism abbreviations to filter
@@ -77,6 +108,34 @@ def get_virulence_factors(
     Returns:
         Paginated list of virulence factors with category mappings
     """
+    # Try Elasticsearch first if enabled
+    if settings.use_elasticsearch:
+        try:
+            es = get_es_client()
+            if es_search_service.check_es_available(es):
+                logger.debug("Using Elasticsearch for virulence factors search")
+                result = es_search_service.search_virulence_factors(
+                    es,
+                    categories=categories if categories else None,
+                    organisms=organisms if organisms else None,
+                    search_term=search_term,
+                    page=page,
+                    page_size=page_size,
+                )
+                if result:
+                    return VirulenceFactorsResponse(
+                        items=[VirulenceFactor(**item) for item in result["items"]],
+                        total_count=result["total_count"],
+                        page=result["page"],
+                        page_size=result["page_size"],
+                        categories_searched=result["categories_searched"],
+                    )
+            else:
+                logger.warning("Elasticsearch index not available, falling back to Oracle")
+        except Exception as e:
+            logger.warning(f"Elasticsearch error, falling back to Oracle: {e}")
+
+    # Fall back to Oracle
     try:
         return virulence_service.get_virulence_factors(
             db=db,
@@ -129,9 +188,30 @@ def get_virulence_stats(db: Session = Depends(get_db)):
 
     Returns counts per category and per organism.
 
+    Uses Elasticsearch when enabled and available, falls back to Oracle.
+
     Returns:
         Summary statistics
     """
+    # Try Elasticsearch first if enabled
+    if settings.use_elasticsearch:
+        try:
+            es = get_es_client()
+            if es_search_service.check_es_available(es):
+                logger.debug("Using Elasticsearch for virulence stats")
+                result = es_search_service.get_virulence_stats_es(es)
+                if result:
+                    return VirulenceStats(
+                        total_genes=result["total_genes"],
+                        categories=[VirulenceCategoryStats(**cat) for cat in result["categories"]],
+                        organisms=[VirulenceOrganismStats(**org) for org in result["organisms"]],
+                    )
+            else:
+                logger.warning("Elasticsearch index not available, falling back to Oracle")
+        except Exception as e:
+            logger.warning(f"Elasticsearch error, falling back to Oracle: {e}")
+
+    # Fall back to Oracle
     try:
         return virulence_service.get_virulence_stats(db=db)
     except Exception as e:

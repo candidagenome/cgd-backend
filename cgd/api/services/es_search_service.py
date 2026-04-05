@@ -2314,3 +2314,249 @@ def get_ortholog_organisms(
     except Exception as e:
         logger.error(f"Error fetching ortholog organisms for {gene_name_or_feature}: {e}")
         return []
+
+
+# =============================================================================
+# VIRULENCE FACTOR SEARCH (ES-based)
+# =============================================================================
+
+def search_virulence_factors(
+    es: Elasticsearch,
+    categories: list[str] | None = None,
+    organisms: list[str] | None = None,
+    search_term: str | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict | None:
+    """
+    Search virulence factors using Elasticsearch.
+
+    Args:
+        es: Elasticsearch client
+        categories: List of category keys to filter (e.g., ["adhesins", "biofilm"])
+        organisms: List of organism abbreviations to filter
+        search_term: Optional keyword search
+        page: Page number (1-indexed)
+        page_size: Results per page
+
+    Returns:
+        Dict with items, total_count, page, page_size, categories_searched
+        Returns None on error (caller should fall back to Oracle).
+    """
+    if not categories:
+        return {
+            "items": [],
+            "total_count": 0,
+            "page": page,
+            "page_size": page_size,
+            "categories_searched": [],
+        }
+
+    # Build ES query
+    must_clauses = [{"term": {"type": "virulence_factor"}}]
+
+    # Filter by categories
+    if categories:
+        must_clauses.append({"terms": {"categories": categories}})
+
+    # Filter by organisms
+    if organisms:
+        # Normalize organism abbreviations for matching
+        org_upper = [o.upper() for o in organisms]
+        must_clauses.append({"terms": {"organism_abbrev.keyword": org_upper}})
+
+    # Search term filter
+    if search_term:
+        must_clauses.append({
+            "bool": {
+                "should": [
+                    {"wildcard": {"gene_name.keyword": {"value": f"*{search_term.lower()}*", "case_insensitive": True}}},
+                    {"wildcard": {"feature_name": {"value": f"*{search_term.upper()}*"}}},
+                    {"wildcard": {"headline.keyword": {"value": f"*{search_term.lower()}*", "case_insensitive": True}}},
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+
+    es_query = {
+        "query": {
+            "bool": {
+                "must": must_clauses,
+            }
+        },
+        "size": 10000,  # Get all for pagination
+        "sort": [
+            {"gene_name.keyword": {"order": "asc", "missing": "_last"}},
+        ],
+    }
+
+    try:
+        response = es.search(index=INDEX_NAME, body=es_query)
+        total_count = response["hits"]["total"]["value"]
+
+        # Parse results
+        all_items = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            all_items.append({
+                "feature_no": source.get("feature_no"),
+                "feature_name": source.get("feature_name"),
+                "gene_name": source.get("gene_name"),
+                "organism": source.get("organism"),
+                "organism_abbrev": source.get("organism_abbrev"),
+                "headline": source.get("headline"),
+                "description": source.get("headline"),
+                "categories": source.get("category_names", []),
+                "match_reasons": source.get("match_reasons", []),
+            })
+
+        # Apply pagination
+        offset = (page - 1) * page_size
+        paginated = all_items[offset:offset + page_size]
+
+        return {
+            "items": paginated,
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+            "categories_searched": categories,
+        }
+
+    except Exception as e:
+        logger.error(f"Elasticsearch virulence search failed: {e}")
+        return None
+
+
+def get_virulence_categories_es(
+    es: Elasticsearch,
+    organism: str | None = None,
+) -> dict | None:
+    """
+    Get virulence categories with counts using Elasticsearch.
+
+    Args:
+        es: Elasticsearch client
+        organism: Optional organism abbreviation to filter
+
+    Returns:
+        Dict with categories list and total_genes count
+        Returns None on error.
+    """
+    from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
+
+    must_clauses = [{"term": {"type": "virulence_factor"}}]
+
+    if organism:
+        must_clauses.append({"term": {"organism_abbrev.keyword": organism.upper()}})
+
+    es_query = {
+        "query": {
+            "bool": {
+                "must": must_clauses,
+            }
+        },
+        "size": 0,
+        "aggs": {
+            "by_category": {
+                "terms": {"field": "categories", "size": 20}
+            },
+            "unique_genes": {
+                "cardinality": {"field": "feature_no"}
+            },
+        },
+    }
+
+    try:
+        response = es.search(index=INDEX_NAME, body=es_query)
+
+        # Parse category counts
+        category_counts = {}
+        for bucket in response.get("aggregations", {}).get("by_category", {}).get("buckets", []):
+            category_counts[bucket["key"]] = bucket["doc_count"]
+
+        # Build category list
+        categories = []
+        for cat_key, cat_config in VIRULENCE_CATEGORIES.items():
+            categories.append({
+                "key": cat_key,
+                "name": cat_config["name"],
+                "description": cat_config["description"],
+                "count": category_counts.get(cat_key, 0),
+            })
+
+        total_genes = response.get("aggregations", {}).get("unique_genes", {}).get("value", 0)
+
+        return {
+            "categories": categories,
+            "total_genes": total_genes,
+        }
+
+    except Exception as e:
+        logger.error(f"Elasticsearch virulence categories failed: {e}")
+        return None
+
+
+def get_virulence_stats_es(es: Elasticsearch) -> dict | None:
+    """
+    Get virulence statistics using Elasticsearch.
+
+    Returns:
+        Dict with total_genes, categories stats, organisms stats
+        Returns None on error.
+    """
+    from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
+
+    es_query = {
+        "query": {
+            "term": {"type": "virulence_factor"}
+        },
+        "size": 0,
+        "aggs": {
+            "by_category": {
+                "terms": {"field": "categories", "size": 20}
+            },
+            "by_organism": {
+                "terms": {"field": "organism_abbrev.keyword", "size": 20}
+            },
+            "unique_genes": {
+                "cardinality": {"field": "feature_no"}
+            },
+        },
+    }
+
+    try:
+        response = es.search(index=INDEX_NAME, body=es_query)
+
+        # Parse category stats
+        category_stats = []
+        category_counts = {}
+        for bucket in response.get("aggregations", {}).get("by_category", {}).get("buckets", []):
+            category_counts[bucket["key"]] = bucket["doc_count"]
+
+        for cat_key, cat_config in VIRULENCE_CATEGORIES.items():
+            category_stats.append({
+                "key": cat_key,
+                "name": cat_config["name"],
+                "count": category_counts.get(cat_key, 0),
+            })
+
+        # Parse organism stats
+        organism_stats = []
+        for bucket in response.get("aggregations", {}).get("by_organism", {}).get("buckets", []):
+            organism_stats.append({
+                "organism_abbrev": bucket["key"],
+                "organism_name": bucket["key"],  # We could map this but abbrev is sufficient
+                "count": bucket["doc_count"],
+            })
+
+        total_genes = response.get("aggregations", {}).get("unique_genes", {}).get("value", 0)
+
+        return {
+            "total_genes": total_genes,
+            "categories": category_stats,
+            "organisms": organism_stats,
+        }
+
+    except Exception as e:
+        logger.error(f"Elasticsearch virulence stats failed: {e}")
+        return None

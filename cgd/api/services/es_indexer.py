@@ -19,7 +19,9 @@ from cgd.models.models import (
     Abstract, Paragraph, FeatPara, Author, AuthorEditor, Colleague,
     Dbxref, DbxrefFeat, Note, NoteLink, HomologyGroup, FeatHomology,
     DbxrefHomology, RefProperty, GoSynonym, GoGosyn, FeatRelationship,
+    PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
 )
+from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
@@ -786,6 +788,218 @@ def index_literature_topics(db: Session, es: Elasticsearch) -> int:
     return success
 
 
+def _convert_goid_to_int(goid_str: str) -> Optional[int]:
+    """Convert GO:XXXXXXX format to integer."""
+    if goid_str.startswith("GO:"):
+        try:
+            return int(goid_str[3:])
+        except ValueError:
+            return None
+    return None
+
+
+def _get_virulence_category_matches(
+    db: Session,
+    feature: Feature,
+    a21_exclude: set[int],
+) -> dict[str, list[str]]:
+    """
+    Determine which virulence categories a feature matches and why.
+
+    Returns dict of category_key -> list of match reasons.
+    """
+    from sqlalchemy import func, or_
+
+    if feature.feature_no in a21_exclude:
+        return {}
+
+    matches: dict[str, list[str]] = {}
+
+    for cat_key, cat_config in VIRULENCE_CATEGORIES.items():
+        rules = cat_config.get("rules", {})
+        reasons: list[str] = []
+
+        # Check gene patterns
+        if "gene_patterns" in rules and feature.gene_name:
+            for pattern in rules["gene_patterns"]:
+                sql_pattern = pattern.replace("%", "")
+                if feature.gene_name.upper().startswith(sql_pattern.upper()):
+                    reasons.append(f"gene pattern: {feature.gene_name}")
+                    break
+
+        # Check phenotype observables
+        if "phenotype_observables" in rules:
+            pheno_matches = (
+                db.query(Phenotype.observable)
+                .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+                .filter(PhenoAnnotation.feature_no == feature.feature_no)
+                .distinct()
+                .all()
+            )
+            for (observable,) in pheno_matches:
+                if observable:
+                    for obs_pattern in rules["phenotype_observables"]:
+                        import re
+                        sql_pattern = obs_pattern.replace("%", ".*")
+                        if re.search(sql_pattern, observable, re.IGNORECASE):
+                            reasons.append(f"phenotype: {observable}")
+                            break
+
+        # Check GO terms
+        if "go_terms" in rules:
+            goids = [_convert_goid_to_int(g) for g in rules["go_terms"]]
+            goids = [g for g in goids if g is not None]
+            if goids:
+                go_matches = (
+                    db.query(Go.goid, Go.go_term)
+                    .join(GoAnnotation, GoAnnotation.go_no == Go.go_no)
+                    .filter(GoAnnotation.feature_no == feature.feature_no)
+                    .filter(Go.goid.in_(goids))
+                    .distinct()
+                    .all()
+                )
+                for goid, go_term in go_matches:
+                    reasons.append(f"GO: {go_term} (GO:{goid:07d})")
+
+        # Check headlines
+        if "headlines" in rules and feature.headline:
+            for pattern in rules["headlines"]:
+                import re
+                sql_pattern = pattern.replace("%", ".*")
+                if re.search(sql_pattern, feature.headline, re.IGNORECASE):
+                    reasons.append(f"headline: {feature.headline[:50]}")
+                    break
+
+        # Check virulence model (simplified check)
+        if rules.get("phenotype_has_virulence_model"):
+            virulence_patterns = ["%virulence%", "%mouse%", "%galleria%"]
+            for pattern in virulence_patterns:
+                vir_matches = (
+                    db.query(Phenotype.observable)
+                    .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+                    .filter(PhenoAnnotation.feature_no == feature.feature_no)
+                    .filter(func.upper(Phenotype.observable).like(func.upper(pattern)))
+                    .first()
+                )
+                if vir_matches:
+                    reasons.append(f"virulence model: {vir_matches[0]}")
+                    break
+
+        # Check literature topics
+        if "literature_topics" in rules:
+            topic_matches = (
+                db.query(RefProperty.property_value)
+                .join(RefpropFeat, RefpropFeat.ref_property_no == RefProperty.ref_property_no)
+                .filter(RefpropFeat.feature_no == feature.feature_no)
+                .filter(func.upper(RefProperty.property_type) == 'TOPIC')
+                .filter(func.upper(RefProperty.property_value).in_([t.upper() for t in rules["literature_topics"]]))
+                .distinct()
+                .all()
+            )
+            for (topic,) in topic_matches:
+                reasons.append(f"literature topic: {topic}")
+
+        if reasons:
+            matches[cat_key] = reasons
+
+    return matches
+
+
+def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
+    """
+    Generate Elasticsearch documents for virulence factors.
+
+    Pre-computes category assignments for each gene so searches are fast.
+    """
+    from sqlalchemy import func
+
+    a21_exclude = _get_a21_exclusion_set(db)
+
+    # Get all ORF features
+    features = (
+        db.query(Feature)
+        .options(joinedload(Feature.organism))
+        .filter(func.lower(Feature.feature_type) == 'orf')
+        .all()
+    )
+
+    count = 0
+    for feat in features:
+        if feat.feature_no in a21_exclude:
+            continue
+
+        # Get category matches for this feature
+        category_matches = _get_virulence_category_matches(db, feat, a21_exclude)
+
+        if not category_matches:
+            continue  # Not a virulence factor
+
+        # Flatten categories and reasons
+        categories = list(category_matches.keys())
+        category_names = [VIRULENCE_CATEGORIES[c]["name"] for c in categories]
+        all_reasons = []
+        for reasons in category_matches.values():
+            all_reasons.extend(reasons)
+
+        # Determine match types for filtering
+        match_types = set()
+        for reason in all_reasons:
+            if reason.startswith("GO:"):
+                match_types.add("go_term")
+            elif reason.startswith("phenotype:"):
+                match_types.add("phenotype")
+            elif reason.startswith("gene pattern:"):
+                match_types.add("gene_pattern")
+            elif reason.startswith("headline:"):
+                match_types.add("headline")
+            elif reason.startswith("literature topic:"):
+                match_types.add("literature")
+            elif reason.startswith("virulence model:"):
+                match_types.add("virulence_model")
+
+        display_name = feat.gene_name or feat.feature_name
+        organism_name = feat.organism.organism_name if feat.organism else None
+        organism_abbrev = feat.organism.organism_abbrev if feat.organism else None
+
+        doc = {
+            "_index": INDEX_NAME,
+            "_id": f"virulence_{feat.feature_no}",
+            "_source": {
+                "type": "virulence_factor",
+                "id": feat.dbxref_id,
+                "name": display_name,
+                "gene_name": feat.gene_name,
+                "feature_name": feat.feature_name,
+                "feature_no": feat.feature_no,
+                "dbxref_id": feat.dbxref_id,
+                "headline": feat.headline,
+                "organism": organism_name,
+                "organism_abbrev": organism_abbrev,
+                # Virulence-specific fields
+                "categories": categories,  # ["adhesins", "biofilm"]
+                "category_names": category_names,  # ["Adhesins", "Biofilm Formation"]
+                "match_reasons": all_reasons,  # ["gene pattern: ALS1", "GO: cell adhesion"]
+                "match_types": list(match_types),  # ["gene_pattern", "go_term"]
+                # Searchable text
+                "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
+                "link": f"/locus/{feat.feature_name}",
+            }
+        }
+        yield doc
+        count += 1
+
+        # Log progress periodically
+        if count % 500 == 0:
+            logger.info(f"Generated {count} virulence factor documents...")
+
+
+def index_virulence_factors(db: Session, es: Elasticsearch) -> int:
+    """Index all virulence factors with pre-computed category assignments."""
+    success, _ = bulk(es, _generate_virulence_docs(db), raise_on_error=False)
+    logger.info(f"Indexed {success} virulence factors")
+    return success
+
+
 def rebuild_index(db: Session, es: Elasticsearch) -> dict:
     """
     Full reindex: delete existing index, create new one, and populate all data.
@@ -813,6 +1027,7 @@ def rebuild_index(db: Session, es: Elasticsearch) -> dict:
     external_ids_count = index_external_ids(db, es)
     orthologs_count = index_orthologs(db, es)
     lit_topics_count = index_literature_topics(db, es)
+    virulence_count = index_virulence_factors(db, es)
 
     # Refresh index to make documents searchable immediately
     es.indices.refresh(index=INDEX_NAME)
@@ -830,10 +1045,12 @@ def rebuild_index(db: Session, es: Elasticsearch) -> dict:
         "external_ids": external_ids_count,
         "orthologs": orthologs_count,
         "literature_topics": lit_topics_count,
+        "virulence_factors": virulence_count,
         "total": (
             genes_count + go_count + phenotypes_count + references_count +
             paragraphs_count + authors_count + colleagues_count + pathways_count +
-            notes_count + external_ids_count + orthologs_count + lit_topics_count
+            notes_count + external_ids_count + orthologs_count + lit_topics_count +
+            virulence_count
         ),
     }
 
