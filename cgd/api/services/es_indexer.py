@@ -11,7 +11,7 @@ from typing import Generator, Optional
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 
 from cgd.core.elasticsearch import INDEX_NAME, INDEX_MAPPING
 from cgd.models.models import (
@@ -870,9 +870,12 @@ def _get_virulence_category_matches(
                     reasons.append(f"headline: {feature.headline[:50]}")
                     break
 
-        # Check virulence model (simplified check)
+        # Check virulence model - search in both phenotype observables and experiment properties
         if rules.get("phenotype_has_virulence_model"):
             virulence_patterns = ["%virulence%", "%mouse%", "%galleria%"]
+            found_virulence = False
+
+            # Search in phenotype observables
             for pattern in virulence_patterns:
                 vir_matches = (
                     db.query(Phenotype.observable)
@@ -883,7 +886,27 @@ def _get_virulence_category_matches(
                 )
                 if vir_matches:
                     reasons.append(f"virulence model: {vir_matches[0]}")
+                    found_virulence = True
                     break
+
+            # Also search in experiment properties (like Oracle does)
+            if not found_virulence:
+                expt_match = (
+                    db.query(ExptProperty.property_value)
+                    .join(ExptExptprop, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+                    .join(PhenoAnnotation, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no)
+                    .filter(PhenoAnnotation.feature_no == feature.feature_no)
+                    .filter(
+                        or_(
+                            func.upper(ExptProperty.property_value).like('%VIRULENCE%'),
+                            func.upper(ExptProperty.property_value).like('%MOUSE%'),
+                            func.upper(ExptProperty.property_value).like('%GALLERIA%'),
+                        )
+                    )
+                    .first()
+                )
+                if expt_match:
+                    reasons.append(f"virulence model: {expt_match[0][:50]}")
 
         # Check literature topics
         if "literature_topics" in rules:
