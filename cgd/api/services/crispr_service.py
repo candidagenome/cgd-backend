@@ -721,14 +721,17 @@ def design_guides(
                 pam_start = position - 1 - pam_config["length"]
                 pam_seq = target_sequence[pam_start:pam_start + pam_config["length"]]
         else:
-            # For reverse strand, PAM is in reverse complement
+            # For reverse strand, extract PAM from forward strand and reverse complement
+            # Position is where the PAM region starts on forward strand (1-based)
             if pam_config["position"] == "3prime":
-                pam_seq = _reverse_complement(
-                    target_sequence[position - 1 - pam_config["length"]:position - 1]
-                )
-            else:
+                # PAM is at position to position + pam_length on forward strand
                 pam_seq = _reverse_complement(
                     target_sequence[position - 1:position - 1 + pam_config["length"]]
+                )
+            else:
+                # For 5' PAM (Cas12a), PAM is before the guide
+                pam_seq = _reverse_complement(
+                    target_sequence[position - 1 - pam_config["length"]:position - 1]
                 )
 
         # Build full target sequence
