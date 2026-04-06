@@ -1301,21 +1301,28 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         )
 
     elif doc_type == "ortholog":
-        display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+        # Show ortholog gene info (not the C. albicans gene)
+        cgd_gene_name = source.get("cgd_gene_name")
+        ortholog_display = source.get("ortholog_display")
         ortholog_name = source.get("ortholog_name")
-        ortholog_source = source.get("ortholog_source")
+        ortholog_feature = source.get("ortholog_feature_name")
+        ortholog_organism = source.get("ortholog_organism")
 
-        description = f"{ortholog_source}: {ortholog_name}" if ortholog_name and ortholog_source else None
+        # Display name: show ortholog gene/feature name
+        display_name = ortholog_name or ortholog_feature or ""
+
+        # Description: show relationship to C. albicans gene
+        description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
 
         highlighted_name = _highlight_text(display_name, query)
 
         return TextSearchResult(
             category="orthologs",
             id=source.get("id", ""),
-            name=display_name or "",
+            name=display_name,
             description=description,
             link=source.get("link"),
-            organism=source.get("organism"),
+            organism=ortholog_organism,  # Show ortholog organism
             homology_group_no=source.get("homology_group_no"),
             highlighted_name=highlighted_name,
             highlighted_description=_highlight_text(description, query) if description else None,
@@ -1940,6 +1947,7 @@ def text_search(
         if "ortholog" in type_counts:
             # Search by both CGD gene name and ortholog name using wildcard
             # Filter to CGOB only (Candida species orthologs, not SGD best hits)
+            # Filter to C. albicans as reference organism (consistent with locus page)
             cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
             ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
             ortholog_wc_query = {
@@ -1948,6 +1956,7 @@ def text_search(
                         "must": [
                             {"term": {"type": "ortholog"}},
                             {"term": {"ortholog_source": "CGOB"}},
+                            {"term": {"organism": "Candida albicans SC5314"}},
                         ],
                         "should": [
                             cgd_gene_wildcard,
@@ -2231,6 +2240,7 @@ def text_search_category(
     elif category == "orthologs":
         # Search by both CGD gene name and ortholog name using wildcard
         # Filter to CGOB only (Candida species orthologs, not SGD best hits)
+        # Filter to C. albicans as reference organism (consistent with locus page)
         cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
         ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
         es_query = {
@@ -2239,6 +2249,7 @@ def text_search_category(
                     "must": [
                         {"term": {"type": "ortholog"}},
                         {"term": {"ortholog_source": "CGOB"}},
+                        {"term": {"organism": "Candida albicans SC5314"}},
                     ],
                     "should": [
                         cgd_gene_wildcard,
@@ -2254,7 +2265,8 @@ def text_search_category(
                 "post_tags": ["</mark>"],
             },
             "aggs": {
-                "by_organism": {"terms": {"field": "organism", "size": 20}}
+                # Aggregate by ortholog organism (not CGD gene organism)
+                "by_organism": {"terms": {"field": "ortholog_organism", "size": 20}}
             },
         }
     else:
