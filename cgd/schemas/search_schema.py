@@ -135,6 +135,7 @@ class TextSearchResult(BaseModel):
     gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
     homology_group_no: Optional[int] = None  # CGOB homology group ID for grouping
     related_orthologs: Optional[list[OrthologRelation]] = None  # Related orthologs for relationship table
+    ortholog_display: Optional[str] = None  # Unique display name for AG Grid row deduplication
 
 
 class TextSearchCategoryResult(BaseModel):

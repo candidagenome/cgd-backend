@@ -1311,13 +1311,15 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
     elif doc_type == "ortholog":
         # Show ortholog gene info (not the C. albicans gene)
         cgd_gene_name = source.get("cgd_gene_name")
-        ortholog_display = source.get("ortholog_display")
         ortholog_name = source.get("ortholog_name")
         ortholog_feature = source.get("ortholog_feature_name")
         ortholog_organism = source.get("ortholog_organism")
 
-        # Display name: show ortholog gene/feature name
-        display_name = ortholog_name or ortholog_feature or ""
+        # Display name: use "name/feature" format when both exist and are different
+        if ortholog_name and ortholog_feature and ortholog_name != ortholog_feature:
+            display_name = f"{ortholog_name}/{ortholog_feature}"
+        else:
+            display_name = ortholog_name or ortholog_feature or ""
 
         # Description: show relationship to C. albicans gene
         description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
@@ -1334,6 +1336,7 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
             homology_group_no=source.get("homology_group_no"),
             highlighted_name=highlighted_name,
             highlighted_description=_highlight_text(description, query) if description else None,
+            ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
         )
 
     elif doc_type == "literature_topic":
