@@ -925,27 +925,37 @@ def _search_offtargets_blast(
 
                 # Skip if this is the on-target position or its allelic variant
                 # C. albicans is diploid, so guides will match both A and B alleles
+                #
+                # Strategy: For exact matches (0 mismatches), we're more lenient with exclusion
+                # because the on-target and its allele should be exact matches. For hits with
+                # mismatches, we're stricter to avoid excluding real off-targets.
                 if exclude_position:
                     exc_chr, exc_pos, exc_strand = exclude_position
-                    # Check if same chromosome or allelic chromosome (A vs B)
+
+                    # Check if chromosome names match (including allelic A/B variants)
                     is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
-                    # Check if position is within tolerance (accounts for small coordinate differences)
+
+                    # Check if position is similar (within tolerance)
                     is_similar_position = abs(start - exc_pos) < 100
                     is_same_strand = strand == exc_strand
 
+                    # For exact matches (0 mismatches), also check by position alone
+                    # This handles chromosome naming mismatches between DB and BLAST
+                    # An exact match at the same position is almost certainly on-target
+                    if mm_count == 0 and is_similar_position and is_same_strand:
+                        logger.debug(
+                            f"Excluding exact match at similar position: {chromosome}:{start} "
+                            f"(exclude: {exc_chr}:{exc_pos})"
+                        )
+                        continue
+
+                    # For hits with mismatches, require chromosome match
                     if is_same_or_allelic and is_similar_position and is_same_strand:
                         logger.debug(
                             f"Excluding on-target/allelic hit: {chromosome}:{start} "
-                            f"(exclude: {exc_chr}:{exc_pos}, allelic={is_same_or_allelic})"
+                            f"(exclude: {exc_chr}:{exc_pos})"
                         )
                         continue
-                    elif mm_count == 0:
-                        # Log exact matches that weren't excluded (potential issue)
-                        logger.warning(
-                            f"Exact match NOT excluded: {chromosome}:{start}:{strand} vs "
-                            f"exclude {exc_chr}:{exc_pos}:{exc_strand} "
-                            f"(allelic={is_same_or_allelic}, similar_pos={is_similar_position})"
-                        )
 
                 # Get chromosome sequence for PAM validation
                 # For now, skip PAM validation if we can't get the sequence
