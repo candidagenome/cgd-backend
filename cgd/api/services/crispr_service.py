@@ -800,12 +800,29 @@ def _search_offtargets_blast(
     offtargets = []
 
     # Build genome database name for this organism
-    genome_db = f"genomic_{organism_tag}"
-    db_path = os.path.join(settings.blast_db_path, genome_db)
+    # Try multiple naming conventions (A22 uses "default_genomic_", older assemblies use "genomic_")
+    db_path = None
+    genome_db = None
 
-    # Check if database exists
-    if not os.path.exists(db_path + ".nsq"):
-        logger.warning(f"BLAST database not found: {genome_db}")
+    # Try naming conventions in order of preference
+    naming_patterns = [
+        f"default_genomic_{organism_tag}",  # A22 convention
+        f"genomic_{organism_tag}",           # A21/A19 convention
+    ]
+
+    for pattern in naming_patterns:
+        test_path = os.path.join(settings.blast_db_path, pattern)
+        if os.path.exists(test_path + ".nsq"):
+            db_path = test_path
+            genome_db = pattern
+            logger.debug(f"Found BLAST database: {genome_db}")
+            break
+
+    if not db_path:
+        logger.warning(
+            f"BLAST database not found for {organism_tag}. "
+            f"Tried: {', '.join(naming_patterns)}"
+        )
         return []
 
     try:
