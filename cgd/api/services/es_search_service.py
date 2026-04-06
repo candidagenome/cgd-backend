@@ -310,8 +310,12 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     ortholog_organism = source.get("ortholog_organism")
     ortholog_type = source.get("ortholog_type", "Ortholog")
 
-    # Display name: show ortholog gene name
-    display_name = ortholog_name or ortholog_feature or ""
+    # Display name: show ortholog gene/feature name
+    # Use "name/feature" format when both exist and are different (like locus page)
+    if ortholog_name and ortholog_feature and ortholog_name != ortholog_feature:
+        display_name = f"{ortholog_name}/{ortholog_feature}"
+    else:
+        display_name = ortholog_name or ortholog_feature or ""
 
     # Description: show relationship to C. albicans gene
     description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
