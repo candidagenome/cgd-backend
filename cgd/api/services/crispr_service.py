@@ -898,31 +898,7 @@ def _search_offtargets_blast(
                 # Convert strand
                 strand = "+" if strand_str == "plus" else "-"
 
-                # Skip if this is the on-target position or its allelic variant
-                # C. albicans is diploid, so guides will match both A and B alleles
-                if exclude_position:
-                    exc_chr, exc_pos, exc_strand = exclude_position
-                    # Check if same chromosome or allelic chromosome (A vs B)
-                    is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
-                    # Check if position is within tolerance (accounts for small coordinate differences)
-                    is_similar_position = abs(start - exc_pos) < 100
-                    is_same_strand = strand == exc_strand
-
-                    if is_same_or_allelic and is_similar_position and is_same_strand:
-                        logger.debug(
-                            f"Excluding on-target/allelic hit: {chromosome}:{start} "
-                            f"(exclude: {exc_chr}:{exc_pos}, allelic={is_same_or_allelic})"
-                        )
-                        continue
-                    elif mm_count == 0:
-                        # Log exact matches that weren't excluded (potential issue)
-                        logger.warning(
-                            f"Exact match NOT excluded: {chromosome}:{start}:{strand} vs "
-                            f"exclude {exc_chr}:{exc_pos}:{exc_strand} "
-                            f"(allelic={is_same_or_allelic}, similar_pos={is_similar_position})"
-                        )
-
-                # Remove gaps for mismatch counting
+                # Remove gaps for mismatch counting first (needed for exclusion check)
                 query_ungapped = query_aln.replace("-", "")
                 subject_ungapped = subject_aln.replace("-", "")
 
@@ -946,6 +922,30 @@ def _search_offtargets_blast(
                 # Filter by max mismatches
                 if mm_count > max_mismatches:
                     continue
+
+                # Skip if this is the on-target position or its allelic variant
+                # C. albicans is diploid, so guides will match both A and B alleles
+                if exclude_position:
+                    exc_chr, exc_pos, exc_strand = exclude_position
+                    # Check if same chromosome or allelic chromosome (A vs B)
+                    is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
+                    # Check if position is within tolerance (accounts for small coordinate differences)
+                    is_similar_position = abs(start - exc_pos) < 100
+                    is_same_strand = strand == exc_strand
+
+                    if is_same_or_allelic and is_similar_position and is_same_strand:
+                        logger.debug(
+                            f"Excluding on-target/allelic hit: {chromosome}:{start} "
+                            f"(exclude: {exc_chr}:{exc_pos}, allelic={is_same_or_allelic})"
+                        )
+                        continue
+                    elif mm_count == 0:
+                        # Log exact matches that weren't excluded (potential issue)
+                        logger.warning(
+                            f"Exact match NOT excluded: {chromosome}:{start}:{strand} vs "
+                            f"exclude {exc_chr}:{exc_pos}:{exc_strand} "
+                            f"(allelic={is_same_or_allelic}, similar_pos={is_similar_position})"
+                        )
 
                 # Get chromosome sequence for PAM validation
                 # For now, skip PAM validation if we can't get the sequence
