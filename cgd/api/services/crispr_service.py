@@ -507,8 +507,12 @@ def _filter_target_region(
 MAX_GUIDES_FOR_OFFTARGET = 14
 
 # Pattern to extract chromosome base name (without A/B allele suffix)
-# Matches patterns like "Ca22chr1A_C_albicans" -> "Ca22chr1"
-CHROMOSOME_ALLELE_PATTERN = re.compile(r'^(.*chr\d+)[AB](_.*)?$', re.IGNORECASE)
+# Matches patterns like:
+#   "Ca22chr1A_C_albicans_SC5314" -> "Ca22chr1"
+#   "Ca22chrRA_C_albicans_SC5314" -> "Ca22chrR"
+# The pattern captures everything up to and including the chromosome ID (number or R),
+# then expects A or B allele suffix
+CHROMOSOME_ALLELE_PATTERN = re.compile(r'^(.*chr[R\d]+)[AB](_.*)?$', re.IGNORECASE)
 
 
 def _are_allelic_chromosomes(chr1: str, chr2: str) -> bool:
@@ -529,8 +533,25 @@ def _are_allelic_chromosomes(chr1: str, chr2: str) -> bool:
     match2 = CHROMOSOME_ALLELE_PATTERN.match(chr2)
 
     if match1 and match2:
-        # Compare base names (e.g., "Ca22chr1" == "Ca22chr1")
-        return match1.group(1).upper() == match2.group(1).upper()
+        base1 = match1.group(1).upper()
+        base2 = match2.group(1).upper()
+        is_allelic = base1 == base2
+        if is_allelic:
+            logger.debug(f"Chromosomes are allelic: {chr1} <-> {chr2} (base: {base1})")
+        return is_allelic
+
+    # Fallback: check if names differ only in A/B before underscore
+    # This handles edge cases the regex might miss
+    parts1 = chr1.split('_')
+    parts2 = chr2.split('_')
+    if parts1 and parts2:
+        prefix1 = parts1[0]
+        prefix2 = parts2[0]
+        # Check if they differ only in last character (A vs B)
+        if len(prefix1) == len(prefix2) and len(prefix1) > 1:
+            if prefix1[:-1] == prefix2[:-1] and prefix1[-1] in 'AB' and prefix2[-1] in 'AB':
+                logger.debug(f"Chromosomes are allelic (fallback): {chr1} <-> {chr2}")
+                return True
 
     return False
 
@@ -856,8 +877,21 @@ def _search_offtargets_blast(
                     is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
                     # Check if position is within tolerance (accounts for small coordinate differences)
                     is_similar_position = abs(start - exc_pos) < 100
-                    if is_same_or_allelic and is_similar_position and strand == exc_strand:
+                    is_same_strand = strand == exc_strand
+
+                    if is_same_or_allelic and is_similar_position and is_same_strand:
+                        logger.debug(
+                            f"Excluding on-target/allelic hit: {chromosome}:{start} "
+                            f"(exclude: {exc_chr}:{exc_pos}, allelic={is_same_or_allelic})"
+                        )
                         continue
+                    elif mm_count == 0:
+                        # Log exact matches that weren't excluded (potential issue)
+                        logger.warning(
+                            f"Exact match NOT excluded: {chromosome}:{start}:{strand} vs "
+                            f"exclude {exc_chr}:{exc_pos}:{exc_strand} "
+                            f"(allelic={is_same_or_allelic}, similar_pos={is_similar_position})"
+                        )
 
                 # Remove gaps for mismatch counting
                 query_ungapped = query_aln.replace("-", "")
@@ -1172,6 +1206,14 @@ def design_guides(
             exclude_pos = None
             if guide.chromosome and guide.genomic_start:
                 exclude_pos = (guide.chromosome, guide.genomic_start, guide.strand)
+                logger.debug(
+                    f"Guide {guide.rank} exclude_pos: {exclude_pos}"
+                )
+            else:
+                logger.warning(
+                    f"Guide {guide.rank} has no genomic coords: "
+                    f"chromosome={guide.chromosome}, genomic_start={guide.genomic_start}"
+                )
 
             # Search for off-targets
             offtargets = _search_offtargets_blast(
