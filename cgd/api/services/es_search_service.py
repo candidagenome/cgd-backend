@@ -321,12 +321,15 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     if not highlighted_name:
         highlighted_name = _highlight_text(display_name, query)
 
+    # Link to the ortholog's locus page, not the CGD gene
+    ortholog_link = f"/locus/{ortholog_feature}" if ortholog_feature else source.get("link")
+
     return SearchResult(
         category="orthologs",
         id=cgd_gene_id or "",
         name=display_name,
         description=None,
-        link=source.get("link") or f"/locus/{cgd_feature_name or cgd_gene_name}",
+        link=ortholog_link,
         organism=ortholog_organism,  # Show ortholog organism
         highlighted_name=highlighted_name,
         highlighted_description=None,
@@ -1320,12 +1323,15 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
 
         highlighted_name = _highlight_text(display_name, query)
 
+        # Link to the ortholog's locus page, not the CGD gene
+        ortholog_link = f"/locus/{ortholog_feature}" if ortholog_feature else source.get("link")
+
         return TextSearchResult(
             category="orthologs",
             id=source.get("id", ""),
             name=display_name,
             description=None,
-            link=source.get("link"),
+            link=ortholog_link,
             organism=ortholog_organism,  # Show ortholog organism
             homology_group_no=source.get("homology_group_no"),
             highlighted_name=highlighted_name,
