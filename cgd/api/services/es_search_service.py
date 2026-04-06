@@ -291,47 +291,46 @@ def _parse_reference_result(hit: dict, query: str) -> SearchResult:
 
 
 def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
-    """Parse ES hit into SearchResult for ortholog type."""
+    """Parse ES hit into SearchResult for ortholog type.
+
+    Shows the ortholog gene info (from other Candida species), with a description
+    showing the relationship to the C. albicans gene.
+    """
     source = hit["_source"]
     highlights = hit.get("highlight", {})
 
-    # CGD gene info (the gene this ortholog maps to)
+    # CGD gene info (the C. albicans gene)
     cgd_gene_name = source.get("cgd_gene_name") or source.get("gene_name") or source.get("name")
     cgd_feature_name = source.get("cgd_feature_name") or source.get("feature_name")
     cgd_gene_id = source.get("cgd_gene_id") or source.get("id")
 
-    # Ortholog info (the related gene from another organism)
-    ortholog_display = source.get("ortholog_display")
+    # Ortholog info (the related gene from another Candida species)
     ortholog_name = source.get("ortholog_name")
+    ortholog_feature = source.get("ortholog_feature_name")
     ortholog_organism = source.get("ortholog_organism")
     ortholog_type = source.get("ortholog_type", "Ortholog")
-    ortholog_source = source.get("ortholog_source")
 
-    # Build description for display - make relationship direction explicit
-    if ortholog_display:
-        description = f"Ortholog of {ortholog_display}"
-    elif ortholog_name:
-        description = f"Ortholog of {ortholog_source} {ortholog_name}"
-    else:
-        description = None
+    # Display name: show ortholog gene name
+    display_name = ortholog_name or ortholog_feature or ""
 
-    highlighted_name = _extract_highlight(highlights, "cgd_gene_name", None)
+    # Description: show relationship to C. albicans gene
+    description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
+
+    highlighted_name = _extract_highlight(highlights, "ortholog_name", None)
     if not highlighted_name:
-        highlighted_name = _extract_highlight(highlights, "gene_name", None)
-    if not highlighted_name:
-        highlighted_name = _highlight_text(cgd_gene_name, query)
+        highlighted_name = _highlight_text(display_name, query)
 
     return SearchResult(
         category="orthologs",
         id=cgd_gene_id or "",
-        name=cgd_gene_name or "",
+        name=display_name,
         description=description,
         link=source.get("link") or f"/locus/{cgd_feature_name or cgd_gene_name}",
-        organism=source.get("organism"),  # Organism of the CGD gene
+        organism=ortholog_organism,  # Show ortholog organism
         highlighted_name=highlighted_name,
-        highlighted_description=_highlight_text(f"Ortholog of {ortholog_display}", query) if ortholog_display else None,
-        # New ortholog relationship fields
-        ortholog_display=ortholog_display,
+        highlighted_description=_highlight_text(description, query) if description else None,
+        # Relationship fields for frontend
+        ortholog_display=None,
         ortholog_organism=ortholog_organism,
         ortholog_type=ortholog_type,
         cgd_gene_name=cgd_gene_name,
@@ -413,11 +412,13 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
         # Fallback to generic name match
         should_clauses = [{"match": {"name": {"query": query}}}]
 
-    # Build must clauses - add C. albicans filter for orthologs
+    # Build must clauses - add C. albicans and CGOB filters for orthologs
     must_clauses = [{"term": {"type": doc_type}}]
     if doc_type == "ortholog":
         # Filter to only C. albicans as the reference organism for clearer display
+        # Filter to CGOB only (Candida species orthologs, not SGD best hits)
         must_clauses.append({"term": {"organism": "Candida albicans SC5314"}})
+        must_clauses.append({"term": {"ortholog_source": "CGOB"}})
 
     return {
         "query": {
@@ -936,23 +937,25 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
     query_upper = query.upper()
 
     if es_type == "ortholog":
-        # For orthologs, search by the ORTHOLOG name (not CGD gene name)
-        # This finds: "CGD genes that have an ortholog matching the query"
-        # Filter to only show C. albicans genes with their orthologs (clearer display)
+        # For orthologs, search by both CGD gene name and ortholog name
+        # This finds all orthologs of a gene (e.g., HOG1 finds all 4 Candida orthologs)
+        # Filter to C. albicans as reference and CGOB only (no SGD best hits)
         return {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "ortholog"}},
-                        # Filter to only C. albicans as the reference organism
                         {"term": {"organism": "Candida albicans SC5314"}},
+                        {"term": {"ortholog_source": "CGOB"}},
                     ],
                     "should": [
-                        # Exact ortholog name match
+                        # Match CGD gene name (finds all orthologs of the C. albicans gene)
+                        {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 15}}},
+                        {"prefix": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
+                        {"match": {"cgd_gene_name": {"query": query, "boost": 8}}},
+                        # Match ortholog name
                         {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 15}}},
-                        # Prefix match
                         {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-                        # Text match
                         {"match": {"ortholog_name": {"query": query, "boost": 8}}},
                     ],
                     "minimum_should_match": 1,
@@ -962,14 +965,15 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
             "highlight": {
                 "fields": {
                     "ortholog_name": {},
-                    "ortholog_display": {},
+                    "cgd_gene_name": {},
                 },
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
             },
             "aggs": {
+                # Aggregate by ortholog organism (not CGD gene organism)
                 "by_organism": {
-                    "terms": {"field": "organism", "size": 20}
+                    "terms": {"field": "ortholog_organism", "size": 20}
                 }
             },
         }
