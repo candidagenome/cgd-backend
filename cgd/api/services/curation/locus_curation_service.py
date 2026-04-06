@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
     Feature,
+    FeatProperty,
     Alias,
     FeatAlias,
     Note,
@@ -35,6 +36,9 @@ from cgd.api.services.curation.reference_curation_service import (
 logger = logging.getLogger(__name__)
 
 SOURCE = "CGD"
+
+# Valid feature qualifiers (status values)
+FEATURE_QUALIFIERS = ["Verified", "Uncharacterized"]
 
 
 class LocusCurationError(Exception):
@@ -69,6 +73,86 @@ class LocusCurationService:
             .filter(Feature.feature_no == feature_no)
             .first()
         )
+
+    def get_feature_qualifier(self, feature_no: int) -> Optional[str]:
+        """
+        Get the feature qualifier (status) for a feature.
+
+        Returns the property_value from FeatProperty where
+        property_type='feature_qualifier', or None if not set.
+        """
+        prop = (
+            self.db.query(FeatProperty)
+            .filter(
+                FeatProperty.feature_no == feature_no,
+                FeatProperty.property_type == "feature_qualifier",
+                FeatProperty.property_value.in_(FEATURE_QUALIFIERS),
+            )
+            .first()
+        )
+        return prop.property_value if prop else None
+
+    def update_feature_qualifier(
+        self,
+        feature_no: int,
+        qualifier: str,
+        curator_userid: str,
+    ) -> bool:
+        """
+        Update the feature qualifier (status).
+
+        Args:
+            feature_no: Feature number
+            qualifier: New qualifier value (Verified or Uncharacterized)
+            curator_userid: Curator's userid
+
+        Returns:
+            True if successful
+        """
+        if qualifier not in FEATURE_QUALIFIERS:
+            raise LocusCurationError(
+                f"Invalid qualifier '{qualifier}'. Must be one of: {FEATURE_QUALIFIERS}"
+            )
+
+        # Check if feature exists
+        feature = self.get_feature_by_no(feature_no)
+        if not feature:
+            raise LocusCurationError(f"Feature {feature_no} not found")
+
+        # Find existing qualifier property
+        existing = (
+            self.db.query(FeatProperty)
+            .filter(
+                FeatProperty.feature_no == feature_no,
+                FeatProperty.property_type == "feature_qualifier",
+                FeatProperty.property_value.in_(FEATURE_QUALIFIERS),
+            )
+            .first()
+        )
+
+        if existing:
+            if existing.property_value == qualifier:
+                # No change needed
+                return True
+            # Delete the old qualifier
+            self.db.delete(existing)
+            self.db.flush()
+
+        # Create new qualifier property
+        new_prop = FeatProperty(
+            feature_no=feature_no,
+            source=SOURCE,
+            property_type="feature_qualifier",
+            property_value=qualifier,
+            created_by=curator_userid[:12],
+        )
+        self.db.add(new_prop)
+
+        logger.info(
+            f"Updated feature {feature_no} qualifier to '{qualifier}' by {curator_userid}"
+        )
+
+        return True
 
     def _get_reference_urls(self, reference: Reference) -> list:
         """
@@ -220,6 +304,9 @@ class LocusCurationService:
                     "link": url.url,  # Field is named 'url' in the model
                 })
 
+        # Get feature qualifier (status)
+        qualifier = self.get_feature_qualifier(feature.feature_no)
+
         return {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
@@ -228,6 +315,7 @@ class LocusCurationService:
             "name_description": feature.name_description,
             "name_description_refs": name_description_refs,
             "feature_type": feature.feature_type,
+            "qualifier": qualifier,
             "headline": feature.headline,
             "headline_refs": headline_refs,
             "source": feature.source,
@@ -391,6 +479,7 @@ class LocusCurationService:
         headline: Optional[str] = None,
         headline_pmids: Optional[str] = None,
         feature_type: Optional[str] = None,
+        qualifier: Optional[str] = None,
     ) -> bool:
         """
         Update feature fields.
@@ -405,6 +494,7 @@ class LocusCurationService:
             headline: Headline/short description (max 240 chars)
             headline_pmids: Pipe-delimited PMIDs for headline references
             feature_type: Feature type
+            qualifier: Feature qualifier (Verified or Uncharacterized)
 
         Returns:
             True if successful
@@ -429,6 +519,10 @@ class LocusCurationService:
             feature.headline = headline or None
         if feature_type is not None:
             feature.feature_type = feature_type
+
+        # Update qualifier if provided
+        if qualifier is not None:
+            self.update_feature_qualifier(feature_no, qualifier, curator_userid)
 
         # Link PMIDs to fields
         if gene_name_pmids:

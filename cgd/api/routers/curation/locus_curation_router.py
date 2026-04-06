@@ -114,6 +114,7 @@ class FeatureDetailResponse(BaseModel):
     name_description: Optional[str]
     name_description_refs: List[FieldRefOut] = []
     feature_type: str
+    qualifier: Optional[str] = None
     headline: Optional[str]
     headline_refs: List[FieldRefOut] = []
     source: str
@@ -134,6 +135,7 @@ class UpdateFeatureRequest(BaseModel):
     headline: Optional[str] = Field(None, description="Headline/short description (max 240 chars)")
     headline_pmids: Optional[str] = Field(None, description="Pipe-delimited PMIDs for headline")
     feature_type: Optional[str] = Field(None, description="Feature type")
+    qualifier: Optional[str] = Field(None, description="Feature qualifier (Verified or Uncharacterized)")
 
 
 class SuccessResponse(BaseModel):

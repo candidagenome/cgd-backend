@@ -31,7 +31,7 @@ class OrthologRelationQuick(BaseModel):
 
 class SearchResult(BaseModel):
     """Single search result item."""
-    category: str  # "gene", "go_term", "phenotype", "reference"
+    category: str  # "gene", "go_term", "phenotype", "reference", "orthologs"
     id: str
     name: str
     description: Optional[str] = None
@@ -44,6 +44,12 @@ class SearchResult(BaseModel):
     # For ortholog results - relationship data
     gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
     related_orthologs: Optional[list[OrthologRelationQuick]] = None  # Related orthologs
+    # For ortholog table view - the ortholog relationship
+    ortholog_display: Optional[str] = None  # e.g., "C. albicans C1_13700W_A/ACT1 (Ortholog)"
+    ortholog_organism: Optional[str] = None  # Organism of the ortholog
+    ortholog_type: Optional[str] = None  # "Ortholog" or "Best Hit"
+    cgd_gene_name: Optional[str] = None  # The CGD gene this ortholog maps to
+    cgd_gene_id: Optional[str] = None  # The CGD gene ID
 
 
 class PaginationInfo(BaseModel):
@@ -129,6 +135,7 @@ class TextSearchResult(BaseModel):
     gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
     homology_group_no: Optional[int] = None  # CGOB homology group ID for grouping
     related_orthologs: Optional[list[OrthologRelation]] = None  # Related orthologs for relationship table
+    ortholog_display: Optional[str] = None  # Unique display name for AG Grid row deduplication
 
 
 class TextSearchCategoryResult(BaseModel):

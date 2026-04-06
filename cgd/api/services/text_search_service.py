@@ -147,11 +147,19 @@ def _build_multi_term_filter(column, query: str, match_mode: str = "all"):
     Args:
         column: SQLAlchemy column to search
         query: Search query string (may contain multiple terms)
-        match_mode: "all" (AND) or "any" (OR)
+        match_mode: "all" (AND), "any" (OR), or "exact" (phrase)
 
     Returns:
         SQLAlchemy filter expression
     """
+    # For "exact" mode, search for the whole phrase as-is (no splitting)
+    if match_mode == "exact":
+        query_stripped = query.strip()
+        if not query_stripped:
+            return None
+        exact_pattern = f"%{query_stripped.upper()}%"
+        return func.upper(column).like(exact_pattern)
+
     terms = _parse_search_terms(query)
     if not terms:
         return None
@@ -2202,6 +2210,7 @@ def text_search(
     category_filter: Optional[str] = None,
     search_field: str = "both",
     match_mode: str = "all",
+    exclude_categories: Optional[set[str]] = None,
 ) -> TextSearchResponse:
     """
     Search all categories (or a single category if filtered).
@@ -2213,11 +2222,16 @@ def text_search(
         category_filter: If set, only search this category (e.g., "orthologs")
         search_field: For abstracts category - "title", "abstract", or "both" (default)
         match_mode: For multi-term queries - "all" (AND) or "any" (OR)
+        exclude_categories: Set of category names to skip (for hybrid ES/Oracle search)
 
     Returns:
         TextSearchResponse with results grouped by category
     """
     categories_to_search = [category_filter] if category_filter else CATEGORY_ORDER
+
+    # Filter out excluded categories (used for hybrid ES/Oracle search)
+    if exclude_categories:
+        categories_to_search = [c for c in categories_to_search if c not in exclude_categories]
     results_list = []
     total_results = 0
 

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from cgd.models.models import (
@@ -112,7 +112,12 @@ class LitGuideCurationService:
     def get_feature_by_name(
         self, name: str, organism_abbrev: Optional[str] = None
     ) -> Optional[Feature]:
-        """Look up feature by name or gene_name, optionally filtered by organism."""
+        """
+        Look up feature by name or gene_name, optionally filtered by organism.
+
+        Prefers Assembly 22 features (feature_name starting with 'C') over
+        Assembly 21 features (orf19.XXXX) when both exist for the same gene.
+        """
         query = self.db.query(Feature).filter(
             or_(
                 func.upper(Feature.feature_name) == name.upper(),
@@ -125,6 +130,17 @@ class LitGuideCurationService:
             query = query.join(
                 Organism, Feature.organism_no == Organism.organism_no
             ).filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
+
+        # Order to prefer Assembly 22 (feature_name starting with 'C') over
+        # Assembly 21 (orf19.XXXX) - ensures consistent feature selection
+        query = query.order_by(
+            # CASE: features starting with 'C' (A22) get priority 0, others get 1
+            case(
+                (Feature.feature_name.ilike('C%'), 0),
+                else_=1
+            ),
+            Feature.feature_name  # Secondary sort for determinism
+        )
 
         return query.first()
 

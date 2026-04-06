@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # Elasticsearch configuration
     elasticsearch_url: str = "http://localhost:9200"
     elasticsearch_index: str = "cgd"
+    use_elasticsearch: bool = Field(
+        default=True,
+        validation_alias="USE_ELASTICSEARCH",
+        description="Use Elasticsearch for search (falls back to Oracle if ES unavailable)",
+    )
 
     # BLAST configuration
     blast_bin_path: str = Field(
