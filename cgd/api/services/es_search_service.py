@@ -333,8 +333,8 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
         organism=ortholog_organism,  # Show ortholog organism
         highlighted_name=highlighted_name,
         highlighted_description=_highlight_text(description, query) if description else None,
-        # Relationship fields for frontend
-        ortholog_display=None,
+        # Relationship fields for frontend - ortholog_display used for unique row IDs
+        ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
         ortholog_organism=ortholog_organism,
         ortholog_type=ortholog_type,
         cgd_gene_name=cgd_gene_name,
