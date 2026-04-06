@@ -317,9 +317,6 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     else:
         display_name = ortholog_name or ortholog_feature or ""
 
-    # Description: show relationship to C. albicans gene
-    description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
-
     highlighted_name = _extract_highlight(highlights, "ortholog_name", None)
     if not highlighted_name:
         highlighted_name = _highlight_text(display_name, query)
@@ -328,11 +325,11 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
         category="orthologs",
         id=cgd_gene_id or "",
         name=display_name,
-        description=description,
+        description=None,
         link=source.get("link") or f"/locus/{cgd_feature_name or cgd_gene_name}",
         organism=ortholog_organism,  # Show ortholog organism
         highlighted_name=highlighted_name,
-        highlighted_description=_highlight_text(description, query) if description else None,
+        highlighted_description=None,
         # Relationship fields for frontend - ortholog_display used for unique row IDs
         ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
         ortholog_organism=ortholog_organism,
@@ -1321,21 +1318,18 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         else:
             display_name = ortholog_name or ortholog_feature or ""
 
-        # Description: show relationship to C. albicans gene
-        description = f"Ortholog of {cgd_gene_name}" if cgd_gene_name else None
-
         highlighted_name = _highlight_text(display_name, query)
 
         return TextSearchResult(
             category="orthologs",
             id=source.get("id", ""),
             name=display_name,
-            description=description,
+            description=None,
             link=source.get("link"),
             organism=ortholog_organism,  # Show ortholog organism
             homology_group_no=source.get("homology_group_no"),
             highlighted_name=highlighted_name,
-            highlighted_description=_highlight_text(description, query) if description else None,
+            highlighted_description=None,
             ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
         )
 
