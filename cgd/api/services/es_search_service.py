@@ -1939,6 +1939,7 @@ def text_search(
         # Step 13: Override orthologs count with wildcard query
         if "ortholog" in type_counts:
             # Search by both CGD gene name and ortholog name using wildcard
+            # Filter to CGOB only (Candida species orthologs, not SGD best hits)
             cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
             ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
             ortholog_wc_query = {
@@ -1946,6 +1947,7 @@ def text_search(
                     "bool": {
                         "must": [
                             {"term": {"type": "ortholog"}},
+                            {"term": {"ortholog_source": "CGOB"}},
                         ],
                         "should": [
                             cgd_gene_wildcard,
@@ -2228,6 +2230,7 @@ def text_search_category(
         }
     elif category == "orthologs":
         # Search by both CGD gene name and ortholog name using wildcard
+        # Filter to CGOB only (Candida species orthologs, not SGD best hits)
         cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
         ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
         es_query = {
@@ -2235,6 +2238,7 @@ def text_search_category(
                 "bool": {
                     "must": [
                         {"term": {"type": "ortholog"}},
+                        {"term": {"ortholog_source": "CGOB"}},
                     ],
                     "should": [
                         cgd_gene_wildcard,
