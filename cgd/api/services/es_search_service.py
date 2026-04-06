@@ -2226,6 +2226,33 @@ def text_search_category(
                 "post_tags": ["</mark>"],
             },
         }
+    elif category == "orthologs":
+        # Search by both CGD gene name and ortholog name using wildcard
+        cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
+        ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
+        es_query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": "ortholog"}},
+                    ],
+                    "should": [
+                        cgd_gene_wildcard,
+                        ortholog_name_wildcard,
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 10000,
+            "highlight": {
+                "fields": {"cgd_gene_name": {}, "ortholog_name": {}},
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+            },
+            "aggs": {
+                "by_organism": {"terms": {"field": "organism", "size": 20}}
+            },
+        }
     else:
         es_query = _build_category_query(query, es_type, size=10000)
 
