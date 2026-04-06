@@ -503,33 +503,389 @@ def _filter_target_region(
 # Off-target Analysis
 # ============================================================================
 
+# Limit number of guides for off-target search (performance)
+MAX_GUIDES_FOR_OFFTARGET = 14
+
+# PAM patterns for off-target validation (regex patterns)
+PAM_PATTERNS_FOR_OFFTARGET: Dict[PAMType, str] = {
+    PAMType.NGG: r"[ACGT]GG",
+    PAMType.NAG: r"[ACGT]AG",
+    PAMType.NNGRRT: r"[ACGT][ACGT]G[AG][AG]T",
+    PAMType.TTTV: r"TTT[ACG]",
+}
+
+
+def _count_mismatches(seq1: str, seq2: str) -> Tuple[int, List[int]]:
+    """
+    Count mismatches between two sequences and return positions.
+
+    Returns (mismatch_count, [positions]) where positions are 0-indexed.
+    """
+    if len(seq1) != len(seq2):
+        return max(len(seq1), len(seq2)), []
+
+    mismatches = 0
+    positions = []
+    for i, (a, b) in enumerate(zip(seq1.upper(), seq2.upper())):
+        if a != b:
+            mismatches += 1
+            positions.append(i)
+    return mismatches, positions
+
+
+def _validate_pam_at_position(
+    chromosome_seq: str,
+    hit_end: int,
+    strand: str,
+    pam_type: PAMType,
+    guide_length: int = 20
+) -> Optional[str]:
+    """
+    Check if a valid PAM exists adjacent to the off-target hit.
+
+    For 3' PAM systems (NGG, NAG, NNGRRT): PAM is immediately after guide.
+    For 5' PAM systems (TTTV): PAM is immediately before guide.
+
+    Returns the PAM sequence if valid, None otherwise.
+    """
+    pam_config = PAM_PATTERNS.get(pam_type)
+    if not pam_config:
+        return None
+
+    pam_pattern = PAM_PATTERNS_FOR_OFFTARGET.get(pam_type)
+    if not pam_pattern:
+        return None
+
+    pam_len = pam_config["length"]
+    is_3prime = pam_config["position"] == "3prime"
+
+    try:
+        if strand == "+":
+            if is_3prime:
+                # PAM is 3' of guide (after hit_end)
+                pam_start = hit_end
+                pam_end = hit_end + pam_len
+            else:
+                # PAM is 5' of guide (before hit_start)
+                pam_end = hit_end - guide_length
+                pam_start = pam_end - pam_len
+
+            if pam_start < 0 or pam_end > len(chromosome_seq):
+                return None
+
+            pam_seq = chromosome_seq[pam_start:pam_end]
+        else:
+            # Minus strand - need reverse complement
+            if is_3prime:
+                # For minus strand with 3' PAM, PAM is upstream in genomic coords
+                pam_end = hit_end - guide_length
+                pam_start = pam_end - pam_len
+            else:
+                # For minus strand with 5' PAM, PAM is downstream in genomic coords
+                pam_start = hit_end
+                pam_end = hit_end + pam_len
+
+            if pam_start < 0 or pam_end > len(chromosome_seq):
+                return None
+
+            pam_seq = _reverse_complement(chromosome_seq[pam_start:pam_end])
+
+        # Validate PAM matches expected pattern
+        if re.match(f"^{pam_pattern}$", pam_seq.upper()):
+            return pam_seq.upper()
+
+    except (IndexError, ValueError):
+        pass
+
+    return None
+
+
+def _get_chromosome_seq_no(
+    db: Session,
+    chromosome_name: str,
+    organism_tag: str
+) -> Optional[int]:
+    """Get the seq_no (root_seq_no) for a chromosome by name."""
+    # Map organism tag to organism_abbrev (strip assembly suffix)
+    org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
+
+    # Find chromosome feature and its sequence
+    chromosome = (
+        db.query(Feature)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Organism.organism_abbrev == org_abbrev,
+            Feature.feature_name == chromosome_name
+        )
+        .first()
+    )
+
+    if not chromosome:
+        return None
+
+    # Get the genomic sequence for this chromosome
+    seq_record = (
+        db.query(Seq)
+        .filter(
+            Seq.feature_no == chromosome.feature_no,
+            Seq.seq_type == "genomic",
+            Seq.is_seq_current == "Y"
+        )
+        .first()
+    )
+
+    return seq_record.seq_no if seq_record else None
+
+
+def _map_position_to_gene(
+    db: Session,
+    chromosome_name: str,
+    position: int,
+    strand: str,
+    organism_tag: str,
+    promoter_distance: int = 1000
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Map a genomic position to a gene and region type.
+
+    Returns (gene_name, region_type) where region_type is:
+    - "exon": within a gene's ORF
+    - "promoter": within promoter_distance bp upstream of a gene
+    - "intergenic": not near any gene
+
+    Note: This is a simplified implementation. A full implementation would
+    check for introns vs exons using exon coordinates.
+    """
+    # Map organism tag to organism_abbrev
+    org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
+
+    # Get the root_seq_no for this chromosome
+    root_seq_no = _get_chromosome_seq_no(db, chromosome_name, organism_tag)
+    if not root_seq_no:
+        return None, "intergenic"
+
+    # Query for features at this position
+    # First check for direct overlap (within gene body)
+    gene_hit = (
+        db.query(Feature, FeatLocation)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Organism.organism_abbrev == org_abbrev,
+            FeatLocation.root_seq_no == root_seq_no,
+            FeatLocation.is_loc_current == "Y",
+            FeatLocation.start_coord <= position,
+            FeatLocation.stop_coord >= position,
+            Feature.feature_type == "ORF"
+        )
+        .first()
+    )
+
+    if gene_hit:
+        feature, _ = gene_hit
+        gene_name = feature.gene_name or feature.feature_name
+        return gene_name, "exon"
+
+    # Check for promoter region (upstream of gene start)
+    # For Watson strand genes, promoter is before start_coord
+    # For Crick strand genes, promoter is after stop_coord
+    promoter_hit = (
+        db.query(Feature, FeatLocation)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Organism.organism_abbrev == org_abbrev,
+            FeatLocation.root_seq_no == root_seq_no,
+            FeatLocation.is_loc_current == "Y",
+            Feature.feature_type == "ORF"
+        )
+        .all()
+    )
+
+    for feature, location in promoter_hit:
+        if location.strand == "W":
+            # Watson strand: promoter is upstream (lower coords)
+            promoter_start = location.start_coord - promoter_distance
+            promoter_end = location.start_coord - 1
+            if promoter_start <= position <= promoter_end:
+                gene_name = feature.gene_name or feature.feature_name
+                return gene_name, "promoter"
+        else:
+            # Crick strand: promoter is downstream (higher coords)
+            promoter_start = location.stop_coord + 1
+            promoter_end = location.stop_coord + promoter_distance
+            if promoter_start <= position <= promoter_end:
+                gene_name = feature.gene_name or feature.feature_name
+                return gene_name, "promoter"
+
+    return None, "intergenic"
+
+
 def _search_offtargets_blast(
+    db: Session,
     guide: str,
-    genome_db: str,
-    max_mismatches: int = 3
+    pam_type: PAMType,
+    organism_tag: str,
+    max_mismatches: int = 3,
+    exclude_position: Optional[Tuple[str, int, str]] = None,
 ) -> List[OffTargetHit]:
     """
     Search for off-targets using BLAST.
 
-    Uses short word size for sensitive search.
+    Uses blastn-short with parameters optimized for 20bp guide sequences.
+
+    Args:
+        db: Database session for gene mapping
+        guide: Guide RNA sequence (20bp)
+        pam_type: PAM type for validation
+        organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
+        max_mismatches: Maximum allowed mismatches (0-3)
+        exclude_position: (chromosome, position, strand) to exclude (the on-target site)
+
+    Returns:
+        List of OffTargetHit objects sorted by mismatches (ascending)
     """
-    # This is a placeholder - actual implementation would run BLAST
-    # with parameters optimized for short exact/near-exact matches
-    #
-    # blast_cmd = [
-    #     "blastn",
-    #     "-task", "blastn-short",
-    #     "-word_size", "7",
-    #     "-evalue", "1000",
-    #     "-dust", "no",
-    #     "-db", genome_db,
-    #     "-query", query_file,
-    #     "-outfmt", "6 sseqid sstart send sstrand qseq sseq mismatch",
-    # ]
-    #
-    # For now, return empty list - off-target search to be implemented
-    # when BLAST databases are confirmed available
-    return []
+    from cgd.core.settings import settings
+
+    offtargets = []
+
+    # Build genome database name for this organism
+    genome_db = f"genomic_{organism_tag}"
+    db_path = os.path.join(settings.blast_db_path, genome_db)
+
+    # Check if database exists
+    if not os.path.exists(db_path + ".nsq"):
+        logger.warning(f"BLAST database not found: {genome_db}")
+        return []
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            query_file = os.path.join(tmpdir, "guide.fasta")
+            output_file = os.path.join(tmpdir, "blast_output.txt")
+
+            # Write guide sequence to FASTA file
+            with open(query_file, "w") as f:
+                f.write(f">guide\n{guide}\n")
+
+            # Build BLAST command for short sequence search
+            # -task blastn-short: optimized for short queries
+            # -word_size 7: shorter words for sensitive search
+            # -evalue 1000: permissive e-value for short sequences
+            # -dust no: disable low complexity filtering
+            # -ungapped: for exact mismatch counting
+            # -outfmt 6: tabular output with custom fields
+            blast_cmd = [
+                os.path.join(settings.blast_bin_path, "blastn"),
+                "-task", "blastn-short",
+                "-word_size", "7",
+                "-evalue", "1000",
+                "-dust", "no",
+                "-db", db_path,
+                "-query", query_file,
+                "-outfmt", "6 sseqid sstart send sstrand qseq sseq",
+                "-max_target_seqs", "1000",
+            ]
+
+            logger.debug(f"Running BLAST for off-targets: {' '.join(blast_cmd)}")
+
+            result = subprocess.run(
+                blast_cmd,
+                capture_output=True,
+                text=True,
+                timeout=CRISPR_TIMEOUT,
+            )
+
+            if result.returncode != 0:
+                logger.warning(f"BLAST off-target search failed: {result.stderr}")
+                return []
+
+            # Parse BLAST tabular output
+            # Fields: sseqid sstart send sstrand qseq sseq
+            for line in result.stdout.strip().split("\n"):
+                if not line:
+                    continue
+
+                fields = line.split("\t")
+                if len(fields) < 6:
+                    continue
+
+                chromosome = fields[0]
+                start = int(fields[1])
+                end = int(fields[2])
+                strand_str = fields[3]  # "plus" or "minus"
+                query_aln = fields[4]  # aligned query sequence
+                subject_aln = fields[5]  # aligned subject sequence
+
+                # Convert strand
+                strand = "+" if strand_str == "plus" else "-"
+
+                # Skip if this is the on-target position
+                if exclude_position:
+                    exc_chr, exc_pos, exc_strand = exclude_position
+                    if chromosome == exc_chr and abs(start - exc_pos) < 5 and strand == exc_strand:
+                        continue
+
+                # Remove gaps for mismatch counting
+                query_ungapped = query_aln.replace("-", "")
+                subject_ungapped = subject_aln.replace("-", "")
+
+                # Skip if alignment is too short (partial match)
+                if len(subject_ungapped) < len(guide) - max_mismatches:
+                    continue
+
+                # Pad shorter sequences if needed for comparison
+                if len(subject_ungapped) < len(guide):
+                    # Partial alignment - count missing bases as mismatches
+                    missing = len(guide) - len(subject_ungapped)
+                    mm_count, mm_positions = _count_mismatches(
+                        guide[:len(subject_ungapped)],
+                        subject_ungapped
+                    )
+                    mm_count += missing
+                    mm_positions.extend(range(len(subject_ungapped), len(guide)))
+                else:
+                    mm_count, mm_positions = _count_mismatches(guide, subject_ungapped[:len(guide)])
+
+                # Filter by max mismatches
+                if mm_count > max_mismatches:
+                    continue
+
+                # Get chromosome sequence for PAM validation
+                # For now, skip PAM validation if we can't get the sequence
+                # (This would require loading chromosome sequences)
+                # In production, we'd validate PAM here
+
+                # Calculate CFD score
+                cfd = _calculate_cfd_score(guide, subject_ungapped[:len(guide)])
+
+                # Map position to gene
+                gene_name, gene_region = _map_position_to_gene(
+                    db, chromosome, start, strand, organism_tag
+                )
+
+                offtargets.append(OffTargetHit(
+                    chromosome=chromosome,
+                    position=start,
+                    strand=strand,
+                    sequence=subject_ungapped[:len(guide)],
+                    mismatches=mm_count,
+                    mismatch_positions=mm_positions,
+                    gene_name=gene_name,
+                    gene_region=gene_region,
+                    cfd_score=cfd,
+                ))
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"BLAST off-target search timed out for guide: {guide[:10]}...")
+        return []
+    except Exception as e:
+        logger.error(f"Error in off-target search: {e}")
+        return []
+
+    # Sort by mismatches (ascending), then by CFD score (descending - higher CFD = more likely to cut)
+    offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
+
+    return offtargets
 
 
 def _calculate_specificity_score(offtargets: List[OffTargetHit]) -> float:
@@ -690,7 +1046,7 @@ def design_guides(
             warnings=warnings + [f"No {request.pam.value} PAM sites found in target region"],
         )
 
-    # Score and rank guides
+    # Score and rank guides (first pass - efficiency only)
     guide_results = []
     pam_config = PAM_PATTERNS[request.pam]
 
@@ -699,19 +1055,15 @@ def design_guides(
         if not re.match(r"^[ACGT]+$", guide_seq):
             continue
 
-        # Calculate scores
+        # Calculate efficiency scores
         gc_content = _calculate_gc_content(guide_seq)
         efficiency_score = _calculate_efficiency_score(guide_seq)
 
-        # Off-target analysis (placeholder - returns empty for now)
+        # Initial specificity score (will be updated after off-target search)
+        specificity_score = 100.0
         offtargets = []
-        if request.check_offtargets:
-            # TODO: Implement actual off-target search
-            pass
 
-        specificity_score = _calculate_specificity_score(offtargets)
-
-        # Combined score (weighted average)
+        # Combined score (weighted average) - initially based on efficiency only
         combined_score = (efficiency_score * 0.5) + (specificity_score * 0.5)
 
         # Build full target sequence (PAM is already captured from _find_pam_sites)
@@ -771,8 +1123,56 @@ def design_guides(
             homology_arms=None,  # TODO: Implement if requested
         ))
 
-    # Sort by combined score (descending)
+    # Sort by combined score (descending) for initial ranking
     guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+
+    # Perform off-target search for top guides (limited for performance)
+    if request.check_offtargets:
+        # Limit off-target search to top N guides
+        guides_for_offtarget = guide_results[:MAX_GUIDES_FOR_OFFTARGET]
+
+        logger.info(f"Running off-target search for {len(guides_for_offtarget)} guides")
+
+        for guide in guides_for_offtarget:
+            # Build exclude position to skip the on-target site
+            exclude_pos = None
+            if guide.chromosome and guide.genomic_start:
+                exclude_pos = (guide.chromosome, guide.genomic_start, guide.strand)
+
+            # Search for off-targets
+            offtargets = _search_offtargets_blast(
+                db=db,
+                guide=guide.sequence,
+                pam_type=request.pam,
+                organism_tag=request.organism,
+                max_mismatches=request.max_offtarget_mismatches,
+                exclude_position=exclude_pos,
+            )
+
+            # Update guide with off-target information
+            guide.offtargets = offtargets[:10]  # Limit stored hits
+            guide.offtarget_count = len(offtargets)
+            guide.offtarget_0mm = sum(1 for ot in offtargets if ot.mismatches == 0)
+            guide.offtarget_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
+            guide.offtarget_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
+            guide.offtarget_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+
+            # Recalculate specificity score based on actual off-targets
+            guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
+
+            # Recalculate combined score
+            guide.combined_score = round(
+                (guide.efficiency_score * 0.5) + (guide.specificity_score * 0.5),
+                1
+            )
+
+        # Re-sort after updating scores
+        guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+
+        if len(guides_for_offtarget) < len(guide_results):
+            warnings.append(
+                f"Off-target search performed for top {MAX_GUIDES_FOR_OFFTARGET} guides only"
+            )
 
     # Assign ranks and limit results
     for i, guide in enumerate(guide_results[:max_guides]):
