@@ -1936,10 +1936,43 @@ def text_search(
             else:
                 results_by_category.pop("authors", None)
 
-        # Step 13: Remove categories that don't have wildcard overrides
+        # Step 13: Override orthologs count with wildcard query
+        if "ortholog" in type_counts:
+            # Search by both CGD gene name and ortholog name using wildcard
+            cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
+            ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
+            ortholog_wc_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"type": "ortholog"}},
+                        ],
+                        "should": [
+                            cgd_gene_wildcard,
+                            ortholog_name_wildcard,
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                },
+                "size": limit,
+            }
+            ortholog_wc_response = es.search(index=INDEX_NAME, body=ortholog_wc_query)
+            ortholog_wc_count = ortholog_wc_response["hits"]["total"]["value"]
+            counts_by_category["orthologs"] = ortholog_wc_count
+            if ortholog_wc_count > 0:
+                ortholog_wc_results = []
+                for hit in ortholog_wc_response["hits"]["hits"]:
+                    result = _parse_text_search_result(hit, query, "orthologs")
+                    ortholog_wc_results.append(result)
+                if ortholog_wc_results:
+                    results_by_category["orthologs"] = ortholog_wc_results
+            else:
+                results_by_category.pop("orthologs", None)
+
+        # Step 14: Remove categories that don't have wildcard overrides
         # These categories used fuzzy matching in Step 2 which doesn't respect match_mode
         # Remove them to ensure total_results only counts properly filtered results
-        categories_without_override = ["abstracts", "colleagues", "pathways", "external_ids", "orthologs", "literature_topics"]
+        categories_without_override = ["abstracts", "colleagues", "pathways", "external_ids", "literature_topics"]
         for cat in categories_without_override:
             counts_by_category.pop(cat, None)
             results_by_category.pop(cat, None)
