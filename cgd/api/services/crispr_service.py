@@ -506,6 +506,35 @@ def _filter_target_region(
 # Limit number of guides for off-target search (performance)
 MAX_GUIDES_FOR_OFFTARGET = 14
 
+# Pattern to extract chromosome base name (without A/B allele suffix)
+# Matches patterns like "Ca22chr1A_C_albicans" -> "Ca22chr1"
+CHROMOSOME_ALLELE_PATTERN = re.compile(r'^(.*chr\d+)[AB](_.*)?$', re.IGNORECASE)
+
+
+def _are_allelic_chromosomes(chr1: str, chr2: str) -> bool:
+    """
+    Check if two chromosome names are allelic variants (A vs B allele).
+
+    C. albicans has diploid chromosomes named like:
+    - Ca22chr1A_C_albicans_SC5314
+    - Ca22chr1B_C_albicans_SC5314
+
+    These represent the same genomic region on different alleles.
+    """
+    if chr1 == chr2:
+        return True
+
+    # Extract base chromosome name (without A/B suffix)
+    match1 = CHROMOSOME_ALLELE_PATTERN.match(chr1)
+    match2 = CHROMOSOME_ALLELE_PATTERN.match(chr2)
+
+    if match1 and match2:
+        # Compare base names (e.g., "Ca22chr1" == "Ca22chr1")
+        return match1.group(1).upper() == match2.group(1).upper()
+
+    return False
+
+
 # PAM patterns for off-target validation (regex patterns)
 PAM_PATTERNS_FOR_OFFTARGET: Dict[PAMType, str] = {
     PAMType.NGG: r"[ACGT]GG",
@@ -819,10 +848,15 @@ def _search_offtargets_blast(
                 # Convert strand
                 strand = "+" if strand_str == "plus" else "-"
 
-                # Skip if this is the on-target position
+                # Skip if this is the on-target position or its allelic variant
+                # C. albicans is diploid, so guides will match both A and B alleles
                 if exclude_position:
                     exc_chr, exc_pos, exc_strand = exclude_position
-                    if chromosome == exc_chr and abs(start - exc_pos) < 5 and strand == exc_strand:
+                    # Check if same chromosome or allelic chromosome (A vs B)
+                    is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
+                    # Check if position is within tolerance (accounts for small coordinate differences)
+                    is_similar_position = abs(start - exc_pos) < 100
+                    if is_same_or_allelic and is_similar_position and strand == exc_strand:
                         continue
 
                 # Remove gaps for mismatch counting
