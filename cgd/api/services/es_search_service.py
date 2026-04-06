@@ -307,11 +307,11 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     ortholog_type = source.get("ortholog_type", "Ortholog")
     ortholog_source = source.get("ortholog_source")
 
-    # Build description for display
+    # Build description for display - make relationship direction explicit
     if ortholog_display:
-        description = f"{ortholog_display} ({ortholog_type})"
+        description = f"Ortholog of {ortholog_display}"
     elif ortholog_name:
-        description = f"{ortholog_source}: {ortholog_name}"
+        description = f"Ortholog of {ortholog_source} {ortholog_name}"
     else:
         description = None
 
@@ -329,7 +329,7 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
         link=source.get("link") or f"/locus/{cgd_feature_name or cgd_gene_name}",
         organism=source.get("organism"),  # Organism of the CGD gene
         highlighted_name=highlighted_name,
-        highlighted_description=_highlight_text(ortholog_display, query) if ortholog_display else None,
+        highlighted_description=_highlight_text(f"Ortholog of {ortholog_display}", query) if ortholog_display else None,
         # New ortholog relationship fields
         ortholog_display=ortholog_display,
         ortholog_organism=ortholog_organism,
@@ -413,12 +413,16 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
         # Fallback to generic name match
         should_clauses = [{"match": {"name": {"query": query}}}]
 
+    # Build must clauses - add C. albicans filter for orthologs
+    must_clauses = [{"term": {"type": doc_type}}]
+    if doc_type == "ortholog":
+        # Filter to only C. albicans as the reference organism for clearer display
+        must_clauses.append({"term": {"organism": "Candida albicans SC5314"}})
+
     return {
         "query": {
             "bool": {
-                "must": [
-                    {"term": {"type": doc_type}},
-                ],
+                "must": must_clauses,
                 "should": should_clauses,
                 "minimum_should_match": 1,
             }
@@ -934,11 +938,14 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
     if es_type == "ortholog":
         # For orthologs, search by the ORTHOLOG name (not CGD gene name)
         # This finds: "CGD genes that have an ortholog matching the query"
+        # Filter to only show C. albicans genes with their orthologs (clearer display)
         return {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "ortholog"}},
+                        # Filter to only C. albicans as the reference organism
+                        {"term": {"organism": "Candida albicans SC5314"}},
                     ],
                     "should": [
                         # Exact ortholog name match
