@@ -778,6 +778,7 @@ def _search_offtargets_blast(
     organism_tag: str,
     max_mismatches: int = 3,
     exclude_position: Optional[Tuple[str, int, str]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> List[OffTargetHit]:
     """
     Search for off-targets using BLAST.
@@ -791,6 +792,7 @@ def _search_offtargets_blast(
         organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
         max_mismatches: Maximum allowed mismatches (0-3)
         exclude_position: (chromosome, position, strand) to exclude (the on-target site)
+        warnings: Optional list to append warning messages to
 
     Returns:
         List of OffTargetHit objects sorted by mismatches (ascending)
@@ -810,19 +812,26 @@ def _search_offtargets_blast(
         f"genomic_{organism_tag}",           # A21/A19 convention
     ]
 
+    # Log the BLAST database path being checked
+    logger.info(f"BLAST DB path from settings: {settings.blast_db_path}")
+
     for pattern in naming_patterns:
         test_path = os.path.join(settings.blast_db_path, pattern)
+        logger.info(f"Checking for BLAST database: {test_path}.nsq")
         if os.path.exists(test_path + ".nsq"):
             db_path = test_path
             genome_db = pattern
-            logger.debug(f"Found BLAST database: {genome_db}")
+            logger.info(f"Found BLAST database: {genome_db}")
             break
 
     if not db_path:
-        logger.warning(
-            f"BLAST database not found for {organism_tag}. "
-            f"Tried: {', '.join(naming_patterns)}"
+        msg = (
+            f"Off-target search unavailable: BLAST database not found for {organism_tag}. "
+            f"Checked: {settings.blast_db_path}"
         )
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
         return []
 
     try:
@@ -863,7 +872,10 @@ def _search_offtargets_blast(
             )
 
             if result.returncode != 0:
-                logger.warning(f"BLAST off-target search failed: {result.stderr}")
+                msg = f"BLAST off-target search failed: {result.stderr}"
+                logger.warning(msg)
+                if warnings is not None:
+                    warnings.append(msg)
                 return []
 
             # Parse BLAST tabular output
@@ -1232,7 +1244,8 @@ def design_guides(
                     f"chromosome={guide.chromosome}, genomic_start={guide.genomic_start}"
                 )
 
-            # Search for off-targets
+            # Search for off-targets (pass warnings only for first guide to avoid duplicates)
+            offtarget_warnings = [] if guide == guides_for_offtarget[0] else None
             offtargets = _search_offtargets_blast(
                 db=db,
                 guide=guide.sequence,
@@ -1240,7 +1253,10 @@ def design_guides(
                 organism_tag=request.organism,
                 max_mismatches=request.max_offtarget_mismatches,
                 exclude_position=exclude_pos,
+                warnings=offtarget_warnings,
             )
+            if offtarget_warnings:
+                warnings.extend(offtarget_warnings)
 
             # Update guide with off-target information
             guide.offtargets = offtargets[:10]  # Limit stored hits
