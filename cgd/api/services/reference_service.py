@@ -392,15 +392,21 @@ def get_reference_phenotype_details(db: Session, identifier: str) -> ReferencePh
     pheno_annotation_nos = [rl.primary_key for rl in ref_links]
 
     if pheno_annotation_nos:
-        pheno_anns = (
-            db.query(PhenoAnnotation)
-            .options(
-                joinedload(PhenoAnnotation.feature).joinedload(Feature.organism),
-                joinedload(PhenoAnnotation.phenotype),
+        # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+        CHUNK_SIZE = 999
+        pheno_anns = []
+        for i in range(0, len(pheno_annotation_nos), CHUNK_SIZE):
+            chunk = pheno_annotation_nos[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(PhenoAnnotation)
+                .options(
+                    joinedload(PhenoAnnotation.feature).joinedload(Feature.organism),
+                    joinedload(PhenoAnnotation.phenotype),
+                )
+                .filter(PhenoAnnotation.pheno_annotation_no.in_(chunk))
+                .all()
             )
-            .filter(PhenoAnnotation.pheno_annotation_no.in_(pheno_annotation_nos))
-            .all()
-        )
+            pheno_anns.extend(chunk_results)
 
         for pa in pheno_anns:
             feature = pa.feature
@@ -448,14 +454,20 @@ def get_reference_interaction_details(db: Session, identifier: str) -> Reference
     interaction_nos = [rl.primary_key for rl in ref_links]
 
     if interaction_nos:
-        interaction_objs = (
-            db.query(Interaction)
-            .options(
-                joinedload(Interaction.feat_interact).joinedload(FeatInteract.feature),
+        # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
+        CHUNK_SIZE = 999
+        interaction_objs = []
+        for i in range(0, len(interaction_nos), CHUNK_SIZE):
+            chunk = interaction_nos[i:i + CHUNK_SIZE]
+            chunk_results = (
+                db.query(Interaction)
+                .options(
+                    joinedload(Interaction.feat_interact).joinedload(FeatInteract.feature),
+                )
+                .filter(Interaction.interaction_no.in_(chunk))
+                .all()
             )
-            .filter(Interaction.interaction_no.in_(interaction_nos))
-            .all()
-        )
+            interaction_objs.extend(chunk_results)
 
         for interaction in interaction_objs:
             interactors = []
