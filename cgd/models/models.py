@@ -2,7 +2,7 @@ from typing import Optional
 import datetime
 import decimal
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKeyConstraint, Index, Integer, PrimaryKeyConstraint, Table, Text, VARCHAR, text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKeyConstraint, Index, Integer, PrimaryKeyConstraint, Sequence, Table, Text, VARCHAR, text
 from sqlalchemy.dialects.oracle import NUMBER
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -1881,10 +1881,16 @@ class GoAnnotation(Base):
         Index('goann_feat_fk_i', 'feature_no'),
         {'comment': 'Contains information about go annotations.  Linking table between '
                 'the go and feature tables.',
-     'schema': 'MULTI'}
+     'schema': 'MULTI',
+     'implicit_returning': False}
     )
 
-    go_annotation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, autoincrement=True, comment='Assigned unique identifier for a go annoation. Oracle sequence generated number.')
+    go_annotation_no: Mapped[int] = mapped_column(
+        NUMBER(10, 0, False),
+        Sequence('go_annotation_seq', schema='MULTI'),
+        primary_key=True,
+        comment='Assigned unique identifier for a go annoation. Oracle sequence generated number.'
+    )
     go_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier assigned to a goid. Foreign key to the go table.')
     feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a feature. Foreign key to the feature table.')
     go_evidence: Mapped[str] = mapped_column(VARCHAR(40), nullable=False, comment='Evidence for the go annotation (Coded: IC, ISS, IDA, etc.).')
@@ -2098,10 +2104,16 @@ class GoRef(Base):
         Index('go_ref_uk', 'reference_no', 'go_annotation_no', unique=True),
         Index('goref_goann_fk_i', 'go_annotation_no'),
         {'comment': 'Linking table between the go_annotation and reference tables.',
-     'schema': 'MULTI'}
+     'schema': 'MULTI',
+     'implicit_returning': False}
     )
 
-    go_ref_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, autoincrement=True, comment='Assigned unique identifier for a GO reference association. Oracle generated sequence number.')
+    go_ref_no: Mapped[int] = mapped_column(
+        NUMBER(10, 0, False),
+        Sequence('go_ref_seq', schema='MULTI'),
+        primary_key=True,
+        comment='Assigned unique identifier for a GO reference association. Oracle generated sequence number.'
+    )
     reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a  reference. Foreign key to the reference table.')
     go_annotation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Assigned unique identifier for a go annoation. Foreign key to the go_annotation table.')
     has_qualifier: Mapped[str] = mapped_column(VARCHAR(1), nullable=False, comment='Whether this GO reference has a qualifier.')
