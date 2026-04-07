@@ -35,6 +35,7 @@ class EvidenceSupportOut(BaseModel):
     source: str  # e.g., "SGD", "CGD", "GO Consortium"
     dbxref_type: str  # e.g., "GOID", "ORF"
     dbxref_id: str  # The actual ID
+    description: Optional[str] = None  # Gene name for CGD/SGD entries
 
 
 class GoReferenceOut(BaseModel):
