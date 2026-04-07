@@ -288,6 +288,7 @@ class GoCurationService:
                             "source": dbxref.source,
                             "dbxref_type": dbxref.dbxref_type,
                             "dbxref_id": dbxref.dbxref_id,
+                            "description": dbxref.description,  # Gene name for SGD entries
                         })
 
                 refs.append({
