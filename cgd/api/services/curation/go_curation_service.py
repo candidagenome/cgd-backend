@@ -434,9 +434,29 @@ class GoCurationService:
             # Handle database constraint violations
             error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
             if 'duplicate' in error_msg.lower() or 'unique' in error_msg.lower():
+                # Check what existing annotation is causing the conflict
+                existing = (
+                    self.db.query(GoAnnotation)
+                    .filter(
+                        GoAnnotation.feature_no == feature_no,
+                        GoAnnotation.go_no == go.go_no,
+                        GoAnnotation.go_evidence == evidence,
+                        GoAnnotation.annotation_type == annotation_type,
+                        GoAnnotation.source == source,
+                    )
+                    .first()
+                )
+                if existing:
+                    raise GoCurationError(
+                        f"Feature '{feature_name}' already has GO annotation GO:{goid:07d} "
+                        f"with evidence '{evidence}' (same type/source). "
+                        f"Use a different reference to add to the existing annotation, "
+                        f"or use a different evidence code to create a new annotation."
+                    )
+                # Shouldn't reach here, but provide detailed error if we do
                 raise GoCurationError(
-                    f"Feature '{feature_name}' already has GO annotation GO:{goid:07d}. "
-                    f"Duplicate annotations are not allowed."
+                    f"Database constraint violation for '{feature_name}' GO:{goid:07d} "
+                    f"evidence '{evidence}': {error_msg}"
                 )
             # Re-raise other integrity errors with context
             raise GoCurationError(
