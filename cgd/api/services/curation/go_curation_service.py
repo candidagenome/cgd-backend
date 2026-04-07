@@ -283,12 +283,22 @@ class GoCurationService:
                         Dbxref.dbxref_no == gd.dbxref_no
                     ).first()
                     if dbxref:
+                        # Get gene name: use description if available, or look up CGD features
+                        gene_name = dbxref.description
+                        if not gene_name and dbxref.source == "CGD":
+                            # For CGD entries, look up gene name from Feature table
+                            feature = self.db.query(Feature).filter(
+                                Feature.dbxref_id == dbxref.dbxref_id
+                            ).first()
+                            if feature:
+                                gene_name = feature.gene_name or feature.feature_name
+
                         evidence_support.append({
                             "support_type": gd.support_type,  # "With" or "From"
                             "source": dbxref.source,
                             "dbxref_type": dbxref.dbxref_type,
                             "dbxref_id": dbxref.dbxref_id,
-                            "description": dbxref.description,  # Gene name for SGD entries
+                            "description": gene_name,  # Gene name from description or Feature lookup
                         })
 
                 refs.append({
