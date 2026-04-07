@@ -377,30 +377,19 @@ class GoCurationService:
         ).first()
         feature_name = feature.feature_name if feature else str(feature_no)
 
-        # Check for existing annotation with same GO ID (any evidence/type/source)
-        existing_any = (
+        # Check for exact match (same GO ID + evidence + type + source)
+        # Multiple annotations with same GO ID but different evidence codes are valid
+        existing_exact = (
             self.db.query(GoAnnotation)
             .filter(
                 GoAnnotation.feature_no == feature_no,
                 GoAnnotation.go_no == go.go_no,
+                GoAnnotation.go_evidence == evidence,
+                GoAnnotation.annotation_type == annotation_type,
+                GoAnnotation.source == source,
             )
             .first()
         )
-
-        # Check for exact match (same GO ID + evidence + type + source)
-        existing_exact = None
-        if existing_any:
-            existing_exact = (
-                self.db.query(GoAnnotation)
-                .filter(
-                    GoAnnotation.feature_no == feature_no,
-                    GoAnnotation.go_no == go.go_no,
-                    GoAnnotation.go_evidence == evidence,
-                    GoAnnotation.annotation_type == annotation_type,
-                    GoAnnotation.source == source,
-                )
-                .first()
-            )
 
         if existing_exact:
             # Exact match - add reference to existing annotation
@@ -411,14 +400,6 @@ class GoCurationService:
                 existing_exact.go_annotation_no, reference_no, qualifiers, curator_userid
             )
             return existing_exact.go_annotation_no
-
-        if existing_any:
-            # Same GO ID but different evidence/type/source - warn user about conflict
-            raise GoCurationError(
-                f"Feature '{feature_name}' already has GO annotation GO:{goid:07d} "
-                f"with evidence '{existing_any.go_evidence}'. "
-                f"Cannot create duplicate annotation with different evidence '{evidence}'."
-            )
 
         # Create new annotation
         try:
