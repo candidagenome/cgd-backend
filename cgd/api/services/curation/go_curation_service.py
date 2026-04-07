@@ -403,7 +403,13 @@ class GoCurationService:
 
         # Create new annotation
         try:
+            # Get next annotation_no manually (workaround for sequence sync issues)
+            from sqlalchemy import func, text
+            max_no = self.db.query(func.max(GoAnnotation.go_annotation_no)).scalar() or 0
+            next_no = max_no + 1
+
             annotation = GoAnnotation(
+                go_annotation_no=next_no,
                 go_no=go.go_no,
                 feature_no=feature_no,
                 go_evidence=evidence,
@@ -489,7 +495,13 @@ class GoCurationService:
         try:
             has_qualifier = "Y" if qualifiers else "N"
 
+            # Get next go_ref_no manually (workaround for sequence sync issues)
+            from sqlalchemy import func
+            max_ref_no = self.db.query(func.max(GoRef.go_ref_no)).scalar() or 0
+            next_ref_no = max_ref_no + 1
+
             go_ref = GoRef(
+                go_ref_no=next_ref_no,
                 go_annotation_no=go_annotation_no,
                 reference_no=reference_no,
                 has_qualifier=has_qualifier,
