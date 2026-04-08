@@ -107,6 +107,14 @@ class CreateAnnotationRequest(BaseModel):
         default=None,
         description="Required GO ID for IC evidence 'from' field",
     )
+    with_db: Optional[str] = Field(
+        default=None,
+        description="Database for with/from evidence (e.g., SGD, CGD, UniProtKB)",
+    )
+    with_id: Optional[str] = Field(
+        default=None,
+        description="ID for with/from evidence (e.g., GPA1). Separate multiple by |",
+    )
 
 
 class CreateAnnotationResponse(BaseModel):
@@ -297,6 +305,8 @@ def create_go_annotation(
             source=request.source,
             qualifiers=request.qualifiers,
             ic_from_goid=request.ic_from_goid,
+            with_db=request.with_db,
+            with_id=request.with_id,
         )
 
         return CreateAnnotationResponse(
