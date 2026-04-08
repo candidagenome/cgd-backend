@@ -545,6 +545,16 @@ class GoCurationService:
                 f"Database error while adding reference: {error_msg}"
             )
 
+    # Map database sources to their dbxref_type values
+    DBXREF_TYPE_MAP = {
+        "SGD": "Gene ID",
+        "CGD": "CGDID Primary",
+        "UniProtKB": "UniProtKB",
+        "PANTHER": "PANTHER",
+        "InterPro": "InterPro",
+        "Pfam": "Pfam",
+    }
+
     def _add_with_support(
         self,
         go_ref_no: int,
@@ -566,9 +576,11 @@ class GoCurationService:
         # Handle multiple IDs separated by |
         ids = [id.strip() for id in with_id.split('|') if id.strip()]
 
+        # Get the correct dbxref_type for this database
+        dbxref_type = self.DBXREF_TYPE_MAP.get(with_db, with_db)
+
         for db_id in ids:
             # Find or create dbxref entry
-            # Use "ORF" as dbxref_type for gene identifiers
             dbxref = (
                 self.db.query(Dbxref)
                 .filter(
@@ -584,7 +596,7 @@ class GoCurationService:
                 dbxref = Dbxref(
                     dbxref_no=max_dbxref_no + 1,
                     source=with_db,
-                    dbxref_type="ORF",
+                    dbxref_type=dbxref_type,
                     dbxref_id=db_id,
                     created_by=curator_userid[:12],
                 )
