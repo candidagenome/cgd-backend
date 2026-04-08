@@ -283,11 +283,22 @@ class GoCurationService:
                         Dbxref.dbxref_no == gd.dbxref_no
                     ).first()
                     if dbxref:
+                        # Get gene name: use description if available, or look up CGD features
+                        gene_name = dbxref.description
+                        if not gene_name and dbxref.source == "CGD":
+                            # For CGD entries, look up gene name from Feature table
+                            feature = self.db.query(Feature).filter(
+                                Feature.dbxref_id == dbxref.dbxref_id
+                            ).first()
+                            if feature:
+                                gene_name = feature.gene_name or feature.feature_name
+
                         evidence_support.append({
                             "support_type": gd.support_type,  # "With" or "From"
                             "source": dbxref.source,
                             "dbxref_type": dbxref.dbxref_type,
                             "dbxref_id": dbxref.dbxref_id,
+                            "description": gene_name,  # Gene name from description or Feature lookup
                         })
 
                 refs.append({
@@ -331,6 +342,8 @@ class GoCurationService:
         source: str = "CGD",
         qualifiers: Optional[list[str]] = None,
         ic_from_goid: Optional[int] = None,
+        with_db: Optional[str] = None,
+        with_id: Optional[str] = None,
     ) -> int:
         """
         Create a new GO annotation.
@@ -345,6 +358,8 @@ class GoCurationService:
             source: Source (default: "CGD")
             qualifiers: Optional list of qualifiers
             ic_from_goid: GO ID for IC evidence "from" field
+            with_db: Database for with/from evidence (e.g., SGD, CGD)
+            with_id: ID for with/from evidence (e.g., GPA1)
 
         Returns:
             New go_annotation_no
@@ -366,30 +381,19 @@ class GoCurationService:
         ).first()
         feature_name = feature.feature_name if feature else str(feature_no)
 
-        # Check for existing annotation with same GO ID (any evidence/type/source)
-        existing_any = (
+        # Check for exact match (same GO ID + evidence + type + source)
+        # Multiple annotations with same GO ID but different evidence codes are valid
+        existing_exact = (
             self.db.query(GoAnnotation)
             .filter(
                 GoAnnotation.feature_no == feature_no,
                 GoAnnotation.go_no == go.go_no,
+                GoAnnotation.go_evidence == evidence,
+                GoAnnotation.annotation_type == annotation_type,
+                GoAnnotation.source == source,
             )
             .first()
         )
-
-        # Check for exact match (same GO ID + evidence + type + source)
-        existing_exact = None
-        if existing_any:
-            existing_exact = (
-                self.db.query(GoAnnotation)
-                .filter(
-                    GoAnnotation.feature_no == feature_no,
-                    GoAnnotation.go_no == go.go_no,
-                    GoAnnotation.go_evidence == evidence,
-                    GoAnnotation.annotation_type == annotation_type,
-                    GoAnnotation.source == source,
-                )
-                .first()
-            )
 
         if existing_exact:
             # Exact match - add reference to existing annotation
@@ -397,21 +401,20 @@ class GoCurationService:
                 f"Adding reference to existing annotation {existing_exact.go_annotation_no}"
             )
             self._add_reference_to_annotation(
-                existing_exact.go_annotation_no, reference_no, qualifiers, curator_userid
+                existing_exact.go_annotation_no, reference_no, qualifiers, curator_userid,
+                with_db=with_db, with_id=with_id,
             )
             return existing_exact.go_annotation_no
 
-        if existing_any:
-            # Same GO ID but different evidence/type/source - warn user about conflict
-            raise GoCurationError(
-                f"Feature '{feature_name}' already has GO annotation GO:{goid:07d} "
-                f"with evidence '{existing_any.go_evidence}'. "
-                f"Cannot create duplicate annotation with different evidence '{evidence}'."
-            )
-
         # Create new annotation
         try:
+            # Get next annotation_no manually (workaround for sequence sync issues)
+            from sqlalchemy import func, text
+            max_no = self.db.query(func.max(GoAnnotation.go_annotation_no)).scalar() or 0
+            next_no = max_no + 1
+
             annotation = GoAnnotation(
+                go_annotation_no=next_no,
                 go_no=go.go_no,
                 feature_no=feature_no,
                 go_evidence=evidence,
@@ -425,7 +428,8 @@ class GoCurationService:
 
             # Add reference
             self._add_reference_to_annotation(
-                annotation.go_annotation_no, reference_no, qualifiers, curator_userid
+                annotation.go_annotation_no, reference_no, qualifiers, curator_userid,
+                with_db=with_db, with_id=with_id,
             )
 
             self.db.commit()
@@ -442,9 +446,29 @@ class GoCurationService:
             # Handle database constraint violations
             error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
             if 'duplicate' in error_msg.lower() or 'unique' in error_msg.lower():
+                # Check what existing annotation is causing the conflict
+                existing = (
+                    self.db.query(GoAnnotation)
+                    .filter(
+                        GoAnnotation.feature_no == feature_no,
+                        GoAnnotation.go_no == go.go_no,
+                        GoAnnotation.go_evidence == evidence,
+                        GoAnnotation.annotation_type == annotation_type,
+                        GoAnnotation.source == source,
+                    )
+                    .first()
+                )
+                if existing:
+                    raise GoCurationError(
+                        f"Feature '{feature_name}' already has GO annotation GO:{goid:07d} "
+                        f"with evidence '{evidence}' (same type/source). "
+                        f"Use a different reference to add to the existing annotation, "
+                        f"or use a different evidence code to create a new annotation."
+                    )
+                # Shouldn't reach here, but provide detailed error if we do
                 raise GoCurationError(
-                    f"Feature '{feature_name}' already has GO annotation GO:{goid:07d}. "
-                    f"Duplicate annotations are not allowed."
+                    f"Database constraint violation for '{feature_name}' GO:{goid:07d} "
+                    f"evidence '{evidence}': {error_msg}"
                 )
             # Re-raise other integrity errors with context
             raise GoCurationError(
@@ -457,6 +481,8 @@ class GoCurationService:
         reference_no: int,
         qualifiers: Optional[list[str]],
         curator_userid: str,
+        with_db: Optional[str] = None,
+        with_id: Optional[str] = None,
     ) -> int:
         """Add a reference to an existing annotation."""
         # Check if reference already linked
@@ -476,12 +502,18 @@ class GoCurationService:
 
         try:
             has_qualifier = "Y" if qualifiers else "N"
+            has_supporting_evidence = "Y" if (with_db and with_id) else "N"
+
+            # Get next go_ref_no manually (workaround for sequence sync issues)
+            max_ref_no = self.db.query(func.max(GoRef.go_ref_no)).scalar() or 0
+            next_ref_no = max_ref_no + 1
 
             go_ref = GoRef(
+                go_ref_no=next_ref_no,
                 go_annotation_no=go_annotation_no,
                 reference_no=reference_no,
                 has_qualifier=has_qualifier,
-                has_supporting_evidence="N",  # Default
+                has_supporting_evidence=has_supporting_evidence,
                 created_by=curator_userid[:12],
             )
             self.db.add(go_ref)
@@ -496,6 +528,10 @@ class GoCurationService:
                     )
                     self.db.add(qualifier)
 
+            # Add with/from evidence support (e.g., "with SGD: GPA1")
+            if with_db and with_id:
+                self._add_with_support(go_ref.go_ref_no, with_db, with_id, curator_userid)
+
             return go_ref.go_ref_no
 
         except IntegrityError as e:
@@ -507,6 +543,81 @@ class GoCurationService:
                 )
             raise GoCurationError(
                 f"Database error while adding reference: {error_msg}"
+            )
+
+    # Map database sources to their dbxref_type values
+    DBXREF_TYPE_MAP = {
+        "SGD": "Gene ID",
+        "CGD": "CGDID Primary",
+        "UniProtKB": "UniProtKB",
+        "PANTHER": "PANTHER",
+        "InterPro": "InterPro",
+        "Pfam": "Pfam",
+    }
+
+    def _add_with_support(
+        self,
+        go_ref_no: int,
+        with_db: str,
+        with_id: str,
+        curator_userid: str,
+    ) -> None:
+        """
+        Add with/from evidence support to a GO reference.
+
+        Creates Dbxref entry if needed and links it via GorefDbxref.
+
+        Args:
+            go_ref_no: GO reference number
+            with_db: Database source (e.g., SGD, CGD, UniProtKB)
+            with_id: Database ID (e.g., GPA1). Can be pipe-separated for multiple.
+            curator_userid: Curator's userid
+        """
+        # Handle multiple IDs separated by |
+        ids = [id.strip() for id in with_id.split('|') if id.strip()]
+
+        # Get the correct dbxref_type for this database
+        dbxref_type = self.DBXREF_TYPE_MAP.get(with_db, with_db)
+
+        for db_id in ids:
+            # Find or create dbxref entry
+            dbxref = (
+                self.db.query(Dbxref)
+                .filter(
+                    Dbxref.source == with_db,
+                    Dbxref.dbxref_id == db_id,
+                )
+                .first()
+            )
+
+            if not dbxref:
+                # Create new dbxref entry
+                max_dbxref_no = self.db.query(func.max(Dbxref.dbxref_no)).scalar() or 0
+                dbxref = Dbxref(
+                    dbxref_no=max_dbxref_no + 1,
+                    source=with_db,
+                    dbxref_type=dbxref_type,
+                    dbxref_id=db_id,
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(dbxref)
+                self.db.flush()
+                logger.info(f"Created new dbxref entry: {with_db}:{db_id}")
+
+            # Create goref_dbxref link with support_type="With"
+            max_goref_dbxref_no = (
+                self.db.query(func.max(GorefDbxref.goref_dbxref_no)).scalar() or 0
+            )
+            goref_dbxref = GorefDbxref(
+                goref_dbxref_no=max_goref_dbxref_no + 1,
+                go_ref_no=go_ref_no,
+                dbxref_no=dbxref.dbxref_no,
+                support_type="With",
+            )
+            self.db.add(goref_dbxref)
+            logger.info(
+                f"Added with support: go_ref_no={go_ref_no}, "
+                f"dbxref={with_db}:{db_id}"
             )
 
     def update_date_last_reviewed(
