@@ -1,4 +1,9 @@
 # CGD CRON JOBS (UTC times - PST +8 hours, PDT +7 hours)
+#
+# Prerequisites:
+#   - samtools (for faidx indexing)
+#   - htslib (for bgzip and tabix)
+#   - Python 3 with venv at /opt/cgd_api/venv
 
 # DAILY
 0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh  # Update Verified/Uncharacterized based on GO evidence
@@ -19,9 +24,11 @@
 0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh                    # Dump GTF format annotations
 0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh   # Dump chromosomal feature tables
 0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh         # Dump phenotype data
+0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh              # Update JBrowse2 (sort/bgzip/tabix GFF, faidx FASTA)
 
 # MONTHLY (1st-4th of each month)
 0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh             # Dump FASTA sequences (genomic, CDS, protein)
+0 21 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh             # Update JBrowse2 with new FASTA files
 0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh            # Generate EMBL format files
 0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh    # Update PatMatch and BLAST databases
 0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh  # Generate ORF coordinates for web-primer

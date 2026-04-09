@@ -8,6 +8,27 @@
 #
 # These cron times are set for PST (+8). During daylight saving time (PDT),
 # jobs will run 1 hour later in local Pacific time.
+#
+# -----------------------------------------------------------------------------
+# PREREQUISITES
+# -----------------------------------------------------------------------------
+#
+# The following tools must be installed on the production server:
+#
+#   Python environment:
+#     - Python 3.9+ with venv at /opt/cgd_api/venv
+#     - All dependencies from requirements.txt
+#
+#   Bioinformatics tools (for JBrowse2 update):
+#     - samtools: For FASTA indexing (faidx)
+#       Install: sudo yum install samtools (Amazon Linux) or conda install samtools
+#     - htslib: For bgzip compression and tabix indexing
+#       Install: sudo yum install htslib (Amazon Linux) or conda install htslib
+#
+#   Other:
+#     - curl: For Slack notifications (slack-cron.sh)
+#     - mail/sendmail: For email reports (curator_reports.py)
+#
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -95,6 +116,26 @@
 # Contains mutant phenotypes, experimental conditions, and references
 0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
 
+# Update JBrowse2 data files from GFF and sequence dumps.
+#
+# What it does:
+#   1. Takes GFF files from ${DOWNLOAD_DIR}/gff/
+#   2. Sorts by chromosome and position
+#   3. Compresses with bgzip and creates tabix index
+#   4. Takes FASTA files from ${DOWNLOAD_DIR}/sequence/
+#   5. Decompresses and creates samtools faidx index
+#   6. Outputs to ${JBROWSE_DIR} (default: /data/jbrowse2/)
+#
+# Species handled:
+#   - C_albicans_SC5314 (Assembly 22)
+#   - C_dubliniensis_CD36
+#   - C_glabrata_CBS138
+#   - C_parapsilosis_CDC317
+#   - C_auris_B8441
+#
+# Note: Runs after GFF dump; gracefully handles missing FASTA until monthly dump
+0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
+
 # -----------------------------------------------------------------------------
 # MONTHLY RUNS (1st-4th of each month)
 # -----------------------------------------------------------------------------
@@ -105,6 +146,10 @@
 #   - Protein translations
 #   - Includes all assemblies for C. albicans (A19, A21, A22)
 0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
+
+# Update JBrowse2 with new FASTA files from monthly sequence dump
+# (GFF is updated weekly; this ensures FASTA updates are picked up immediately)
+0 21 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
 
 # Generate EMBL format files per chromosome with embedded ORF annotations
 # Used for sequence submission to ENA/GenBank
