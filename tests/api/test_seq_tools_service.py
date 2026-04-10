@@ -39,7 +39,7 @@ from cgd.api.services.seq_tools_service import (
 from cgd.core.settings import settings
 
 # Backwards compatibility aliases for tests
-JBROWSE_BASE_URL = settings.JBROWSE_BASE_URL
+JBROWSE_BASE_URL = settings.jbrowse_base_url
 DEFAULT_JBROWSE_TRACKS = "DNA,TranscribedFeatures"
 from cgd.schemas.seq_tools_schema import (
     InputType,
