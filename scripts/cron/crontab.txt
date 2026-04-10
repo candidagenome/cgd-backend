@@ -16,8 +16,13 @@
 # The following tools must be installed on the production server:
 #
 #   Python environment:
-#     - Python 3.9+ with venv at /opt/cgd_api/venv
+#     - Python 3.9+ with venv at /opt/cgd_api/.venv
 #     - All dependencies from requirements.txt
+#
+#   Playwright (for smoke tests):
+#     - playwright package installed in venv
+#     - Chromium browser: playwright install chromium
+#     - System dependencies: playwright install-deps chromium
 #
 #   Bioinformatics tools (for JBrowse2 update):
 #     - samtools: For FASTA indexing (faidx)
@@ -30,6 +35,46 @@
 #     - mail/sendmail: For email reports (curator_reports.py)
 #
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# MONITORING (Every 5 minutes - runs as root)
+# -----------------------------------------------------------------------------
+#
+# Memory monitoring and auto-restart:
+#   - Checks system memory usage percentage
+#   - Checks largest gunicorn worker memory
+#   - Restarts cgd-api service if:
+#     * System memory > 80%
+#     * Any single worker > 4GB (indicates memory leak)
+#   - Logs to /opt/cgd_api/logs/monitor.log
+#
+# Note: This runs as root via /etc/cron.d/cgd-api-monitor (not in user crontab)
+#       because it needs privileges to restart the systemd service.
+#
+# Installation:
+#   echo '*/5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh' | sudo tee /etc/cron.d/cgd-api-monitor
+#
+# */5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh
+
+# -----------------------------------------------------------------------------
+# EVERY 6 HOURS (Health checks)
+# -----------------------------------------------------------------------------
+
+# Playwright smoke tests - verify frontend JavaScript rendering:
+#   - Loads pages in headless Chromium browser
+#   - Waits for JavaScript content to render
+#   - Verifies expected text and elements appear
+#   - Sends Slack notification on failure
+#
+# Pages tested:
+#   - Home page
+#   - Locus page (ACT1) with all tabs (GO, Phenotype, Sequence)
+#   - GO term page
+#   - Feature search, BLAST, Phenotype search pages
+#   - Reference page
+#
+# Note: Requires Playwright and Chromium installed (see Prerequisites)
+0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50
 
 # -----------------------------------------------------------------------------
 # DAILY RUNS (Every day)
