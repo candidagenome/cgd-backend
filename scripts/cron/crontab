@@ -6,6 +6,7 @@
 #   - Python 3 with venv at /opt/cgd_api/venv
 
 # DAILY
+0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh                                   # Run test suite and send Slack report
 0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh  # Update Verified/Uncharacterized based on GO evidence
 0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh                  # Check data integrity rules, email violations to curators
 0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh             # Dump GO annotations to GAF 2.0 format

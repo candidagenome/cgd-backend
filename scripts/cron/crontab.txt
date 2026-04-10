@@ -35,6 +35,14 @@
 # DAILY RUNS (Every day)
 # -----------------------------------------------------------------------------
 
+# Run test suite and send Slack report:
+#   - Runs pytest on all API and script tests
+#   - Reports passed/failed/skipped counts
+#   - Lists failed test names in Slack notification
+#   - Logs stored in ${LOG_DIR}/test-results/
+# Note: Runs early morning to catch any regressions before curators start work
+0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh
+
 # Update ORF classifications based on GO annotation evidence codes:
 #   - Verified: has GO annotation with experimental evidence (not IEA/ISS/RCA/ISA/ISM/ISO/NAS/ND)
 #   - Uncharacterized: not deleted, not dubious, lacks strong GO evidence
