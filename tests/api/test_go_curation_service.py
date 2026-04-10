@@ -146,6 +146,15 @@ class MockQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def join(self, *args, **kwargs):
+        return self
+
+    def outerjoin(self, *args, **kwargs):
+        return self
+
+    def options(self, *args, **kwargs):
+        return self
+
     def first(self):
         return self._results[0] if self._results else None
 
@@ -517,6 +526,7 @@ class TestGetAnnotationsForFeature:
             MockQuery([annotation]),  # Annotations query
             MockQuery([sample_go_terms[0]]),  # GO lookup
             MockQuery([sample_references[0]]),  # Reference lookup
+            MockQuery([]),  # GorefDbxref lookup (evidence support)
         ]
 
         service = GoCurationService(mock_db)
@@ -569,7 +579,10 @@ class TestDeleteAnnotation:
     def test_deletes_annotation(self, mock_db):
         """Should delete annotation."""
         annotation = MockGoAnnotation(1, 1, 1)
-        mock_db.query.return_value = MockQuery([annotation])
+        mock_db.query.side_effect = [
+            MockQuery([annotation]),  # Annotation lookup
+            MockQuery([]),  # GoRef lookup (no child refs)
+        ]
 
         service = GoCurationService(mock_db)
         result = service.delete_annotation(1, "curator")

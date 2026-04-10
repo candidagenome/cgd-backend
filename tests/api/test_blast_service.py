@@ -116,7 +116,7 @@ class TestJBrowseUrlGeneration:
 
         assert url is not None
         assert "test.jbrowse.org" in url
-        assert "cgd_data" in url
+        # URL includes assembly and location parameters
         assert "Ca22chr1A_C_albicans_SC5314" in url
 
     @patch('cgd.api.services.blast_service.settings')

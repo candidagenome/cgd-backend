@@ -62,6 +62,7 @@ class MockFeature:
         headline: str = None,
         organism: MockOrganism = None,
         feat_alias: list = None,
+        name_description: str = None,
     ):
         self.feature_no = feature_no
         self.feature_name = feature_name
@@ -70,6 +71,7 @@ class MockFeature:
         self.headline = headline
         self.organism = organism
         self.feat_alias = feat_alias or []
+        self.name_description = name_description
 
 
 class MockGo:
@@ -108,12 +110,14 @@ class MockReference:
         pubmed: int = None,
         citation: str = None,
         year: int = None,
+        title: str = None,
     ):
         self.reference_no = reference_no
         self.dbxref_id = dbxref_id
         self.pubmed = pubmed
         self.citation = citation
         self.year = year
+        self.title = title
 
 
 class MockQuery:
@@ -123,6 +127,15 @@ class MockQuery:
         self._results = results or []
 
     def options(self, *args, **kwargs):
+        return self
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def join(self, *args, **kwargs):
+        return self
+
+    def outerjoin(self, *args, **kwargs):
         return self
 
     def distinct(self):
@@ -255,7 +268,12 @@ class TestGenerateGeneDocs:
 
     def test_generates_gene_document(self, mock_db, sample_feature):
         """Should generate gene document with correct fields."""
-        mock_db.query.return_value = MockQuery([sample_feature])
+        # First query is for Assembly 21 exclusion (returns tuples)
+        # Second query is for features
+        mock_db.query.side_effect = [
+            MockQuery([]),  # A21 exclusion query - no exclusions
+            MockQuery([sample_feature]),  # Feature query
+        ]
 
         docs = list(_generate_gene_docs(mock_db))
 
@@ -270,7 +288,10 @@ class TestGenerateGeneDocs:
 
     def test_includes_aliases(self, mock_db, sample_feature):
         """Should include aliases in document."""
-        mock_db.query.return_value = MockQuery([sample_feature])
+        mock_db.query.side_effect = [
+            MockQuery([]),  # A21 exclusion query
+            MockQuery([sample_feature]),  # Feature query
+        ]
 
         docs = list(_generate_gene_docs(mock_db))
 
@@ -284,7 +305,10 @@ class TestGenerateGeneDocs:
             gene_name=None,
             organism=sample_organism,
         )
-        mock_db.query.return_value = MockQuery([feature])
+        mock_db.query.side_effect = [
+            MockQuery([]),  # A21 exclusion query
+            MockQuery([feature]),  # Feature query
+        ]
 
         docs = list(_generate_gene_docs(mock_db))
 
@@ -297,7 +321,10 @@ class TestGenerateGeneDocs:
             feature_name="CAL0001",
             organism=None,
         )
-        mock_db.query.return_value = MockQuery([feature])
+        mock_db.query.side_effect = [
+            MockQuery([]),  # A21 exclusion query
+            MockQuery([feature]),  # Feature query
+        ]
 
         docs = list(_generate_gene_docs(mock_db))
 
@@ -309,7 +336,10 @@ class TestGenerateGoDocs:
 
     def test_generates_go_document(self, mock_db, sample_go):
         """Should generate GO document with correct fields."""
-        mock_db.query.return_value = MockQuery([sample_go])
+        mock_db.query.side_effect = [
+            MockQuery([sample_go]),  # GO terms query
+            MockQuery([]),  # GoGosyn synonym query (returns tuples)
+        ]
 
         docs = list(_generate_go_docs(mock_db))
 
@@ -351,7 +381,8 @@ class TestGenerateReferenceDocs:
 
     def test_generates_reference_document(self, mock_db, sample_reference):
         """Should generate reference document with correct fields."""
-        mock_db.query.return_value = MockQuery([sample_reference])
+        # Query returns tuples of (Reference, abstract_text)
+        mock_db.query.return_value = MockQuery([(sample_reference, None)])
 
         docs = list(_generate_reference_docs(mock_db))
 
@@ -364,7 +395,7 @@ class TestGenerateReferenceDocs:
 
     def test_uses_pmid_as_display_name(self, mock_db, sample_reference):
         """Should use PMID as display name when available."""
-        mock_db.query.return_value = MockQuery([sample_reference])
+        mock_db.query.return_value = MockQuery([(sample_reference, None)])
 
         docs = list(_generate_reference_docs(mock_db))
 
@@ -377,7 +408,7 @@ class TestGenerateReferenceDocs:
             dbxref_id="CGD_REF:0001",
             pubmed=None,
         )
-        mock_db.query.return_value = MockQuery([ref])
+        mock_db.query.return_value = MockQuery([(ref, None)])
 
         docs = list(_generate_reference_docs(mock_db))
 
@@ -431,6 +462,15 @@ class TestIndexFunctions:
 class TestRebuildIndex:
     """Tests for rebuild_index."""
 
+    @patch('cgd.api.services.es_indexer.index_virulence_factors')
+    @patch('cgd.api.services.es_indexer.index_literature_topics')
+    @patch('cgd.api.services.es_indexer.index_orthologs')
+    @patch('cgd.api.services.es_indexer.index_external_ids')
+    @patch('cgd.api.services.es_indexer.index_notes')
+    @patch('cgd.api.services.es_indexer.index_pathways')
+    @patch('cgd.api.services.es_indexer.index_colleagues')
+    @patch('cgd.api.services.es_indexer.index_authors')
+    @patch('cgd.api.services.es_indexer.index_paragraphs')
     @patch('cgd.api.services.es_indexer.index_references')
     @patch('cgd.api.services.es_indexer.index_phenotypes')
     @patch('cgd.api.services.es_indexer.index_go_terms')
@@ -439,13 +479,24 @@ class TestRebuildIndex:
     @patch('cgd.api.services.es_indexer.delete_index')
     def test_calls_all_index_functions(
         self, mock_delete, mock_create, mock_genes, mock_go,
-        mock_phenotypes, mock_refs, mock_db, mock_es
+        mock_phenotypes, mock_refs, mock_paragraphs, mock_authors,
+        mock_colleagues, mock_pathways, mock_notes, mock_external_ids,
+        mock_orthologs, mock_lit_topics, mock_virulence, mock_db, mock_es
     ):
         """Should call all index functions."""
         mock_genes.return_value = 10
         mock_go.return_value = 5
         mock_phenotypes.return_value = 3
         mock_refs.return_value = 7
+        mock_paragraphs.return_value = 0
+        mock_authors.return_value = 0
+        mock_colleagues.return_value = 0
+        mock_pathways.return_value = 0
+        mock_notes.return_value = 0
+        mock_external_ids.return_value = 0
+        mock_orthologs.return_value = 0
+        mock_lit_topics.return_value = 0
+        mock_virulence.return_value = 0
 
         result = rebuild_index(mock_db, mock_es)
 
@@ -456,6 +507,15 @@ class TestRebuildIndex:
         mock_phenotypes.assert_called_once()
         mock_refs.assert_called_once()
 
+    @patch('cgd.api.services.es_indexer.index_virulence_factors')
+    @patch('cgd.api.services.es_indexer.index_literature_topics')
+    @patch('cgd.api.services.es_indexer.index_orthologs')
+    @patch('cgd.api.services.es_indexer.index_external_ids')
+    @patch('cgd.api.services.es_indexer.index_notes')
+    @patch('cgd.api.services.es_indexer.index_pathways')
+    @patch('cgd.api.services.es_indexer.index_colleagues')
+    @patch('cgd.api.services.es_indexer.index_authors')
+    @patch('cgd.api.services.es_indexer.index_paragraphs')
     @patch('cgd.api.services.es_indexer.index_references')
     @patch('cgd.api.services.es_indexer.index_phenotypes')
     @patch('cgd.api.services.es_indexer.index_go_terms')
@@ -464,13 +524,24 @@ class TestRebuildIndex:
     @patch('cgd.api.services.es_indexer.delete_index')
     def test_returns_summary(
         self, mock_delete, mock_create, mock_genes, mock_go,
-        mock_phenotypes, mock_refs, mock_db, mock_es
+        mock_phenotypes, mock_refs, mock_paragraphs, mock_authors,
+        mock_colleagues, mock_pathways, mock_notes, mock_external_ids,
+        mock_orthologs, mock_lit_topics, mock_virulence, mock_db, mock_es
     ):
         """Should return summary with counts."""
         mock_genes.return_value = 10
         mock_go.return_value = 5
         mock_phenotypes.return_value = 3
         mock_refs.return_value = 7
+        mock_paragraphs.return_value = 0
+        mock_authors.return_value = 0
+        mock_colleagues.return_value = 0
+        mock_pathways.return_value = 0
+        mock_notes.return_value = 0
+        mock_external_ids.return_value = 0
+        mock_orthologs.return_value = 0
+        mock_lit_topics.return_value = 0
+        mock_virulence.return_value = 0
 
         result = rebuild_index(mock_db, mock_es)
 
@@ -480,6 +551,15 @@ class TestRebuildIndex:
         assert result["references"] == 7
         assert result["total"] == 25
 
+    @patch('cgd.api.services.es_indexer.index_virulence_factors')
+    @patch('cgd.api.services.es_indexer.index_literature_topics')
+    @patch('cgd.api.services.es_indexer.index_orthologs')
+    @patch('cgd.api.services.es_indexer.index_external_ids')
+    @patch('cgd.api.services.es_indexer.index_notes')
+    @patch('cgd.api.services.es_indexer.index_pathways')
+    @patch('cgd.api.services.es_indexer.index_colleagues')
+    @patch('cgd.api.services.es_indexer.index_authors')
+    @patch('cgd.api.services.es_indexer.index_paragraphs')
     @patch('cgd.api.services.es_indexer.index_references')
     @patch('cgd.api.services.es_indexer.index_phenotypes')
     @patch('cgd.api.services.es_indexer.index_go_terms')
@@ -488,13 +568,24 @@ class TestRebuildIndex:
     @patch('cgd.api.services.es_indexer.delete_index')
     def test_refreshes_index(
         self, mock_delete, mock_create, mock_genes, mock_go,
-        mock_phenotypes, mock_refs, mock_db, mock_es
+        mock_phenotypes, mock_refs, mock_paragraphs, mock_authors,
+        mock_colleagues, mock_pathways, mock_notes, mock_external_ids,
+        mock_orthologs, mock_lit_topics, mock_virulence, mock_db, mock_es
     ):
         """Should refresh index after rebuild."""
         mock_genes.return_value = 0
         mock_go.return_value = 0
         mock_phenotypes.return_value = 0
         mock_refs.return_value = 0
+        mock_paragraphs.return_value = 0
+        mock_authors.return_value = 0
+        mock_colleagues.return_value = 0
+        mock_pathways.return_value = 0
+        mock_notes.return_value = 0
+        mock_external_ids.return_value = 0
+        mock_orthologs.return_value = 0
+        mock_lit_topics.return_value = 0
+        mock_virulence.return_value = 0
 
         rebuild_index(mock_db, mock_es)
 

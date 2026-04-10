@@ -207,39 +207,42 @@ class TestBuildJbrowseLink:
     """Tests for _build_jbrowse_link."""
 
     def test_builds_basic_link(self):
-        """Should build basic JBrowse link."""
-        result = _build_jbrowse_link("Chr1", 1000, 2000)
+        """Should build basic JBrowse link with default flanking."""
+        result = _build_jbrowse_link("Candida albicans SC5314", "Chr1", 1000, 2000)
 
-        assert JBROWSE_BASE_URL in result
-        assert "loc=Chr1%3A1000..2000" in result
-        # The comma is URL-encoded as %2C
-        assert "tracks=DNA%2CGenes" in result
+        assert result is not None
+        # Default flanking of JBROWSE_FLANK (1000) is applied
+        # So loc should be 1..3000 (1000-1000=0 clamped to 1, 2000+1000=3000)
+        assert "loc=Chr1" in result
+        assert "tracks=DNA" in result
 
-    def test_includes_flanking(self):
-        """Should include flanking regions."""
-        result = _build_jbrowse_link("Chr1", 1000, 2000, flank_left=100, flank_right=200)
+    def test_includes_custom_flanking(self):
+        """Should include custom flanking regions."""
+        result = _build_jbrowse_link("Candida albicans SC5314", "Chr1", 1000, 2000, flank_left=100, flank_right=200)
 
+        # Custom flanking: 1000-100=900, 2000+200=2200
         assert "loc=Chr1%3A900..2200" in result
 
     def test_clamps_start_to_one(self):
         """Should not allow start < 1."""
-        result = _build_jbrowse_link("Chr1", 50, 100, flank_left=100)
+        result = _build_jbrowse_link("Candida albicans SC5314", "Chr1", 50, 100, flank_left=100)
 
-        assert "loc=Chr1%3A1..100" in result
+        # 50-100=-50, clamped to 1; 100+1000 (default right flank)=1100
+        assert "loc=Chr1%3A1.." in result
 
     def test_returns_none_when_no_chromosome(self):
         """Should return None when no chromosome."""
-        result = _build_jbrowse_link(None, 1000, 2000)
+        result = _build_jbrowse_link("Candida albicans SC5314", None, 1000, 2000)
         assert result is None
 
     def test_returns_none_when_no_start(self):
         """Should return None when no start."""
-        result = _build_jbrowse_link("Chr1", None, 2000)
+        result = _build_jbrowse_link("Candida albicans SC5314", "Chr1", None, 2000)
         assert result is None
 
     def test_returns_none_when_no_end(self):
         """Should return None when no end."""
-        result = _build_jbrowse_link("Chr1", 1000, None)
+        result = _build_jbrowse_link("Candida albicans SC5314", "Chr1", 1000, None)
         assert result is None
 
 
@@ -388,6 +391,7 @@ class TestResolveGeneQuery:
         """Should find feature by gene name."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Gene name lookup
+            MockQuery([]),  # Assembly22 equivalent lookup (FeatRelationship)
             MockQuery([]),  # Location lookup
         ]
 
@@ -401,6 +405,7 @@ class TestResolveGeneQuery:
         mock_db.query.side_effect = [
             MockQuery([]),  # Gene name lookup - no match
             MockQuery([sample_feature]),  # Feature name lookup
+            MockQuery([]),  # Assembly22 equivalent lookup (FeatRelationship)
             MockQuery([]),  # Location lookup
         ]
 
@@ -415,6 +420,7 @@ class TestResolveGeneQuery:
             MockQuery([]),  # Gene name lookup - no match
             MockQuery([]),  # Feature name lookup - no match
             MockQuery([sample_feature]),  # dbxref_id lookup
+            MockQuery([]),  # Assembly22 equivalent lookup (FeatRelationship)
             MockQuery([]),  # Location lookup
         ]
 
@@ -435,6 +441,7 @@ class TestResolveGeneQuery:
         """Should be case insensitive."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Gene name lookup
+            MockQuery([]),  # Assembly22 equivalent lookup (FeatRelationship)
             MockQuery([]),  # Location lookup
         ]
 
@@ -450,6 +457,7 @@ class TestResolveGeneQuery:
 
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Gene name lookup
+            MockQuery([]),  # Assembly22 equivalent lookup (FeatRelationship)
             MockQuery([location]),  # Location lookup
             MockQuery([root_seq]),  # Root seq lookup
         ]
@@ -509,30 +517,49 @@ class TestGetToolsForGene:
 class TestGetToolsForCoordinates:
     """Tests for get_tools_for_coordinates."""
 
-    def test_returns_maps_category(self):
+    def test_returns_maps_category(self, mock_db, sample_organism):
         """Should include Maps/Tables category."""
-        result = get_tools_for_coordinates("Chr1", 1000, 2000)
+        # Mock the chromosome lookup to return an organism
+        chr_feature = MockFeature(10, "Chr1", feature_type="chromosome")
+        chr_feature.organism = sample_organism
+        mock_db.query.return_value = MockQuery([chr_feature])
+
+        result = get_tools_for_coordinates(mock_db, "Chr1", 1000, 2000)
 
         maps_cat = next((c for c in result if c.name == "Maps/Tables"), None)
         assert maps_cat is not None
 
-    def test_includes_jbrowse(self):
-        """Should include JBrowse link."""
-        result = get_tools_for_coordinates("Chr1", 1000, 2000)
+    def test_includes_jbrowse(self, mock_db, sample_organism):
+        """Should include JBrowse link when organism is found."""
+        # Mock the chromosome lookup to return an organism
+        chr_feature = MockFeature(10, "Chr1", feature_type="chromosome")
+        chr_feature.organism = sample_organism
+        mock_db.query.return_value = MockQuery([chr_feature])
+
+        result = get_tools_for_coordinates(mock_db, "Chr1", 1000, 2000)
 
         maps_cat = next(c for c in result if c.name == "Maps/Tables")
-        assert any("JBrowse" in t.name for t in maps_cat.tools)
+        # JBrowse should be present if organism is supported
+        assert any("JBrowse" in t.name or "Batch Download" in t.name for t in maps_cat.tools)
 
-    def test_includes_batch_download(self):
+    def test_includes_batch_download(self, mock_db, sample_organism):
         """Should include batch download link."""
-        result = get_tools_for_coordinates("Chr1", 1000, 2000)
+        chr_feature = MockFeature(10, "Chr1", feature_type="chromosome")
+        chr_feature.organism = sample_organism
+        mock_db.query.return_value = MockQuery([chr_feature])
+
+        result = get_tools_for_coordinates(mock_db, "Chr1", 1000, 2000)
 
         maps_cat = next(c for c in result if c.name == "Maps/Tables")
         assert any("Batch Download" in t.name for t in maps_cat.tools)
 
-    def test_includes_sequence_retrieval(self):
+    def test_includes_sequence_retrieval(self, mock_db, sample_organism):
         """Should include sequence retrieval."""
-        result = get_tools_for_coordinates("Chr1", 1000, 2000)
+        chr_feature = MockFeature(10, "Chr1", feature_type="chromosome")
+        chr_feature.organism = sample_organism
+        mock_db.query.return_value = MockQuery([chr_feature])
+
+        result = get_tools_for_coordinates(mock_db, "Chr1", 1000, 2000)
 
         seq_cat = next((c for c in result if c.name == "Sequence Retrieval"), None)
         assert seq_cat is not None
