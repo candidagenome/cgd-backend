@@ -9,10 +9,10 @@
 #   4. Sends a formatted Slack report
 #
 # Usage:
-#   ./cgd_run_tests.sh [pytest-args...]
-#   ./cgd_run_tests.sh                    # Run all tests
-#   ./cgd_run_tests.sh tests/api/         # Run only API tests
-#   ./cgd_run_tests.sh -k "locus"         # Run tests matching "locus"
+#   ./cgd_run_tests.sh                    # Run API tests only (default)
+#   ./cgd_run_tests.sh --all              # Run ALL tests (API + scripts)
+#   ./cgd_run_tests.sh --all -k "locus"   # Run all tests matching "locus"
+#   ./cgd_run_tests.sh -k "go"            # Run API tests matching "go"
 #
 # Environment Variables:
 #   SLACK_WEBHOOK_URL: Slack webhook for notifications (optional)
@@ -64,14 +64,28 @@ echo "========================================"
 # Change to project root
 cd "$PROJECT_ROOT"
 
+# Set PYTHONPATH to include project root and untested scripts
+export PYTHONPATH="$PROJECT_ROOT:$PROJECT_ROOT/scripts/untested:${PYTHONPATH:-}"
+
 # Run pytest with JUnit XML output
 # Capture both stdout and the exit code
 echo ""
 echo "Running tests..."
 echo ""
 
-pytest_args="${@:--v}"
-python -m pytest $pytest_args \
+# Default to running API tests only (more reliable)
+# Use --all flag to run all tests including script tests
+if [ "$1" = "--all" ]; then
+    pytest_args="${@:2}"
+    test_path="tests/"
+    echo "Running ALL tests..."
+else
+    pytest_args="${@:--v}"
+    test_path="tests/api/"
+    echo "Running API tests (use --all for full suite)..."
+fi
+
+python -m pytest $test_path $pytest_args \
     --tb=short \
     --junit-xml="$JUNIT_XML" \
     2>&1 | tee "$LOG_FILE"

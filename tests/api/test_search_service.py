@@ -33,12 +33,15 @@ from cgd.api.services.search_service import (
     search_references,
     quick_search,
     get_autocomplete_suggestions,
-    search_category_paginated,
+    search_category,  # renamed from search_category_paginated
     _count_genes,
     _count_go_terms,
     _count_phenotypes,
     _count_references,
 )
+
+# Alias for backwards compatibility with tests
+search_category_paginated = search_category
 
 
 class MockOrganism:

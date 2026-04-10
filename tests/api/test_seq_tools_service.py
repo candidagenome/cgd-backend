@@ -33,9 +33,14 @@ from cgd.api.services.seq_tools_service import (
     get_available_assemblies,
     get_chromosomes,
     resolve_and_get_tools,
-    JBROWSE_BASE_URL,
-    DEFAULT_JBROWSE_TRACKS,
+    JBROWSE_CONFIG,
+    JBROWSE_FLANK,
 )
+from cgd.core.settings import settings
+
+# Backwards compatibility aliases for tests
+JBROWSE_BASE_URL = settings.JBROWSE_BASE_URL
+DEFAULT_JBROWSE_TRACKS = "DNA,TranscribedFeatures"
 from cgd.schemas.seq_tools_schema import (
     InputType,
     SeqType,

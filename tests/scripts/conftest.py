@@ -8,10 +8,20 @@ Provides common fixtures for testing CGD backend scripts including:
 - Environment configuration
 """
 import os
+import sys
 import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+# Add scripts/untested to path so tests can import modules like:
+#   from ftp_dump.gp2protein import ...
+# instead of:
+#   from scripts.untested.ftp_dump.gp2protein import ...
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+UNTESTED_SCRIPTS = PROJECT_ROOT / "scripts" / "untested"
+if str(UNTESTED_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(UNTESTED_SCRIPTS))
 
 
 @pytest.fixture
