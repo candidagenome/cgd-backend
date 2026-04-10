@@ -24,3 +24,6 @@ pytest>=7.0
 
 # Bioinformatics
 biopython>=1.83
+
+# Testing / Smoke tests
+playwright>=1.40
