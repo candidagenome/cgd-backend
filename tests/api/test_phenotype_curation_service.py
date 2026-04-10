@@ -308,13 +308,14 @@ class TestGetOrCreatePhenotype:
 class TestGetOrCreateExperiment:
     """Tests for experiment get/create."""
 
-    def test_returns_none_without_comment(self, mock_db):
-        """Should return None if no comment provided."""
+    def test_creates_experiment_without_comment(self, mock_db):
+        """Should create experiment even without comment (needed for properties)."""
         service = PhenotypeCurationService(mock_db)
-        result = service.get_or_create_experiment(None, "curator")
+        service.get_or_create_experiment(None, "curator")
 
-        assert result is None
-        mock_db.add.assert_not_called()
+        # Service always creates experiment (needed to link properties)
+        mock_db.add.assert_called_once()
+        mock_db.flush.assert_called_once()
 
     def test_creates_experiment_with_comment(self, mock_db):
         """Should create experiment if comment provided."""

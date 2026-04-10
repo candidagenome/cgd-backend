@@ -259,8 +259,8 @@ class TestGetSequenceByFeature:
         """Should find feature by gene name."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Found by gene_name
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),  # Sequence
-            MockQuery([]),  # Location (none)
         ]
 
         result = get_sequence_by_feature(mock_db, "ALS1")
@@ -273,8 +273,8 @@ class TestGetSequenceByFeature:
         mock_db.query.side_effect = [
             MockQuery([]),  # Not found by gene_name
             MockQuery([sample_feature]),  # Found by feature_name
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),  # Sequence
-            MockQuery([]),  # Location
         ]
 
         result = get_sequence_by_feature(mock_db, "CAL0001")
@@ -288,8 +288,8 @@ class TestGetSequenceByFeature:
             MockQuery([]),  # Not by gene_name
             MockQuery([]),  # Not by feature_name
             MockQuery([sample_feature]),  # Found by dbxref_id
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),  # Sequence
-            MockQuery([]),  # Location
         ]
 
         result = get_sequence_by_feature(mock_db, "CGD:CAL0001")
@@ -300,6 +300,7 @@ class TestGetSequenceByFeature:
         """Should return None when feature has no sequence."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Feature found
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([]),  # No sequence
         ]
 
@@ -311,8 +312,8 @@ class TestGetSequenceByFeature:
         """Should return uppercase sequence."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),  # Has lowercase residues
-            MockQuery([]),
         ]
 
         result = get_sequence_by_feature(mock_db, "ALS1")
@@ -323,8 +324,8 @@ class TestGetSequenceByFeature:
         """Should include FASTA header."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),
-            MockQuery([]),
         ]
 
         result = get_sequence_by_feature(mock_db, "ALS1")
@@ -337,8 +338,8 @@ class TestGetSequenceByFeature:
         protein_seq = MockSeq(1, 1, "MKATGC", "protein")
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([protein_seq]),
-            MockQuery([]),
         ]
 
         result = get_sequence_by_feature(mock_db, "ALS1", seq_type=SeqType.PROTEIN)
@@ -350,8 +351,8 @@ class TestGetSequenceByFeature:
         """Should apply reverse complement when requested."""
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),
+            MockQuery([]),  # FeatLocation (none)
             MockQuery([sample_seq]),  # "atgcatgcatgc"
-            MockQuery([]),
         ]
 
         result = get_sequence_by_feature(

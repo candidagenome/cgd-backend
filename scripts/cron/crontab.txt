@@ -8,11 +8,67 @@
 #
 # These cron times are set for PST (+8). During daylight saving time (PDT),
 # jobs will run 1 hour later in local Pacific time.
+#
+# -----------------------------------------------------------------------------
+# PREREQUISITES
+# -----------------------------------------------------------------------------
+#
+# The following tools must be installed on the production server:
+#
+#   Python environment:
+#     - Python 3.9+ with venv at /opt/cgd_api/venv
+#     - All dependencies from requirements.txt
+#
+#   Bioinformatics tools (for JBrowse2 update):
+#     - samtools: For FASTA indexing (faidx)
+#       Install: sudo yum install samtools (Amazon Linux) or conda install samtools
+#     - htslib: For bgzip compression and tabix indexing
+#       Install: sudo yum install htslib (Amazon Linux) or conda install htslib
+#
+#   Other:
+#     - curl: For Slack notifications (slack-cron.sh)
+#     - mail/sendmail: For email reports (curator_reports.py)
+#
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # DAILY RUNS (Every day)
 # -----------------------------------------------------------------------------
+
+# Run API test suite and send Slack report:
+#   - Runs pytest on API tests (tests/api/)
+#   - Reports passed/failed/skipped counts
+#   - Lists failed test names in Slack notification
+#   - Logs stored in ${LOG_DIR}/test-results/
+#
+# Test Coverage (~1400 tests across 40 modules):
+#   Public API Services:
+#     - Search: full-text search, feature search, database search
+#     - Features: locus details, sequences, GO annotations, phenotypes
+#     - References: literature data, batch downloads
+#     - Tools: BLAST, PatMatch, restriction mapper, web primer designer,
+#              sequence alignment, GO Term Finder, GO Slim mapper
+#     - Genome: chromosome details, coordinate lookup, genome versions
+#   Curation Services:
+#     - Locus curation: gene names, aliases, descriptions, notes
+#     - Literature: review queue triage, literature guide associations
+#     - GO curation: annotation management with evidence codes
+#     - Phenotype curation: observable/qualifier/experiment handling
+#     - Reference curation: PubMed import, manual entry, status tracking
+#     - Sequence curation: coordinate and sequence updates
+#     - Colleague/gene registry: submissions and approvals
+#   Infrastructure:
+#     - Elasticsearch indexing and search
+#     - Batch download generation (GAF, GFF, FASTA)
+#     - Form submission utilities
+#
+# Usage:
+#   ./cgd_run_tests.sh           # Run API tests only (default, more reliable)
+#   ./cgd_run_tests.sh --all     # Run all tests including script tests
+#   ./cgd_run_tests.sh -k "go"   # Run tests matching "go"
+#
+# Note: Runs early morning to catch any regressions before curators start work
+0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh
 
 # Update ORF classifications based on GO annotation evidence codes:
 #   - Verified: has GO annotation with experimental evidence (not IEA/ISS/RCA/ISA/ISM/ISO/NAS/ND)
@@ -95,6 +151,26 @@
 # Contains mutant phenotypes, experimental conditions, and references
 0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
 
+# Update JBrowse2 data files from GFF and sequence dumps.
+#
+# What it does:
+#   1. Takes GFF files from ${DOWNLOAD_DIR}/gff/
+#   2. Sorts by chromosome and position
+#   3. Compresses with bgzip and creates tabix index
+#   4. Takes FASTA files from ${DOWNLOAD_DIR}/sequence/
+#   5. Decompresses and creates samtools faidx index
+#   6. Outputs to ${JBROWSE_DIR} (default: /data/jbrowse2/)
+#
+# Species handled:
+#   - C_albicans_SC5314 (Assembly 22)
+#   - C_dubliniensis_CD36
+#   - C_glabrata_CBS138
+#   - C_parapsilosis_CDC317
+#   - C_auris_B8441
+#
+# Note: Runs after GFF dump; gracefully handles missing FASTA until monthly dump
+0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
+
 # -----------------------------------------------------------------------------
 # MONTHLY RUNS (1st-4th of each month)
 # -----------------------------------------------------------------------------
@@ -105,6 +181,10 @@
 #   - Protein translations
 #   - Includes all assemblies for C. albicans (A19, A21, A22)
 0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
+
+# Update JBrowse2 with new FASTA files from monthly sequence dump
+# (GFF is updated weekly; this ensures FASTA updates are picked up immediately)
+0 21 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
 
 # Generate EMBL format files per chromosome with embedded ORF annotations
 # Used for sequence submission to ENA/GenBank

@@ -190,6 +190,9 @@ class MockQuery:
     def distinct(self):
         return self
 
+    def subquery(self):
+        return self
+
     def first(self):
         return self._results[0] if self._results else None
 
@@ -554,23 +557,14 @@ class TestSearchFeatures:
         assert result.success is False
         assert "not found" in result.error
 
-    def test_returns_empty_results_for_no_features(self, mock_db, sample_organism):
+    @patch('cgd.api.services.feature_search_service.get_current_feature_nos')
+    def test_returns_empty_results_for_no_features(self, mock_get_features, mock_db, sample_organism):
         """Should return empty results when no features match."""
-        # Create a query that returns organism first, then empty features
-        call_count = [0]
+        # Mock the organism lookup
+        mock_db.query.return_value = MockQuery([sample_organism])
 
-        def mock_query(*args):
-            call_count[0] += 1
-            if call_count[0] == 1:  # First query is organism lookup
-                q = MockQuery([sample_organism])
-                q.filter = MagicMock(return_value=q)
-                return q
-            # Return empty for all other queries
-            q = MockQuery([])
-            q.filter = MagicMock(return_value=q)
-            return q
-
-        mock_db.query.side_effect = mock_query
+        # Mock get_current_feature_nos to return empty set
+        mock_get_features.return_value = set()
 
         request = FeatureSearchRequest(
             organism="C_albicans_SC5314",
@@ -621,23 +615,14 @@ class TestGenerateDownloadTsv:
 
         assert "No results" in result
 
-    def test_generates_tsv_headers(self, mock_db, sample_organism):
+    @patch('cgd.api.services.feature_search_service.get_current_feature_nos')
+    def test_generates_tsv_headers(self, mock_get_features, mock_db, sample_organism):
         """Should generate TSV with headers (when results exist)."""
-        # Create a query that returns organism first, then empty features
-        call_count = [0]
+        # Mock the organism lookup
+        mock_db.query.return_value = MockQuery([sample_organism])
 
-        def mock_query(*args):
-            call_count[0] += 1
-            if call_count[0] == 1:  # First query is organism lookup
-                q = MockQuery([sample_organism])
-                q.filter = MagicMock(return_value=q)
-                return q
-            # Return empty for all other queries
-            q = MockQuery([])
-            q.filter = MagicMock(return_value=q)
-            return q
-
-        mock_db.query.side_effect = mock_query
+        # Mock get_current_feature_nos to return empty set
+        mock_get_features.return_value = set()
 
         request = FeatureSearchRequest(
             organism="C_albicans_SC5314",

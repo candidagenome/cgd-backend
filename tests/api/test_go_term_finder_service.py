@@ -299,6 +299,7 @@ class TestEnrichmentCalculation:
             4: {200},  # Feature 4 -> GO term 200
             5: {200},  # Feature 5 -> GO term 200
         }
+        query_direct = {k: v.copy() for k, v in query_annotations.items()}
 
         # Background: 10 genes total, 5 annotated to term 100
         background_annotations = {
@@ -313,10 +314,15 @@ class TestEnrichmentCalculation:
             9: {200},
             10: {200},
         }
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=0.5,
             min_genes_in_term=1,
         )
@@ -330,15 +336,21 @@ class TestEnrichmentCalculation:
         query_annotations = {
             1: {999},  # GO term not in background
         }
+        query_direct = {1: {999}}
 
         background_annotations = {
             2: {100},
             3: {100},
         }
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=0.05,
             min_genes_in_term=1,
         )
@@ -354,6 +366,7 @@ class TestEnrichmentCalculation:
             3: {200},
             4: {200},  # 3 genes with term 200
         }
+        query_direct = {k: v.copy() for k, v in query_annotations.items()}
 
         background_annotations = {
             1: {100},
@@ -363,10 +376,15 @@ class TestEnrichmentCalculation:
             5: {100, 200},
             6: {100, 200},
         }
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=2,  # Require at least 2 genes
         )
@@ -380,6 +398,10 @@ class TestEnrichmentCalculation:
         results = _calculate_enrichment(
             {},  # Empty query
             {1: {100}, 2: {100}},
+            {},  # Empty query direct
+            {1: {100}, 2: {100}},
+            query_size=0,
+            background_size=2,
             p_value_cutoff=0.05,
             min_genes_in_term=1,
         )
@@ -390,6 +412,10 @@ class TestEnrichmentCalculation:
         results = _calculate_enrichment(
             {1: {100}},
             {},  # Empty background
+            {1: {100}},
+            {},  # Empty background direct
+            query_size=1,
+            background_size=0,
             p_value_cutoff=0.05,
             min_genes_in_term=1,
         )
@@ -408,13 +434,19 @@ class TestEnrichmentCalculation:
             2: {100},
             3: {100},
         }
+        query_direct = {k: v.copy() for k, v in query_annotations.items()}
 
         # Same as query
         background_annotations = query_annotations.copy()
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,  # Accept all p-values
             min_genes_in_term=1,
         )
@@ -495,15 +527,21 @@ class TestEdgeCases:
     def test_single_gene_query(self):
         """Test enrichment with single gene."""
         query_annotations = {1: {100}}
+        query_direct = {1: {100}}
         background_annotations = {
             1: {100},
             2: {100},
             3: {200},
         }
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
@@ -517,16 +555,22 @@ class TestEdgeCases:
             1: {100},
             2: {200},
         }
+        query_direct = {k: v.copy() for k, v in query_annotations.items()}
         background_annotations = {
             1: {100},
             2: {200},
             3: {100},
             4: {200},
         }
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
@@ -550,6 +594,10 @@ class TestEdgeCases:
             1: {11, 10, 1},  # Direct to 11, inherited to 10 and 1
             2: {10, 1},      # Direct to 10, inherited to 1
         }
+        query_direct = {
+            1: {11},  # Direct to 11 only
+            2: {10},  # Direct to 10 only
+        }
 
         background_annotations_with_ancestors = {
             1: {11, 10, 1},
@@ -558,10 +606,21 @@ class TestEdgeCases:
             4: {10, 1},
             5: {12, 1},  # Different branch
         }
+        background_direct = {
+            1: {11},
+            2: {10},
+            3: {10},
+            4: {10},
+            5: {12},
+        }
 
         results = _calculate_enrichment(
             query_annotations_with_ancestors,
             background_annotations_with_ancestors,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations_with_ancestors),
+            background_size=len(background_annotations_with_ancestors),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )

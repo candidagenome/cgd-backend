@@ -286,8 +286,12 @@ class TestGetFeatureDetails:
         """Should return basic feature fields."""
         mock_db.query.side_effect = [
             MockQuery([sample_features[0]]),  # Feature lookup
+            MockQuery([]),  # RefLink for GENE_NAME
+            MockQuery([]),  # RefLink for NAME_DESCRIPTION
+            MockQuery([]),  # RefLink for HEADLINE
             MockQuery([]),  # RefLink for alias
             MockQuery([]),  # NoteLink lookup
+            MockQuery([]),  # FeatProperty for qualifier
         ]
 
         service = LocusCurationService(mock_db)
@@ -312,9 +316,13 @@ class TestGetFeatureDetails:
     def test_includes_aliases(self, mock_db, sample_features):
         """Should include aliases in details."""
         mock_db.query.side_effect = [
-            MockQuery([sample_features[0]]),
+            MockQuery([sample_features[0]]),  # Feature lookup
+            MockQuery([]),  # RefLink for GENE_NAME
+            MockQuery([]),  # RefLink for NAME_DESCRIPTION
+            MockQuery([]),  # RefLink for HEADLINE
             MockQuery([]),  # RefLink for alias
             MockQuery([]),  # NoteLink lookup
+            MockQuery([]),  # FeatProperty for qualifier
         ]
 
         service = LocusCurationService(mock_db)

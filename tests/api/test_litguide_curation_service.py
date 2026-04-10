@@ -28,10 +28,12 @@ class MockFeature:
         feature_no: int,
         feature_name: str,
         gene_name: str = None,
+        organism_no: int = 1,
     ):
         self.feature_no = feature_no
         self.feature_name = feature_name
         self.gene_name = gene_name
+        self.organism_no = organism_no
 
 
 class MockReference:
@@ -111,6 +113,9 @@ class MockQuery:
 
     def count(self):
         return self._count
+
+    def distinct(self):
+        return self
 
 
 @pytest.fixture
@@ -220,8 +225,14 @@ class TestGetFeatureLiterature:
         self, mock_db, sample_features
     ):
         """Should return empty lists when no literature."""
+        # Create mock row object for related features query
+        # SQLAlchemy returns Row objects with feature_no attribute
+        mock_row = MagicMock()
+        mock_row.feature_no = 1
+
         mock_db.query.side_effect = [
             MockQuery([sample_features[0]]),  # Feature lookup
+            MockQuery([mock_row]),  # Related features query (gene_name lookup)
             MockQuery([]),  # Curated query
             MockQuery([]),  # Uncurated query
         ]
@@ -237,14 +248,22 @@ class TestGetFeatureLiterature:
 class TestAddTopicAssociation:
     """Tests for adding topic associations."""
 
-    def test_raises_for_invalid_topic(self, mock_db):
-        """Should raise error for invalid topic."""
+    def test_accepts_any_topic(self, mock_db, sample_features, sample_references):
+        """Should accept any topic value (validation is done by CV tree selector in UI)."""
+        # Topics are selected from CV tree in UI, so service accepts any value
+        # (matching Perl behavior which accepts any selected term)
+        ref_prop = MockRefProperty(1, 1, "literature_topic", "Custom Topic")
+
+        mock_db.query.side_effect = [
+            MockQuery([sample_features[0]]),  # Feature found
+            MockQuery([sample_references[0]]),  # Reference found
+            MockQuery([ref_prop]),  # RefProperty exists
+            MockQuery([]),  # No existing link
+        ]
+
         service = LitGuideCurationService(mock_db)
-
-        with pytest.raises(LitGuideCurationError) as exc_info:
-            service.add_topic_association(1, 1, "Invalid Topic", "curator1")
-
-        assert "Invalid topic" in str(exc_info.value)
+        # Should not raise - any topic is accepted
+        service.add_topic_association(1, 1, "Custom Topic", "curator1")
 
     def test_raises_for_unknown_feature(self, mock_db):
         """Should raise error for unknown feature."""

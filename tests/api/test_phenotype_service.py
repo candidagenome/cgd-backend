@@ -117,6 +117,7 @@ class MockPhenoAnnotation:
         self.feature = feature
         self.phenotype = phenotype
         self.experiment = experiment
+        self.experiment_no = experiment.experiment_no if experiment else None
 
 
 class MockCv:

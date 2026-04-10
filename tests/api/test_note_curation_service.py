@@ -116,8 +116,8 @@ def mock_db():
 def sample_notes():
     """Sample notes for testing."""
     return [
-        MockNote(1, "This is a curator note about ACT1", "Curator", created_by="curator1"),
-        MockNote(2, "History of gene naming", "History", created_by="curator2"),
+        MockNote(1, "This is a curator note about ACT1", "Curation note", created_by="curator1"),
+        MockNote(2, "Nomenclature history of gene naming", "Nomenclature history", created_by="curator2"),
         MockNote(3, "Sequence update note", "Sequence", created_by="curator1"),
     ]
 
@@ -146,10 +146,10 @@ class TestConstants:
 
     def test_note_types(self):
         """Should have standard note types."""
-        assert "Curator" in NOTE_TYPES
-        assert "History" in NOTE_TYPES
-        assert "Nomenclature" in NOTE_TYPES
-        assert "Sequence" in NOTE_TYPES
+        assert "Curation note" in NOTE_TYPES
+        assert "Nomenclature history" in NOTE_TYPES
+        assert "Literature history" in NOTE_TYPES
+        assert "Sequence change" in NOTE_TYPES
 
     def test_linkable_tables(self):
         """Should have standard linkable tables."""
@@ -198,7 +198,7 @@ class TestGetNoteDetails:
 
         assert result["note_no"] == 1
         assert result["note"] == "This is a curator note about ACT1"
-        assert result["note_type"] == "Curator"
+        assert result["note_type"] == "Curation note"
         assert len(result["linked_entities"]) == 2
 
     def test_raises_for_unknown_note(self, mock_db):
@@ -256,13 +256,13 @@ class TestSearchNotes:
         mock_db.query.return_value = MockQuery([sample_notes[0]], count_value=1)
 
         service = NoteCurationService(mock_db)
-        results, total = service.search_notes(note_type="Curator")
+        results, total = service.search_notes(note_type="Curation note")
 
         assert len(results) == 1
 
     def test_search_truncates_long_notes(self, mock_db):
         """Should truncate notes longer than 200 chars."""
-        long_note = MockNote(1, "x" * 300, "Curator")
+        long_note = MockNote(1, "x" * 300, "Curation note")
         mock_db.query.return_value = MockQuery([long_note], count_value=1)
 
         service = NoteCurationService(mock_db)
@@ -290,7 +290,7 @@ class TestCreateNote:
         mock_db.query.return_value = MockQuery([])  # No existing note
 
         service = NoteCurationService(mock_db)
-        service.create_note("Test note", "Curator", "curator1")
+        service.create_note("Test note", "Curation note", "curator1")
 
         mock_db.add.assert_called()
         mock_db.commit.assert_called_once()
@@ -311,7 +311,7 @@ class TestCreateNote:
         service = NoteCurationService(mock_db)
 
         with pytest.raises(NoteCurationError) as exc_info:
-            service.create_note("This is a curator note about ACT1", "Curator", "curator1")
+            service.create_note("This is a curator note about ACT1", "Curation note", "curator1")
 
         assert "already exists" in str(exc_info.value)
 
@@ -322,7 +322,7 @@ class TestCreateNote:
         service = NoteCurationService(mock_db)
         service.create_note(
             "Test note",
-            "Curator",
+            "Curation note",
             "curator1",
             linked_entities=[{"tab_name": "FEATURE", "primary_key": 101}]
         )
@@ -337,7 +337,7 @@ class TestCreateNote:
         service = NoteCurationService(mock_db)
         service.create_note(
             "Test note",
-            "Curator",
+            "Curation note",
             "curator1",
             linked_entities=[{"tab_name": "INVALID_TABLE", "primary_key": 101}]
         )
@@ -365,10 +365,10 @@ class TestUpdateNote:
         mock_db.query.return_value = MockQuery([sample_notes[0]])
 
         service = NoteCurationService(mock_db)
-        result = service.update_note(1, "curator1", note_type="History")
+        result = service.update_note(1, "curator1", note_type="Nomenclature history")
 
         assert result is True
-        assert sample_notes[0].note_type == "History"
+        assert sample_notes[0].note_type == "Nomenclature history"
 
     def test_raises_for_unknown_note(self, mock_db):
         """Should raise error for unknown note."""

@@ -86,12 +86,12 @@ UNANNOTATED_GENES = [
 # =============================================================================
 # Create a minimal but realistic test dataset that demonstrates enrichment
 
-def create_test_annotations() -> Tuple[Dict[int, Set[int]], Dict[int, Set[int]]]:
+def create_test_annotations() -> Tuple[Dict[int, Set[int]], Dict[int, Set[int]], Dict[int, Set[int]], Dict[int, Set[int]]]:
     """
     Create synthetic annotation data for testing enrichment.
 
     Returns:
-        Tuple of (query_annotations, background_annotations)
+        Tuple of (query_annotations, background_annotations, query_direct, background_direct)
         Each is a dict mapping feature_no -> set of go_nos
     """
     # GO term IDs (using integers for internal representation)
@@ -126,13 +126,27 @@ def create_test_annotations() -> Tuple[Dict[int, Set[int]], Dict[int, Set[int]]]
         GO_BIOLOGICAL_PROCESS: {GO_BIOLOGICAL_PROCESS},
     }
 
+    # Direct annotations (only the most specific term, not ancestors)
+    direct_terms = {
+        GO_METHIONINE: {GO_METHIONINE},
+        GO_SULFUR_AMINO_ACID: {GO_SULFUR_AMINO_ACID},
+        GO_AMINO_ACID: {GO_AMINO_ACID},
+        GO_NITROGEN_COMPOUND: {GO_NITROGEN_COMPOUND},
+        GO_METABOLIC_PROCESS: {GO_METABOLIC_PROCESS},
+        GO_CELLULAR_PROCESS: {GO_CELLULAR_PROCESS},
+        GO_BIOLOGICAL_PROCESS: {GO_BIOLOGICAL_PROCESS},
+    }
+
     # Query genes (10 genes, 8 annotated to methionine pathway)
     # Feature numbers 1-10
     query_annotations = {}
+    query_direct = {}
     for i in range(1, 9):  # Genes 1-8: methionine pathway
         query_annotations[i] = ancestors[GO_METHIONINE].copy()
+        query_direct[i] = direct_terms[GO_METHIONINE].copy()
     for i in range(9, 11):  # Genes 9-10: general metabolic process
         query_annotations[i] = ancestors[GO_METABOLIC_PROCESS].copy()
+        query_direct[i] = direct_terms[GO_METABOLIC_PROCESS].copy()
 
     # Background (100 genes total)
     # 15 annotated to methionine (including the 8 query genes)
@@ -140,28 +154,34 @@ def create_test_annotations() -> Tuple[Dict[int, Set[int]], Dict[int, Set[int]]]
     # 50 annotated to general metabolic process
     # 5 annotated to biological process only
     background_annotations = {}
+    background_direct = {}
 
     # Copy query annotations
     for i in range(1, 11):
         background_annotations[i] = query_annotations[i].copy()
+        background_direct[i] = query_direct[i].copy()
 
     # Additional methionine genes (11-15)
     for i in range(11, 16):
         background_annotations[i] = ancestors[GO_METHIONINE].copy()
+        background_direct[i] = direct_terms[GO_METHIONINE].copy()
 
     # Amino acid metabolism genes (16-30)
     for i in range(16, 31):
         background_annotations[i] = ancestors[GO_AMINO_ACID].copy()
+        background_direct[i] = direct_terms[GO_AMINO_ACID].copy()
 
     # General metabolic process genes (31-80)
     for i in range(31, 81):
         background_annotations[i] = ancestors[GO_METABOLIC_PROCESS].copy()
+        background_direct[i] = direct_terms[GO_METABOLIC_PROCESS].copy()
 
     # Biological process only genes (81-100)
     for i in range(81, 101):
         background_annotations[i] = {GO_BIOLOGICAL_PROCESS}
+        background_direct[i] = {GO_BIOLOGICAL_PROCESS}
 
-    return query_annotations, background_annotations
+    return query_annotations, background_annotations, query_direct, background_direct
 
 
 # =============================================================================
@@ -183,11 +203,15 @@ class TestEnrichmentIntegration:
         This mirrors the Perl test that uses the methionine cluster
         from Spellman et al. (1998).
         """
-        query_annotations, background_annotations = create_test_annotations()
+        query_annotations, background_annotations, query_direct, background_direct = create_test_annotations()
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=0.05,
             min_genes_in_term=1,
         )
@@ -214,11 +238,15 @@ class TestEnrichmentIntegration:
         In the GO hierarchy, more specific terms (like methionine metabolism)
         should have lower p-values than general terms (like biological process).
         """
-        query_annotations, background_annotations = create_test_annotations()
+        query_annotations, background_annotations, query_direct, background_direct = create_test_annotations()
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,  # Accept all
             min_genes_in_term=1,
         )
@@ -240,11 +268,15 @@ class TestEnrichmentIntegration:
 
         Manually verify the p-value for methionine enrichment.
         """
-        query_annotations, background_annotations = create_test_annotations()
+        query_annotations, background_annotations, query_direct, background_direct = create_test_annotations()
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
@@ -318,10 +350,17 @@ class TestSelfPopulation:
             5: {300},
         }
         background_annotations = query_annotations.copy()
+        # For direct annotations, use the same as full annotations in this test
+        query_direct = {k: v.copy() for k, v in query_annotations.items()}
+        background_direct = {k: v.copy() for k, v in background_annotations.items()}
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
@@ -391,12 +430,16 @@ class TestDiscardedGenes:
         The service should discard unknown genes and produce the same
         results as without them.
         """
-        query_annotations, background_annotations = create_test_annotations()
+        query_annotations, background_annotations, query_direct, background_direct = create_test_annotations()
 
         # Results without bogus genes
         results_clean = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=0.05,
             min_genes_in_term=1,
         )
@@ -423,12 +466,16 @@ class TestNoEnrichment:
         When query contains all genes in the background, the observed
         proportion equals the expected proportion, so no enrichment.
         """
-        query_annotations, background_annotations = create_test_annotations()
+        query_annotations, background_annotations, query_direct, background_direct = create_test_annotations()
 
         # Use entire background as query
         results = _calculate_enrichment(
             background_annotations,  # Query = all background
             background_annotations,
+            background_direct,  # Query direct = background direct
+            background_direct,
+            query_size=len(background_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
@@ -456,6 +503,11 @@ class TestUnannotatedGenes:
             2: {8150},
             3: {8150},
         }
+        query_direct = {
+            1: {8150},
+            2: {8150},
+            3: {8150},
+        }
 
         background_annotations = {
             1: {8150},
@@ -464,18 +516,30 @@ class TestUnannotatedGenes:
             4: {6555, 96, 6520, 6807, 8150},  # Full methionine path
             5: {6555, 96, 6520, 6807, 8150},
         }
+        background_direct = {
+            1: {8150},
+            2: {8150},
+            3: {8150},
+            4: {6555},  # Direct annotation to methionine only
+            5: {6555},
+        }
 
         results = _calculate_enrichment(
             query_annotations,
             background_annotations,
+            query_direct,
+            background_direct,
+            query_size=len(query_annotations),
+            background_size=len(background_annotations),
             p_value_cutoff=1.0,
             min_genes_in_term=1,
         )
 
-        # Should only have biological_process term
+        # Should only have biological_process term (8150 is an aspect node,
+        # so only direct annotations are counted; query genes only have direct 8150)
         go_nos = [r[0] for r in results]
-        assert go_nos == [8150], \
-            f"Should only have biological_process, got {go_nos}"
+        assert 8150 in go_nos, \
+            f"Should have biological_process, got {go_nos}"
 
 
 class TestExpectedResults:
