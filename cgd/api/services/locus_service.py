@@ -5,7 +5,7 @@ import urllib.request
 import urllib.error
 from typing import Optional
 from pathlib import Path
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, or_
 from collections import defaultdict
 
@@ -1560,21 +1560,23 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     from cgd.models.models import GoQualifier, GorefDbxref
 
     n = name.strip()
+    # Use selectinload instead of joinedload for collections to avoid
+    # cartesian product explosion with large result sets (memory optimization)
     features = (
         db.query(Feature)
         .join(Seq, Seq.feature_no == Feature.feature_no)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.go_annotation).joinedload(GoAnnotation.go),
-            joinedload(Feature.go_annotation)
-                .joinedload(GoAnnotation.go_ref)
+            selectinload(Feature.go_annotation).joinedload(GoAnnotation.go),
+            selectinload(Feature.go_annotation)
+                .selectinload(GoAnnotation.go_ref)
                 .joinedload(GoRef.reference),
-            joinedload(Feature.go_annotation)
-                .joinedload(GoAnnotation.go_ref)
-                .joinedload(GoRef.go_qualifier),
-            joinedload(Feature.go_annotation)
-                .joinedload(GoAnnotation.go_ref)
-                .joinedload(GoRef.goref_dbxref)
+            selectinload(Feature.go_annotation)
+                .selectinload(GoAnnotation.go_ref)
+                .selectinload(GoRef.go_qualifier),
+            selectinload(Feature.go_annotation)
+                .selectinload(GoAnnotation.go_ref)
+                .selectinload(GoRef.goref_dbxref)
                 .joinedload(GorefDbxref.dbxref),
         )
         .filter(
@@ -1761,12 +1763,13 @@ def get_locus_phenotype_details(db: Session, name: str) -> PhenotypeDetailsRespo
     grouped by organism.
     """
     n = name.strip()
+    # Use selectinload for pheno_annotation collection to avoid cartesian product
     features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
-            joinedload(Feature.pheno_annotation).joinedload(PhenoAnnotation.phenotype),
-            joinedload(Feature.pheno_annotation).joinedload(PhenoAnnotation.experiment),
+            selectinload(Feature.pheno_annotation).joinedload(PhenoAnnotation.phenotype),
+            selectinload(Feature.pheno_annotation).joinedload(PhenoAnnotation.experiment),
         )
         .filter(
             or_(
