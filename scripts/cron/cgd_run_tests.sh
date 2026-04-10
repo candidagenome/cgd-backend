@@ -230,7 +230,7 @@ $FAILED_LIST
 
     MESSAGE="$MESSAGE
 
-_Log: $LOG_FILE_"
+Log: $LOG_FILE"
 
     # Send to Slack using jq for proper JSON escaping
     if command -v jq &> /dev/null; then
@@ -246,8 +246,11 @@ _Log: $LOG_FILE_"
     echo "Slack notification sent."
 fi
 
-# Cleanup old test results (keep last 30 days)
-find "$RESULTS_DIR" -name "*.xml" -mtime +30 -delete 2>/dev/null
-find "$RESULTS_DIR" -name "*.log" -mtime +30 -delete 2>/dev/null
+# Cleanup old test results (keep last 7 days and max 10 files of each type)
+find "$RESULTS_DIR" -name "*.xml" -mtime +7 -delete 2>/dev/null
+find "$RESULTS_DIR" -name "*.log" -mtime +7 -delete 2>/dev/null
+# Also keep only the 10 most recent files of each type
+ls -t "$RESULTS_DIR"/*.xml 2>/dev/null | tail -n +11 | xargs -r rm -f
+ls -t "$RESULTS_DIR"/*.log 2>/dev/null | tail -n +11 | xargs -r rm -f
 
 exit $EXIT_CODE
