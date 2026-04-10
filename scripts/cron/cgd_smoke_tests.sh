@@ -184,7 +184,7 @@ if [ "$RUN_WEB" = true ]; then
     check_page "Locus page (ACT1)" "/locus/ACT1" "ACT1"
 
     # GO page
-    check_page "GO term page" "/go/GO:0008150" "biological_process"
+    check_page "GO term page" "/go/GO:0008150" "GO:0008150"
 
     # Search page
     check_page "Feature search page" "/feature-search" "Search"

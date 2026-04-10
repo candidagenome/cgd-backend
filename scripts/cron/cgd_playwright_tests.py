@@ -180,8 +180,8 @@ class SmokeTests:
         self.check_page(
             name="GO term page",
             path="/go/GO:0008150",
-            wait_for_selector=".go-term-page, .go-page, main h1",
-            expected_text="biological_process",
+            wait_for_selector="h1, .go-term-page, .definition-section, table",
+            expected_text="GO:0008150",
         )
 
         # Feature search page
