@@ -41,6 +41,27 @@
 #   - Lists failed test names in Slack notification
 #   - Logs stored in ${LOG_DIR}/test-results/
 #
+# Test Coverage (~1400 tests across 40 modules):
+#   Public API Services:
+#     - Search: full-text search, feature search, database search
+#     - Features: locus details, sequences, GO annotations, phenotypes
+#     - References: literature data, batch downloads
+#     - Tools: BLAST, PatMatch, restriction mapper, web primer designer,
+#              sequence alignment, GO Term Finder, GO Slim mapper
+#     - Genome: chromosome details, coordinate lookup, genome versions
+#   Curation Services:
+#     - Locus curation: gene names, aliases, descriptions, notes
+#     - Literature: review queue triage, literature guide associations
+#     - GO curation: annotation management with evidence codes
+#     - Phenotype curation: observable/qualifier/experiment handling
+#     - Reference curation: PubMed import, manual entry, status tracking
+#     - Sequence curation: coordinate and sequence updates
+#     - Colleague/gene registry: submissions and approvals
+#   Infrastructure:
+#     - Elasticsearch indexing and search
+#     - Batch download generation (GAF, GFF, FASTA)
+#     - Form submission utilities
+#
 # Usage:
 #   ./cgd_run_tests.sh           # Run API tests only (default, more reliable)
 #   ./cgd_run_tests.sh --all     # Run all tests including script tests
