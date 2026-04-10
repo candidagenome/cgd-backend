@@ -4,6 +4,13 @@
 #   - samtools (for faidx indexing)
 #   - htslib (for bgzip and tabix)
 #   - Python 3 with venv at /opt/cgd_api/venv
+#   - Playwright with Chromium (for smoke tests)
+
+# MONITORING (runs as root via /etc/cron.d/cgd-api-monitor)
+# */5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh              # Auto-restart if memory > 80% or worker > 4GB
+
+# EVERY 6 HOURS
+0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50  # Playwright smoke tests
 
 # DAILY
 0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh                                   # Run test suite and send Slack report
