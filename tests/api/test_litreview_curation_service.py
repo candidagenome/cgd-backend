@@ -419,37 +419,49 @@ class TestCreateReferenceFromRefTemp:
 
     def test_creates_reference(self, mock_db, sample_ref_temps):
         """Should create reference from REF_TEMP."""
+        # Mock the sequence call for reference_no
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = 12345
+        mock_db.execute.return_value = mock_result
         mock_db.query.return_value = MockQuery([sample_ref_temps[0]])
 
         service = LitReviewCurationService(mock_db)
         service._create_reference_from_ref_temp(12345678, "curator1")
 
-        # Should have added Reference and possibly Abstract
-        assert mock_db.add.call_count >= 1
+        # Should have executed SQL (one for sequence, one for insert)
+        assert mock_db.execute.call_count >= 2
 
 
 class TestSetCurationStatus:
     """Tests for setting curation status."""
 
     def test_updates_existing_status(self, mock_db):
-        """Should update existing curation status."""
+        """Should update existing curation status via SQL."""
         existing_prop = MockRefProperty(1, 1, PROPERTY_TYPE, NOT_YET_CURATED)
         mock_db.query.return_value = MockQuery([existing_prop])
 
         service = LitReviewCurationService(mock_db)
         result = service._set_curation_status(1, HIGH_PRIORITY, "curator1")
 
+        # Service returns the ref_property_no and uses SQL UPDATE
         assert result == 1
-        assert existing_prop.property_value == HIGH_PRIORITY
+        # Should have executed UPDATE SQL
+        assert mock_db.execute.called
 
     def test_creates_new_status(self, mock_db):
-        """Should create new curation status."""
+        """Should create new curation status via SQL."""
+        # Mock the sequence call for ref_property_no
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = 123
+        mock_db.execute.return_value = mock_result
         mock_db.query.return_value = MockQuery([])
 
         service = LitReviewCurationService(mock_db)
         service._set_curation_status(1, HIGH_PRIORITY, "curator1")
 
-        mock_db.add.assert_called_once()
+        # Service uses raw SQL (db.execute) for Oracle compatibility
+        # One call for sequence, one for INSERT
+        assert mock_db.execute.call_count >= 2
 
 
 class TestLinkToFeature:

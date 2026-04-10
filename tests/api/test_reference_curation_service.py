@@ -646,9 +646,10 @@ class TestGetReferenceCurationDetails:
         """Should return curation details."""
         mock_db.query.side_effect = [
             MockQuery([sample_references[0]]),  # Reference found
-            MockQuery([]),  # No properties
+            MockQuery([]),  # No properties (curation status)
             MockQuery([]),  # No abstract
             MockQuery([]),  # No authors
+            MockQuery([]),  # No URLs
         ]
 
         service = ReferenceCurationService(mock_db)
