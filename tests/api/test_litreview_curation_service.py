@@ -164,7 +164,7 @@ class TestConstants:
 
     def test_ref_source(self):
         """Should define reference source."""
-        assert REF_SOURCE == "Curator Triage"
+        assert REF_SOURCE == "Curator PubMed reference"
 
 
 class TestGetPendingPapers:

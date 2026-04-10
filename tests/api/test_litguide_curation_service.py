@@ -28,10 +28,12 @@ class MockFeature:
         feature_no: int,
         feature_name: str,
         gene_name: str = None,
+        organism_no: int = 1,
     ):
         self.feature_no = feature_no
         self.feature_name = feature_name
         self.gene_name = gene_name
+        self.organism_no = organism_no
 
 
 class MockReference:

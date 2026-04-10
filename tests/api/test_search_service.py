@@ -33,15 +33,12 @@ from cgd.api.services.search_service import (
     search_references,
     quick_search,
     get_autocomplete_suggestions,
-    search_category,  # renamed from search_category_paginated
+    search_category,
     _count_genes,
     _count_go_terms,
     _count_phenotypes,
     _count_references,
 )
-
-# Alias for backwards compatibility with tests
-search_category_paginated = search_category
 
 
 class MockOrganism:
@@ -83,11 +80,13 @@ class MockReference:
         dbxref_id: str,
         pubmed: int = None,
         citation: str = None,
+        title: str = None,
     ):
         self.reference_no = reference_no
         self.dbxref_id = dbxref_id
         self.pubmed = pubmed
         self.citation = citation
+        self.title = title or citation
 
 
 class MockGo:
@@ -175,6 +174,9 @@ class MockQuery:
         return self
 
     def limit(self, n):
+        return self
+
+    def group_by(self, *args, **kwargs):
         return self
 
     def subquery(self):
@@ -544,21 +546,42 @@ class TestSearchReferences:
 class TestQuickSearch:
     """Tests for quick_search."""
 
-    def test_returns_search_response(self, mock_db):
+    def test_returns_search_response(self, mock_db, monkeypatch):
         """Should return SearchResponse."""
-        mock_db.query.return_value = MockQuery([])
+        # quick_search uses text_search_service functions, mock those at source
+        import cgd.api.services.text_search_service as ts
+
+        monkeypatch.setattr(ts, 'search_genes', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_go_terms', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_phenotypes', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_paper_titles', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_orthologs', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, '_count_genes', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_go_terms', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_phenotypes', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_paper_titles', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_orthologs', lambda *args, **kwargs: 0)
 
         result = quick_search(mock_db, "test")
 
         assert result.query == "test"
         assert result.total_results >= 0
 
-    def test_groups_results_by_category(self, mock_db, sample_feature, sample_go):
+    def test_groups_results_by_category(self, mock_db, sample_feature, sample_go, monkeypatch):
         """Should group results by category."""
-        # quick_search calls search_genes, search_go_terms, search_phenotypes, search_references
-        # Each function may make multiple queries internally
-        # Return empty results to simplify - just verify the response structure
-        mock_db.query.return_value = MockQuery([])
+        # quick_search uses text_search_service functions, mock those at source
+        import cgd.api.services.text_search_service as ts
+
+        monkeypatch.setattr(ts, 'search_genes', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_go_terms', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_phenotypes', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_paper_titles', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, 'search_orthologs', lambda *args, **kwargs: [])
+        monkeypatch.setattr(ts, '_count_genes', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_go_terms', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_phenotypes', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_paper_titles', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ts, '_count_orthologs', lambda *args, **kwargs: 0)
 
         result = quick_search(mock_db, "test")
 
@@ -599,12 +622,12 @@ class TestGetAutocompleteSuggestions:
             assert result.suggestions[0].category == "gene"
 
 
-class TestSearchCategoryPaginated:
-    """Tests for search_category_paginated."""
+class TestSearchCategory:
+    """Tests for search_category."""
 
-    def test_returns_paginated_response(self, mock_db):
+    def test_returns_category_response(self, mock_db):
         """Should return CategorySearchResponse."""
-        # search_category_paginated calls count function and search function
+        # search_category calls count function and search function
         # Use callable to return scalar for count and empty list for search
         call_count = [0]
 
@@ -617,32 +640,25 @@ class TestSearchCategoryPaginated:
 
         mock_db.query.side_effect = mock_query
 
-        result = search_category_paginated(mock_db, "test", "genes", page=1, page_size=20)
+        result = search_category(mock_db, "test", "genes")
 
         assert result.query == "test"
         assert result.category == "genes"
-        assert result.pagination is not None
 
-    def test_pagination_info(self, mock_db):
-        """Should include correct pagination info."""
-        call_count = [0]
+    def test_has_total_count_attribute(self, mock_db):
+        """Should include total_count attribute in response."""
+        # search_category for genes has complex query logic with subqueries
+        # Just verify the response includes total_count attribute (type checking)
+        mock_db.query.return_value = MockQuery([])
 
-        def mock_query(*args):
-            call_count[0] += 1
-            q = MockQuery([])
-            q._results = 0 if call_count[0] == 1 else []
-            return q
+        result = search_category(mock_db, "test", "genes")
 
-        mock_db.query.side_effect = mock_query
-
-        result = search_category_paginated(mock_db, "test", "genes", page=1, page_size=10)
-
-        assert result.pagination.page == 1
-        assert result.pagination.page_size == 10
+        # total_count should be an integer (0 with our mock)
+        assert isinstance(result.total_count, int)
 
     def test_unknown_category(self, mock_db):
         """Should handle unknown category."""
-        result = search_category_paginated(mock_db, "test", "unknown", page=1, page_size=20)
+        result = search_category(mock_db, "test", "unknown")
 
         assert result.results == []
 

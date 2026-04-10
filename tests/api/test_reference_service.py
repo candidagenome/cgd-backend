@@ -491,17 +491,18 @@ class TestBuildCitationLinks:
         download = next((l for l in links if l.name == "Download Datasets"), None)
         assert download is not None
 
-    def test_skips_reference_data(self):
-        """Should skip Reference Data URLs."""
+    def test_includes_reference_data(self):
+        """Should include Reference Data URLs."""
         ref = MockReference(1, "CGD_REF:0001")
         url = MockUrl("http://example.com/data", "Reference Data")
         ref_url = MockRefUrl(1, url)
 
         links = _build_citation_links(ref, [ref_url])
 
-        # Should only have CGD Paper
-        assert len(links) == 1
+        # Should have CGD Paper and Reference Data
+        assert len(links) == 2
         assert links[0].name == "CGD Paper"
+        assert any(l.name == "Reference Data" for l in links)
 
 
 class TestGetReferenceByIdentifier:

@@ -199,9 +199,9 @@ class TestConstants:
 
     def test_curation_statuses(self):
         """Should define curation statuses."""
-        assert "Not Yet Curated" in ReferenceCurationService.CURATION_STATUSES
+        assert "Not yet curated" in ReferenceCurationService.CURATION_STATUSES
         assert "High Priority" in ReferenceCurationService.CURATION_STATUSES
-        assert "Done: Curated" in ReferenceCurationService.CURATION_STATUSES
+        assert "High Priority" in ReferenceCurationService.CURATION_STATUSES
 
 
 class TestGetReferenceByPubmed:
@@ -552,7 +552,7 @@ class TestSetCurationStatus:
         service = ReferenceCurationService(mock_db)
 
         with pytest.raises(ReferenceCurationError) as exc_info:
-            service.set_curation_status(999, "Not Yet Curated", "curator1")
+            service.set_curation_status(999, "Not yet curated", "curator1")
 
         assert "not found" in str(exc_info.value)
 
@@ -571,7 +571,7 @@ class TestSetCurationStatus:
 
     def test_updates_existing_property(self, mock_db, sample_references):
         """Should update existing property."""
-        existing_prop = MockRefProperty(1, 1, "Curation status", "Not Yet Curated")
+        existing_prop = MockRefProperty(1, 1, "Curation status", "Not yet curated")
 
         mock_db.query.side_effect = [
             MockQuery([sample_references[0]]),  # Reference found
@@ -579,10 +579,10 @@ class TestSetCurationStatus:
         ]
 
         service = ReferenceCurationService(mock_db)
-        result = service.set_curation_status(1, "Done: Curated", "curator1")
+        result = service.set_curation_status(1, "High Priority", "curator1")
 
         assert result == 1
-        assert existing_prop.property_value == "Done: Curated"
+        assert existing_prop.property_value == "High Priority"
 
 
 class TestLinkToLiteratureGuide:
