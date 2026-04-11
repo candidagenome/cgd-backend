@@ -7,6 +7,14 @@ Dump GO Slim annotations to GAF (Gene Association File) format.
 This script generates GOslim_gene_association.cgd file in GAF 2.0 format.
 It maps GO annotations to their corresponding GO Slim terms.
 
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum annotation count (1,000+ absolute floor)
+- Checks annotation count change < 10% vs existing file
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
+
 Based on dumpGOSlimAnnotation.pl by Prachi Shah (Apr 2008)
 Updated for MULTI by Jon Binkley (Feb 2011)
 
@@ -18,6 +26,8 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     DOWNLOAD_DIR: Directory for output files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse

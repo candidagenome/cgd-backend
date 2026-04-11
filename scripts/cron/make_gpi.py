@@ -8,6 +8,14 @@ This script generates GPI 2.0 format files for submission to the GO Consortium.
 It outputs feature information including IDs, names, descriptions, aliases,
 SO type codes, taxon IDs, and UniProt cross-references.
 
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum feature count (100+ per strain)
+- Checks feature count change < 10% vs existing file
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
+
 Based on makeGPI.pl by Shuai Weng
 
 Usage:
@@ -18,6 +26,8 @@ Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     DOWNLOAD_DIR: Directory for output files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse
