@@ -177,6 +177,18 @@ def validate_output_file(
     return True, f"Validation passed for {strain_abbrev}: {new_count} records"
 
 
+def get_short_species_name(organism_name: str) -> str:
+    """
+    Convert full organism name to short species name.
+
+    Example: "Candida albicans SC5314" -> "C. albicans"
+    """
+    parts = organism_name.split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {parts[1]}"
+    return organism_name
+
+
 def get_organism_info(session, org_abbrev: str) -> dict | None:
     """Get organism information from database."""
     query = text(f"""
@@ -189,10 +201,12 @@ def get_organism_info(session, org_abbrev: str) -> dict | None:
     if not result:
         return None
 
+    organism_name = result[2]
     return {
         "organism_no": result[0],
         "organism_abbrev": result[1],
-        "organism_name": result[2],
+        "organism_name": organism_name,
+        "short_species_name": get_short_species_name(organism_name),
         "taxon_id": result[3],
     }
 
@@ -452,7 +466,7 @@ def main() -> int:
             # Get phenotype data
             logger.info("Retrieving phenotype data from database...")
             phenotypes = get_phenotype_data(
-                session, org_info["organism_no"], org_info["organism_name"]
+                session, org_info["organism_no"], org_info["short_species_name"]
             )
 
             if not phenotypes:
