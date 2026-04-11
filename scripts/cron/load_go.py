@@ -12,6 +12,39 @@ and updates the GO table in the database. It handles:
 - Secondary (alt_id) GO entries (merging with primary)
 - GO synonyms (go_synonym and go_gosyn tables)
 
+Safety Checks (before any database updates):
+---------------------------------------------------------------------------
+1. FILE SIZE CHECK
+   - Minimum file size: 35 MB
+   - Catches truncated or corrupted downloads
+   - Current expected size: ~36.5 MB
+
+2. FILE FORMAT VALIDATION
+   - Verifies OBO format header (format-version:)
+   - Confirms [Term] entries exist
+   - Validates that terms have required fields (id:, namespace:)
+   - Checks that 90%+ of sampled terms are well-formed
+
+3. OPERATION THRESHOLDS (checked after processing, before commit)
+   - Max deletions: 500 terms OR 5% of existing terms
+   - Max insertions: 5,000 new terms
+   - Max updates: 50% of existing terms
+   - Prevents accidental bulk changes from corrupted data
+
+4. ANNOTATION DEPENDENCY CHECKS
+   - Obsolete GOIDs are checked for existing annotations
+   - Secondary GOIDs are checked before merging
+   - Prevents deletion of GOIDs still in use
+
+If any check fails:
+- Changes are rolled back (no database modifications)
+- Error notification sent to Slack
+- Script exits with non-zero status
+
+On success:
+- Summary sent to Slack with counts of new/updated/obsoleted terms
+---------------------------------------------------------------------------
+
 Based on loadGo.pl/updateGo by Gavin Sherlock (June 2000)
 Rewritten by Shuai Weng (April 2004)
 
@@ -26,19 +59,29 @@ Environment Variables:
     LOG_DIR: Log directory
     ADMIN_USER: Admin username for database operations
     CURATOR_EMAIL: Email for notifications
+    SLACK_WEBHOOK_URL: Slack webhook for notifications
 """
 
 import argparse
+import json
 import logging
 import os
 import re
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 from sqlalchemy import text
+
+# Safety thresholds
+FILE_SIZE_MIN_BYTES = 35_000_000  # 35 MB minimum file size
+MAX_DELETIONS = 500  # Max GO terms that can be deleted in one run
+MAX_DELETIONS_PERCENT = 5.0  # Max percentage of existing terms that can be deleted
+MAX_INSERTIONS = 5000  # Max GO terms that can be inserted in one run
+MAX_UPDATES_PERCENT = 50.0  # Max percentage of existing terms that can be updated
 
 # Project root directory (cgd-backend/)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +104,10 @@ CURATOR_EMAIL = os.getenv("CURATOR_EMAIL", "")
 # GO download URL
 GO_DOWNLOAD_URL = "https://ontology-build.geneontology.org/go.obo"
 
+# Slack configuration
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +124,142 @@ def delete_unwanted_char(text_value: str | None) -> str | None:
     text_value = text_value.replace("\\n", " ")
     text_value = text_value.replace("\\", "")
     return text_value
+
+
+def send_slack_message(message: str, is_error: bool = False) -> bool:
+    """
+    Send a message to Slack.
+
+    Args:
+        message: The message to send
+        is_error: Whether this is an error message (affects emoji)
+
+    Returns:
+        True on success, False on failure
+    """
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping Slack notification")
+        return False
+
+    env_label = "PROD" if ENV_STATE in ("prod", "production") else "DEV"
+    emoji = ":x:" if is_error else ":white_check_mark:"
+
+    slack_message = {
+        "text": f"{emoji} *GO Ontology Load ({env_label})*\n{message}"
+    }
+
+    try:
+        data = json.dumps(slack_message).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as response:
+            return response.status == 200
+    except Exception as e:
+        logger.error(f"Failed to send Slack notification: {e}")
+        return False
+
+
+def validate_obo_file(obo_file: Path) -> tuple[bool, str]:
+    """
+    Validate the OBO file format and size.
+
+    Args:
+        obo_file: Path to the OBO file
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Check file size
+    file_size = obo_file.stat().st_size
+    if file_size < FILE_SIZE_MIN_BYTES:
+        size_mb = file_size / 1_000_000
+        min_mb = FILE_SIZE_MIN_BYTES / 1_000_000
+        return False, (
+            f"File size too small: {size_mb:.1f} MB (minimum: {min_mb:.0f} MB). "
+            f"The file may be truncated or corrupted."
+        )
+
+    # Read file content for format validation
+    try:
+        with open(obo_file, "r", encoding="utf-8") as f:
+            content = f.read(100000)  # Read first 100KB for header check
+    except Exception as e:
+        return False, f"Failed to read OBO file: {e}"
+
+    # Check for OBO format header
+    if "format-version:" not in content[:1000]:
+        return False, (
+            "Invalid OBO file format: missing 'format-version:' header. "
+            "The file format may have changed."
+        )
+
+    # Check for [Term] entries
+    if "[Term]" not in content:
+        return False, (
+            "Invalid OBO file format: no [Term] entries found. "
+            "The file format may have changed."
+        )
+
+    # Read more of the file to validate term structure
+    with open(obo_file, "r", encoding="utf-8") as f:
+        term_count = 0
+        valid_terms = 0
+        in_term = False
+        has_id = False
+        has_namespace = False
+
+        for line in f:
+            line = line.strip()
+
+            if line == "[Term]":
+                # Check previous term validity
+                if in_term and has_id and has_namespace:
+                    valid_terms += 1
+                term_count += 1
+                in_term = True
+                has_id = False
+                has_namespace = False
+                continue
+
+            if line == "[Typedef]":
+                # Check last term
+                if in_term and has_id and has_namespace:
+                    valid_terms += 1
+                break
+
+            if in_term:
+                if line.startswith("id:"):
+                    has_id = True
+                elif line.startswith("namespace:"):
+                    has_namespace = True
+
+            # Only check first 1000 terms for performance
+            if term_count >= 1000:
+                break
+
+    if term_count == 0:
+        return False, (
+            "Invalid OBO file format: no [Term] entries could be parsed. "
+            "The file format may have changed."
+        )
+
+    # Check that most terms have required fields
+    validity_ratio = valid_terms / term_count if term_count > 0 else 0
+    if validity_ratio < 0.9:
+        return False, (
+            f"Invalid OBO file format: only {valid_terms}/{term_count} terms "
+            f"have required fields (id, namespace). The file format may have changed."
+        )
+
+    logger.info(
+        f"OBO file validation passed: {file_size / 1_000_000:.1f} MB, "
+        f"{valid_terms}/{term_count} sampled terms valid"
+    )
+    return True, ""
 
 
 class GOLoader:
@@ -785,7 +968,56 @@ class GOLoader:
             "obsolete_errors": self.obsolete_err,
             "secondary_errors": self.secondary_err,
             "term_errors": self.check_term_err,
+            "existing_terms": len(self.go_info_db),
         }
+
+    def check_operation_thresholds(self) -> tuple[bool, str]:
+        """
+        Check if operations exceed safety thresholds.
+
+        Returns:
+            Tuple of (is_safe, error_message)
+        """
+        existing_count = len(self.go_info_db)
+        if existing_count == 0:
+            # First load, skip threshold checks
+            return True, ""
+
+        issues = []
+
+        # Check deletion thresholds
+        if self.go_delete_count > MAX_DELETIONS:
+            issues.append(
+                f"Too many deletions: {self.go_delete_count} "
+                f"(max allowed: {MAX_DELETIONS})"
+            )
+
+        delete_percent = (self.go_delete_count / existing_count) * 100
+        if delete_percent > MAX_DELETIONS_PERCENT:
+            issues.append(
+                f"Deletion percentage too high: {delete_percent:.1f}% "
+                f"(max allowed: {MAX_DELETIONS_PERCENT}%)"
+            )
+
+        # Check insertion threshold
+        if self.go_insert_count > MAX_INSERTIONS:
+            issues.append(
+                f"Too many insertions: {self.go_insert_count} "
+                f"(max allowed: {MAX_INSERTIONS})"
+            )
+
+        # Check update threshold
+        update_percent = (self.go_update_count / existing_count) * 100
+        if update_percent > MAX_UPDATES_PERCENT:
+            issues.append(
+                f"Update percentage too high: {update_percent:.1f}% "
+                f"(max allowed: {MAX_UPDATES_PERCENT}%)"
+            )
+
+        if issues:
+            return False, " | ".join(issues)
+
+        return True, ""
 
 
 def download_go_file(output_path: Path) -> bool:
@@ -852,11 +1084,26 @@ def load_go(obo_file: Path | None = None, download: bool = True) -> bool:
     # Download latest file if requested
     if download:
         if not download_go_file(obo_file):
-            logger.error("Failed to download GO file")
+            error_msg = "Failed to download GO file"
+            logger.error(error_msg)
+            send_slack_message(error_msg, is_error=True)
             return False
 
     if not obo_file.exists():
-        logger.error(f"OBO file not found: {obo_file}")
+        error_msg = f"OBO file not found: {obo_file}"
+        logger.error(error_msg)
+        send_slack_message(error_msg, is_error=True)
+        return False
+
+    # Validate OBO file format and size
+    is_valid, validation_error = validate_obo_file(obo_file)
+    if not is_valid:
+        logger.error(f"OBO file validation failed: {validation_error}")
+        send_slack_message(
+            f"*OBO file validation failed*\n{validation_error}\n\n"
+            "The GO load was aborted. Please check the OBO file manually.",
+            is_error=True
+        )
         return False
 
     try:
@@ -869,7 +1116,7 @@ def load_go(obo_file: Path | None = None, download: bool = True) -> bool:
             # Process OBO file
             loader.process_obo_file(obo_file)
 
-            # Check for errors
+            # Check for database errors
             if loader.oracle_err > 0:
                 logger.error("Oracle errors occurred, rolling back")
                 session.rollback()
@@ -878,6 +1125,32 @@ def load_go(obo_file: Path | None = None, download: bool = True) -> bool:
                 for msg in loader.error_messages:
                     logger.error(msg)
 
+                error_summary = (
+                    f"*Database errors occurred - changes rolled back*\n"
+                    f"• Oracle errors: {loader.oracle_err}\n"
+                    f"• First error: {loader.error_messages[0] if loader.error_messages else 'Unknown'}"
+                )
+                send_slack_message(error_summary, is_error=True)
+                return False
+
+            # Check operation thresholds before committing
+            is_safe, threshold_error = loader.check_operation_thresholds()
+            if not is_safe:
+                logger.error(f"Operation thresholds exceeded: {threshold_error}")
+                session.rollback()
+
+                summary = loader.get_summary()
+                error_summary = (
+                    f"*Operation thresholds exceeded - changes rolled back*\n"
+                    f"{threshold_error}\n\n"
+                    f"*Attempted operations:*\n"
+                    f"• New GO terms: {summary['go_inserts']}\n"
+                    f"• Updated GO terms: {summary['go_updates']}\n"
+                    f"• Obsoleted GO terms: {summary['go_deletes']}\n"
+                    f"• Existing terms in DB: {summary['existing_terms']}\n\n"
+                    "Please review the OBO file and database manually."
+                )
+                send_slack_message(error_summary, is_error=True)
                 return False
 
             # Commit changes
@@ -887,12 +1160,13 @@ def load_go(obo_file: Path | None = None, download: bool = True) -> bool:
             summary = loader.get_summary()
             logger.info("\n" + "=" * 40)
             logger.info("Summary:")
+            logger.info(f"  Existing GO terms in database: {summary['existing_terms']}")
             if summary["go_inserts"] > 0:
-                logger.info(f"  {summary['go_inserts']} GO entries inserted")
+                logger.info(f"  {summary['go_inserts']} GO entries inserted (new)")
             if summary["go_updates"] > 0:
                 logger.info(f"  {summary['go_updates']} GO entries updated")
             if summary["go_deletes"] > 0:
-                logger.info(f"  {summary['go_deletes']} GO entries deleted")
+                logger.info(f"  {summary['go_deletes']} GO entries deleted (obsoleted)")
             if summary["synonym_inserts"] > 0:
                 logger.info(f"  {summary['synonym_inserts']} synonyms inserted")
             if summary["synonym_deletes"] > 0:
@@ -910,10 +1184,30 @@ def load_go(obo_file: Path | None = None, download: bool = True) -> bool:
 
             logger.info(f"Ended at {datetime.now()}")
 
+            # Send success summary to Slack
+            slack_summary = (
+                f"*GO Ontology load completed successfully*\n\n"
+                f"*Summary:*\n"
+                f"• New GO terms added: {summary['go_inserts']}\n"
+                f"• GO terms updated: {summary['go_updates']}\n"
+                f"• GO terms obsoleted: {summary['go_deletes']}\n"
+                f"• Existing terms in DB: {summary['existing_terms']}"
+            )
+            if loader.error_messages:
+                slack_summary += (
+                    f"\n\n_Note: {len(loader.error_messages)} annotation "
+                    f"warning(s) for curator review (see logs)_"
+                )
+            send_slack_message(slack_summary, is_error=False)
+
             return True
 
     except Exception as e:
         logger.exception(f"Error loading GO: {e}")
+        send_slack_message(
+            f"*Unexpected error during GO load*\n```{str(e)[:500]}```",
+            is_error=True
+        )
         return False
 
 
