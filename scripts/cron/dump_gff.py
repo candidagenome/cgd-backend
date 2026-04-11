@@ -530,8 +530,8 @@ def dump_gff(
             "centromere", "blocked_reading_frame"
         }
 
-        # Feature types that need exons
-        types_with_exon = {"ORF", "tRNA", "pseudogene"}
+        # Feature types that need exons (all gene/transcript types except standalone)
+        types_with_exon = {"ORF", "tRNA", "snoRNA", "snRNA", "rRNA", "ncRNA", "pseudogene"}
 
         # Feature types that need CDS
         types_with_cds = {"ORF", "pseudogene"}
