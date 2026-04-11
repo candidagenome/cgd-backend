@@ -12,15 +12,50 @@ This script reads protein and coding sequence files and checks for:
 - ORFs with internal Stop codon(s) (check protein)
 - ORFs with multiple terminal Stop codons (check protein)
 
+Checks Performed:
+---------------------------------------------------------------------------
+1. CODING SEQUENCE CHECKS (from orf_coding_*.fasta)
+   - Ambiguous sequence: Contains non-ACGT characters (N, R, Y, etc.)
+   - Missing start codon: Does not begin with ATG
+   - Partial stop codon: Ends with incomplete stop (T, TA, TG)
+   - Missing stop codon: Does not end with TAA, TAG, or TGA
+
+2. PROTEIN SEQUENCE CHECKS (from orf_trans_all_*.fasta)
+   - Internal stop codon: Contains '*' before the terminal position
+   - Multiple terminal stops: Ends with more than one '*'
+
+Data Sources:
+---------------------------------------------------------------------------
+- ORF list: Fetched from database (excludes deleted ORFs)
+- Coding sequences: CGD_DATA_DIR/fasta_files/<strain>/orf_coding_*.fasta
+- Protein sequences: CGD_DATA_DIR/fasta_files/<strain>/orf_trans_all_*.fasta
+
+Output Summary:
+---------------------------------------------------------------------------
+Prints a summary report with counts for each issue type:
+    Report from checks run on C_albicans_SC5314 ORFs:
+       - ORFs with ambiguous sequence            => 5
+       - ORFs without Start codon                => 12
+       - ORFs with partial terminal Stop codon   => 3
+       - ORFs without terminal Stop codon        => 8
+       - ORFs with internal Stop codon(s)        => 2
+       - ORFs with multiple terminal Stop codons => 0
+
+Detailed ORF lists are written to the log file:
+    LOG_DIR/<strain>_OrfCheck.log
+---------------------------------------------------------------------------
+
 Usage:
     python check_orf_sequences.py <strain_abbrev>
     python check_orf_sequences.py C_albicans_SC5314
+    python check_orf_sequences.py C_albicans_SC5314 --assembly "Assembly 22"
 
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     LOG_DIR: Directory for log files
     DATA_DIR: Directory for data files
+    CGD_DATA_DIR: Primary directory for sequence files (default: /data)
 """
 
 import argparse
