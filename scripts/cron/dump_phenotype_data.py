@@ -8,6 +8,14 @@ This script exports all phenotype annotation data to a tab-delimited file
 for download. It was created as an alternative to batch download which
 times out when requesting phenotype results for all features on a chromosome.
 
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum record count (10+ per strain, some strains may have few)
+- Checks record count change < 20% vs existing file
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
+
 Based on dumpPhenotypeData.pl by Adil Lotia (May 6, 2009).
 
 Output format (tab-delimited):
@@ -38,12 +46,18 @@ Environment Variables:
     DB_SCHEMA: Database schema name (default: MULTI)
     DOWNLOAD_DIR: Directory for download files (default: PROJECT_ROOT/data)
     LOG_DIR: Directory for log files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse
+import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
+import urllib.request
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +81,14 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_RECORDS = 10  # Minimum records expected (some strains have few phenotypes)
+MAX_RECORD_CHANGE_PERCENT = 20.0  # Maximum allowed change from previous file
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +96,85 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {
+        "text": f"{emoji} {env_prefix}Phenotype Data Dump: {message}"
+    }
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def count_records_in_file(file_path: Path) -> int:
+    """Count non-header lines (records) in a tab file."""
+    if not file_path.exists():
+        return 0
+
+    count = 0
+    with open(file_path) as f:
+        for i, line in enumerate(f):
+            if i > 0:  # Skip header
+                count += 1
+    return count
+
+
+def validate_output_file(
+    new_file: Path,
+    existing_file: Path | None = None,
+    strain_abbrev: str = "",
+) -> tuple[bool, str]:
+    """
+    Validate the generated phenotype file.
+
+    Returns:
+        Tuple of (is_valid, message)
+    """
+    # Check file exists and has content
+    if not new_file.exists():
+        return False, f"Output file does not exist: {new_file}"
+
+    new_count = count_records_in_file(new_file)
+
+    # Check minimum records
+    if new_count < MIN_RECORDS:
+        return False, (
+            f"Too few records for {strain_abbrev}: {new_count} "
+            f"(minimum: {MIN_RECORDS})"
+        )
+
+    # Check against existing file if present
+    if existing_file and existing_file.exists():
+        existing_count = count_records_in_file(existing_file)
+        if existing_count > 0:
+            change_pct = abs(new_count - existing_count) / existing_count * 100
+            if change_pct > MAX_RECORD_CHANGE_PERCENT:
+                return False, (
+                    f"Record count changed too much for {strain_abbrev}: "
+                    f"{existing_count} -> {new_count} ({change_pct:.1f}% "
+                    f"change, max: {MAX_RECORD_CHANGE_PERCENT}%)"
+                )
+
+    return True, f"Validation passed for {strain_abbrev}: {new_count} records"
 
 
 def get_organism_info(session, org_abbrev: str) -> dict | None:
@@ -317,8 +418,9 @@ def main() -> int:
     org_abbrev = args.organism_abbrev
     output_dir = args.output_dir or DOWNLOAD_DIR / "phenotype"
 
-    # Ensure log directory exists
+    # Ensure directories exist
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Set up file logging
     log_file = LOG_DIR / f"dumpPhenotypeData_{org_abbrev}.log"
@@ -329,20 +431,23 @@ def main() -> int:
     logger.info(f"Dumping phenotype data for {org_abbrev}")
     logger.info(f"Start execution: {datetime.now()}")
 
+    # Create temp directory for safe generation
+    temp_dir = Path(tempfile.mkdtemp(prefix="phenotype_"))
+    output_filename = f"{org_abbrev}_phenotype_data.tab"
+    temp_file = temp_dir / output_filename
+    final_file = output_dir / output_filename
+
     try:
         with SessionLocal() as session:
             # Verify organism exists
             org_info = get_organism_info(session, org_abbrev)
             if not org_info:
-                logger.error(f"Organism {org_abbrev} not found in database")
+                error_msg = f"Organism {org_abbrev} not found in database"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
                 return 1
 
             logger.info(f"Found organism: {org_info['organism_name']}")
-
-            # Ensure output directory exists
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            output_file = output_dir / f"{org_abbrev}_phenotype_data.tab"
 
             # Get phenotype data
             logger.info("Retrieving phenotype data from database...")
@@ -355,9 +460,26 @@ def main() -> int:
                 logger.warning(f"No phenotype data found for {org_abbrev}")
                 return 0
 
-            # Write to file
-            logger.info(f"Writing {len(phenotypes)} records to {output_file}")
-            count = write_phenotype_file(phenotypes, output_file)
+            # Write to temp file
+            logger.info(f"Writing {len(phenotypes)} records to {temp_file}")
+            count = write_phenotype_file(phenotypes, temp_file)
+
+            # Validate the generated file
+            is_valid, validation_msg = validate_output_file(
+                temp_file,
+                final_file if final_file.exists() else None,
+                org_abbrev,
+            )
+
+            if not is_valid:
+                error_msg = f"Validation failed: {validation_msg}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                return 1
+
+            # Copy validated file to final location
+            shutil.copy(str(temp_file), str(final_file))
+            logger.info(f"Copied validated file to {final_file}")
 
             # Print summary to stdout for Slack
             print(f"*{org_abbrev}*: {count} phenotype records exported")
@@ -365,15 +487,24 @@ def main() -> int:
             logger.info(f"Successfully wrote {count} phenotype records")
             logger.info(f"End execution: {datetime.now()}")
 
+            # Send success notification
+            send_slack_message(
+                f"Successfully exported {org_abbrev} with {count} phenotype records"
+            )
+
         return 0
 
     except Exception as e:
         logger.error(f"Error: {e}")
+        send_slack_message(f"Error dumping {org_abbrev}: {e}", is_error=True)
         return 1
 
     finally:
         logger.removeHandler(file_handler)
         file_handler.close()
+        # Clean up temp directory
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
