@@ -132,27 +132,46 @@ def get_strain_config(session, strain_abbrev: str) -> dict | None:
 
 
 def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
-    """Get all features for a strain with their details."""
-    query = text(f"""
+    """Get all features for a strain with their details.
+
+    Includes:
+    - Biological features (ORF, tRNA, snoRNA, etc.) on Assembly 22 chromosomes
+    - B-haplotype alleles (stored as 'allele' type but shown as ORF in output)
+
+    Excludes: CDS, intron, noncoding_exon, adjustment, gap, telomeric_repeat,
+    and legacy orf19.* features.
+
+    For diploid organisms like C. albicans, the _A features are primary ORFs,
+    and the _B features are stored as alleles but represent the B haplotype
+    version of the ORF.
+    """
+    features = []
+
+    # Part 1: Get all biological features (not alleles)
+    # These are the primary features including _A haplotype ORFs
+    query_main = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
                f.dbxref_id, f.headline, f.date_created,
                fl.start_coord, fl.stop_coord, fl.strand,
                chr.feature_name as chromosome
         FROM {DB_SCHEMA}.feature f
-        LEFT JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
             AND fl.is_loc_current = 'Y'
-        LEFT JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
+        JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
             AND s.is_seq_current = 'Y'
             AND s.source = :seq_source
-        LEFT JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
+        JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
         WHERE f.organism_no = :organism_no
-        AND f.feature_type NOT IN ('chromosome', 'contig')
+        AND f.feature_type NOT IN (
+            'chromosome', 'contig', 'CDS', 'allele', 'intron',
+            'noncoding_exon', 'adjustment', 'gap', 'telomeric_repeat'
+        )
+        AND f.feature_name NOT LIKE 'orf19.%'
         ORDER BY chr.feature_name, fl.start_coord, f.feature_name
     """)
 
-    features = []
     for row in session.execute(
-        query, {"organism_no": organism_no, "seq_source": seq_source}
+        query_main, {"organism_no": organism_no, "seq_source": seq_source}
     ).fetchall():
         features.append({
             "feature_no": row[0],
@@ -167,6 +186,88 @@ def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
             "strand": row[9],
             "chromosome": row[10],
         })
+
+    # Part 2: Get B-haplotype alleles (feature_name ending in _B)
+    # These are the B haplotype versions stored as alleles
+    # We get the feature_type and headline from the _A parent feature
+    query_alleles = text(f"""
+        SELECT b.feature_no, b.feature_name, b.gene_name,
+               a.feature_type as parent_feature_type,
+               b.dbxref_id,
+               COALESCE(b.headline, a.headline) as headline,
+               b.date_created,
+               fl.start_coord, fl.stop_coord, fl.strand,
+               chr.feature_name as chromosome
+        FROM {DB_SCHEMA}.feature b
+        JOIN {DB_SCHEMA}.feat_location fl ON b.feature_no = fl.feature_no
+            AND fl.is_loc_current = 'Y'
+        JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
+            AND s.is_seq_current = 'Y'
+            AND s.source = :seq_source
+        JOIN {DB_SCHEMA}.feature chr ON s.feature_no = chr.feature_no
+        JOIN {DB_SCHEMA}.feature a ON a.organism_no = b.organism_no
+            AND REPLACE(b.feature_name, '_B', '_A') = a.feature_name
+            AND a.feature_type NOT IN ('allele', 'CDS', 'intron', 'noncoding_exon')
+        WHERE b.organism_no = :organism_no
+        AND b.feature_type = 'allele'
+        AND b.feature_name LIKE '%\\_B' ESCAPE '\\'
+        ORDER BY chr.feature_name, fl.start_coord, b.feature_name
+    """)
+
+    for row in session.execute(
+        query_alleles, {"organism_no": organism_no, "seq_source": seq_source}
+    ).fetchall():
+        features.append({
+            "feature_no": row[0],
+            "feature_name": row[1],
+            "gene_name": row[2],
+            "feature_type": row[3],  # Parent's feature type (ORF, tRNA, etc.)
+            "dbxref_id": row[4],
+            "headline": row[5],
+            "date_created": row[6],
+            "start": row[7],
+            "end": row[8],
+            "strand": row[9],
+            "chromosome": row[10],
+        })
+
+    # Part 3: Get features without locations (e.g., multigene locus)
+    # These are included in the output with empty location fields
+    query_no_loc = text(f"""
+        SELECT f.feature_no, f.feature_name, f.gene_name, f.feature_type,
+               f.dbxref_id, f.headline, f.date_created
+        FROM {DB_SCHEMA}.feature f
+        WHERE f.organism_no = :organism_no
+        AND f.feature_type IN ('multigene locus')
+        AND f.feature_name NOT LIKE 'orf19.%'
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_location fl
+            WHERE fl.feature_no = f.feature_no
+            AND fl.is_loc_current = 'Y'
+        )
+        ORDER BY f.feature_name
+    """)
+
+    for row in session.execute(
+        query_no_loc, {"organism_no": organism_no}
+    ).fetchall():
+        features.append({
+            "feature_no": row[0],
+            "feature_name": row[1],
+            "gene_name": row[2],
+            "feature_type": row[3],
+            "dbxref_id": row[4],
+            "headline": row[5],
+            "date_created": row[6],
+            "start": None,
+            "end": None,
+            "strand": None,
+            "chromosome": None,
+        })
+
+    # Sort combined results by chromosome, start position, feature name
+    # Features without location (chromosome=None) will be sorted at the beginning
+    features.sort(key=lambda x: (x["chromosome"] or "", x["start"] or 0, x["feature_name"] or ""))
 
     return features
 
@@ -310,9 +411,14 @@ def get_haplotype_variations(session, organism_no: int) -> list[dict]:
     Get haplotype variation data between haplotype A and B chromosomes.
 
     Returns list of variation records.
+
+    NOTE: This query currently uses seq_change_archive table which provides
+    partial data (~5,000 records). The production file has ~64,000 records,
+    suggesting the original data source is different (possibly derived from
+    direct sequence comparison of A vs B haplotype chromosomes).
+    TODO: Investigate the correct data source for complete haplotype variations.
     """
-    # Check if there's a haplotype_variation table or similar
-    # For now, we try to get data from seq_change or similar tables
+    # Using seq_change_archive table - may not be the complete source
     query = text(f"""
         SELECT
             chr_a.feature_name as hap_a_chr,
