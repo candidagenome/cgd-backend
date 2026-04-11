@@ -26,6 +26,19 @@ Uncharacterized:
     - Not deleted
     - Not verified
 
+Output Summary:
+---------------
+The script outputs a summary listing every ORF with a qualifier change:
+- ORF name
+- Previous classification (or "None" if new)
+- New classification
+- Reason for the change
+
+Example output:
+    ORF123: None -> Verified (has GO annotation with experimental evidence)
+    ORF456: Uncharacterized -> Verified (has GO annotation with experimental evidence)
+    ORF789: Verified -> Uncharacterized (no longer has qualifying GO evidence)
+
 Based on updateORFclassifications.pl by Prachi Shah (Sep 10, 2008).
 
 Usage:
@@ -281,13 +294,21 @@ def update_classification(
     session,
     feature_name: str,
     new_classification: str,
-    log_handler: logging.FileHandler,
-) -> bool:
+    reason: str,
+) -> tuple[bool, str, str]:
     """
     Update a feature's classification to the specified value.
 
     Removes conflicting classifications and adds the new one.
-    Returns True if any changes were made.
+
+    Args:
+        session: Database session
+        feature_name: Name of the feature to update
+        new_classification: The new classification (Dubious, Verified, Uncharacterized)
+        reason: Reason for the classification change
+
+    Returns:
+        Tuple of (changed, previous_classification, new_classification)
     """
     feat_info = get_feature_info(session, feature_name)
     if not feat_info:
@@ -296,11 +317,18 @@ def update_classification(
             "Error updating ORF classification",
             f"No feature found for {feature_name}",
         )
-        return False
+        return False, "", ""
 
     feature_no = feat_info["feature_no"]
     current_qualifier = feat_info["feature_qualifier"]
     changed = False
+
+    # Determine previous classification
+    previous_classification = "None"
+    for cls in ["Dubious", "Verified", "Uncharacterized"]:
+        if cls in current_qualifier:
+            previous_classification = cls
+            break
 
     # Classifications that should be removed for each new classification
     remove_for = {
@@ -322,7 +350,7 @@ def update_classification(
             logger.info(f"Added {new_classification} classification to {feature_name}")
             changed = True
 
-    return changed
+    return changed, previous_classification, new_classification
 
 
 def main() -> int:
@@ -390,39 +418,51 @@ def main() -> int:
             all_features = get_all_features(session, organism_no)
             logger.info(f"Found {len(all_features)} total features")
 
-            # Counters
-            dubious_updates = 0
-            verified_updates = 0
-            uncharacterized_updates = 0
+            # Track all changes: list of (orf_name, prev, new, reason)
+            changes: list[tuple[str, str, str, str]] = []
+
+            # Reasons for classification changes
+            REASON_DUBIOUS = "marked as dubious in database"
+            REASON_VERIFIED = "has GO annotation with experimental evidence"
+            REASON_UNCHARACTERIZED = "no qualifying GO evidence"
 
             # Process dubious ORFs
             logger.info("Processing dubious ORFs...")
-            for orf in dubious_orfs:
+            for orf in sorted(dubious_orfs):
                 if not dry_run:
-                    if update_classification(session, orf, "Dubious", file_handler):
-                        dubious_updates += 1
+                    changed, prev, new = update_classification(
+                        session, orf, "Dubious", REASON_DUBIOUS
+                    )
+                    if changed:
+                        changes.append((orf, prev, new, REASON_DUBIOUS))
                 else:
                     logger.info(f"Would update {orf} to Dubious")
 
             # Process verified ORFs (exclude deleted and dubious)
             logger.info("Processing verified ORFs...")
-            for orf in verified_orfs:
+            for orf in sorted(verified_orfs):
                 if orf in deleted_features or orf in dubious_orfs:
                     continue
                 if not dry_run:
-                    if update_classification(session, orf, "Verified", file_handler):
-                        verified_updates += 1
+                    changed, prev, new = update_classification(
+                        session, orf, "Verified", REASON_VERIFIED
+                    )
+                    if changed:
+                        changes.append((orf, prev, new, REASON_VERIFIED))
                 else:
                     logger.info(f"Would update {orf} to Verified")
 
             # Process uncharacterized ORFs (everything else that's not deleted/dubious/verified)
             logger.info("Processing uncharacterized ORFs...")
-            for orf in all_features:
+            for orf in sorted(all_features):
                 if orf in deleted_features or orf in dubious_orfs or orf in verified_orfs:
                     continue
                 if not dry_run:
-                    if update_classification(session, orf, "Uncharacterized", file_handler):
-                        uncharacterized_updates += 1
+                    changed, prev, new = update_classification(
+                        session, orf, "Uncharacterized", REASON_UNCHARACTERIZED
+                    )
+                    if changed:
+                        changes.append((orf, prev, new, REASON_UNCHARACTERIZED))
                 else:
                     logger.info(f"Would update {orf} to Uncharacterized")
 
@@ -431,17 +471,28 @@ def main() -> int:
                 session.commit()
                 logger.info("Changes committed to database")
 
+            # Count updates by type
+            dubious_updates = sum(1 for c in changes if c[2] == "Dubious")
+            verified_updates = sum(1 for c in changes if c[2] == "Verified")
+            uncharacterized_updates = sum(1 for c in changes if c[2] == "Uncharacterized")
+
             # Summary - print to stdout for Slack
-            summary = (
-                f"*{strain_abbrev}*\n"
-                f"  Total features: {len(all_features)} | "
-                f"Deleted: {len(deleted_features)} | "
-                f"Dubious: {len(dubious_orfs)}\n"
-                f"  Updates: Dubious={dubious_updates}, "
-                f"Verified={verified_updates}, "
-                f"Uncharacterized={uncharacterized_updates}"
-            )
-            print(summary)
+            print(f"*{strain_abbrev}*")
+            print(f"Total features: {len(all_features)} | "
+                  f"Deleted: {len(deleted_features)} | "
+                  f"Dubious: {len(dubious_orfs)}")
+            print(f"Updates: Dubious={dubious_updates}, "
+                  f"Verified={verified_updates}, "
+                  f"Uncharacterized={uncharacterized_updates}")
+
+            # Print detailed changes
+            if changes:
+                print(f"\nDetailed changes ({len(changes)} total):")
+                for orf, prev, new, reason in changes:
+                    print(f"  {orf}: {prev} -> {new} ({reason})")
+            else:
+                print("\nNo changes made.")
+
             logger.info(f"Summary: Dubious={dubious_updates}, Verified={verified_updates}, Uncharacterized={uncharacterized_updates}")
 
         logger.info(f"Completed at {datetime.now()}")
