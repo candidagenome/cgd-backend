@@ -21,10 +21,13 @@ Environment Variables:
 """
 
 import argparse
+import json
 import logging
 import os
 import shutil
 import sys
+import tempfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +53,14 @@ PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 # Output directories
 GO_DIR = DOWNLOAD_DIR / "go"
 ARCHIVE_DIR = GO_DIR / "archive"
+
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_ANNOTATIONS = 1000  # Absolute minimum annotations expected
+MAX_ANNOTATION_CHANGE_PERCENT = 10.0  # Maximum allowed change from previous file
 
 # Strain configurations with taxon IDs
 STRAIN_CONFIGS = {
@@ -81,6 +92,83 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {
+        "text": f"{emoji} {env_prefix}GO Annotation Dump: {message}"
+    }
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def count_annotations_in_file(file_path: Path) -> int:
+    """Count non-header lines (annotations) in a GAF file."""
+    if not file_path.exists():
+        return 0
+
+    count = 0
+    with open(file_path) as f:
+        for line in f:
+            if not line.startswith("!"):
+                count += 1
+    return count
+
+
+def validate_output_file(
+    new_file: Path,
+    existing_file: Path | None = None,
+) -> tuple[bool, str]:
+    """
+    Validate the generated GAF file.
+
+    Returns:
+        Tuple of (is_valid, message)
+    """
+    # Check file exists and has content
+    if not new_file.exists():
+        return False, f"Output file does not exist: {new_file}"
+
+    new_count = count_annotations_in_file(new_file)
+
+    # Check minimum annotations
+    if new_count < MIN_ANNOTATIONS:
+        return False, (
+            f"Too few annotations: {new_count} (minimum: {MIN_ANNOTATIONS})"
+        )
+
+    # Check against existing file if present
+    if existing_file and existing_file.exists():
+        existing_count = count_annotations_in_file(existing_file)
+        if existing_count > 0:
+            change_pct = abs(new_count - existing_count) / existing_count * 100
+            if change_pct > MAX_ANNOTATION_CHANGE_PERCENT:
+                return False, (
+                    f"Annotation count changed too much: {existing_count} -> "
+                    f"{new_count} ({change_pct:.1f}% change, max: "
+                    f"{MAX_ANNOTATION_CHANGE_PERCENT}%)"
+                )
+
+    return True, f"Validation passed: {new_count} annotations"
 
 
 def zero_pad_goid(goid: str | int) -> str:
@@ -339,18 +427,14 @@ def dump_annotation(output_dir: Path | None = None) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    gaf_file = output_dir / f"gene_association.{PROJECT_ACRONYM.lower()}"
+    gaf_filename = f"gene_association.{PROJECT_ACRONYM.lower()}"
+    final_file = output_dir / gaf_filename
     today = datetime.now().strftime("%Y-%m-%d")
     today_tag = datetime.now().strftime("%Y%m%d")
 
-    # Archive existing file
-    if gaf_file.exists():
-        archive_file = ARCHIVE_DIR / f"gene_association.{PROJECT_ACRONYM.lower()}_{today_tag}"
-        try:
-            shutil.copy(str(gaf_file), str(archive_file))
-            logger.info(f"Archived {gaf_file} to {archive_file}")
-        except Exception as e:
-            logger.warning(f"Could not archive {gaf_file}: {e}")
+    # Create temp directory for safe generation
+    temp_dir = Path(tempfile.mkdtemp(prefix="go_annotation_"))
+    temp_file = temp_dir / gaf_filename
 
     try:
         with SessionLocal() as session:
@@ -392,9 +476,9 @@ def dump_annotation(output_dir: Path | None = None) -> bool:
             logger.info("Loading GO annotations...")
             annotations = get_go_annotations(session, set(all_features.keys()))
 
-            # Write GAF file
+            # Write GAF file to temp location
             annotation_count = 0
-            with open(gaf_file, "w") as f:
+            with open(temp_file, "w") as f:
                 # Write header
                 f.write(generate_gaf_header(list(STRAIN_CONFIGS.keys()), today))
 
@@ -464,16 +548,54 @@ def dump_annotation(output_dir: Path | None = None) -> bool:
                         f.write("\t".join(columns) + "\n")
                         annotation_count += 1
 
-            logger.info(f"Wrote {annotation_count} annotations to {gaf_file}")
-            print(f"Generated: {gaf_file}")
+            logger.info(f"Wrote {annotation_count} annotations to {temp_file}")
+
+            # Validate the generated file
+            is_valid, validation_msg = validate_output_file(
+                temp_file,
+                final_file if final_file.exists() else None,
+            )
+
+            if not is_valid:
+                error_msg = f"Validation failed: {validation_msg}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                return False
+
+            # Archive existing file before replacing
+            if final_file.exists():
+                archive_file = ARCHIVE_DIR / f"{gaf_filename}_{today_tag}"
+                try:
+                    shutil.copy(str(final_file), str(archive_file))
+                    logger.info(f"Archived {final_file} to {archive_file}")
+                except Exception as e:
+                    logger.warning(f"Could not archive {final_file}: {e}")
+
+            # Copy validated file to final location
+            shutil.copy(str(temp_file), str(final_file))
+            logger.info(f"Copied validated file to {final_file}")
+
+            print(f"Generated: {final_file}")
             print(f"  Annotations: {annotation_count}")
             print(f"  Features: {len(all_features)}")
+
+            # Send success notification
+            send_slack_message(
+                f"Successfully generated {gaf_filename} with "
+                f"{annotation_count} annotations"
+            )
 
             return True
 
     except Exception as e:
         logger.exception(f"Error generating GAF: {e}")
+        send_slack_message(f"Error generating GAF: {e}", is_error=True)
         return False
+
+    finally:
+        # Clean up temp directory
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def main() -> int:
