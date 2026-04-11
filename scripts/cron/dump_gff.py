@@ -524,106 +524,149 @@ def dump_gff(
         else:
             note = None
 
-        # Build gene attributes
-        gene_attrs = {"ID": feature_name, "Name": feature_name}
-        if feat["gene_name"]:
-            gene_attrs["Gene"] = feat["gene_name"]
-        if note:
-            gene_attrs["Note"] = note
-        if orf_classification:
-            gene_attrs["orf_classification"] = orf_classification
-        if aliases:
-            gene_attrs["Alias"] = aliases
-
-        # Write gene line
-        gene_attr_str = format_gff_attributes(gene_attrs)
-        output_file.write(
-            f"{root_name}\t{source}\tgene\t{start}\t{end}\t.\t{strand}\t.\t{gene_attr_str}\n"
-        )
-
-        # Determine transcript type based on feature type
-        if original_feature_type == "ORF":
-            transcript_type = "mRNA"
-        else:
-            transcript_type = original_feature_type
-
-        # Write mRNA/tRNA/etc line with -T suffix
-        transcript_id = f"{feature_name}-T"
-        transcript_attrs = {
-            "ID": transcript_id,
-            "Parent": feature_name,
-            "Name": feature_name,
+        # Feature types that are standalone (no gene/transcript hierarchy)
+        standalone_types = {
+            "long_terminal_repeat", "repeat_region", "retrotransposon",
+            "centromere", "blocked_reading_frame"
         }
-        if feat["gene_name"]:
-            transcript_attrs["Gene"] = feat["gene_name"]
-        if note:
-            transcript_attrs["Note"] = note
-        if orf_classification:
-            transcript_attrs["orf_classification"] = orf_classification
-        if aliases:
-            transcript_attrs["Alias"] = aliases
 
-        transcript_attr_str = format_gff_attributes(transcript_attrs)
-        output_file.write(
-            f"{root_name}\t{source}\t{transcript_type}\t{start}\t{end}\t.\t{strand}\t.\t{transcript_attr_str}\n"
-        )
+        # Feature types that need exons
+        types_with_exon = {"ORF", "tRNA", "pseudogene"}
 
-        # Get subfeatures and write exon/CDS lines
+        # Feature types that need CDS
+        types_with_cds = {"ORF", "pseudogene"}
+
+        # Get subfeatures
         subfeatures = subfeature_map.get(feat["feature_no"], [])
-
-        # Group CDS subfeatures for exon numbering
         cds_subfeatures = [sf for sf in subfeatures if sf["type"] == "CDS"]
-
-        # Sort by start coordinate
         cds_subfeatures.sort(key=lambda x: x["start"])
 
-        # Write exon lines
-        if original_feature_type == "ORF":
-            # For ORFs, write exons based on CDS subfeatures
-            for i, sf in enumerate(cds_subfeatures, 1):
-                exon_id = f"{feature_name}-T-E{i}"
-                exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+        if original_feature_type in standalone_types:
+            # Standalone feature - no hierarchy
+            standalone_attrs = {"ID": feature_name, "Name": feature_name}
+            if note:
+                standalone_attrs["Note"] = note
+            if aliases:
+                standalone_attrs["Alias"] = aliases
 
-                sf_start = sf["start"]
-                sf_end = sf["end"]
-                if sf_start > sf_end:
-                    sf_start, sf_end = sf_end, sf_start
-
-                exon_attr_str = format_gff_attributes(exon_attrs)
-                output_file.write(
-                    f"{root_name}\t{source}\texon\t{sf_start}\t{sf_end}\t.\t{strand}\t.\t{exon_attr_str}\n"
-                )
-        else:
-            # For tRNA and other feature types, write single exon spanning the feature
-            exon_id = f"{feature_name}-T-E1"
-            exon_attrs = {"ID": exon_id, "Parent": transcript_id}
-            exon_attr_str = format_gff_attributes(exon_attrs)
+            standalone_attr_str = format_gff_attributes(standalone_attrs)
             output_file.write(
-                f"{root_name}\t{source}\texon\t{start}\t{end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+                f"{root_name}\t{source}\t{original_feature_type}\t{start}\t{end}\t.\t{strand}\t.\t{standalone_attr_str}\n"
+            )
+        else:
+            # Build gene/parent attributes
+            gene_attrs = {"ID": feature_name, "Name": feature_name}
+            if feat["gene_name"]:
+                gene_attrs["Gene"] = feat["gene_name"]
+            if note:
+                gene_attrs["Note"] = note
+            if orf_classification:
+                gene_attrs["orf_classification"] = orf_classification
+            if aliases:
+                gene_attrs["Alias"] = aliases
+
+            # For pseudogene, top-level type is "pseudogene", not "gene"
+            if original_feature_type == "pseudogene":
+                parent_type = "pseudogene"
+            else:
+                parent_type = "gene"
+
+            gene_attr_str = format_gff_attributes(gene_attrs)
+            output_file.write(
+                f"{root_name}\t{source}\t{parent_type}\t{start}\t{end}\t.\t{strand}\t.\t{gene_attr_str}\n"
             )
 
-        # Write CDS lines for ORFs
-        if original_feature_type == "ORF":
-            for sf in cds_subfeatures:
-                cds_id = f"{feature_name}-P"
-                cds_attrs = {
-                    "ID": cds_id,
-                    "Parent": transcript_id,
-                }
-                if orf_classification:
-                    cds_attrs["orf_classification"] = orf_classification
-                cds_attrs["parent_feature_type"] = "ORF"
+            # Determine transcript type
+            if original_feature_type == "ORF" or original_feature_type == "pseudogene":
+                transcript_type = "mRNA"
+            else:
+                transcript_type = original_feature_type
 
-                sf_start = sf["start"]
-                sf_end = sf["end"]
-                if sf_start > sf_end:
-                    sf_start, sf_end = sf_end, sf_start
+            # Write transcript line with -T suffix
+            transcript_id = f"{feature_name}-T"
+            transcript_attrs = {
+                "ID": transcript_id,
+                "Parent": feature_name,
+                "Name": feature_name,
+            }
+            if feat["gene_name"]:
+                transcript_attrs["Gene"] = feat["gene_name"]
+            if note:
+                transcript_attrs["Note"] = note
+            if orf_classification:
+                transcript_attrs["orf_classification"] = orf_classification
+            if aliases:
+                transcript_attrs["Alias"] = aliases
 
-                cds_attr_str = format_gff_attributes(cds_attrs)
-                # Use phase 0 for CDS
-                output_file.write(
-                    f"{root_name}\t{source}\tCDS\t{sf_start}\t{sf_end}\t.\t{strand}\t0\t{cds_attr_str}\n"
-                )
+            transcript_attr_str = format_gff_attributes(transcript_attrs)
+            output_file.write(
+                f"{root_name}\t{source}\t{transcript_type}\t{start}\t{end}\t.\t{strand}\t.\t{transcript_attr_str}\n"
+            )
+
+            # Write exon lines for applicable types
+            if original_feature_type in types_with_exon:
+                if original_feature_type == "ORF" and cds_subfeatures:
+                    # For ORFs with CDS subfeatures, write exons based on CDS
+                    for i, sf in enumerate(cds_subfeatures, 1):
+                        exon_id = f"{feature_name}-T-E{i}"
+                        exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+
+                        sf_start = sf["start"]
+                        sf_end = sf["end"]
+                        if sf_start > sf_end:
+                            sf_start, sf_end = sf_end, sf_start
+
+                        exon_attr_str = format_gff_attributes(exon_attrs)
+                        output_file.write(
+                            f"{root_name}\t{source}\texon\t{sf_start}\t{sf_end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+                        )
+                else:
+                    # For tRNA, pseudogene, or ORF without subfeatures - single exon
+                    exon_id = f"{feature_name}-T-E1"
+                    exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+                    exon_attr_str = format_gff_attributes(exon_attrs)
+                    output_file.write(
+                        f"{root_name}\t{source}\texon\t{start}\t{end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+                    )
+
+            # Write CDS lines for applicable types
+            if original_feature_type in types_with_cds:
+                parent_type_for_cds = original_feature_type
+                if cds_subfeatures:
+                    for sf in cds_subfeatures:
+                        cds_id = f"{feature_name}-P"
+                        cds_attrs = {
+                            "ID": cds_id,
+                            "Parent": transcript_id,
+                        }
+                        if orf_classification:
+                            cds_attrs["orf_classification"] = orf_classification
+                        cds_attrs["parent_feature_type"] = parent_type_for_cds
+
+                        sf_start = sf["start"]
+                        sf_end = sf["end"]
+                        if sf_start > sf_end:
+                            sf_start, sf_end = sf_end, sf_start
+
+                        cds_attr_str = format_gff_attributes(cds_attrs)
+                        output_file.write(
+                            f"{root_name}\t{source}\tCDS\t{sf_start}\t{sf_end}\t.\t{strand}\t0\t{cds_attr_str}\n"
+                        )
+                else:
+                    # Pseudogene without CDS subfeatures - write single CDS
+                    cds_id = f"{feature_name}-P"
+                    cds_attrs = {
+                        "ID": cds_id,
+                        "Parent": transcript_id,
+                    }
+                    if orf_classification:
+                        cds_attrs["orf_classification"] = orf_classification
+                    cds_attrs["parent_feature_type"] = parent_type_for_cds
+
+                    cds_attr_str = format_gff_attributes(cds_attrs)
+                    output_file.write(
+                        f"{root_name}\t{source}\tCDS\t{start}\t{end}\t.\t{strand}\t0\t{cds_attr_str}\n"
+                    )
 
         count += 1
 
