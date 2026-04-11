@@ -9,6 +9,14 @@ aspect and assigns the root term with 'ND' evidence code. This signifies that
 a curator has examined the literature and that as of the date of the annotation,
 there was no information available for that aspect.
 
+Safety checks before modifying database:
+---------------------------------------------------------------------------
+- Validates that deletion count is within expected range
+- Validates that insertion count is within expected range
+- Checks annotation count change < 50% vs previous run
+- Sends Slack notifications on success or failure
+- Use --dry-run to preview changes without modifying database
+
 Based on make_GO_complete.pl by Prachi Shah (March 2010)
 
 Usage:
@@ -19,12 +27,16 @@ Usage:
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +59,14 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 ADMIN_USER = os.getenv("ADMIN_USER", "CGDADMIN").upper()
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
+
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_ND_ANNOTATIONS = 100  # Minimum ND annotations expected per strain
+MAX_ND_CHANGE_PERCENT = 50.0  # Maximum allowed change from previous count
 
 # CGD reference_no for ND annotations (internal reference for auto-generated descriptions)
 ND_REFERENCE_NO = 53556  # CGD production
@@ -74,6 +94,64 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {
+        "text": f"{emoji} {env_prefix}GO-Complete: {message}"
+    }
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def validate_nd_counts(
+    strain_abbrev: str,
+    deleted_count: int,
+    new_count: int,
+) -> tuple[bool, str]:
+    """
+    Validate ND annotation counts.
+
+    Returns:
+        Tuple of (is_valid, message)
+    """
+    # Check minimum new annotations
+    if new_count < MIN_ND_ANNOTATIONS:
+        return False, (
+            f"Too few ND annotations for {strain_abbrev}: {new_count} "
+            f"(minimum: {MIN_ND_ANNOTATIONS})"
+        )
+
+    # Check against deleted count (previous run) if present
+    if deleted_count > 0:
+        change_pct = abs(new_count - deleted_count) / deleted_count * 100
+        if change_pct > MAX_ND_CHANGE_PERCENT:
+            return False, (
+                f"ND count changed too much for {strain_abbrev}: "
+                f"{deleted_count} -> {new_count} ({change_pct:.1f}% "
+                f"change, max: {MAX_ND_CHANGE_PERCENT}%)"
+            )
+
+    return True, f"Validation passed for {strain_abbrev}: {new_count} ND annotations"
 
 
 def get_organism_no(session, strain_abbrev: str) -> int | None:
@@ -319,14 +397,16 @@ def make_go_complete(strain_abbrev: str, dry_run: bool = False) -> bool:
             # Get organism_no
             organism_no = get_organism_no(session, strain_abbrev)
             if not organism_no:
-                logger.error(f"Organism not found: {strain_abbrev}")
+                error_msg = f"Organism not found: {strain_abbrev}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
                 return False
 
             logger.info(f"Organism: {strain_abbrev} (organism_no={organism_no})")
 
-            # Delete existing ND annotations
+            # Delete existing ND annotations (store count for validation)
             logger.info("Deleting existing ND annotations...")
-            delete_nd_annotations(session, organism_no, dry_run)
+            deleted_count = delete_nd_annotations(session, organism_no, dry_run)
 
             # Process each aspect
             total_annotations = 0
@@ -362,6 +442,18 @@ def make_go_complete(strain_abbrev: str, dry_run: bool = False) -> bool:
 
                 logger.info(f"  Added {len(features)} ND annotations for aspect {aspect}")
 
+            # Validate counts before committing
+            is_valid, validation_msg = validate_nd_counts(
+                strain_abbrev, deleted_count, total_annotations
+            )
+
+            if not is_valid and not dry_run:
+                error_msg = f"Validation failed: {validation_msg}"
+                logger.error(error_msg)
+                session.rollback()
+                send_slack_message(error_msg, is_error=True)
+                return False
+
             # Commit or rollback
             if dry_run:
                 session.rollback()
@@ -370,6 +462,12 @@ def make_go_complete(strain_abbrev: str, dry_run: bool = False) -> bool:
                 session.commit()
                 logger.info(f"\nCommitted {total_annotations} total ND annotations")
 
+                # Send success notification
+                send_slack_message(
+                    f"Successfully updated {strain_abbrev} with "
+                    f"{total_annotations} ND annotations"
+                )
+
             logger.info(f"Completed: {datetime.now()}")
             print(f"{'[DRY RUN] ' if dry_run else ''}{strain_abbrev}: {total_annotations} ND annotations")
 
@@ -377,6 +475,10 @@ def make_go_complete(strain_abbrev: str, dry_run: bool = False) -> bool:
 
     except Exception as e:
         logger.exception(f"Error making {strain_abbrev} GO-complete: {e}")
+        send_slack_message(
+            f"Error making {strain_abbrev} GO-complete: {e}",
+            is_error=True
+        )
         return False
 
     finally:
