@@ -37,7 +37,7 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# MONITORING (Every 5 minutes - runs as root)
+# MONITORING (Every 10 minutes - runs as root)
 # -----------------------------------------------------------------------------
 #
 # Memory monitoring and auto-restart:
@@ -52,9 +52,9 @@
 #       because it needs privileges to restart the systemd service.
 #
 # Installation:
-#   echo '*/5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh' | sudo tee /etc/cron.d/cgd-api-monitor
+#   echo '*/10 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh' | sudo tee /etc/cron.d/cgd-api-monitor
 #
-# */5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh
+# */10 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh
 
 # -----------------------------------------------------------------------------
 # TWICE DAILY (7 AM and 7 PM UTC)
