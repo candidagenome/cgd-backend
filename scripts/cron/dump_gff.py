@@ -577,8 +577,9 @@ def dump_gff(
         # Sort by start coordinate
         cds_subfeatures.sort(key=lambda x: x["start"])
 
-        # Write exon lines for ORFs
+        # Write exon lines
         if original_feature_type == "ORF":
+            # For ORFs, write exons based on CDS subfeatures
             for i, sf in enumerate(cds_subfeatures, 1):
                 exon_id = f"{feature_name}-T-E{i}"
                 exon_attrs = {"ID": exon_id, "Parent": transcript_id}
@@ -592,6 +593,14 @@ def dump_gff(
                 output_file.write(
                     f"{root_name}\t{source}\texon\t{sf_start}\t{sf_end}\t.\t{strand}\t.\t{exon_attr_str}\n"
                 )
+        else:
+            # For tRNA and other feature types, write single exon spanning the feature
+            exon_id = f"{feature_name}-T-E1"
+            exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+            exon_attr_str = format_gff_attributes(exon_attrs)
+            output_file.write(
+                f"{root_name}\t{source}\texon\t{start}\t{end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+            )
 
         # Write CDS lines for ORFs
         if original_feature_type == "ORF":
