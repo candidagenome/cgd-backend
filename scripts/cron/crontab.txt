@@ -74,8 +74,9 @@
 # Frontend pages tested:
 #   - Home, Locus, GO term, Feature search, BLAST, Phenotype search
 #
-# Note: Faster than Playwright but doesn't verify JS rendering
-0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://backend.candidagenome.org/api CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh 2>&1 | head -50
+# Note: Uses --api-only since frontend is React SPA (use Playwright for frontend)
+#       Uses localhost for API since external URL not reachable from server
+0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=http://localhost:8000/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50
 
 # -----------------------------------------------------------------------------
 # EVERY 6 HOURS (Health checks)

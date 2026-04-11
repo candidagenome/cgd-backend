@@ -162,7 +162,7 @@ if [ "$RUN_API" = true ]; then
     check_api "GO term" "/go/GO:0008150" "go_term"
 
     # Search endpoints
-    check_api "Search autocomplete" "/search/autocomplete?query=act&limit=5" "results"
+    check_api "Search autocomplete" "/search/autocomplete?query=act&limit=5" "suggestions"
 
     # Reference endpoint
     check_api "Reference" "/reference/8349105" "reference_no"
