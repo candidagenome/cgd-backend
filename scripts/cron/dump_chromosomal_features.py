@@ -13,9 +13,9 @@ This script generates the following files for a strain:
 Validation checks before copying to final location:
 ---------------------------------------------------------------------------
 - Writes to temp directory first
-- Validates minimum feature count (10,000+)
+- Validates minimum feature count (1,000+ absolute floor)
 - Validates ORF features are present
-- Checks feature count change < 10% vs existing file
+- Checks feature count change < 10% vs existing file (organism-specific)
 - Only copies to final location if validation passes
 - Sends Slack notifications on success or failure
 
@@ -107,8 +107,8 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 ENV_STATE = os.getenv("ENV_STATE", "dev")
 
 # Validation thresholds
-MIN_FEATURES = 10000  # Minimum expected features for C. albicans
-MAX_FEATURE_CHANGE_PERCENT = 10.0  # Max % change from existing file
+MIN_FEATURES = 1000  # Absolute minimum (catches catastrophic failures)
+MAX_FEATURE_CHANGE_PERCENT = 10.0  # Max % change from existing file (organism-specific)
 EXPECTED_FEATURE_TYPES = {
     "ORF", "tRNA", "snoRNA", "snRNA", "rRNA", "ncRNA",
     "long_terminal_repeat", "repeat_region", "retrotransposon",
