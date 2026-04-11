@@ -10,17 +10,14 @@ This script generates the following files for a strain:
 3. <strain>_haplotype_variations.tab - Haplotype A vs B differences (if applicable)
 4. README - Documentation file
 
-Safety Checks:
+Validation checks before copying to final location:
 ---------------------------------------------------------------------------
-Before copying files to the final location, the script validates:
-1. Minimum feature count (at least 10,000 features expected)
-2. ORF features must be present
-3. Feature count change must be < 10% compared to existing file
-4. Expected feature types (ORF, tRNA, snoRNA, etc.)
-
-Files are written to a temp directory first, then validated, and only
-copied to the final location if validation passes. Slack notifications
-are sent on success or failure.
+- Writes to temp directory first
+- Validates minimum feature count (10,000+)
+- Validates ORF features are present
+- Checks feature count change < 10% vs existing file
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
 
 Use --skip-validation to bypass these checks (not recommended for production).
 
