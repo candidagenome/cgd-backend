@@ -375,12 +375,12 @@ def format_gff_attributes(attrs: dict) -> str:
 
 
 def get_note_prefix(gene_name: str | None, aliases: list[str]) -> str:
-    """Get the note prefix (e.g., orf19.xxxx) from gene name or aliases."""
-    # First try gene_name
-    if gene_name:
-        return gene_name
+    """Get the note prefix (e.g., orf19.xxxx) from aliases.
 
-    # Look for orf19 alias
+    The old format always uses orf19 identifiers in the Note prefix,
+    even when a gene name exists. This matches the old Perl script behavior.
+    """
+    # Look for orf19 alias (prefer non-orf19.1xxxxx pattern first)
     for alias in aliases:
         if alias.startswith("orf19.") and not alias.startswith("orf19.1"):
             return alias
@@ -389,6 +389,10 @@ def get_note_prefix(gene_name: str | None, aliases: list[str]) -> str:
     for alias in aliases:
         if alias.startswith("orf19."):
             return alias
+
+    # Fall back to gene_name if no orf19 alias
+    if gene_name:
+        return gene_name
 
     return ""
 
