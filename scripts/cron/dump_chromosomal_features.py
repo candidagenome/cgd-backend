@@ -10,6 +10,20 @@ This script generates the following files for a strain:
 3. <strain>_haplotype_variations.tab - Haplotype A vs B differences (if applicable)
 4. README - Documentation file
 
+Safety Checks:
+---------------------------------------------------------------------------
+Before copying files to the final location, the script validates:
+1. Minimum feature count (at least 10,000 features expected)
+2. ORF features must be present
+3. Feature count change must be < 10% compared to existing file
+4. Expected feature types (ORF, tRNA, snoRNA, etc.)
+
+Files are written to a temp directory first, then validated, and only
+copied to the final location if validation passes. Slack notifications
+are sent on success or failure.
+
+Use --skip-validation to bypass these checks (not recommended for production).
+
 Output Files:
 ---------------------------------------------------------------------------
 1. CHROMOSOMAL FEATURE FILE (<strain>_version_<version>_chromosomal_feature.tab)
@@ -56,14 +70,19 @@ Environment Variables:
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
     DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse
 import gzip
+import json
 import logging
 import os
 import shutil
 import sys
+import tempfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -87,6 +106,17 @@ PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 TMP_DIR = Path(os.getenv("TMP_DIR", "/tmp"))
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_FEATURES = 10000  # Minimum expected features for C. albicans
+MAX_FEATURE_CHANGE_PERCENT = 10.0  # Max % change from existing file
+EXPECTED_FEATURE_TYPES = {
+    "ORF", "tRNA", "snoRNA", "snRNA", "rRNA", "ncRNA",
+    "long_terminal_repeat", "repeat_region", "retrotransposon",
+    "pseudogene", "centromere", "blocked_reading_frame", "multigene locus"
+}
 
 # Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
@@ -95,6 +125,120 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> bool:
+    """Send a message to Slack."""
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping Slack notification")
+        return False
+
+    env_label = "PROD" if ENV_STATE in ("prod", "production") else "DEV"
+    emoji = ":x:" if is_error else ":white_check_mark:"
+
+    slack_message = {
+        "text": f"{emoji} *Chromosomal Features Dump ({env_label})*\n{message}"
+    }
+
+    try:
+        data = json.dumps(slack_message).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return response.status == 200
+    except Exception as e:
+        logger.error(f"Failed to send Slack message: {e}")
+        return False
+
+
+def count_lines_and_types(filepath: Path) -> tuple[int, dict[str, int]]:
+    """Count lines and feature types in a chromosomal features file."""
+    line_count = 0
+    feature_types = {}
+
+    with open(filepath, "r") as f:
+        for line in f:
+            if line.startswith("!"):
+                continue
+            line_count += 1
+            parts = line.strip().split("\t")
+            if len(parts) >= 4:
+                # Feature type is in column 4, format: "ORF|Verified" or just "ORF"
+                ft = parts[3].split("|")[0] if parts[3] else "unknown"
+                feature_types[ft] = feature_types.get(ft, 0) + 1
+
+    return line_count, feature_types
+
+
+def validate_output_file(
+    new_file: Path,
+    existing_file: Path | None,
+    strain_abbrev: str,
+) -> tuple[bool, str | None]:
+    """
+    Validate the newly generated file before copying to final location.
+
+    Returns:
+        (is_valid, error_message) - error_message is None if valid
+    """
+    # Check file exists and is not empty
+    if not new_file.exists():
+        return False, f"Output file not created: {new_file}"
+
+    if new_file.stat().st_size == 0:
+        return False, "Output file is empty"
+
+    # Count lines and feature types
+    new_count, new_types = count_lines_and_types(new_file)
+
+    # Check minimum features
+    if new_count < MIN_FEATURES:
+        return False, (
+            f"Too few features: {new_count} (minimum: {MIN_FEATURES}). "
+            "This may indicate a database or query issue."
+        )
+
+    # Check for expected feature types
+    if "ORF" not in new_types:
+        return False, "No ORF features found in output"
+
+    # Check for unexpected feature types
+    unexpected = set(new_types.keys()) - EXPECTED_FEATURE_TYPES
+    if unexpected:
+        logger.warning(f"Unexpected feature types found: {unexpected}")
+
+    # Compare with existing file if it exists
+    if existing_file and existing_file.exists():
+        existing_count, existing_types = count_lines_and_types(existing_file)
+
+        # Check for large changes
+        if existing_count > 0:
+            change_percent = abs(new_count - existing_count) / existing_count * 100
+            if change_percent > MAX_FEATURE_CHANGE_PERCENT:
+                return False, (
+                    f"Feature count changed by {change_percent:.1f}% "
+                    f"(from {existing_count} to {new_count}). "
+                    f"Maximum allowed: {MAX_FEATURE_CHANGE_PERCENT}%. "
+                    "Please verify this is expected."
+                )
+
+        # Check ORF count specifically
+        existing_orfs = existing_types.get("ORF", 0)
+        new_orfs = new_types.get("ORF", 0)
+        if existing_orfs > 0:
+            orf_change = abs(new_orfs - existing_orfs) / existing_orfs * 100
+            if orf_change > MAX_FEATURE_CHANGE_PERCENT:
+                return False, (
+                    f"ORF count changed by {orf_change:.1f}% "
+                    f"(from {existing_orfs} to {new_orfs}). "
+                    "Please verify this is expected."
+                )
+
+    logger.info(f"Validation passed: {new_count} features, {len(new_types)} types")
+    return True, None
 
 
 def get_strain_config(session, strain_abbrev: str) -> dict | None:
@@ -700,6 +844,11 @@ def main() -> int:
         action="store_true",
         help="Don't archive old files",
     )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip validation checks (use with caution)",
+    )
 
     args = parser.parse_args()
     strain_abbrev = args.strain_abbrev
@@ -711,7 +860,9 @@ def main() -> int:
             # Get strain config
             config = get_strain_config(session, strain_abbrev)
             if not config:
-                logger.error(f"Strain not found: {strain_abbrev}")
+                error_msg = f"Strain not found: {strain_abbrev}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
                 return 1
 
             organism_no = config["organism_no"]
@@ -719,7 +870,9 @@ def main() -> int:
             seq_source = config["seq_source"]
 
             if not seq_source:
-                logger.error(f"No seq_source found for {strain_abbrev}")
+                error_msg = f"No seq_source found for {strain_abbrev}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
                 return 1
 
             logger.info(f"Seq source: {seq_source}")
@@ -727,79 +880,126 @@ def main() -> int:
             # Get genome version
             genome_version = get_genome_version(session, organism_no, seq_source)
             if not genome_version:
-                logger.warning(f"No genome version found, using 'unknown'")
+                logger.warning("No genome version found, using 'unknown'")
                 genome_version = "unknown"
 
             logger.info(f"Genome version: {genome_version}")
 
-            # Determine output directory
+            # Determine final output directory
             if args.output_dir:
-                output_dir = args.output_dir
+                final_output_dir = args.output_dir
             else:
-                output_dir = (
+                final_output_dir = (
                     DOWNLOAD_DIR / "chromosomal_feature_files" / strain_abbrev
                 )
 
-            output_dir.mkdir(parents=True, exist_ok=True)
-            archive_dir = output_dir / "archive"
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            archive_dir = final_output_dir / "archive"
 
-            # 1. Write chromosomal features file with versioned filename
+            # File names
             versioned_filename = f"{strain_abbrev}_version_{genome_version}_chromosomal_feature.tab"
-            output_file = output_dir / versioned_filename
+            final_output_file = final_output_dir / versioned_filename
 
-            # Archive old file if exists
-            if not args.no_archive and output_file.exists():
-                archive_old_file(output_file, archive_dir)
+            # Create temp directory for initial output
+            with tempfile.TemporaryDirectory(prefix="cgd_dump_") as temp_dir:
+                temp_path = Path(temp_dir)
+                temp_output_file = temp_path / versioned_filename
 
-            count = write_chromosomal_features(
-                session, organism_no, strain_abbrev, organism_name,
-                seq_source, genome_version, output_file
-            )
-            logger.info(f"Chromosomal features written to {output_file}")
+                # 1. Write chromosomal features to temp directory
+                logger.info("Writing chromosomal features to temp directory...")
+                count = write_chromosomal_features(
+                    session, organism_no, strain_abbrev, organism_name,
+                    seq_source, genome_version, temp_output_file
+                )
+                logger.info(f"Generated {count} features in temp file")
 
-            # 2. Write ORF19 to Assembly22 mapping (only for C_albicans_SC5314)
-            orf_mapping_count = 0
-            if strain_abbrev == "C_albicans_SC5314":
-                orf_mapping_file = output_dir / "ORF19_Assembly22_mapping.tab"
-                if not args.no_archive and orf_mapping_file.exists():
-                    archive_old_file(orf_mapping_file, archive_dir)
-                orf_mapping_count = write_orf19_mapping(session, organism_no, orf_mapping_file)
-                logger.info(f"ORF mapping written to {orf_mapping_file}")
+                # 2. Validate output before copying
+                if not args.skip_validation:
+                    logger.info("Validating output file...")
+                    is_valid, error_msg = validate_output_file(
+                        temp_output_file,
+                        final_output_file if final_output_file.exists() else None,
+                        strain_abbrev,
+                    )
 
-            # 3. Write haplotype variations (if data available)
-            haplotype_count = 0
-            haplotype_file = output_dir / f"{strain_abbrev}_haplotype_variations.tab"
-            if not args.no_archive and haplotype_file.exists():
-                archive_old_file(haplotype_file, archive_dir)
-            haplotype_count = write_haplotype_variations(session, organism_no, haplotype_file)
-            if haplotype_count > 0:
-                logger.info(f"Haplotype variations written to {haplotype_file}")
-            else:
-                # Remove empty file
-                if haplotype_file.exists():
-                    haplotype_file.unlink()
-                logger.info("No haplotype variation data found")
+                    if not is_valid:
+                        logger.error(f"Validation failed: {error_msg}")
+                        send_slack_message(
+                            f"*Validation failed for {strain_abbrev}*\n{error_msg}\n\n"
+                            "Files were NOT copied to the final location.",
+                            is_error=True
+                        )
+                        return 1
+                else:
+                    logger.warning("Validation skipped (--skip-validation flag)")
 
-            # 4. Write README
-            readme_file = output_dir / "README"
-            write_readme(strain_abbrev, readme_file)
-            logger.info(f"README written to {readme_file}")
+                # 3. Archive old file and copy new file to final location
+                if not args.no_archive and final_output_file.exists():
+                    archive_old_file(final_output_file, archive_dir)
 
-            # Print summary to stdout for Slack
-            summary_parts = [f"*{strain_abbrev}*:"]
-            summary_parts.append(f"{count} features in {versioned_filename}")
+                shutil.copy2(temp_output_file, final_output_file)
+                logger.info(f"Chromosomal features written to {final_output_file}")
+
+                # 4. Write ORF19 to Assembly22 mapping (only for C_albicans_SC5314)
+                orf_mapping_count = 0
+                if strain_abbrev == "C_albicans_SC5314":
+                    orf_mapping_file = final_output_dir / "ORF19_Assembly22_mapping.tab"
+                    if not args.no_archive and orf_mapping_file.exists():
+                        archive_old_file(orf_mapping_file, archive_dir)
+                    orf_mapping_count = write_orf19_mapping(session, organism_no, orf_mapping_file)
+                    logger.info(f"ORF mapping written to {orf_mapping_file}")
+
+                # 5. Write haplotype variations (if data available)
+                haplotype_count = 0
+                haplotype_file = final_output_dir / f"{strain_abbrev}_haplotype_variations.tab"
+                if not args.no_archive and haplotype_file.exists():
+                    archive_old_file(haplotype_file, archive_dir)
+                haplotype_count = write_haplotype_variations(session, organism_no, haplotype_file)
+                if haplotype_count > 0:
+                    logger.info(f"Haplotype variations written to {haplotype_file}")
+                else:
+                    # Remove empty file
+                    if haplotype_file.exists():
+                        haplotype_file.unlink()
+                    logger.info("No haplotype variation data found")
+
+                # 6. Write README
+                readme_file = final_output_dir / "README"
+                write_readme(strain_abbrev, readme_file)
+                logger.info(f"README written to {readme_file}")
+
+            # Build summary
+            summary_parts = [f"{count} features in {versioned_filename}"]
             if orf_mapping_count > 0:
                 summary_parts.append(f"{orf_mapping_count} ORF mappings")
             if haplotype_count > 0:
                 summary_parts.append(f"{haplotype_count} haplotype variations")
-            print(" | ".join(summary_parts))
+
+            summary = f"*{strain_abbrev}*: " + " | ".join(summary_parts)
+
+            # Print summary to stdout
+            print(summary)
+
+            # Send success Slack notification
+            send_slack_message(
+                f"{summary}\n\n"
+                f"Output directory: `{final_output_dir}`",
+                is_error=False
+            )
 
         return 0
 
     except Exception as e:
         logger.error(f"Error: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        error_trace = traceback.format_exc()
+        logger.error(error_trace)
+        strain_info = strain_abbrev if 'strain_abbrev' in dir() else "unknown"
+        send_slack_message(
+            f"*Unexpected error during dump for {strain_info}*\n"
+            f"```{str(e)[:500]}```",
+            is_error=True
+        )
         return 1
 
 
