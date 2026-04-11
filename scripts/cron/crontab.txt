@@ -75,8 +75,7 @@
 #   - Home, Locus, GO term, Feature search, BLAST, Phenotype search
 #
 # Note: Uses --api-only since frontend is React SPA (use Playwright for frontend)
-#       Uses localhost for API since external URL not reachable from server
-0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=http://localhost:8000/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50
+0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://www.candidagenome.org/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50
 
 # -----------------------------------------------------------------------------
 # EVERY 6 HOURS (Health checks)
