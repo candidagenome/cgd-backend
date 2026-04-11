@@ -9,8 +9,11 @@
 # MONITORING (runs as root via /etc/cron.d/cgd-api-monitor)
 # */5 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh              # Auto-restart if memory > 80% or worker > 4GB
 
+# TWICE DAILY (7 AM and 7 PM UTC)
+0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://backend.candidagenome.org/api CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh 2>&1 | head -50  # Curl-based API/page checks
+
 # EVERY 6 HOURS
-0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50  # Playwright smoke tests
+0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50  # Playwright JS rendering checks
 
 # DAILY
 0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh                                   # Run test suite and send Slack report
