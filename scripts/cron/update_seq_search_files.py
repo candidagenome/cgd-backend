@@ -905,7 +905,7 @@ def find_source_file(download_dir: Path, strain_abbrev: str, file_type: str) -> 
     return None
 
 
-def get_assembly_abbrev(source_file: Path) -> str:
+def get_assembly_abbrev(source_file: Path) -> tuple[str, bool]:
     """
     Extract assembly abbreviation from versioned filename.
 
@@ -913,23 +913,26 @@ def get_assembly_abbrev(source_file: Path) -> str:
     extracts 'A22'
 
     For files without assembly prefix (e.g., 'C_dubliniensis_CD36_version_s01-m04-r07_orf_coding.fasta.gz')
-    extracts version info like 's01'
+    returns empty string (legacy naming doesn't include version suffix).
 
     Returns:
-        Assembly abbreviation like 'A22' or 's01'
+        Tuple of (assembly_abbrev, is_assembly_format)
+        - For Assembly format: ('A22', True)
+        - For direct format: ('', False)
     """
     name = source_file.name
     # Pattern 1: ..._version_A22-..._... (assembly format)
     match = re.search(r"_version_(A\d+)-", name)
     if match:
-        return match.group(1)
+        return match.group(1), True
 
     # Pattern 2: ..._version_s##-m##-r##_... (direct format without assembly)
+    # Legacy naming doesn't include version suffix for these
     match = re.search(r"_version_(s\d+)-", name)
     if match:
-        return match.group(1)
+        return "", False
 
-    return ""
+    return "", False
 
 
 def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
@@ -969,13 +972,17 @@ def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
         if not source_file:
             continue
 
-        assembly = get_assembly_abbrev(source_file)
-        if not assembly:
-            continue
+        assembly, is_assembly_format = get_assembly_abbrev(source_file)
 
-        # Output filenames match existing pattern: {type}_{strain}_{assembly}.fasta
-        fasta_name = f"{dt['name']}_{strain_abbrev}_{assembly}.fasta"
-        blast_name = f"{dt['name']}_{strain_abbrev}_{assembly}" if dt["blast"] else None
+        # Output filenames:
+        # - Assembly format (A22): {type}_{strain}_{assembly}.fasta
+        # - Direct format: {type}_{strain}.fasta (no version suffix, legacy naming)
+        if is_assembly_format:
+            fasta_name = f"{dt['name']}_{strain_abbrev}_{assembly}.fasta"
+            blast_name = f"{dt['name']}_{strain_abbrev}_{assembly}" if dt["blast"] else None
+        else:
+            fasta_name = f"{dt['name']}_{strain_abbrev}.fasta"
+            blast_name = f"{dt['name']}_{strain_abbrev}" if dt["blast"] else None
 
         datasets.append({
             "name": dt["name"],
@@ -983,7 +990,7 @@ def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
             "fasta": fasta_name,
             "blast": blast_name,
             "type": dt["seq_type"],
-            "assembly": assembly,
+            "assembly": assembly if assembly else "current",
         })
 
     return datasets
