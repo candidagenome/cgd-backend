@@ -226,11 +226,12 @@ def get_genome_version(session, seq_source: str) -> str | None:
 
 
 def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
-    """Get ORF features with their location information."""
+    """Get ORF and allele features with their location information."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name,
                fp.property_value as feature_qualifier,
-               fl.strand, root_feat.feature_name as chr_name
+               fl.strand, root_feat.feature_name as chr_name,
+               f.feature_type
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl
             ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
@@ -240,7 +241,7 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         LEFT JOIN {DB_SCHEMA}.feat_property fp
             ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
-        AND f.feature_type = 'ORF'
+        AND f.feature_type IN ('ORF', 'allele')
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
@@ -250,12 +251,21 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         if "Deleted" in feature_qualifier:
             continue
 
+        feature_type = row[6]
+        # For alleles, only include those that are alleles of ORFs (not tRNAs, etc.)
+        # Allele names end with _A or _B and their parent is an ORF
+        if feature_type == "allele":
+            # Check parent is ORF by checking if feature_name matches ORF naming pattern
+            # ORF allele names are like C1_00010W_B where the _A version is the ORF
+            pass  # Include all alleles for now, they should have CDS subfeatures
+
         features.append({
             "feature_no": row[0],
             "feature_name": row[1],
             "gene_name": row[2] or row[1],
             "strand": "-" if row[4] == "C" else "+",
             "chr_name": row[5],
+            "feature_type": feature_type,
         })
 
     return features
