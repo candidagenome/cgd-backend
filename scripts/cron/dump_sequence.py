@@ -4,34 +4,56 @@ from __future__ import annotations
 """
 Dump sequence files in FASTA format for a strain.
 
-This script generates various FASTA sequence files:
+This script generates various FASTA sequence files matching the legacy Perl output:
 - Chromosome sequences
 - ORF genomic sequences (with optional flanking regions)
 - ORF coding sequences (introns removed)
 - ORF protein translations
+- ORF plus intergenic (extended to adjacent features)
 - Other feature sequences (ncRNA, tRNA, etc.)
+- Intergenic (not_feature) sequences
+- Default/representative sequences (one per gene for diploids)
+
+Output directory structure: {DOWNLOAD_DIR}/sequence/{strain}/Assembly{N}/current/
+Filename format: {strain}_version_{genome_version}_{type}.fasta.gz
+
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum feature count per file type
+- Checks feature count change < 10% vs existing file
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
 
 Based on dumpSequence.pl by CGD team.
 
 Usage:
     python dump_sequence.py <strain_abbrev> [seq_source]
     python dump_sequence.py C_albicans_SC5314
-    python dump_sequence.py C_albicans_SC5314 --output-dir ./sequences
+    python dump_sequence.py C_albicans_SC5314 "C. albicans SC5314 Assembly 22"
+    python dump_sequence.py --all
 
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
     DOWNLOAD_DIR: Directory for output files
-    LOG_DIR: Directory for log files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 
 import argparse
 import gzip
+import json
 import logging
 import os
 import re
+import shutil
 import sys
+import tempfile
+import urllib.request
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,7 +74,29 @@ from cgd.db.engine import SessionLocal
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
-LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_FEATURES = {
+    "chromosomes": 5,
+    "orf_coding": 100,
+    "orf_genomic": 100,
+    "orf_genomic_1000": 100,
+    "orf_trans_all": 100,
+    "orf_plus_intergenic": 100,
+    "other_features_genomic": 10,
+    "other_features_genomic_1000": 10,
+    "other_features_no_introns": 10,
+    "other_features_plus_intergenic": 10,
+    "not_feature": 50,
+    "default_coding": 100,
+    "default_genomic": 100,
+    "default_protein": 100,
+}
+MAX_FEATURE_CHANGE_PERCENT = 10.0
 
 # Configure logging to stderr so stdout can be used for summary output
 logging.basicConfig(
@@ -61,6 +105,81 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {"text": f"{emoji} {env_prefix}Sequence Dump: {message}"}
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def count_sequences_in_file(file_path: Path) -> int:
+    """Count sequences in a FASTA file (gzipped or not)."""
+    if not file_path.exists():
+        return 0
+
+    count = 0
+    if file_path.suffix == ".gz":
+        with gzip.open(file_path, "rt") as f:
+            for line in f:
+                if line.startswith(">"):
+                    count += 1
+    else:
+        with open(file_path) as f:
+            for line in f:
+                if line.startswith(">"):
+                    count += 1
+    return count
+
+
+def validate_output_file(
+    new_file: Path,
+    existing_file: Path | None,
+    file_type: str,
+    strain_abbrev: str,
+) -> tuple[bool, str]:
+    """Validate the generated FASTA file."""
+    if not new_file.exists():
+        return False, f"Output file does not exist: {new_file}"
+
+    new_count = count_sequences_in_file(new_file)
+    min_count = MIN_FEATURES.get(file_type, 10)
+
+    if new_count < min_count:
+        return False, (
+            f"Too few sequences for {strain_abbrev} {file_type}: {new_count} "
+            f"(minimum: {min_count})"
+        )
+
+    if existing_file and existing_file.exists():
+        existing_count = count_sequences_in_file(existing_file)
+        if existing_count > 0:
+            change_pct = abs(new_count - existing_count) / existing_count * 100
+            if change_pct > MAX_FEATURE_CHANGE_PERCENT:
+                return False, (
+                    f"Sequence count changed too much for {strain_abbrev} {file_type}: "
+                    f"{existing_count} -> {new_count} ({change_pct:.1f}% change)"
+                )
+
+    return True, f"Validation passed: {new_count} sequences"
 
 
 def get_strain_config(session, strain_abbrev: str) -> dict | None:
@@ -97,10 +216,36 @@ def get_seq_source(session, organism_no: int) -> str | None:
     return result[0] if result else None
 
 
-def get_chromosomes(session, seq_source: str) -> list[dict]:
-    """Get chromosome/contig names for a sequence source."""
+def get_genome_version(session, seq_source: str) -> str | None:
+    """Get current genome version for the sequence source."""
     query = text(f"""
-        SELECT f.feature_name, s.residues
+        SELECT gv.genome_version
+        FROM {DB_SCHEMA}.genome_version gv
+        WHERE gv.is_ver_current = 'Y'
+        AND gv.genome_version_no IN (
+            SELECT DISTINCT s.genome_version_no
+            FROM {DB_SCHEMA}.seq s
+            WHERE s.is_seq_current = 'Y'
+            AND s.source = :seq_source
+        )
+    """)
+    result = session.execute(query, {"seq_source": seq_source}).fetchone()
+    return result[0] if result else None
+
+
+def get_assembly_number(genome_version: str) -> str | None:
+    """Extract assembly number from genome version (e.g., 'A22-xxx' -> '22')."""
+    if genome_version and genome_version.startswith("A"):
+        match = re.match(r"A(\d+)", genome_version)
+        if match:
+            return match.group(1)
+    return None
+
+
+def get_chromosomes(session, seq_source: str) -> list[dict]:
+    """Get chromosome/contig sequences for a sequence source."""
+    query = text(f"""
+        SELECT f.feature_name, s.residues, LENGTH(s.residues) as seq_len
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.seq s ON (f.feature_no = s.feature_no
             AND s.source = :seq_source AND s.is_seq_current = 'Y')
@@ -113,18 +258,23 @@ def get_chromosomes(session, seq_source: str) -> list[dict]:
         chromosomes.append({
             "name": row[0],
             "sequence": row[1],
+            "length": row[2],
         })
 
     return chromosomes
 
 
-def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
-    """Get features with their sequences and location info."""
+def get_features_with_locations(
+    session, organism_no: int, seq_source: str
+) -> list[dict]:
+    """Get all features with their location information."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name, f.dbxref_id,
                f.feature_type, fp.property_value as feature_qualifier, f.headline,
                fl.start_coord, fl.stop_coord, fl.strand,
-               root_feat.feature_name as root_name
+               root_feat.feature_name as chr_name,
+               (SELECT LENGTH(s2.residues) FROM {DB_SCHEMA}.seq s2
+                WHERE s2.seq_no = fl.root_seq_no) as chr_length
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
@@ -132,7 +282,7 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
-        ORDER BY f.feature_name
+        ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
     features = []
@@ -145,6 +295,11 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         if "Deleted" in feature_qualifier:
             continue
 
+        start = row[7]
+        stop = row[8]
+        if start > stop:
+            start, stop = stop, start
+
         features.append({
             "feature_no": row[0],
             "feature_name": row[1],
@@ -153,10 +308,11 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
             "feature_type": row[4],
             "feature_qualifier": feature_qualifier,
             "headline": row[6],
-            "start_coord": row[7],
-            "stop_coord": row[8],
+            "start_coord": start,
+            "stop_coord": stop,
             "strand": row[9],
-            "root_name": row[10],
+            "chr_name": row[10],
+            "chr_length": row[11],
         })
 
     return features
@@ -178,70 +334,9 @@ def get_chromosome_sequence(session, chr_name: str, seq_source: str) -> str | No
     return result[0] if result else None
 
 
-def get_feature_sequence(
-    session,
-    feature_no: int,
-    seq_source: str,
-    upstream: int = 0,
-    downstream: int = 0,
-) -> tuple[str | None, str]:
-    """
-    Get genomic sequence for a feature.
-
-    Returns (sequence, location_description)
-    """
-    # Get feature location
-    loc_query = text(f"""
-        SELECT fl.start_coord, fl.stop_coord, fl.strand, s.seq_no, s.residues as chr_seq
-        FROM {DB_SCHEMA}.feat_location fl
-        JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
-        WHERE fl.feature_no = :feature_no
-        AND fl.is_loc_current = 'Y'
-        AND s.is_seq_current = 'Y'
-        AND s.source = :seq_source
-    """)
-    loc_result = session.execute(
-        loc_query, {"feature_no": feature_no, "seq_source": seq_source}
-    ).fetchone()
-
-    if not loc_result:
-        return None, ""
-
-    start_coord, stop_coord, strand, seq_no, chr_seq = loc_result
-
-    if not chr_seq:
-        return None, ""
-
-    # Calculate coordinates with flanking
-    start = start_coord - 1  # 0-based
-    end = stop_coord
-
-    # Adjust for flanking regions based on strand
-    if strand == "W" or strand == "+":
-        start = max(0, start - upstream)
-        end = min(len(chr_seq), end + downstream)
-    else:
-        start = max(0, start - downstream)
-        end = min(len(chr_seq), end + upstream)
-
-    sequence = chr_seq[start:end]
-
-    # Reverse complement if on C strand
-    if strand == "C" or strand == "-":
-        sequence = reverse_complement(sequence)
-
-    # Build location description
-    loc_desc = ""
-    if upstream or downstream:
-        loc_desc = f"with {upstream} bases upstream and {downstream} bases downstream"
-
-    return sequence, loc_desc
-
-
-def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> str | None:
-    """Get coding sequence (introns removed) for a feature."""
-    # Get CDS subfeatures using feat_relationship
-    sf_query = text(f"""
+def get_cds_subfeatures(session, feature_no: int, seq_source: str) -> list[tuple]:
+    """Get CDS subfeatures for a feature."""
+    query = text(f"""
         SELECT fl.start_coord, fl.stop_coord
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_relationship fr ON fr.child_feature_no = f.feature_no
@@ -254,70 +349,29 @@ def get_feature_coding_sequence(session, feature_no: int, seq_source: str) -> st
     """)
 
     subfeatures = []
-    for row in session.execute(sf_query, {"feature_no": feature_no, "seq_source": seq_source}).fetchall():
+    for row in session.execute(
+        query, {"feature_no": feature_no, "seq_source": seq_source}
+    ).fetchall():
         start, end = row
         if start > end:
             start, end = end, start
         subfeatures.append((start, end))
 
-    if not subfeatures:
-        # No subfeatures, return full genomic sequence
-        seq, _ = get_feature_sequence(session, feature_no, seq_source)
-        return seq
-
-    # Get chromosome sequence and feature location
-    loc_query = text(f"""
-        SELECT fl.start_coord, fl.strand, s.residues as chr_seq
-        FROM {DB_SCHEMA}.feat_location fl
-        JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
-        WHERE fl.feature_no = :feature_no
-        AND fl.is_loc_current = 'Y'
-        AND s.is_seq_current = 'Y'
-        AND s.source = :seq_source
-    """)
-    loc_result = session.execute(
-        loc_query, {"feature_no": feature_no, "seq_source": seq_source}
-    ).fetchone()
-
-    if not loc_result:
-        return None
-
-    start_coord, strand, chr_seq = loc_result
-
-    if not chr_seq:
-        return None
-
-    # Extract and concatenate CDS sequences
-    coding_parts = []
-    for sf_start, sf_end in subfeatures:
-        # Subfeature coordinates are absolute chromosome coordinates
-        part = chr_seq[sf_start - 1:sf_end]
-        coding_parts.append(part)
-
-    coding_seq = "".join(coding_parts)
-
-    # Reverse complement if on C strand
-    if strand == "C" or strand == "-":
-        coding_seq = reverse_complement(coding_seq)
-
-    return coding_seq
+    return subfeatures
 
 
 def reverse_complement(seq: str) -> str:
     """Return reverse complement of a DNA sequence."""
-    complement = {"A": "T", "T": "A", "G": "C", "C": "G",
-                  "a": "t", "t": "a", "g": "c", "c": "g",
-                  "N": "N", "n": "n"}
+    complement = {
+        "A": "T", "T": "A", "G": "C", "C": "G",
+        "a": "t", "t": "a", "g": "c", "c": "g",
+        "N": "N", "n": "n",
+    }
     return "".join(complement.get(base, base) for base in reversed(seq))
 
 
 def translate_sequence(dna_seq: str, trans_table: int = 12) -> str:
-    """
-    Translate DNA sequence to protein.
-
-    Uses genetic code table (default: 12 = alternative yeast nuclear code).
-    """
-    # Standard genetic code with CTG -> Ser for table 12
+    """Translate DNA sequence to protein using genetic code table."""
     codon_table = {
         "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
         "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
@@ -342,118 +396,698 @@ def translate_sequence(dna_seq: str, trans_table: int = 12) -> str:
     for i in range(0, len(seq) - 2, 3):
         codon = seq[i:i + 3]
         aa = codon_table.get(codon, "X")
-        if aa == "*":  # Stop codon
+        if aa == "*":
             break
         protein.append(aa)
 
     return "".join(protein)
 
 
-def format_fasta(seq_id: str, description: str, sequence: str, line_length: int = 60) -> str:
+def format_fasta(header: str, sequence: str, line_length: int = 60) -> str:
     """Format sequence as FASTA."""
-    lines = [f">{seq_id} {description}"]
+    lines = [f">{header}"]
     for i in range(0, len(sequence), line_length):
         lines.append(sequence[i:i + line_length])
     return "\n".join(lines) + "\n"
 
 
-def is_coding_feature(feature_type: str) -> bool:
-    """Check if feature type is protein-coding."""
+# Feature types to include in "other_features" files
+OTHER_FEATURE_TYPES = {
+    "tRNA", "snoRNA", "snRNA", "ncRNA", "rRNA",
+    "long_terminal_repeat", "retrotransposon",
+    "blocked_reading_frame", "pseudogene",
+    "repeat_region", "centromere",
+}
+
+
+def is_orf(feature_type: str) -> bool:
+    """Check if feature type is an ORF (not including alleles - those are handled separately)."""
     return feature_type.upper() == "ORF"
 
 
-def dump_chromosomes(
-    session,
-    seq_source: str,
-    output_file: Path,
-) -> int:
-    """Dump chromosome sequences to file."""
-    chromosomes = get_chromosomes(session, seq_source)
-
-    with open(output_file, "w") as f:
-        for chrom in chromosomes:
-            if chrom["sequence"]:
-                fasta = format_fasta(chrom["name"], "", chrom["sequence"])
-                f.write(fasta)
-
-    return len(chromosomes)
+def is_other_feature(feature_type: str) -> bool:
+    """Check if feature type is an 'other feature' for sequence dumps."""
+    return feature_type in OTHER_FEATURE_TYPES
 
 
-def dump_feature_sequences(
-    session,
-    organism_no: int,
-    seq_source: str,
-    output_file: Path,
-    coding_only: bool = True,
+def get_allele_parent_types(session, organism_no: int, seq_source: str) -> dict[int, str]:
+    """Get parent feature types for alleles."""
+    query = text(f"""
+        SELECT child.feature_no, parent.feature_type
+        FROM {DB_SCHEMA}.feat_relationship fr
+        JOIN {DB_SCHEMA}.feature child ON fr.child_feature_no = child.feature_no
+        JOIN {DB_SCHEMA}.feature parent ON fr.parent_feature_no = parent.feature_no
+        JOIN {DB_SCHEMA}.feat_location fl ON (child.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        WHERE child.organism_no = :organism_no
+        AND child.feature_type = 'allele'
+        AND parent.feature_type != 'chromosome'
+    """)
+    result = {}
+    for row in session.execute(query, {"organism_no": organism_no, "seq_source": seq_source}).fetchall():
+        # Cast to int to ensure consistent type for dictionary lookup
+        result[int(row[0])] = row[1]
+    return result
+
+
+def is_default_feature(feature_name: str) -> bool:
+    """Check if feature is the default/representative (A allele for diploids)."""
+    # A allele ends with _A, or no suffix for haploids
+    return feature_name.endswith("_A") or not re.search(r"_[AB]$", feature_name)
+
+
+def build_feature_header(
+    feat: dict,
+    coords_desc: str = "",
+    extra_desc: str = "",
+) -> str:
+    """Build FASTA header for a feature."""
+    parts = [feat["feature_name"]]
+
+    # Gene name
+    if feat["gene_name"] and feat["gene_name"] != feat["feature_name"]:
+        parts.append(feat["gene_name"])
+
+    # CGDID
+    if feat["dbxref_id"]:
+        parts.append(f"{PROJECT_ACRONYM}ID:{feat['dbxref_id']}")
+
+    # Coordinates
+    if coords_desc:
+        parts.append(coords_desc)
+
+    # Extra description (e.g., "Exon(s) only sequence")
+    if extra_desc:
+        parts.append(extra_desc)
+
+    # ORF classification
+    match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
+    if match:
+        parts.append(f"{match.group(1)} ORF;")
+
+    # Headline
+    if feat["headline"]:
+        parts.append(feat["headline"])
+
+    return " ".join(parts)
+
+
+def get_coords_desc(feat: dict, upstream: int = 0, downstream: int = 0) -> str:
+    """Build coordinates description string."""
+    strand_char = "W" if feat["strand"] in ("W", "+") else "C"
+    start = feat["start_coord"]
+    stop = feat["stop_coord"]
+
+    if upstream or downstream:
+        if strand_char == "W":
+            adj_start = max(1, start - upstream)
+            adj_stop = min(feat["chr_length"], stop + downstream)
+        else:
+            adj_start = max(1, start - downstream)
+            adj_stop = min(feat["chr_length"], stop + upstream)
+        length = adj_stop - adj_start + 1
+        return (
+            f"COORDS:{feat['chr_name']}:{adj_start}-{adj_stop}{strand_char} "
+            f"with {upstream} bases upstream and {downstream} bases downstream "
+            f"({length} nucleotides)"
+        )
+    else:
+        length = stop - start + 1
+        return f"COORDS:{feat['chr_name']}:{start}-{stop}{strand_char} ({length} nucleotides)"
+
+
+def extract_genomic_sequence(
+    chr_seq: str,
+    start: int,
+    stop: int,
+    strand: str,
     upstream: int = 0,
     downstream: int = 0,
-    coding_seq: bool = False,
-    translate: bool = False,
-    trans_table: int = 12,
-) -> int:
+) -> str:
+    """Extract genomic sequence with optional flanking regions."""
+    chr_length = len(chr_seq)
+
+    if strand in ("W", "+"):
+        adj_start = max(0, start - 1 - upstream)
+        adj_stop = min(chr_length, stop + downstream)
+    else:
+        adj_start = max(0, start - 1 - downstream)
+        adj_stop = min(chr_length, stop + upstream)
+
+    sequence = chr_seq[adj_start:adj_stop]
+
+    if strand in ("C", "-"):
+        sequence = reverse_complement(sequence)
+
+    return sequence
+
+
+def extract_coding_sequence(
+    chr_seq: str,
+    subfeatures: list[tuple],
+    strand: str,
+) -> str:
+    """Extract coding sequence (introns removed)."""
+    if not subfeatures:
+        return ""
+
+    parts = []
+    for sf_start, sf_end in subfeatures:
+        part = chr_seq[sf_start - 1:sf_end]
+        parts.append(part)
+
+    coding_seq = "".join(parts)
+
+    if strand in ("C", "-"):
+        coding_seq = reverse_complement(coding_seq)
+
+    return coding_seq
+
+
+def dump_sequences(
+    session,
+    strain_abbrev: str,
+    seq_source: str,
+    output_dir: Path,
+    genome_version: str,
+) -> dict[str, int]:
     """
-    Dump feature sequences to file.
+    Dump all sequence files for a strain.
 
-    Args:
-        coding_only: If True, only dump ORFs; if False, only non-coding features
-        upstream: Bases upstream to include
-        downstream: Bases downstream to include
-        coding_seq: If True, remove introns
-        translate: If True, translate to protein
+    Returns dict of {file_type: count}.
     """
-    features = get_features(session, organism_no, seq_source)
+    config = get_strain_config(session, strain_abbrev)
+    if not config:
+        raise ValueError(f"Strain not found: {strain_abbrev}")
 
-    count = 0
-    with open(output_file, "w") as f:
-        for feat in features:
-            is_coding = is_coding_feature(feat["feature_type"])
+    organism_no = config["organism_no"]
 
-            # Filter by coding/non-coding
-            if coding_only and not is_coding:
+    # Get all features and chromosomes
+    logger.info("Fetching features...")
+    features = get_features_with_locations(session, organism_no, seq_source)
+    logger.info(f"Found {len(features)} features")
+
+    logger.info("Fetching chromosomes...")
+    chromosomes = get_chromosomes(session, seq_source)
+    logger.info(f"Found {len(chromosomes)} chromosomes")
+
+    # Build chromosome sequence cache
+    chr_seqs = {c["name"]: c["sequence"] for c in chromosomes}
+
+    # Batch fetch CDS subfeatures for all ORFs
+    logger.info("Fetching CDS subfeatures...")
+    cds_cache = {}
+    for feat in features:
+        if is_orf(feat["feature_type"]):
+            cds_cache[feat["feature_no"]] = get_cds_subfeatures(
+                session, feat["feature_no"], seq_source
+            )
+
+    # Get parent types for alleles (to include alleles of other_features)
+    logger.info("Fetching allele parent types...")
+    allele_parent_types = get_allele_parent_types(session, organism_no, seq_source)
+    logger.info(f"Found {len(allele_parent_types)} allele parent types")
+
+    # Separate ORFs and other features
+    # ORFs include: feature_type ORF, or allele whose parent is ORF
+    # Other features include: direct other_feature types, or allele whose parent is other_feature
+    orfs = []
+    other_features = []
+    for f in features:
+        if is_orf(f["feature_type"]):
+            # Direct ORF
+            orfs.append(f)
+        elif f["feature_type"] == "allele":
+            # Allele - check parent type (cast to int for consistent lookup)
+            parent_type = allele_parent_types.get(int(f["feature_no"]))
+            if parent_type == "ORF":
+                orfs.append(f)
+            elif parent_type and is_other_feature(parent_type):
+                other_features.append(f)
+        elif is_other_feature(f["feature_type"]):
+            # Direct other feature
+            other_features.append(f)
+    logger.info(f"ORFs: {len(orfs)}, Other features: {len(other_features)}")
+
+    # Build features by chromosome for intergenic calculation
+    features_by_chr = defaultdict(list)
+    for feat in features:
+        features_by_chr[feat["chr_name"]].append(feat)
+
+    # Sort by position
+    for chr_name in features_by_chr:
+        features_by_chr[chr_name].sort(key=lambda f: f["start_coord"])
+
+    counts = {}
+    file_prefix = f"{strain_abbrev}_version_{genome_version}"
+
+    # 1. Chromosomes
+    logger.info("Writing chromosomes...")
+    with open(output_dir / f"{file_prefix}_chromosomes.fasta", "w") as f:
+        for chrom in chromosomes:
+            if chrom["sequence"]:
+                header = f"{chrom['name']} ({chrom['length']} nucleotides)"
+                f.write(format_fasta(header, chrom["sequence"]))
+    counts["chromosomes"] = len(chromosomes)
+
+    # 2. ORF genomic
+    logger.info("Writing ORF genomic...")
+    with open(output_dir / f"{file_prefix}_orf_genomic.fasta", "w") as f:
+        for feat in orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
                 continue
-            if not coding_only and is_coding:
-                continue
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+            )
+            if seq:
+                coords = get_coords_desc(feat)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["orf_genomic"] = len(orfs)
 
-            # Skip alleles for certain dumps
-            if feat["feature_type"] == "allele":
+    # 3. ORF genomic 1000
+    logger.info("Writing ORF genomic 1000...")
+    with open(output_dir / f"{file_prefix}_orf_genomic_1000.fasta", "w") as f:
+        for feat in orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
                 continue
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                upstream=1000, downstream=1000
+            )
+            if seq:
+                coords = get_coords_desc(feat, upstream=1000, downstream=1000)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["orf_genomic_1000"] = len(orfs)
 
-            # Get sequence based on options
-            if translate or coding_seq:
-                sequence = get_feature_coding_sequence(session, feat["feature_no"], seq_source)
-                if translate and sequence:
-                    sequence = translate_sequence(sequence, trans_table)
+    # 4. ORF coding
+    logger.info("Writing ORF coding...")
+    with open(output_dir / f"{file_prefix}_orf_coding.fasta", "w") as f:
+        for feat in orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            subfeatures = cds_cache.get(feat["feature_no"], [])
+            if subfeatures:
+                seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
             else:
-                sequence, loc_desc = get_feature_sequence(
-                    session, feat["feature_no"], seq_source, upstream, downstream
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+            if seq:
+                coords = get_coords_desc(feat)
+                extra = f"Exon(s) only sequence ({len(seq)} nucleotides)"
+                header = build_feature_header(feat, coords, extra)
+                f.write(format_fasta(header, seq))
+    counts["orf_coding"] = len(orfs)
+
+    # 5. ORF translations
+    logger.info("Writing ORF translations...")
+    with open(output_dir / f"{file_prefix}_orf_trans_all.fasta", "w") as f:
+        for feat in orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            subfeatures = cds_cache.get(feat["feature_no"], [])
+            if subfeatures:
+                coding_seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+            else:
+                coding_seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+            if coding_seq:
+                protein = translate_sequence(coding_seq)
+                if protein:
+                    coords = get_coords_desc(feat)
+                    extra = f"translated using codon table 12 ({len(protein)} amino acids)"
+                    header = build_feature_header(feat, coords, extra)
+                    f.write(format_fasta(header, protein))
+    counts["orf_trans_all"] = len(orfs)
+
+    # 6. ORF plus intergenic (extend to adjacent features)
+    logger.info("Writing ORF plus intergenic...")
+    with open(output_dir / f"{file_prefix}_orf_plus_intergenic.fasta", "w") as f:
+        for feat in orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+
+            # Find adjacent features
+            chr_feats = features_by_chr[feat["chr_name"]]
+            idx = next((i for i, cf in enumerate(chr_feats) if cf["feature_no"] == feat["feature_no"]), -1)
+
+            # Calculate upstream/downstream to adjacent features
+            if idx > 0:
+                prev_feat = chr_feats[idx - 1]
+                upstream = (feat["start_coord"] - prev_feat["stop_coord"]) // 2
+            else:
+                upstream = feat["start_coord"] - 1
+
+            if idx < len(chr_feats) - 1:
+                next_feat = chr_feats[idx + 1]
+                downstream = (next_feat["start_coord"] - feat["stop_coord"]) // 2
+            else:
+                downstream = len(chr_seq) - feat["stop_coord"]
+
+            upstream = max(0, min(upstream, feat["start_coord"] - 1))
+            downstream = max(0, min(downstream, len(chr_seq) - feat["stop_coord"]))
+
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                upstream=upstream, downstream=downstream
+            )
+            if seq:
+                coords = get_coords_desc(feat, upstream=upstream, downstream=downstream)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["orf_plus_intergenic"] = len(orfs)
+
+    # 7. Other features genomic
+    logger.info("Writing other features genomic...")
+    with open(output_dir / f"{file_prefix}_other_features_genomic.fasta", "w") as f:
+        for feat in other_features:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+            )
+            if seq:
+                coords = get_coords_desc(feat)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["other_features_genomic"] = len(other_features)
+
+    # 8. Other features genomic 1000
+    logger.info("Writing other features genomic 1000...")
+    with open(output_dir / f"{file_prefix}_other_features_genomic_1000.fasta", "w") as f:
+        for feat in other_features:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                upstream=1000, downstream=1000
+            )
+            if seq:
+                coords = get_coords_desc(feat, upstream=1000, downstream=1000)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["other_features_genomic_1000"] = len(other_features)
+
+    # 9. Other features no introns
+    logger.info("Writing other features no introns...")
+    with open(output_dir / f"{file_prefix}_other_features_no_introns.fasta", "w") as f:
+        for feat in other_features:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            subfeatures = get_cds_subfeatures(session, feat["feature_no"], seq_source)
+            if subfeatures:
+                seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+            else:
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+            if seq:
+                coords = get_coords_desc(feat)
+                extra = f"Exon(s) only sequence ({len(seq)} nucleotides)"
+                header = build_feature_header(feat, coords, extra)
+                f.write(format_fasta(header, seq))
+    counts["other_features_no_introns"] = len(other_features)
+
+    # 10. Other features plus intergenic
+    logger.info("Writing other features plus intergenic...")
+    with open(output_dir / f"{file_prefix}_other_features_plus_intergenic.fasta", "w") as f:
+        for feat in other_features:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+
+            chr_feats = features_by_chr[feat["chr_name"]]
+            idx = next((i for i, cf in enumerate(chr_feats) if cf["feature_no"] == feat["feature_no"]), -1)
+
+            if idx > 0:
+                prev_feat = chr_feats[idx - 1]
+                upstream = (feat["start_coord"] - prev_feat["stop_coord"]) // 2
+            else:
+                upstream = feat["start_coord"] - 1
+
+            if idx < len(chr_feats) - 1:
+                next_feat = chr_feats[idx + 1]
+                downstream = (next_feat["start_coord"] - feat["stop_coord"]) // 2
+            else:
+                downstream = len(chr_seq) - feat["stop_coord"]
+
+            upstream = max(0, min(upstream, feat["start_coord"] - 1))
+            downstream = max(0, min(downstream, len(chr_seq) - feat["stop_coord"]))
+
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                upstream=upstream, downstream=downstream
+            )
+            if seq:
+                coords = get_coords_desc(feat, upstream=upstream, downstream=downstream)
+                header = build_feature_header(feat, coords)
+                f.write(format_fasta(header, seq))
+    counts["other_features_plus_intergenic"] = len(other_features)
+
+    # 11. Not feature (intergenic)
+    logger.info("Writing intergenic sequences...")
+    intergenic_count = 0
+    with open(output_dir / f"{file_prefix}_not_feature.fasta", "w") as f:
+        for chrom in chromosomes:
+            chr_seq = chrom["sequence"]
+            if not chr_seq:
+                continue
+
+            chr_feats = features_by_chr.get(chrom["name"], [])
+            prev_end = 0
+
+            for feat in chr_feats:
+                if feat["start_coord"] > prev_end + 1:
+                    # Intergenic region
+                    start = prev_end + 1
+                    end = feat["start_coord"] - 1
+                    seq = chr_seq[start - 1:end]
+
+                    if seq:
+                        if prev_end == 0:
+                            desc = f"between start of {chrom['name']} and {feat['feature_name']}"
+                        else:
+                            prev_feat_name = chr_feats[chr_feats.index(feat) - 1]["feature_name"] if chr_feats.index(feat) > 0 else "start"
+                            desc = f"between {prev_feat_name} and {feat['feature_name']}"
+
+                        header = f"{chrom['name']}:{start}-{end} {desc}"
+                        f.write(format_fasta(header, seq))
+                        intergenic_count += 1
+
+                prev_end = max(prev_end, feat["stop_coord"])
+
+            # After last feature
+            if prev_end < len(chr_seq):
+                start = prev_end + 1
+                end = len(chr_seq)
+                seq = chr_seq[start - 1:end]
+                if seq and chr_feats:
+                    desc = f"between {chr_feats[-1]['feature_name']} and end of {chrom['name']}"
+                    header = f"{chrom['name']}:{start}-{end} {desc}"
+                    f.write(format_fasta(header, seq))
+                    intergenic_count += 1
+
+    counts["not_feature"] = intergenic_count
+
+    # 12-14. Default sequences (representative, A allele only)
+    default_orfs = [f for f in orfs if is_default_feature(f["feature_name"])]
+    logger.info(f"Writing default sequences ({len(default_orfs)} features)...")
+
+    # Default coding
+    with open(output_dir / f"{file_prefix}_default_coding.fasta", "w") as f:
+        for feat in default_orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            subfeatures = cds_cache.get(feat["feature_no"], [])
+            if subfeatures:
+                seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+            else:
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+            if seq:
+                f.write(format_fasta(feat["feature_name"], seq))
+    counts["default_coding"] = len(default_orfs)
+
+    # Default genomic
+    with open(output_dir / f"{file_prefix}_default_genomic.fasta", "w") as f:
+        for feat in default_orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            seq = extract_genomic_sequence(
+                chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+            )
+            if seq:
+                f.write(format_fasta(feat["feature_name"], seq))
+    counts["default_genomic"] = len(default_orfs)
+
+    # Default protein
+    with open(output_dir / f"{file_prefix}_default_protein.fasta", "w") as f:
+        for feat in default_orfs:
+            chr_seq = chr_seqs.get(feat["chr_name"])
+            if not chr_seq:
+                continue
+            subfeatures = cds_cache.get(feat["feature_no"], [])
+            if subfeatures:
+                coding_seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+            else:
+                coding_seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+            if coding_seq:
+                protein = translate_sequence(coding_seq)
+                if protein:
+                    f.write(format_fasta(feat["feature_name"], protein))
+    counts["default_protein"] = len(default_orfs)
+
+    return counts
+
+
+def gzip_file(file_path: Path) -> None:
+    """Gzip a file and remove the original."""
+    with open(file_path, "rb") as f_in:
+        with gzip.open(f"{file_path}.gz", "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    file_path.unlink()
+
+
+def generate_sequences(strain_abbrev: str, seq_source: str | None = None) -> bool:
+    """
+    Generate sequence files for a strain with validation and safety checks.
+
+    Returns True on success, False on failure.
+    """
+    temp_dir = Path(tempfile.mkdtemp(prefix="seq_"))
+
+    try:
+        with SessionLocal() as session:
+            # Get strain config
+            config = get_strain_config(session, strain_abbrev)
+            if not config:
+                error_msg = f"Strain {strain_abbrev} not found"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                return False
+
+            # Get or detect seq_source
+            if not seq_source:
+                seq_source = get_seq_source(session, config["organism_no"])
+                if not seq_source:
+                    error_msg = f"No seq_source found for {strain_abbrev}"
+                    logger.error(error_msg)
+                    send_slack_message(error_msg, is_error=True)
+                    return False
+
+            logger.info(f"Seq source: {seq_source}")
+
+            # Get genome version
+            genome_version = get_genome_version(session, seq_source)
+            if not genome_version:
+                error_msg = f"No genome version found for {seq_source}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                return False
+
+            logger.info(f"Genome version: {genome_version}")
+
+            # Determine output directory
+            assembly_num = get_assembly_number(genome_version)
+            if assembly_num:
+                final_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev / f"Assembly{assembly_num}" / "current"
+            else:
+                final_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev / "current"
+
+            final_dir.mkdir(parents=True, exist_ok=True)
+            archive_dir = final_dir.parent / "archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info(f"Output directory: {final_dir}")
+
+            # Generate sequences to temp directory
+            counts = dump_sequences(
+                session, strain_abbrev, seq_source, temp_dir, genome_version
+            )
+
+            # Validate and gzip each file
+            file_prefix = f"{strain_abbrev}_version_{genome_version}"
+            today_tag = datetime.now().strftime("%Y%m%d")
+            all_valid = True
+
+            for file_type, count in counts.items():
+                temp_file = temp_dir / f"{file_prefix}_{file_type}.fasta"
+                if not temp_file.exists():
+                    continue
+
+                # Gzip
+                gzip_file(temp_file)
+                temp_gz = temp_dir / f"{file_prefix}_{file_type}.fasta.gz"
+
+                # Validate
+                final_gz = final_dir / f"{file_prefix}_{file_type}.fasta.gz"
+                is_valid, msg = validate_output_file(
+                    temp_gz, final_gz if final_gz.exists() else None,
+                    file_type, strain_abbrev
                 )
 
-            if not sequence:
-                continue
+                if not is_valid:
+                    logger.error(f"Validation failed for {file_type}: {msg}")
+                    all_valid = False
+                    continue
 
-            # Build description
-            name = feat["gene_name"] or feat["feature_name"]
-            desc_parts = [name, f"{PROJECT_ACRONYM}ID:{feat['dbxref_id']}"]
+                logger.info(f"{file_type}: {msg}")
 
-            if 'loc_desc' in dir() and loc_desc:
-                desc_parts.append(loc_desc)
+                # Archive existing
+                if final_gz.exists():
+                    archive_file = archive_dir / f"{file_prefix}_{file_type}_{today_tag}.fasta.gz"
+                    try:
+                        shutil.copy(str(final_gz), str(archive_file))
+                    except Exception as e:
+                        logger.warning(f"Could not archive {final_gz}: {e}")
 
-            # Add ORF classification if available
-            match = re.search(r"(Verified|Uncharacterized|Dubious)", feat["feature_qualifier"])
-            if match:
-                desc_parts.append(f"{match.group(1)} ORF")
+                # Copy new file
+                shutil.copy(str(temp_gz), str(final_gz))
 
-            # Add headline if available
-            if feat["headline"]:
-                desc_parts.append(feat["headline"])
+            if not all_valid:
+                send_slack_message(
+                    f"Some files failed validation for {strain_abbrev}",
+                    is_error=True
+                )
+                return False
 
-            description = " ".join(desc_parts)
+            # Print summary
+            print(f"*{strain_abbrev}* ({seq_source}):")
+            for file_type, count in sorted(counts.items()):
+                print(f"  {file_type}: {count}")
 
-            fasta = format_fasta(feat["feature_name"], description, sequence)
-            f.write(fasta)
-            count += 1
+            send_slack_message(
+                f"Successfully generated sequence files for {strain_abbrev}"
+            )
+            return True
 
-    return count
+    except Exception as e:
+        logger.exception(f"Error generating sequences for {strain_abbrev}: {e}")
+        send_slack_message(
+            f"Error generating sequences for {strain_abbrev}: {e}",
+            is_error=True
+        )
+        return False
+
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def main() -> int:
@@ -463,6 +1097,7 @@ def main() -> int:
     )
     parser.add_argument(
         "strain_abbrev",
+        nargs="?",
         help="Strain abbreviation (e.g., C_albicans_SC5314)",
     )
     parser.add_argument(
@@ -472,128 +1107,42 @@ def main() -> int:
         help="Sequence source (optional, auto-detected if not provided)",
     )
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Generate sequences for all strains",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: DOWNLOAD_DIR/sequence/<strain>)",
-    )
-    parser.add_argument(
-        "--type",
-        choices=["all", "chromosomes", "orf_genomic", "orf_genomic_1000",
-                 "orf_coding", "orf_trans", "other_features"],
-        default="all",
-        help="Type of sequences to dump (default: all)",
-    )
-    parser.add_argument(
-        "--gzip", "-z",
-        action="store_true",
-        help="Gzip the output files",
+        help="Output directory (overrides default location)",
     )
 
     args = parser.parse_args()
 
-    strain_abbrev = args.strain_abbrev
+    if args.all:
+        strains = [
+            ("C_albicans_SC5314", "C. albicans SC5314 Assembly 22"),
+            ("C_albicans_SC5314", "C. albicans SC5314 Assembly 21"),
+            ("C_albicans_SC5314", "C. albicans SC5314 Assembly 19"),
+            ("C_dubliniensis_CD36", None),
+            ("C_glabrata_CBS138", None),
+            ("C_parapsilosis_CDC317", None),
+            ("C_auris_B8441", None),
+        ]
+        success = True
+        for strain, seq_source in strains:
+            if not generate_sequences(strain, seq_source):
+                success = False
+        return 0 if success else 1
 
-    logger.info(f"Dumping sequences for {strain_abbrev}")
+    elif args.strain_abbrev:
+        if generate_sequences(args.strain_abbrev, args.seq_source):
+            return 0
+        return 1
 
-    try:
-        with SessionLocal() as session:
-            # Get strain config
-            config = get_strain_config(session, strain_abbrev)
-            if not config:
-                logger.error(f"Strain not found: {strain_abbrev}")
-                return 1
-
-            # Get or detect seq_source
-            seq_source = args.seq_source
-            if not seq_source:
-                seq_source = get_seq_source(session, config["organism_no"])
-                if not seq_source:
-                    logger.error(f"No seq_source found for {strain_abbrev}")
-                    return 1
-
-            logger.info(f"Seq source: {seq_source}")
-
-            # Set up output directory
-            if args.output_dir:
-                output_dir = args.output_dir
-            else:
-                output_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Track counts for summary
-            summary = []
-
-            def write_file(filename: str, count: int):
-                logger.info(f"Wrote {count} sequences to {filename}")
-                summary.append(f"{filename}: {count}")
-                if args.gzip:
-                    with open(output_dir / filename, "rb") as f_in:
-                        with gzip.open(output_dir / f"{filename}.gz", "wb") as f_out:
-                            f_out.writelines(f_in)
-                    (output_dir / filename).unlink()
-
-            # Dump requested sequence types
-            if args.type in ("all", "chromosomes"):
-                count = dump_chromosomes(
-                    session, seq_source,
-                    output_dir / f"{strain_abbrev}_chromosomes.fasta"
-                )
-                write_file(f"{strain_abbrev}_chromosomes.fasta", count)
-
-            if args.type in ("all", "orf_genomic"):
-                count = dump_feature_sequences(
-                    session, config["organism_no"], seq_source,
-                    output_dir / "orf_genomic.fasta",
-                    coding_only=True
-                )
-                write_file("orf_genomic.fasta", count)
-
-            if args.type in ("all", "orf_genomic_1000"):
-                count = dump_feature_sequences(
-                    session, config["organism_no"], seq_source,
-                    output_dir / "orf_genomic_1000.fasta",
-                    coding_only=True, upstream=1000, downstream=1000
-                )
-                write_file("orf_genomic_1000.fasta", count)
-
-            if args.type in ("all", "orf_coding"):
-                count = dump_feature_sequences(
-                    session, config["organism_no"], seq_source,
-                    output_dir / "orf_coding.fasta",
-                    coding_only=True, coding_seq=True
-                )
-                write_file("orf_coding.fasta", count)
-
-            if args.type in ("all", "orf_trans"):
-                count = dump_feature_sequences(
-                    session, config["organism_no"], seq_source,
-                    output_dir / "orf_trans_all.fasta",
-                    coding_only=True, translate=True
-                )
-                write_file("orf_trans_all.fasta", count)
-
-            if args.type in ("all", "other_features"):
-                count = dump_feature_sequences(
-                    session, config["organism_no"], seq_source,
-                    output_dir / "other_features_genomic.fasta",
-                    coding_only=False
-                )
-                write_file("other_features_genomic.fasta", count)
-
-            logger.info("Done")
-
-            # Print summary to stdout for Slack
-            print(f"*{strain_abbrev}* ({seq_source}):")
-            for item in summary:
-                print(f"  {item}")
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+    else:
+        parser.print_help()
         return 1
 
 
