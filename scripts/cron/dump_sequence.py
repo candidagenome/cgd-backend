@@ -95,6 +95,16 @@ MIN_FEATURES = {
     "default_coding": 100,
     "default_genomic": 100,
     "default_protein": 100,
+    # Haploid files (Assembly 19 only)
+    "orf_coding_haploid": 100,
+    "orf_genomic_haploid": 100,
+    "orf_genomic_1000_haploid": 100,
+    "orf_trans_all_haploid": 100,
+    "orf_plus_intergenic_haploid": 100,
+    "other_features_genomic_haploid": 10,
+    "other_features_genomic_1000_haploid": 10,
+    "other_features_no_introns_haploid": 10,
+    "other_features_plus_intergenic_haploid": 10,
 }
 MAX_FEATURE_CHANGE_PERCENT = 10.0
 
@@ -454,6 +464,16 @@ def is_default_feature(feature_name: str) -> bool:
     """Check if feature is the default/representative (A allele for diploids)."""
     # A allele ends with _A, or no suffix for haploids
     return feature_name.endswith("_A") or not re.search(r"_[AB]$", feature_name)
+
+
+def is_assembly_19(seq_source: str) -> bool:
+    """Check if the sequence source is Assembly 19."""
+    return "Assembly 19" in seq_source
+
+
+def is_allele_feature(feature: dict) -> bool:
+    """Check if a feature is an allele."""
+    return feature["feature_type"] == "allele"
 
 
 def build_feature_header(
@@ -952,6 +972,208 @@ def dump_sequences(
                 if protein:
                     f.write(format_fasta(feat["feature_name"], protein))
     counts["default_protein"] = len(default_orfs)
+
+    # 15-23. Haploid files for Assembly 19 (exclude alleles)
+    if is_assembly_19(seq_source):
+        logger.info("Generating haploid files for Assembly 19...")
+
+        # Filter out allele features for haploid files
+        haploid_orfs = [f for f in orfs if not is_allele_feature(f)]
+        haploid_other = [f for f in other_features if not is_allele_feature(f)]
+        logger.info(f"Haploid ORFs: {len(haploid_orfs)}, Haploid other: {len(haploid_other)}")
+
+        # ORF genomic haploid
+        logger.info("Writing ORF genomic haploid...")
+        with open(output_dir / f"{file_prefix}_orf_genomic_haploid.fasta", "w") as f:
+            for feat in haploid_orfs:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+                if seq:
+                    coords = get_coords_desc(feat)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["orf_genomic_haploid"] = len(haploid_orfs)
+
+        # ORF genomic 1000 haploid
+        logger.info("Writing ORF genomic 1000 haploid...")
+        with open(output_dir / f"{file_prefix}_orf_genomic_1000_haploid.fasta", "w") as f:
+            for feat in haploid_orfs:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                    upstream=1000, downstream=1000
+                )
+                if seq:
+                    coords = get_coords_desc(feat, upstream=1000, downstream=1000)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["orf_genomic_1000_haploid"] = len(haploid_orfs)
+
+        # ORF coding haploid
+        logger.info("Writing ORF coding haploid...")
+        with open(output_dir / f"{file_prefix}_orf_coding_haploid.fasta", "w") as f:
+            for feat in haploid_orfs:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                subfeatures = cds_cache.get(feat["feature_no"], [])
+                if subfeatures:
+                    seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+                else:
+                    seq = extract_genomic_sequence(
+                        chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                    )
+                if seq:
+                    coords = get_coords_desc(feat)
+                    extra = f"Exon(s) only sequence ({len(seq)} nucleotides)"
+                    header = build_feature_header(feat, coords, extra)
+                    f.write(format_fasta(header, seq))
+        counts["orf_coding_haploid"] = len(haploid_orfs)
+
+        # ORF translations haploid
+        logger.info("Writing ORF translations haploid...")
+        with open(output_dir / f"{file_prefix}_orf_trans_all_haploid.fasta", "w") as f:
+            for feat in haploid_orfs:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                subfeatures = cds_cache.get(feat["feature_no"], [])
+                if subfeatures:
+                    coding_seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+                else:
+                    coding_seq = extract_genomic_sequence(
+                        chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                    )
+                if coding_seq:
+                    protein = translate_sequence(coding_seq)
+                    if protein:
+                        coords = get_coords_desc(feat)
+                        extra = f"translated using codon table 12 ({len(protein)} amino acids)"
+                        header = build_feature_header(feat, coords, extra)
+                        f.write(format_fasta(header, protein))
+        counts["orf_trans_all_haploid"] = len(haploid_orfs)
+
+        # ORF plus intergenic haploid
+        logger.info("Writing ORF plus intergenic haploid...")
+        with open(output_dir / f"{file_prefix}_orf_plus_intergenic_haploid.fasta", "w") as f:
+            for feat in haploid_orfs:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                chr_feats = features_by_chr[feat["chr_name"]]
+                idx = next((i for i, cf in enumerate(chr_feats) if cf["feature_no"] == feat["feature_no"]), -1)
+                if idx > 0:
+                    prev_feat = chr_feats[idx - 1]
+                    upstream = (feat["start_coord"] - prev_feat["stop_coord"]) // 2
+                else:
+                    upstream = feat["start_coord"] - 1
+                if idx < len(chr_feats) - 1:
+                    next_feat = chr_feats[idx + 1]
+                    downstream = (next_feat["start_coord"] - feat["stop_coord"]) // 2
+                else:
+                    downstream = len(chr_seq) - feat["stop_coord"]
+                upstream = max(0, min(upstream, feat["start_coord"] - 1))
+                downstream = max(0, min(downstream, len(chr_seq) - feat["stop_coord"]))
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                    upstream=upstream, downstream=downstream
+                )
+                if seq:
+                    coords = get_coords_desc(feat, upstream=upstream, downstream=downstream)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["orf_plus_intergenic_haploid"] = len(haploid_orfs)
+
+        # Other features genomic haploid
+        logger.info("Writing other features genomic haploid...")
+        with open(output_dir / f"{file_prefix}_other_features_genomic_haploid.fasta", "w") as f:
+            for feat in haploid_other:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                )
+                if seq:
+                    coords = get_coords_desc(feat)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["other_features_genomic_haploid"] = len(haploid_other)
+
+        # Other features genomic 1000 haploid
+        logger.info("Writing other features genomic 1000 haploid...")
+        with open(output_dir / f"{file_prefix}_other_features_genomic_1000_haploid.fasta", "w") as f:
+            for feat in haploid_other:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                    upstream=1000, downstream=1000
+                )
+                if seq:
+                    coords = get_coords_desc(feat, upstream=1000, downstream=1000)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["other_features_genomic_1000_haploid"] = len(haploid_other)
+
+        # Other features no introns haploid
+        logger.info("Writing other features no introns haploid...")
+        with open(output_dir / f"{file_prefix}_other_features_no_introns_haploid.fasta", "w") as f:
+            for feat in haploid_other:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                subfeatures = get_cds_subfeatures(session, feat["feature_no"], seq_source)
+                if subfeatures:
+                    seq = extract_coding_sequence(chr_seq, subfeatures, feat["strand"])
+                else:
+                    seq = extract_genomic_sequence(
+                        chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"]
+                    )
+                if seq:
+                    coords = get_coords_desc(feat)
+                    extra = f"Exon(s) only sequence ({len(seq)} nucleotides)"
+                    header = build_feature_header(feat, coords, extra)
+                    f.write(format_fasta(header, seq))
+        counts["other_features_no_introns_haploid"] = len(haploid_other)
+
+        # Other features plus intergenic haploid
+        logger.info("Writing other features plus intergenic haploid...")
+        with open(output_dir / f"{file_prefix}_other_features_plus_intergenic_haploid.fasta", "w") as f:
+            for feat in haploid_other:
+                chr_seq = chr_seqs.get(feat["chr_name"])
+                if not chr_seq:
+                    continue
+                chr_feats = features_by_chr[feat["chr_name"]]
+                idx = next((i for i, cf in enumerate(chr_feats) if cf["feature_no"] == feat["feature_no"]), -1)
+                if idx > 0:
+                    prev_feat = chr_feats[idx - 1]
+                    upstream = (feat["start_coord"] - prev_feat["stop_coord"]) // 2
+                else:
+                    upstream = feat["start_coord"] - 1
+                if idx < len(chr_feats) - 1:
+                    next_feat = chr_feats[idx + 1]
+                    downstream = (next_feat["start_coord"] - feat["stop_coord"]) // 2
+                else:
+                    downstream = len(chr_seq) - feat["stop_coord"]
+                upstream = max(0, min(upstream, feat["start_coord"] - 1))
+                downstream = max(0, min(downstream, len(chr_seq) - feat["stop_coord"]))
+                seq = extract_genomic_sequence(
+                    chr_seq, feat["start_coord"], feat["stop_coord"], feat["strand"],
+                    upstream=upstream, downstream=downstream
+                )
+                if seq:
+                    coords = get_coords_desc(feat, upstream=upstream, downstream=downstream)
+                    header = build_feature_header(feat, coords)
+                    f.write(format_fasta(header, seq))
+        counts["other_features_plus_intergenic_haploid"] = len(haploid_other)
 
     return counts
 
