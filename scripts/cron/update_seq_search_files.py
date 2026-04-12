@@ -324,8 +324,10 @@ class SequenceProcessor:
         self.validation_failures: list[str] = []
 
         # Final output directories
+        # FASTA files go in strain subdirectories
         self.fasta_dir = FASTA_DIR / strain_abbrev
-        self.blast_dir = BLAST_DIR / strain_abbrev
+        # BLAST databases go directly in base directory (legacy behavior)
+        self.blast_dir = BLAST_DIR
         self.download_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
 
         # Temp directories for validation before copy
@@ -337,7 +339,7 @@ class SequenceProcessor:
 
         # Archive directory for old files
         self.archive_dir = FASTA_DIR / strain_abbrev / "archive"
-        self.blast_archive_dir = BLAST_DIR / strain_abbrev / "archive"
+        self.blast_archive_dir = BLAST_DIR / "archive"
 
         # Track files to copy after validation
         self.pending_fasta_copies: list[tuple[Path, Path, str]] = []  # (temp, final, dataset)
