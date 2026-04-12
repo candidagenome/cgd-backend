@@ -256,7 +256,11 @@ def get_chromosome_sequence(session, chr_name: str, seq_source: str) -> str | No
 
 
 def get_chromosome_orfs(session, chr_name: str) -> list[dict]:
-    """Get ORF features for a chromosome."""
+    """Get ORF and allele features for a chromosome.
+
+    Note: B-alleles in diploid genomes (e.g., C. albicans) are stored as
+    feature_type='allele' rather than 'ORF', so we include both types.
+    """
     query = text(f"""
         SELECT f1.feature_no, f1.feature_name, f1.dbxref_id, f1.gene_name, f1.headline
         FROM {DB_SCHEMA}.feature f1
@@ -264,7 +268,7 @@ def get_chromosome_orfs(session, chr_name: str) -> list[dict]:
             AND fr.rank = 1 AND fr.relationship_type = 'part of')
         JOIN {DB_SCHEMA}.feature f2 ON (fr.parent_feature_no = f2.feature_no
             AND f2.feature_name = :chr_name)
-        WHERE f1.feature_type = 'ORF'
+        WHERE f1.feature_type IN ('ORF', 'allele')
         AND f1.feature_no NOT IN (
             SELECT feature_no
             FROM {DB_SCHEMA}.feat_property
