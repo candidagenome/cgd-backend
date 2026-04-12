@@ -217,7 +217,7 @@ def get_genome_version(session, seq_source: str) -> str | None:
     return result[0] if result else None
 
 
-def get_features(session, seq_source: str) -> list[dict]:
+def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
     """Get ORF features with their location information."""
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.gene_name,
@@ -231,12 +231,13 @@ def get_features(session, seq_source: str) -> list[dict]:
         JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
         LEFT JOIN {DB_SCHEMA}.feat_property fp
             ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
-        WHERE f.feature_type = 'ORF'
+        WHERE f.organism_no = :organism_no
+        AND f.feature_type = 'ORF'
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 
     features = []
-    for row in session.execute(query, {"seq_source": seq_source}).fetchall():
+    for row in session.execute(query, {"organism_no": organism_no, "seq_source": seq_source}).fetchall():
         feature_qualifier = row[3] or ""
         if "Deleted" in feature_qualifier:
             continue
@@ -318,7 +319,7 @@ def dump_gtf(
     logger.info(f"Dumping GTF for {strain_abbrev} (seq_source: {seq_source})")
 
     # Get features
-    features = get_features(session, seq_source)
+    features = get_features(session, organism_no, seq_source)
     logger.info(f"Found {len(features)} ORF features")
 
     # Batch fetch all subfeatures
