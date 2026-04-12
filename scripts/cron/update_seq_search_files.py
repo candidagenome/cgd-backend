@@ -12,31 +12,46 @@ It processes gzipped weekly sequence download files and:
 - Separates mitochondrial sequences if configured
 - Creates seq.count file for PatMatch
 
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum sequence count per dataset
+- Checks sequence count change < 10% vs existing file
+- Validates BLAST database files are created correctly
+- Only copies to final location if validation passes
+- Sends Slack notifications on success or failure
+
 Based on updateSeqSearchFiles.pl by Jon Binkley (November 2010)
 
 Usage:
     python update_seq_search_files.py --strain C_albicans_SC5314
     python update_seq_search_files.py --all
+    python update_seq_search_files.py --strain C_albicans_SC5314 --force
 
 Environment Variables:
     DATABASE_URL: Database connection URL
     DB_SCHEMA: Database schema name
     DOWNLOAD_DIR: Directory for sequence download files
     LOG_DIR: Directory for log files
-    BLAST_DIR: Directory for BLAST databases
+    BLAST_DB_DIR: Directory for BLAST databases
     FASTA_DIR: Directory for FASTA files
     BLAST_FORMAT_CMD: Path to makeblastdb command
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -59,9 +74,28 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data" / "download")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
 CGD_DATA_DIR = Path(os.getenv("CGD_DATA_DIR", "/data"))
-BLAST_DIR = Path(os.getenv("BLAST_DIR", str(CGD_DATA_DIR / "blast")))
+BLAST_DIR = Path(os.getenv("BLAST_DB_DIR", str(CGD_DATA_DIR / "blast_datasets")))
 FASTA_DIR = Path(os.getenv("FASTA_DIR", str(CGD_DATA_DIR / "fasta")))
 BLAST_FORMAT_CMD = os.getenv("BLAST_FORMAT_CMD", "makeblastdb")
+
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_SEQUENCES = {
+    "orf_coding": 100,
+    "orf_trans": 100,
+    "orf_genomic": 100,
+    "1000_up": 100,
+    "other_features": 10,
+    "genomic": 5,
+}
+MAX_SEQUENCE_CHANGE_PERCENT = 10.0
+
+# BLAST database file extensions
+BLAST_PROTEIN_EXTENSIONS = ["pdb", "phr", "pin", "pog", "pos", "pot", "psq", "ptf", "pto"]
+BLAST_NUCLEOTIDE_EXTENSIONS = ["ndb", "nhr", "nin", "nog", "nos", "not", "nsq", "ntf", "nto"]
 
 # Strain configurations
 STRAIN_ABBREVS = [
@@ -81,22 +115,219 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {"text": f"{emoji} {env_prefix}Seq Search Files: {message}"}
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def count_sequences_in_file(file_path: Path) -> int:
+    """Count sequences in a FASTA file (gzipped or plain)."""
+    if not file_path.exists():
+        return 0
+
+    count = 0
+    if file_path.suffix == ".gz":
+        with gzip.open(file_path, "rt") as f:
+            for line in f:
+                if line.startswith(">"):
+                    count += 1
+    else:
+        with open(file_path) as f:
+            for line in f:
+                if line.startswith(">"):
+                    count += 1
+    return count
+
+
+def validate_fasta_file(
+    new_file: Path,
+    existing_file: Path | None,
+    dataset: str,
+    strain_abbrev: str,
+) -> tuple[bool, str]:
+    """
+    Validate a generated FASTA file.
+
+    Returns:
+        Tuple of (success, message)
+    """
+    if not new_file.exists():
+        return False, f"Output file does not exist: {new_file}"
+
+    new_count = count_sequences_in_file(new_file)
+    min_count = MIN_SEQUENCES.get(dataset, 10)
+
+    if new_count < min_count:
+        return False, (
+            f"Too few sequences for {strain_abbrev} {dataset}: {new_count} "
+            f"(minimum: {min_count})"
+        )
+
+    if existing_file and existing_file.exists():
+        existing_count = count_sequences_in_file(existing_file)
+        if existing_count > 0:
+            change_pct = abs(new_count - existing_count) / existing_count * 100
+            if change_pct > MAX_SEQUENCE_CHANGE_PERCENT:
+                return False, (
+                    f"Sequence count changed too much for {strain_abbrev} {dataset}: "
+                    f"{existing_count} -> {new_count} ({change_pct:.1f}% change)"
+                )
+
+    return True, f"Validation passed: {new_count} sequences"
+
+
+def validate_blast_db(
+    temp_db_path: Path,
+    existing_db_path: Path | None,
+    dataset: str,
+    seq_type: str,
+    strain_abbrev: str,
+) -> tuple[bool, str]:
+    """
+    Validate a generated BLAST database.
+
+    Checks that all expected database files exist and have reasonable sizes.
+
+    Returns:
+        Tuple of (success, message)
+    """
+    extensions = (
+        BLAST_PROTEIN_EXTENSIONS if seq_type == "protein" else BLAST_NUCLEOTIDE_EXTENSIONS
+    )
+
+    # Check that at least the core files exist
+    core_extensions = ["phr", "pin", "psq"] if seq_type == "protein" else ["nhr", "nin", "nsq"]
+    missing_files = []
+
+    for ext in core_extensions:
+        db_file = temp_db_path.with_suffix(f".{ext}")
+        if not db_file.exists():
+            missing_files.append(ext)
+
+    if missing_files:
+        return False, (
+            f"Missing BLAST database files for {strain_abbrev} {dataset}: "
+            f"{', '.join(missing_files)}"
+        )
+
+    # Check file sizes are reasonable (not empty)
+    for ext in core_extensions:
+        db_file = temp_db_path.with_suffix(f".{ext}")
+        if db_file.stat().st_size == 0:
+            return False, (
+                f"Empty BLAST database file for {strain_abbrev} {dataset}: {ext}"
+            )
+
+    # Compare with existing database if available
+    if existing_db_path:
+        existing_core = existing_db_path.with_suffix(f".{core_extensions[0]}")
+        if existing_core.exists():
+            new_size = sum(
+                temp_db_path.with_suffix(f".{ext}").stat().st_size
+                for ext in core_extensions
+                if temp_db_path.with_suffix(f".{ext}").exists()
+            )
+            existing_size = sum(
+                existing_db_path.with_suffix(f".{ext}").stat().st_size
+                for ext in core_extensions
+                if existing_db_path.with_suffix(f".{ext}").exists()
+            )
+            if existing_size > 0:
+                change_pct = abs(new_size - existing_size) / existing_size * 100
+                if change_pct > MAX_SEQUENCE_CHANGE_PERCENT * 2:  # Allow more variance for DB size
+                    return False, (
+                        f"BLAST database size changed too much for {strain_abbrev} {dataset}: "
+                        f"{existing_size} -> {new_size} bytes ({change_pct:.1f}% change)"
+                    )
+
+    return True, "BLAST database validation passed"
+
+
+def copy_blast_db(src_path: Path, dst_path: Path, seq_type: str) -> None:
+    """Copy all BLAST database files from src to dst."""
+    extensions = (
+        BLAST_PROTEIN_EXTENSIONS if seq_type == "protein" else BLAST_NUCLEOTIDE_EXTENSIONS
+    )
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for ext in extensions:
+        src_file = src_path.with_suffix(f".{ext}")
+        if src_file.exists():
+            dst_file = dst_path.with_suffix(f".{ext}")
+            shutil.copy2(src_file, dst_file)
+
+
+def archive_old_files(file_path: Path, archive_dir: Path) -> None:
+    """Archive old files before replacement."""
+    if not file_path.exists():
+        return
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+    archive_path = archive_dir / archive_name
+    shutil.copy2(file_path, archive_path)
+
+
 class SequenceProcessor:
     """Process sequence files for PatMatch and BLAST."""
 
-    def __init__(self, session, strain_abbrev: str):
+    def __init__(self, session, strain_abbrev: str, force: bool = False):
         self.session = session
         self.strain_abbrev = strain_abbrev
+        self.force = force
         self.organism_no = None
         self.mito_features: set[str] = set()
         self.seq_counts: dict[str, int] = {}
         self.log_messages: list[str] = []
         self.errors: list[str] = []
+        self.validation_failures: list[str] = []
 
-        # Directory setup - use DOWNLOAD_DIR/sequence/{strain} for source files
+        # Final output directories
         self.fasta_dir = FASTA_DIR / strain_abbrev
         self.blast_dir = BLAST_DIR / strain_abbrev
         self.download_dir = DOWNLOAD_DIR / "sequence" / strain_abbrev
+
+        # Temp directories for validation before copy
+        self.temp_dir = Path(tempfile.mkdtemp(prefix=f"seq_search_{strain_abbrev}_"))
+        self.temp_fasta_dir = self.temp_dir / "fasta"
+        self.temp_blast_dir = self.temp_dir / "blast"
+        self.temp_fasta_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_blast_dir.mkdir(parents=True, exist_ok=True)
+
+        # Archive directory for old files
+        self.archive_dir = FASTA_DIR / strain_abbrev / "archive"
+        self.blast_archive_dir = BLAST_DIR / strain_abbrev / "archive"
+
+        # Track files to copy after validation
+        self.pending_fasta_copies: list[tuple[Path, Path, str]] = []  # (temp, final, dataset)
+        self.pending_blast_copies: list[tuple[Path, Path, str, str]] = []  # (temp, final, dataset, seq_type)
+
+    def cleanup_temp(self) -> None:
+        """Remove temp directory."""
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
+            self.log(f"Cleaned up temp directory: {self.temp_dir}")
 
     def log(self, message: str) -> None:
         """Log a message to both logger and internal list."""
@@ -247,10 +478,12 @@ class SequenceProcessor:
         - Removes '*' characters from protein sequences
         - Counts sequences
 
+        Writes to temp directory; files will be validated and copied later.
+
         Args:
             dataset: Dataset name
             input_file: Input gzipped FASTA file
-            output_file: Output plain FASTA file
+            output_file: Output plain FASTA file (in temp directory)
             seq_type: Sequence type ('protein' or 'dna')
 
         Returns:
@@ -262,11 +495,9 @@ class SequenceProcessor:
         sequences = self.parse_fasta(input_file)
         count = 0
 
-        # Write to temp file first
-        temp_file = output_file.with_suffix(".temp")
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(temp_file, "w") as f:
+        with open(output_file, "w") as f:
             for seq in sequences:
                 seq_id, desc = self.clean_header(seq["id"], seq["desc"], dataset)
                 sequence = seq["seq"]
@@ -283,8 +514,6 @@ class SequenceProcessor:
                 f.write(f"{sequence}\n")
                 count += 1
 
-        # Move temp file to final location
-        shutil.move(temp_file, output_file)
         self.log(f"Created {output_file} with {count} sequences")
 
         return count
@@ -298,6 +527,9 @@ class SequenceProcessor:
     ) -> bool:
         """
         Format a BLAST database using makeblastdb.
+
+        Writes database files directly to output_db path (in temp directory).
+        Files will be validated and copied to final location later.
 
         Args:
             input_file: Input gzipped FASTA file
@@ -314,11 +546,6 @@ class SequenceProcessor:
 
         output_db.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create temp directory for formatting
-        temp_dir = output_db.parent / "temp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_db = temp_dir / output_db.name
-
         # Determine database type
         db_type = "prot" if seq_type == "protein" else "nucl"
 
@@ -327,13 +554,13 @@ class SequenceProcessor:
             cmd = (
                 f"zcat {input_file} | {BLAST_FORMAT_CMD} "
                 f"-dbtype {db_type} -input_type fasta "
-                f"-parse_seqids -title {dataset} -out {temp_db}"
+                f"-parse_seqids -title {dataset} -out {output_db}"
             )
         else:
             cmd = (
                 f"cat {input_file} | {BLAST_FORMAT_CMD} "
                 f"-dbtype {db_type} -input_type fasta "
-                f"-parse_seqids -title {dataset} -out {temp_db}"
+                f"-parse_seqids -title {dataset} -out {output_db}"
             )
 
         self.log(f"Executing: {cmd}")
@@ -354,13 +581,13 @@ class SequenceProcessor:
                         cmd_retry = (
                             f"zcat {input_file} | {BLAST_FORMAT_CMD} "
                             f"-dbtype {db_type} -input_type fasta "
-                            f"-title {dataset} -out {temp_db}"
+                            f"-title {dataset} -out {output_db}"
                         )
                     else:
                         cmd_retry = (
                             f"cat {input_file} | {BLAST_FORMAT_CMD} "
                             f"-dbtype {db_type} -input_type fasta "
-                            f"-title {dataset} -out {temp_db}"
+                            f"-title {dataset} -out {output_db}"
                         )
                     self.log(f"Executing: {cmd_retry}")
                     result = subprocess.run(
@@ -376,20 +603,7 @@ class SequenceProcessor:
                     self.log_error(f"makeblastdb failed: {result.stderr}")
                     return False
 
-            # Move files to final location
-            suffixes = (
-                ["pdb", "phr", "pin", "pog", "pos", "pot", "psq", "ptf", "pto"]
-                if seq_type == "protein"
-                else ["ndb", "nhr", "nin", "nog", "nos", "not", "nsq", "ntf", "nto"]
-            )
-
-            for suffix in suffixes:
-                src = temp_db.with_suffix(f".{suffix}")
-                if src.exists():
-                    dst = output_db.with_suffix(f".{suffix}")
-                    shutil.move(src, dst)
-                    self.log(f"Created {dst}")
-
+            self.log(f"Created BLAST database: {output_db}")
             return True
 
         except Exception as e:
@@ -451,11 +665,13 @@ class SequenceProcessor:
         """
         Process a single dataset for PatMatch and/or BLAST.
 
+        Writes to temp directory first, then validates before final copy.
+
         Args:
             dataset: Dataset name
             source_file: Source gzipped FASTA file
-            fasta_file: Output PatMatch FASTA file (or None)
-            blast_db: Output BLAST database path (or None)
+            fasta_file: Final output PatMatch FASTA file (or None)
+            blast_db: Final output BLAST database path (or None)
             seq_type: Sequence type ('protein' or 'dna')
 
         Returns:
@@ -475,50 +691,145 @@ class SequenceProcessor:
             and any(kw in dataset for kw in ["genomic", "orf_genomic", "orf_coding"])
         )
 
-        # Process for BLAST
+        # Process for BLAST - write to temp directory
         if blast_db:
+            # Temp path for BLAST database
+            temp_blast_db = self.temp_blast_dir / blast_db.name
+
             if needs_mito_separation:
                 # Create temp files for separated sequences
-                temp_dir = blast_db.parent / "temp"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-
-                nuclear_file = temp_dir / f"{dataset}_nuclear.fasta.gz"
-                mito_file = temp_dir / f"{dataset}_mito.fasta.gz"
+                nuclear_file = self.temp_blast_dir / f"{dataset}_nuclear.fasta.gz"
+                mito_file = self.temp_blast_dir / f"{dataset}_mito.fasta.gz"
 
                 nuc_count, mito_count = self.separate_mito_sequences(
                     source_file, nuclear_file, mito_file
                 )
 
-                # Format nuclear BLAST database
-                if not self.format_blast_db(nuclear_file, blast_db, dataset, seq_type):
+                # Format nuclear BLAST database to temp
+                if not self.format_blast_db(nuclear_file, temp_blast_db, dataset, seq_type):
                     success = False
+                else:
+                    # Track for validation and copy
+                    self.pending_blast_copies.append((temp_blast_db, blast_db, dataset, seq_type))
 
                 # Format mito BLAST database if there are mito sequences
                 if mito_count > 0:
                     mito_blast_db = blast_db.parent / f"mito_{blast_db.name}"
-                    if not self.format_blast_db(mito_file, mito_blast_db, f"mito_{dataset}", seq_type):
+                    temp_mito_blast_db = self.temp_blast_dir / f"mito_{blast_db.name}"
+                    if not self.format_blast_db(mito_file, temp_mito_blast_db, f"mito_{dataset}", seq_type):
                         success = False
+                    else:
+                        self.pending_blast_copies.append((temp_mito_blast_db, mito_blast_db, f"mito_{dataset}", seq_type))
 
-                # Cleanup temp files
+                # Cleanup temp fasta files
                 if nuclear_file.exists():
                     nuclear_file.unlink()
                 if mito_file.exists():
                     mito_file.unlink()
             else:
-                if not self.format_blast_db(source_file, blast_db, dataset, seq_type):
+                if not self.format_blast_db(source_file, temp_blast_db, dataset, seq_type):
                     success = False
+                else:
+                    # Track for validation and copy
+                    self.pending_blast_copies.append((temp_blast_db, blast_db, dataset, seq_type))
 
-        # Process for PatMatch
+        # Process for PatMatch - write to temp directory
         if fasta_file:
+            temp_fasta_file = self.temp_fasta_dir / fasta_file.name
             try:
-                count = self.reformat_fasta(dataset, source_file, fasta_file, seq_type)
+                count = self.reformat_fasta(dataset, source_file, temp_fasta_file, seq_type)
                 self.seq_counts[dataset] = count
+                # Track for validation and copy
+                self.pending_fasta_copies.append((temp_fasta_file, fasta_file, dataset))
             except Exception as e:
                 self.log_error(f"Error reformatting {dataset}: {e}")
                 success = False
 
         if success:
             self.log(f"Successfully processed dataset: {dataset}")
+
+        return success
+
+    def validate_all_files(self) -> bool:
+        """
+        Validate all pending files before copying.
+
+        Returns:
+            True if all validations pass (or force mode), False otherwise
+        """
+        all_valid = True
+
+        # Validate FASTA files
+        for temp_file, final_file, dataset in self.pending_fasta_copies:
+            valid, message = validate_fasta_file(
+                temp_file, final_file, dataset, self.strain_abbrev
+            )
+            if valid:
+                self.log(f"FASTA validation: {message}")
+            else:
+                self.log_error(f"FASTA validation failed: {message}")
+                self.validation_failures.append(message)
+                all_valid = False
+
+        # Validate BLAST databases
+        for temp_db, final_db, dataset, seq_type in self.pending_blast_copies:
+            valid, message = validate_blast_db(
+                temp_db, final_db, dataset, seq_type, self.strain_abbrev
+            )
+            if valid:
+                self.log(f"BLAST validation: {message}")
+            else:
+                self.log_error(f"BLAST validation failed: {message}")
+                self.validation_failures.append(message)
+                all_valid = False
+
+        return all_valid
+
+    def copy_validated_files(self) -> bool:
+        """
+        Copy all validated files from temp to final locations.
+
+        Archives old files before replacement.
+
+        Returns:
+            True on success, False on failure
+        """
+        success = True
+
+        # Copy FASTA files
+        for temp_file, final_file, dataset in self.pending_fasta_copies:
+            try:
+                # Archive old file if exists
+                if final_file.exists():
+                    archive_old_files(final_file, self.archive_dir)
+
+                # Create parent directory and copy
+                final_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(temp_file, final_file)
+                self.log(f"Copied {temp_file.name} to {final_file}")
+            except Exception as e:
+                self.log_error(f"Failed to copy {temp_file.name}: {e}")
+                success = False
+
+        # Copy BLAST databases
+        for temp_db, final_db, dataset, seq_type in self.pending_blast_copies:
+            try:
+                # Archive old database files if exist
+                extensions = (
+                    BLAST_PROTEIN_EXTENSIONS if seq_type == "protein"
+                    else BLAST_NUCLEOTIDE_EXTENSIONS
+                )
+                for ext in extensions:
+                    old_file = final_db.with_suffix(f".{ext}")
+                    if old_file.exists():
+                        archive_old_files(old_file, self.blast_archive_dir)
+
+                # Copy all database files
+                copy_blast_db(temp_db, final_db, seq_type)
+                self.log(f"Copied BLAST database {temp_db.name} to {final_db}")
+            except Exception as e:
+                self.log_error(f"Failed to copy BLAST database {temp_db.name}: {e}")
+                success = False
 
         return success
 
@@ -605,12 +916,16 @@ def get_mito_features(session, strain_abbrev: str) -> list[str]:
     return [row[0] for row in result]
 
 
-def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
+def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bool, dict]:
     """
     Main function to update sequence search files.
 
+    Files are written to temp directory first, validated, then copied to
+    final location if validation passes.
+
     Args:
         strain_abbrev: Strain abbreviation
+        force: If True, skip validation and copy files anyway
 
     Returns:
         Tuple of (success, stats_dict)
@@ -621,7 +936,9 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
         "datasets_failed": 0,
         "fasta_files": 0,
         "blast_dbs": 0,
+        "validation_failures": [],
         "errors": [],
+        "copied": False,
     }
 
     # Set up logging for this strain
@@ -633,10 +950,13 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
 
     logger.info(f"Starting sequence search file update for {strain_abbrev}")
     logger.info(f"Start time: {datetime.now()}")
+    logger.info(f"Force mode: {force}")
+
+    processor = None
 
     try:
         with SessionLocal() as session:
-            processor = SequenceProcessor(session, strain_abbrev)
+            processor = SequenceProcessor(session, strain_abbrev, force=force)
 
             # Get organism number
             processor.organism_no = processor.get_organism_no()
@@ -646,9 +966,10 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
                 return False, stats
 
             logger.info(f"Organism: {strain_abbrev} (organism_no={processor.organism_no})")
+            logger.info(f"Temp dir: {processor.temp_dir}")
             logger.info(f"Download dir: {processor.download_dir}")
-            logger.info(f"FASTA dir: {processor.fasta_dir}")
-            logger.info(f"BLAST dir: {processor.blast_dir}")
+            logger.info(f"FASTA dir (final): {processor.fasta_dir}")
+            logger.info(f"BLAST dir (final): {processor.blast_dir}")
 
             # Identify mito features
             mito_features = get_mito_features(session, strain_abbrev)
@@ -657,7 +978,7 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
             # Get dataset configuration
             datasets = get_dataset_config(strain_abbrev)
 
-            # Process each dataset
+            # Process each dataset (writes to temp directory)
             for ds_config in datasets:
                 # Try both plain and gzipped versions of source file
                 source_file = processor.download_dir / ds_config["source"]
@@ -695,7 +1016,51 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
                 else:
                     stats["datasets_failed"] += 1
 
-            # Write sequence count file
+            # If any datasets failed to process, don't proceed to validation
+            if stats["datasets_failed"] > 0:
+                logger.error(f"Dataset processing failed, skipping validation")
+                stats["errors"] = processor.errors
+                send_slack_message(
+                    f"{strain_abbrev}: Processing failed - {stats['datasets_failed']} datasets failed",
+                    is_error=True
+                )
+                return False, stats
+
+            # Validate all files
+            logger.info("Validating generated files...")
+            validation_passed = processor.validate_all_files()
+            stats["validation_failures"] = processor.validation_failures
+
+            if not validation_passed and not force:
+                logger.error("Validation failed, files NOT copied to final location")
+                logger.error(f"Validation failures: {processor.validation_failures}")
+                stats["errors"] = processor.errors
+                send_slack_message(
+                    f"{strain_abbrev}: Validation failed - {len(processor.validation_failures)} failures. "
+                    f"Use --force to override.",
+                    is_error=True
+                )
+                return False, stats
+
+            if not validation_passed and force:
+                logger.warning("Validation failed but --force specified, proceeding with copy")
+
+            # Copy files to final location
+            logger.info("Copying validated files to final location...")
+            copy_success = processor.copy_validated_files()
+
+            if not copy_success:
+                logger.error("Failed to copy some files to final location")
+                stats["errors"] = processor.errors
+                send_slack_message(
+                    f"{strain_abbrev}: Copy failed - see log for details",
+                    is_error=True
+                )
+                return False, stats
+
+            stats["copied"] = True
+
+            # Write sequence count file to final location
             if processor.seq_counts:
                 seq_count_file = processor.fasta_dir / "seq.count"
                 processor.write_seq_count_file(seq_count_file)
@@ -703,14 +1068,27 @@ def update_seq_search_files(strain_abbrev: str) -> tuple[bool, dict]:
             stats["errors"] = processor.errors
             logger.info(f"Complete: {datetime.now()}")
 
-            return stats["datasets_failed"] == 0, stats
+            # Send success notification
+            send_slack_message(
+                f"{strain_abbrev}: Updated successfully - "
+                f"{stats['fasta_files']} FASTA, {stats['blast_dbs']} BLAST DBs"
+            )
+
+            return True, stats
 
     except Exception as e:
         logger.exception(f"Error updating sequence search files: {e}")
         stats["errors"].append(str(e))
+        send_slack_message(
+            f"{strain_abbrev}: Error - {str(e)[:100]}",
+            is_error=True
+        )
         return False, stats
 
     finally:
+        # Clean up temp directory
+        if processor:
+            processor.cleanup_temp()
         logger.removeHandler(file_handler)
         file_handler.close()
 
@@ -730,6 +1108,11 @@ def main() -> int:
         action="store_true",
         help="Process all strains",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force copy even if validation fails (use with caution)",
+    )
 
     args = parser.parse_args()
 
@@ -746,7 +1129,7 @@ def main() -> int:
 
     for strain in strains:
         print(f"\nProcessing {strain}...")
-        success, stats = update_seq_search_files(strain)
+        success, stats = update_seq_search_files(strain, force=args.force)
         all_stats.append(stats)
         if not success:
             all_success = False
@@ -757,12 +1140,17 @@ def main() -> int:
     print("=" * 50)
 
     for stats in all_stats:
-        status = "OK" if stats["datasets_failed"] == 0 else "FAILED"
+        status = "OK" if stats.get("copied", False) else "FAILED"
         print(f"\n{stats['strain']}: {status}")
         print(f"  Datasets processed: {stats['datasets_processed']}")
         print(f"  Datasets failed: {stats['datasets_failed']}")
         print(f"  FASTA files created: {stats['fasta_files']}")
         print(f"  BLAST databases created: {stats['blast_dbs']}")
+        print(f"  Copied to final location: {'Yes' if stats.get('copied') else 'No'}")
+        if stats.get("validation_failures"):
+            print(f"  Validation failures: {len(stats['validation_failures'])}")
+            for fail in stats["validation_failures"][:3]:
+                print(f"    - {fail}")
         if stats["errors"]:
             print(f"  Errors: {len(stats['errors'])}")
             for err in stats["errors"][:3]:
