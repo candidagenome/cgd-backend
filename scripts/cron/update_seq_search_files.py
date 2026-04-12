@@ -185,14 +185,22 @@ def validate_fasta_file(
     if existing_file and existing_file.exists():
         existing_count = count_sequences_in_file(existing_file)
         if existing_count > 0:
-            change_pct = abs(new_count - existing_count) / existing_count * 100
+            diff = new_count - existing_count
+            change_pct = abs(diff) / existing_count * 100
             if change_pct > MAX_SEQUENCE_CHANGE_PERCENT:
                 return False, (
                     f"Sequence count changed too much for {strain_abbrev} {dataset}: "
                     f"{existing_count} -> {new_count} ({change_pct:.1f}% change)"
                 )
+            # Show comparison in success message
+            sign = "+" if diff > 0 else ""
+            return True, (
+                f"{dataset}: {existing_count} -> {new_count} "
+                f"({sign}{diff}, {change_pct:.1f}% change)"
+            )
 
-    return True, f"Validation passed: {new_count} sequences"
+    # No existing file to compare against
+    return True, f"{dataset}: {new_count} sequences (new file)"
 
 
 def validate_blast_db(
@@ -238,28 +246,40 @@ def validate_blast_db(
             )
 
     # Compare with existing database if available
+    new_size = sum(
+        temp_db_path.with_suffix(f".{ext}").stat().st_size
+        for ext in core_extensions
+        if temp_db_path.with_suffix(f".{ext}").exists()
+    )
+
     if existing_db_path:
         existing_core = existing_db_path.with_suffix(f".{core_extensions[0]}")
         if existing_core.exists():
-            new_size = sum(
-                temp_db_path.with_suffix(f".{ext}").stat().st_size
-                for ext in core_extensions
-                if temp_db_path.with_suffix(f".{ext}").exists()
-            )
             existing_size = sum(
                 existing_db_path.with_suffix(f".{ext}").stat().st_size
                 for ext in core_extensions
                 if existing_db_path.with_suffix(f".{ext}").exists()
             )
             if existing_size > 0:
-                change_pct = abs(new_size - existing_size) / existing_size * 100
+                diff = new_size - existing_size
+                change_pct = abs(diff) / existing_size * 100
                 if change_pct > MAX_SEQUENCE_CHANGE_PERCENT * 2:  # Allow more variance for DB size
                     return False, (
                         f"BLAST database size changed too much for {strain_abbrev} {dataset}: "
                         f"{existing_size} -> {new_size} bytes ({change_pct:.1f}% change)"
                     )
+                # Show comparison in success message
+                sign = "+" if diff > 0 else ""
+                new_kb = new_size / 1024
+                existing_kb = existing_size / 1024
+                return True, (
+                    f"{dataset}: {existing_kb:.1f}KB -> {new_kb:.1f}KB "
+                    f"({sign}{diff/1024:.1f}KB, {change_pct:.1f}% change)"
+                )
 
-    return True, "BLAST database validation passed"
+    # No existing database to compare against
+    new_kb = new_size / 1024
+    return True, f"{dataset}: {new_kb:.1f}KB (new database)"
 
 
 def copy_blast_db(src_path: Path, dst_path: Path, seq_type: str) -> None:
