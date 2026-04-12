@@ -89,7 +89,7 @@ MIN_SEQUENCES = {
     "orf_genomic": 100,
     "1000_up": 100,
     "other_features_genomic": 10,
-    "genomic": 5,
+    "genomic": 5,  # Some assemblies have as few as 7-8 chromosomes
 }
 MAX_SEQUENCE_CHANGE_PERCENT = 10.0
 
@@ -105,6 +105,11 @@ STRAIN_ABBREVS = [
     "C_parapsilosis_CDC317",
     "C_auris_B8441",
 ]
+
+# Assemblies to process per strain (strains not listed use default/current only)
+STRAIN_ASSEMBLIES = {
+    "C_albicans_SC5314": ["A22", "A21", "A19"],
+}
 
 # Configure logging
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -167,6 +172,9 @@ def validate_fasta_file(
     """
     Validate a generated FASTA file.
 
+    Args:
+        dataset: Dataset display name (may include assembly suffix like 'orf_coding_A22')
+
     Returns:
         Tuple of (success, message)
     """
@@ -174,7 +182,9 @@ def validate_fasta_file(
         return False, f"Output file does not exist: {new_file}"
 
     new_count = count_sequences_in_file(new_file)
-    min_count = MIN_SEQUENCES.get(dataset, 10)
+    # Strip assembly suffix (A##) for MIN_SEQUENCES lookup
+    base_dataset = re.sub(r"_A\d+$", "", dataset)
+    min_count = MIN_SEQUENCES.get(base_dataset, 10)
 
     if new_count < min_count:
         return False, (
@@ -683,6 +693,7 @@ class SequenceProcessor:
         fasta_file: Path | None,
         blast_db: Path | None,
         seq_type: str,
+        assembly: str = "",
     ) -> bool:
         """
         Process a single dataset for PatMatch and/or BLAST.
@@ -690,8 +701,9 @@ class SequenceProcessor:
         Writes to temp directory first, then validates before final copy.
 
         Args:
-            dataset: Dataset name
+            dataset: Dataset name (base name like 'orf_coding')
             source_file: Source gzipped FASTA file
+            assembly: Assembly identifier for display (e.g., 'A22', 'A19')
             fasta_file: Final output PatMatch FASTA file (or None)
             blast_db: Final output BLAST database path (or None)
             seq_type: Sequence type ('protein' or 'dna')
@@ -699,6 +711,9 @@ class SequenceProcessor:
         Returns:
             True on success, False on failure
         """
+        # Create display name that includes assembly for validation messages
+        display_name = f"{dataset}_{assembly}" if assembly else dataset
+
         self.log(f"Processing dataset: {dataset}")
 
         if not source_file.exists():
@@ -731,8 +746,8 @@ class SequenceProcessor:
                 if not self.format_blast_db(nuclear_file, temp_blast_db, dataset, seq_type):
                     success = False
                 else:
-                    # Track for validation and copy
-                    self.pending_blast_copies.append((temp_blast_db, blast_db, dataset, seq_type))
+                    # Track for validation and copy (use display_name for validation messages)
+                    self.pending_blast_copies.append((temp_blast_db, blast_db, display_name, seq_type))
 
                 # Format mito BLAST database if there are mito sequences
                 if mito_count > 0:
@@ -741,7 +756,7 @@ class SequenceProcessor:
                     if not self.format_blast_db(mito_file, temp_mito_blast_db, f"mito_{dataset}", seq_type):
                         success = False
                     else:
-                        self.pending_blast_copies.append((temp_mito_blast_db, mito_blast_db, f"mito_{dataset}", seq_type))
+                        self.pending_blast_copies.append((temp_mito_blast_db, mito_blast_db, f"mito_{display_name}", seq_type))
 
                 # Cleanup temp fasta files
                 if nuclear_file.exists():
@@ -752,17 +767,17 @@ class SequenceProcessor:
                 if not self.format_blast_db(source_file, temp_blast_db, dataset, seq_type):
                     success = False
                 else:
-                    # Track for validation and copy
-                    self.pending_blast_copies.append((temp_blast_db, blast_db, dataset, seq_type))
+                    # Track for validation and copy (use display_name for validation messages)
+                    self.pending_blast_copies.append((temp_blast_db, blast_db, display_name, seq_type))
 
         # Process for PatMatch - write to temp directory
         if fasta_file:
             temp_fasta_file = self.temp_fasta_dir / fasta_file.name
             try:
                 count = self.reformat_fasta(dataset, source_file, temp_fasta_file, seq_type)
-                self.seq_counts[dataset] = count
-                # Track for validation and copy
-                self.pending_fasta_copies.append((temp_fasta_file, fasta_file, dataset))
+                self.seq_counts[display_name] = count
+                # Track for validation and copy (use display_name for validation messages)
+                self.pending_fasta_copies.append((temp_fasta_file, fasta_file, display_name))
             except Exception as e:
                 self.log_error(f"Error reformatting {dataset}: {e}")
                 success = False
@@ -866,7 +881,9 @@ class SequenceProcessor:
         self.log(f"Wrote sequence counts to {output_file}")
 
 
-def find_source_file(download_dir: Path, strain_abbrev: str, file_type: str) -> Path | None:
+def find_source_file(
+    download_dir: Path, strain_abbrev: str, file_type: str, assembly: str | None = None
+) -> Path | None:
     """
     Find source file in Assembly/current/ or direct current/ directory.
 
@@ -874,33 +891,58 @@ def find_source_file(download_dir: Path, strain_abbrev: str, file_type: str) -> 
     - C_albicans_SC5314_version_A22-s08-m01-r36_orf_coding.fasta.gz (Assembly format)
     - C_dubliniensis_CD36_version_s01-m04-r07_orf_coding.fasta.gz (direct format)
 
+    For A19, files may have _haploid suffix:
+    - C_albicans_SC5314_version_A19-s01-m04-r03_orf_coding_haploid.fasta.gz
+
     Args:
         download_dir: Base download directory for the strain
         strain_abbrev: Strain abbreviation
         file_type: File type to find (e.g., 'orf_coding', 'chromosomes')
+        assembly: Optional specific assembly to look in (e.g., 'A22', 'A19')
 
     Returns:
         Path to source file or None if not found
     """
     # Pattern to match: {strain}_version_*_{file_type}.fasta.gz
-    pattern = f"{strain_abbrev}_version_*_{file_type}.fasta.gz"
+    # Also try with _haploid suffix for A19
+    patterns = [
+        f"{strain_abbrev}_version_*_{file_type}.fasta.gz",
+        f"{strain_abbrev}_version_*_{file_type}_haploid.fasta.gz",
+    ]
 
-    # First, try Assembly directories (sorted in reverse to get latest first)
+    if assembly:
+        # Look in specific assembly directory
+        assembly_num = assembly[1:]  # Extract number from 'A22' -> '22'
+        assembly_dir = download_dir / f"Assembly{assembly_num}"
+        current_dir = assembly_dir / "current"
+
+        if current_dir.exists():
+            for pattern in patterns:
+                matches = list(current_dir.glob(pattern))
+                # Filter to only match the requested assembly
+                matches = [m for m in matches if f"_version_{assembly}-" in m.name]
+                if matches:
+                    return matches[0]
+        return None
+
+    # No specific assembly - try Assembly directories (sorted in reverse to get latest first)
     for assembly_dir in sorted(download_dir.glob("Assembly*"), reverse=True):
         current_dir = assembly_dir / "current"
         if not current_dir.exists():
             continue
 
-        matches = list(current_dir.glob(pattern))
-        if matches:
-            return matches[0]
+        for pattern in patterns:
+            matches = list(current_dir.glob(pattern))
+            if matches:
+                return matches[0]
 
     # Second, try direct current/ directory (for strains without Assembly prefix)
     current_dir = download_dir / "current"
     if current_dir.exists():
-        matches = list(current_dir.glob(pattern))
-        if matches:
-            return matches[0]
+        for pattern in patterns:
+            matches = list(current_dir.glob(pattern))
+            if matches:
+                return matches[0]
 
     return None
 
@@ -935,7 +977,9 @@ def get_assembly_abbrev(source_file: Path) -> tuple[str, bool]:
     return "", False
 
 
-def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
+def get_dataset_config(
+    strain_abbrev: str, download_dir: Path, assembly: str | None = None
+) -> list[dict]:
     """
     Get dataset configuration for a strain.
 
@@ -945,6 +989,7 @@ def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
     Args:
         strain_abbrev: Strain abbreviation
         download_dir: Base download directory for the strain
+        assembly: Optional specific assembly (e.g., 'A22', 'A19')
 
     Returns:
         List of dataset configurations
@@ -968,7 +1013,7 @@ def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
     datasets = []
 
     for dt in dataset_types:
-        source_file = find_source_file(download_dir, strain_abbrev, dt["source_type"])
+        source_file = find_source_file(download_dir, strain_abbrev, dt["source_type"], assembly)
         if not source_file:
             continue
 
@@ -1070,15 +1115,28 @@ def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bo
             mito_features = get_mito_features(session, strain_abbrev)
             processor.identify_mito_features(mito_features)
 
-            # Get dataset configuration - finds source files in Assembly/current/
-            datasets = get_dataset_config(strain_abbrev, processor.download_dir)
+            # Get assemblies to process for this strain
+            assemblies = STRAIN_ASSEMBLIES.get(strain_abbrev, [None])
+            logger.info(f"Assemblies to process: {assemblies if assemblies != [None] else ['current']}")
+
+            # Get dataset configuration for each assembly
+            datasets = []
+            for assembly in assemblies:
+                assembly_datasets = get_dataset_config(
+                    strain_abbrev, processor.download_dir, assembly
+                )
+                if assembly_datasets:
+                    logger.info(f"Found {len(assembly_datasets)} datasets for {assembly or 'current'}")
+                    datasets.extend(assembly_datasets)
+                else:
+                    logger.warning(f"No source files found for assembly {assembly or 'current'}")
 
             if not datasets:
                 logger.error(f"No source files found for {strain_abbrev}")
                 stats["errors"].append("No source files found in any Assembly/current/ directory")
                 return False, stats
 
-            logger.info(f"Found {len(datasets)} datasets to process")
+            logger.info(f"Found {len(datasets)} total datasets to process")
 
             # Process each dataset (writes to temp directory)
             for ds_config in datasets:
@@ -1096,7 +1154,8 @@ def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bo
                     else None
                 )
 
-                logger.info(f"Processing {ds_config['name']} ({ds_config.get('assembly', 'unknown')})")
+                assembly = ds_config.get('assembly', '')
+                logger.info(f"Processing {ds_config['name']} ({assembly or 'current'})")
 
                 success = processor.process_dataset(
                     dataset=ds_config["name"],
@@ -1104,6 +1163,7 @@ def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bo
                     fasta_file=fasta_file,
                     blast_db=blast_db,
                     seq_type=ds_config["type"],
+                    assembly=assembly,
                 )
 
                 if success:
