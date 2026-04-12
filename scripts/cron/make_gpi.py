@@ -8,6 +8,10 @@ This script generates GPI 2.0 format files for submission to the GO Consortium.
 It outputs feature information including IDs, names, descriptions, aliases,
 SO type codes, taxon IDs, and UniProt cross-references.
 
+For diploid strains (C. albicans SC5314), two files are generated:
+- {strain}.gpi - A alleles only (backwards compatible)
+- {strain}_with_B_alleles.gpi - Both A and B alleles
+
 Validation checks before copying to final location:
 ---------------------------------------------------------------------------
 - Writes to temp directory first
@@ -75,6 +79,7 @@ MAX_FEATURE_CHANGE_PERCENT = 10.0  # Maximum allowed change from previous file
 # SO type codes for different feature types
 SO_CODE_FOR_TYPE = {
     "ORF": "SO:0001217",
+    "allele": "SO:0001217",  # B alleles use same SO code as ORF
     "ncRNA": "SO:0001263",
     "rRNA": "SO:0001263",
     "snRNA": "SO:0001263",
@@ -88,6 +93,7 @@ STRAIN_CONFIGS = {
     "C_albicans_SC5314": {
         "seq_source": "C. albicans SC5314 Assembly 22",
         "taxon_id": "237561",
+        "has_b_alleles": True,  # Diploid genome with A and B alleles
     },
     "C_dubliniensis_CD36": {
         "seq_source": "C. dubliniensis CD36",
@@ -212,8 +218,21 @@ def get_genome_version(session, seq_source: str) -> str | None:
     return result[0] if result else None
 
 
-def get_features(session, seq_source: str) -> list[dict]:
-    """Get features for GPI output."""
+def get_features(session, seq_source: str, include_alleles: bool = False) -> list[dict]:
+    """Get features for GPI output.
+
+    Args:
+        session: Database session
+        seq_source: Sequence source string
+        include_alleles: If True, include B allele features (for diploid genomes)
+    """
+    # Base feature types
+    feature_types = ['ORF', 'ncRNA', 'rRNA', 'snRNA', 'snoRNA', 'tRNA', 'pseudogene']
+    if include_alleles:
+        feature_types.append('allele')
+
+    feature_types_str = ", ".join(f"'{ft}'" for ft in feature_types)
+
     query = text(f"""
         SELECT f.feature_no, f.feature_name, f.dbxref_id, f.feature_type,
                f.gene_name, f.headline
@@ -221,7 +240,7 @@ def get_features(session, seq_source: str) -> list[dict]:
         JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
         JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
         JOIN {DB_SCHEMA}.genome_version gv ON (s.genome_version_no = gv.genome_version_no AND gv.is_ver_current = 'Y')
-        WHERE f.feature_type IN ('ORF', 'ncRNA', 'rRNA', 'snRNA', 'snoRNA', 'tRNA', 'pseudogene')
+        WHERE f.feature_type IN ({feature_types_str})
     """)
 
     result = session.execute(query, {"seq_source": seq_source})
@@ -286,6 +305,8 @@ def clean_description(headline: str | None) -> str:
 def generate_gpi(
     strain_abbrev: str,
     output_dir: Path | None = None,
+    include_alleles: bool = False,
+    file_suffix: str = "",
 ) -> bool:
     """
     Generate GPI file for a strain.
@@ -293,6 +314,8 @@ def generate_gpi(
     Args:
         strain_abbrev: Strain abbreviation (e.g., C_albicans_SC5314)
         output_dir: Output directory (default: DOWNLOAD_DIR/go)
+        include_alleles: If True, include B allele features
+        file_suffix: Optional suffix to add to filename (e.g., "_with_B_alleles")
 
     Returns:
         True on success, False on failure
@@ -311,7 +334,7 @@ def generate_gpi(
     output_dir.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    gpi_filename = f"{strain_abbrev}.gpi"
+    gpi_filename = f"{strain_abbrev}{file_suffix}.gpi"
     final_file = output_dir / gpi_filename
     today = datetime.now().strftime("%Y-%m-%d")
     today_tag = datetime.now().strftime("%Y%m%d")
@@ -329,8 +352,9 @@ def generate_gpi(
                 genome_version = "unknown"
 
             # Get features
-            features = get_features(session, seq_source)
-            logger.info(f"Found {len(features)} features for {strain_abbrev}")
+            features = get_features(session, seq_source, include_alleles=include_alleles)
+            allele_note = " (with B alleles)" if include_alleles else ""
+            logger.info(f"Found {len(features)} features for {strain_abbrev}{allele_note}")
 
             # Write GPI file to temp location
             with open(temp_file, "w") as f:
@@ -367,9 +391,9 @@ def generate_gpi(
                             name_list += " | "
                         name_list += alias
 
-                    # Get UniProt IDs (only for ORFs)
+                    # Get UniProt IDs (for ORFs and alleles)
                     up_list = ""
-                    if feature_type == "ORF":
+                    if feature_type in ("ORF", "allele"):
                         uniprot_ids = get_uniprot_ids(session, feature_no)
                         up_list = " | ".join(f"UniProtKB:{up}" for up in uniprot_ids)
 
@@ -397,7 +421,7 @@ def generate_gpi(
 
             # Archive existing file before replacing
             if final_file.exists():
-                archive_file = ARCHIVE_DIR / f"{strain_abbrev}_{today_tag}.gpi"
+                archive_file = ARCHIVE_DIR / f"{strain_abbrev}{file_suffix}_{today_tag}.gpi"
                 try:
                     shutil.copy(str(final_file), str(archive_file))
                     logger.info(f"Archived {final_file} to {archive_file}")
@@ -465,8 +489,20 @@ def main() -> int:
 
     success = True
     for strain in strains:
+        # Generate standard GPI file (A alleles only for diploids)
         if not generate_gpi(strain, args.output_dir):
             success = False
+
+        # For strains with B alleles, also generate a version with all alleles
+        config = STRAIN_CONFIGS.get(strain, {})
+        if config.get("has_b_alleles"):
+            if not generate_gpi(
+                strain,
+                args.output_dir,
+                include_alleles=True,
+                file_suffix="_with_B_alleles",
+            ):
+                success = False
 
     return 0 if success else 1
 
