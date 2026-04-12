@@ -621,13 +621,33 @@ def dump_gff(
                             f"{root_name}\t{source}\texon\t{sf_start}\t{sf_end}\t.\t{strand}\t.\t{exon_attr_str}\n"
                         )
                 else:
-                    # For tRNA, pseudogene, or ORF without subfeatures - single exon
-                    exon_id = f"{feature_name}-T-E1"
-                    exon_attrs = {"ID": exon_id, "Parent": transcript_id}
-                    exon_attr_str = format_gff_attributes(exon_attrs)
-                    output_file.write(
-                        f"{root_name}\t{source}\texon\t{start}\t{end}\t.\t{strand}\t.\t{exon_attr_str}\n"
-                    )
+                    # For non-ORF types, check for noncoding_exon subfeatures
+                    noncoding_exons = [sf for sf in subfeatures if sf["type"] == "noncoding_exon"]
+                    noncoding_exons.sort(key=lambda x: x["start"])
+
+                    if noncoding_exons:
+                        # Write exons from noncoding_exon subfeatures
+                        for i, sf in enumerate(noncoding_exons, 1):
+                            exon_id = f"{feature_name}-T-E{i}"
+                            exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+
+                            sf_start = sf["start"]
+                            sf_end = sf["end"]
+                            if sf_start > sf_end:
+                                sf_start, sf_end = sf_end, sf_start
+
+                            exon_attr_str = format_gff_attributes(exon_attrs)
+                            output_file.write(
+                                f"{root_name}\t{source}\texon\t{sf_start}\t{sf_end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+                            )
+                    else:
+                        # Single exon spanning the feature
+                        exon_id = f"{feature_name}-T-E1"
+                        exon_attrs = {"ID": exon_id, "Parent": transcript_id}
+                        exon_attr_str = format_gff_attributes(exon_attrs)
+                        output_file.write(
+                            f"{root_name}\t{source}\texon\t{start}\t{end}\t.\t{strand}\t.\t{exon_attr_str}\n"
+                        )
 
             # Write CDS lines for applicable types
             if original_feature_type in types_with_cds:
