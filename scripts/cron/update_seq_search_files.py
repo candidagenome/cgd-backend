@@ -1057,9 +1057,9 @@ def get_dataset_config(
         {"name": "other_features_no_introns", "source_type": "other_features_no_introns", "seq_type": "dna", "blast": False},
         {"name": "genomic", "source_type": "chromosomes", "seq_type": "dna", "blast": True},
         {"name": "not_feature", "source_type": "not_feature", "seq_type": "dna", "blast": False},
-        {"name": "default_coding", "source_type": "default_coding", "seq_type": "dna", "blast": False},
-        {"name": "default_genomic", "source_type": "default_genomic", "seq_type": "dna", "blast": False},
-        {"name": "default_protein", "source_type": "default_protein", "seq_type": "protein", "blast": False},
+        {"name": "default_coding", "source_type": "default_coding", "seq_type": "dna", "blast": True},
+        {"name": "default_genomic", "source_type": "default_genomic", "seq_type": "dna", "blast": True},
+        {"name": "default_protein", "source_type": "default_protein", "seq_type": "protein", "blast": True},
     ]
 
     datasets = []
