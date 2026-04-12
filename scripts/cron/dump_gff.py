@@ -374,11 +374,11 @@ def format_gff_attributes(attrs: dict) -> str:
     return ";".join(parts)
 
 
-def get_note_prefix(gene_name: str | None, aliases: list[str]) -> str:
+def get_note_prefix(gene_name: str | None, aliases: list[str], feature_name: str = "") -> str:
     """Get the note prefix (e.g., orf19.xxxx) from aliases.
 
-    The old format always uses orf19 identifiers in the Note prefix,
-    even when a gene name exists. This matches the old Perl script behavior.
+    The old format uses orf19 identifiers in the Note prefix when available.
+    For features without orf19 aliases (like LTRs), uses short aliases.
     """
     # Look for orf19 alias (prefer non-orf19.1xxxxx pattern first)
     for alias in aliases:
@@ -393,6 +393,27 @@ def get_note_prefix(gene_name: str | None, aliases: list[str]) -> str:
     # Fall back to gene_name if no orf19 alias
     if gene_name:
         return gene_name
+
+    # Fall back to short alias (not a systematic name like C1_xxxxx)
+    # Get the feature prefix (e.g., "C1_" from "C1_00260W_A")
+    feature_prefix = ""
+    if feature_name and "_" in feature_name:
+        feature_prefix = feature_name.split("_")[0] + "_"
+
+    short_aliases = []
+    for alias in aliases:
+        # Skip systematic names (start with feature prefix or contain numbers like CaO19)
+        if feature_prefix and alias.startswith(feature_prefix):
+            continue
+        if alias.startswith("CaO19.") or alias.startswith("IPF"):
+            continue
+        if alias.startswith("Contig") or alias.startswith("CAWG_"):
+            continue
+        short_aliases.append(alias)
+
+    # Return the last short alias (most specific, e.g., "beta-1b" over "beta")
+    if short_aliases:
+        return short_aliases[-1]
 
     return ""
 
@@ -513,7 +534,7 @@ def dump_gff(
                 orf_classification = match.group(1)
 
         # Build note with prefix
-        note_prefix = get_note_prefix(feat["gene_name"], aliases)
+        note_prefix = get_note_prefix(feat["gene_name"], aliases, feature_name)
         headline = feat["headline"] or ""
         headline = re.sub(r"<[^<>]+>", "", headline)  # Strip HTML tags
 
