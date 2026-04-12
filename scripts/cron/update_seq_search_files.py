@@ -90,6 +90,7 @@ MIN_SEQUENCES = {
     "1000_up": 100,
     "other_features_genomic": 10,
     "genomic": 5,  # Some assemblies have as few as 7-8 chromosomes
+    "mito_genomic": 1,  # Mito files may have just 1 sequence (mtDNA)
 }
 MAX_SEQUENCE_CHANGE_PERCENT = 10.0
 
@@ -110,6 +111,15 @@ STRAIN_ABBREVS = [
 STRAIN_ASSEMBLIES = {
     "C_albicans_SC5314": ["A22", "A21", "A19"],
 }
+
+# Datasets to skip for specific assemblies (to match legacy file set)
+ASSEMBLY_SKIP_DATASETS = {
+    "A19": ["default_coding", "default_genomic", "default_protein", "not_feature"],
+    "A21": ["default_coding", "default_genomic", "default_protein"],
+}
+
+# Assemblies that need mito FASTA file generation
+ASSEMBLY_MITO_FASTA = ["A19"]
 
 # Configure logging
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -686,6 +696,33 @@ class SequenceProcessor:
 
         return nuclear_count, mito_count
 
+    def create_mito_fasta(self, source_file: Path, output_file: Path) -> int:
+        """
+        Create a FASTA file containing only mitochondrial sequences.
+
+        Args:
+            source_file: Source gzipped FASTA file
+            output_file: Output FASTA file for mito sequences
+
+        Returns:
+            Number of mito sequences written
+        """
+        sequences = self.parse_fasta(source_file)
+        mito_count = 0
+
+        with open(output_file, "w") as f:
+            for seq in sequences:
+                if seq["id"] in self.mito_features:
+                    # Write sequence on single line (PatMatch format)
+                    if seq["desc"]:
+                        f.write(f">{seq['id']} {seq['desc']}\n")
+                    else:
+                        f.write(f">{seq['id']}\n")
+                    f.write(f"{seq['seq']}\n")
+                    mito_count += 1
+
+        return mito_count
+
     def process_dataset(
         self,
         dataset: str,
@@ -778,6 +815,20 @@ class SequenceProcessor:
                 self.seq_counts[display_name] = count
                 # Track for validation and copy (use display_name for validation messages)
                 self.pending_fasta_copies.append((temp_fasta_file, fasta_file, display_name))
+
+                # Generate mito FASTA for specific assemblies (e.g., A19)
+                if (dataset == "genomic" and assembly in ASSEMBLY_MITO_FASTA
+                        and self.mito_features):
+                    mito_fasta_name = f"mito_{fasta_file.name}"
+                    mito_fasta_file = fasta_file.parent / mito_fasta_name
+                    temp_mito_fasta = self.temp_fasta_dir / mito_fasta_name
+                    mito_count = self.create_mito_fasta(source_file, temp_mito_fasta)
+                    if mito_count > 0:
+                        mito_display = f"mito_{display_name}"
+                        self.seq_counts[mito_display] = mito_count
+                        self.pending_fasta_copies.append((temp_mito_fasta, mito_fasta_file, mito_display))
+                        self.log(f"Created mito FASTA with {mito_count} sequences")
+
             except Exception as e:
                 self.log_error(f"Error reformatting {dataset}: {e}")
                 success = False
@@ -1012,19 +1063,26 @@ def get_dataset_config(
 
     datasets = []
 
+    # Get datasets to skip for this assembly
+    skip_datasets = ASSEMBLY_SKIP_DATASETS.get(assembly, []) if assembly else []
+
     for dt in dataset_types:
+        # Skip datasets not needed for this assembly
+        if dt["name"] in skip_datasets:
+            continue
+
         source_file = find_source_file(download_dir, strain_abbrev, dt["source_type"], assembly)
         if not source_file:
             continue
 
-        assembly, is_assembly_format = get_assembly_abbrev(source_file)
+        file_assembly, is_assembly_format = get_assembly_abbrev(source_file)
 
         # Output filenames:
         # - Assembly format (A22): {type}_{strain}_{assembly}.fasta
         # - Direct format: {type}_{strain}.fasta (no version suffix, legacy naming)
         if is_assembly_format:
-            fasta_name = f"{dt['name']}_{strain_abbrev}_{assembly}.fasta"
-            blast_name = f"{dt['name']}_{strain_abbrev}_{assembly}" if dt["blast"] else None
+            fasta_name = f"{dt['name']}_{strain_abbrev}_{file_assembly}.fasta"
+            blast_name = f"{dt['name']}_{strain_abbrev}_{file_assembly}" if dt["blast"] else None
         else:
             fasta_name = f"{dt['name']}_{strain_abbrev}.fasta"
             blast_name = f"{dt['name']}_{strain_abbrev}" if dt["blast"] else None
@@ -1035,7 +1093,7 @@ def get_dataset_config(
             "fasta": fasta_name,
             "blast": blast_name,
             "type": dt["seq_type"],
-            "assembly": assembly if assembly else "current",
+            "assembly": file_assembly if file_assembly else "current",
         })
 
     return datasets
@@ -1048,8 +1106,8 @@ def get_mito_features(session, strain_abbrev: str) -> list[str]:
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
         WHERE o.organism_abbrev = :strain_abbrev
-        AND f.feature_type = 'chromosome'
-        AND UPPER(f.feature_name) LIKE '%MITO%'
+        AND f.feature_type IN ('chromosome', 'contig')
+        AND (UPPER(f.feature_name) LIKE '%MITO%' OR UPPER(f.feature_name) LIKE '%MTDNA%')
     """)
 
     result = session.execute(query, {"strain_abbrev": strain_abbrev})
