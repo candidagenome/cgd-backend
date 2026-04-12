@@ -6,6 +6,15 @@ This script creates EMBL format files containing chromosome sequences with
 ORF feature annotations. Each chromosome/contig gets its own EMBL file
 with gene, mRNA, and CDS features for all ORFs.
 
+Validation checks before copying to final location:
+---------------------------------------------------------------------------
+- Writes to temp directory first
+- Validates minimum feature count (10+ per chromosome)
+- Checks total feature count change < 10% vs existing files
+- Only copies to final location if validation passes
+- Archives existing files before replacing
+- Sends Slack notifications on success or failure
+
 Based on makeEmblFiles.pl by Prachi Shah (Jun 2011).
 
 Usage:
@@ -19,13 +28,19 @@ Environment Variables:
     PROJECT_ACRONYM: Project acronym (CGD or AspGD)
     DOWNLOAD_DIR: Directory for output files
     LOG_DIR: Directory for log files
+    SLACK_WEBHOOK_URL: Slack webhook URL for notifications
+    ENV_STATE: Environment state (dev/prod) for Slack labels
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -48,6 +63,14 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 PROJECT_ACRONYM = os.getenv("PROJECT_ACRONYM", "CGD")
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(PROJECT_ROOT / "data")))
 LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+
+# Slack webhook for notifications
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+ENV_STATE = os.getenv("ENV_STATE", "dev")
+
+# Validation thresholds
+MIN_FEATURES_PER_CHR = 10  # Minimum features expected per chromosome
+MAX_FEATURE_CHANGE_PERCENT = 10.0  # Maximum allowed change from previous files
 
 # Translation tables (genetic code)
 DEFAULT_NUCLEAR_TRANS_TABLE = 12  # Alternative yeast nuclear code
@@ -78,6 +101,94 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def send_slack_message(message: str, is_error: bool = False) -> None:
+    """Send a message to Slack webhook."""
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping notification")
+        return
+
+    emoji = ":x:" if is_error else ":white_check_mark:"
+    env_prefix = f"[{ENV_STATE.upper()}] " if ENV_STATE != "prod" else ""
+
+    payload = {
+        "text": f"{emoji} {env_prefix}EMBL Generation: {message}"
+    }
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SLACK_WEBHOOK_URL,
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status != 200:
+                logger.warning(f"Slack notification failed: {response.status}")
+    except Exception as e:
+        logger.warning(f"Failed to send Slack notification: {e}")
+
+
+def count_features_in_embl(file_path: Path) -> int:
+    """Count gene features in an EMBL file."""
+    if not file_path.exists():
+        return 0
+
+    count = 0
+    with open(file_path) as f:
+        for line in f:
+            # Count gene features (each ORF has gene, mRNA, CDS - count gene only)
+            if line.startswith("FT   gene "):
+                count += 1
+    return count
+
+
+def count_features_in_directory(dir_path: Path) -> int:
+    """Count total features across all EMBL files in a directory."""
+    if not dir_path.exists():
+        return 0
+
+    total = 0
+    for embl_file in dir_path.glob("*.embl"):
+        total += count_features_in_embl(embl_file)
+    return total
+
+
+def validate_embl_files(
+    temp_dir: Path,
+    existing_dir: Path | None,
+    strain_abbrev: str,
+) -> tuple[bool, str]:
+    """
+    Validate generated EMBL files.
+
+    Returns:
+        Tuple of (is_valid, message)
+    """
+    # Count features in new files
+    new_count = count_features_in_directory(temp_dir)
+
+    # Check minimum features
+    if new_count < MIN_FEATURES_PER_CHR:
+        return False, (
+            f"Too few features for {strain_abbrev}: {new_count} "
+            f"(minimum: {MIN_FEATURES_PER_CHR})"
+        )
+
+    # Check against existing files if present
+    if existing_dir and existing_dir.exists():
+        existing_count = count_features_in_directory(existing_dir)
+        if existing_count > 0:
+            change_pct = abs(new_count - existing_count) / existing_count * 100
+            if change_pct > MAX_FEATURE_CHANGE_PERCENT:
+                return False, (
+                    f"Feature count changed too much for {strain_abbrev}: "
+                    f"{existing_count} -> {new_count} ({change_pct:.1f}% "
+                    f"change, max: {MAX_FEATURE_CHANGE_PERCENT}%)"
+                )
+
+    return True, f"Validation passed for {strain_abbrev}: {new_count} features"
 
 
 def get_strain_config(session, strain_abbrev: str) -> dict | None:
@@ -464,7 +575,7 @@ def write_embl_file(
 
 def make_embl_files(strain_abbrev: str, output_dir: Path | None = None) -> tuple[bool, dict]:
     """
-    Generate EMBL files for a strain.
+    Generate EMBL files for a strain with validation and safety checks.
 
     Returns tuple of (success, stats_dict).
     """
@@ -484,42 +595,53 @@ def make_embl_files(strain_abbrev: str, output_dir: Path | None = None) -> tuple
     logger.info(f"Generating EMBL files for {strain_abbrev}")
     logger.info(f"Started: {datetime.now()}")
 
+    # Create temp directory for safe generation
+    temp_dir = Path(tempfile.mkdtemp(prefix="embl_"))
+
     try:
         with SessionLocal() as session:
             # Get strain config
             config = get_strain_config(session, strain_abbrev)
             if not config:
-                logger.error(f"Strain not found: {strain_abbrev}")
+                error_msg = f"Strain not found: {strain_abbrev}"
+                logger.error(error_msg)
                 stats["errors"].append("Strain not found in database")
+                send_slack_message(error_msg, is_error=True)
                 return False, stats
 
             seq_source = config["seq_source"]
             if not seq_source:
-                logger.error(f"No seq_source found for {strain_abbrev}")
+                error_msg = f"No seq_source found for {strain_abbrev}"
+                logger.error(error_msg)
                 stats["errors"].append("No seq_source found")
+                send_slack_message(error_msg, is_error=True)
                 return False, stats
 
             logger.info(f"Seq source: {seq_source}")
 
-            # Determine output directory
+            # Determine final output directory
             if output_dir:
-                out_dir = output_dir
+                final_dir = output_dir
             else:
                 # Default: DOWNLOAD_DIR/embl/{strain}/
-                out_dir = DOWNLOAD_DIR / "embl" / strain_abbrev
+                final_dir = DOWNLOAD_DIR / "embl" / strain_abbrev
 
-            out_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Output directory: {out_dir}")
+            # Create temp subdirectory for this strain
+            temp_strain_dir = temp_dir / strain_abbrev
+            temp_strain_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Temp directory: {temp_strain_dir}")
+            logger.info(f"Final directory: {final_dir}")
 
             # Get chromosomes
             chromosomes = get_chromosomes(session, seq_source)
             logger.info(f"Found {len(chromosomes)} chromosomes/contigs")
             stats["chromosomes"] = len(chromosomes)
 
+            # Write files to temp directory
             total_features = 0
             for chr_name, chr_type in chromosomes.items():
-                output_file = out_dir / f"{chr_name}.embl"
-                logger.info(f"Writing {output_file}")
+                temp_file = temp_strain_dir / f"{chr_name}.embl"
+                logger.info(f"Writing {temp_file}")
 
                 try:
                     count = write_embl_file(
@@ -527,7 +649,7 @@ def make_embl_files(strain_abbrev: str, output_dir: Path | None = None) -> tuple
                         chr_name,
                         chr_type,
                         seq_source,
-                        output_file,
+                        temp_file,
                         strain_abbrev,
                     )
                     logger.info(f"  {count} features written")
@@ -537,19 +659,73 @@ def make_embl_files(strain_abbrev: str, output_dir: Path | None = None) -> tuple
                     stats["errors"].append(f"Error writing {chr_name}: {e}")
 
             stats["features"] = total_features
+
+            if stats["errors"]:
+                error_msg = f"Errors generating EMBL for {strain_abbrev}: {len(stats['errors'])} errors"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                return False, stats
+
+            # Validate the generated files
+            is_valid, validation_msg = validate_embl_files(
+                temp_strain_dir,
+                final_dir if final_dir.exists() else None,
+                strain_abbrev,
+            )
+
+            if not is_valid:
+                error_msg = f"Validation failed: {validation_msg}"
+                logger.error(error_msg)
+                send_slack_message(error_msg, is_error=True)
+                stats["errors"].append(validation_msg)
+                return False, stats
+
+            logger.info(validation_msg)
+
+            # Archive existing files before replacing
+            if final_dir.exists():
+                archive_dir = final_dir / "archive"
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                today_tag = datetime.now().strftime("%Y%m%d")
+
+                for embl_file in final_dir.glob("*.embl"):
+                    archive_file = archive_dir / f"{embl_file.stem}_{today_tag}.embl"
+                    try:
+                        shutil.copy(str(embl_file), str(archive_file))
+                        logger.info(f"Archived {embl_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Could not archive {embl_file}: {e}")
+
+            # Copy validated files to final location
+            final_dir.mkdir(parents=True, exist_ok=True)
+            for temp_file in temp_strain_dir.glob("*.embl"):
+                final_file = final_dir / temp_file.name
+                shutil.copy(str(temp_file), str(final_file))
+
+            logger.info(f"Copied {len(chromosomes)} files to {final_dir}")
             logger.info(f"Total: {total_features} features across {len(chromosomes)} files")
             logger.info(f"Completed: {datetime.now()}")
 
-            print(f"{strain_abbrev}: {len(chromosomes)} chromosomes, {total_features} features")
+            print(f"*{strain_abbrev}*: {len(chromosomes)} chromosomes, {total_features} features")
 
-        return len(stats["errors"]) == 0, stats
+            # Send success notification
+            send_slack_message(
+                f"Successfully generated EMBL for {strain_abbrev}: "
+                f"{len(chromosomes)} chromosomes, {total_features} features"
+            )
+
+        return True, stats
 
     except Exception as e:
         logger.exception(f"Error: {e}")
         stats["errors"].append(str(e))
+        send_slack_message(f"Error generating EMBL for {strain_abbrev}: {e}", is_error=True)
         return False, stats
 
     finally:
+        # Clean up temp directory
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
         logger.removeHandler(file_handler)
         file_handler.close()
 
