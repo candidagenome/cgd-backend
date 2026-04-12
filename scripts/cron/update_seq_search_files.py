@@ -90,7 +90,7 @@ MIN_SEQUENCES = {
     "1000_up": 100,
     "other_features_genomic": 10,
     "genomic": 5,  # Some assemblies have as few as 7-8 chromosomes
-    "mito_genomic": 1,  # Mito files may have just 1 sequence (mtDNA)
+    "mito": 1,  # Mito files may have just 1 sequence (mtDNA)
 }
 MAX_SEQUENCE_CHANGE_PERCENT = 10.0
 
@@ -819,12 +819,13 @@ class SequenceProcessor:
                 # Generate mito FASTA for specific assemblies (e.g., A19)
                 if (dataset == "genomic" and assembly in ASSEMBLY_MITO_FASTA
                         and self.mito_features):
-                    mito_fasta_name = f"mito_{fasta_file.name}"
+                    # Use legacy naming: mito_{strain}_{assembly}.fasta (not mito_genomic_...)
+                    mito_fasta_name = f"mito_{self.strain_abbrev}_{assembly}.fasta"
                     mito_fasta_file = fasta_file.parent / mito_fasta_name
                     temp_mito_fasta = self.temp_fasta_dir / mito_fasta_name
                     mito_count = self.create_mito_fasta(source_file, temp_mito_fasta)
                     if mito_count > 0:
-                        mito_display = f"mito_{display_name}"
+                        mito_display = f"mito_{assembly}"
                         self.seq_counts[mito_display] = mito_count
                         self.pending_fasta_copies.append((temp_mito_fasta, mito_fasta_file, mito_display))
                         self.log(f"Created mito FASTA with {mito_count} sequences")
