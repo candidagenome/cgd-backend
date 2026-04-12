@@ -844,59 +844,125 @@ class SequenceProcessor:
         self.log(f"Wrote sequence counts to {output_file}")
 
 
-def get_dataset_config(strain_abbrev: str) -> list[dict]:
+def find_source_file(download_dir: Path, strain_abbrev: str, file_type: str) -> Path | None:
+    """
+    Find source file in Assembly/current/ or direct current/ directory.
+
+    Source files from dump_sequence.py have versioned names like:
+    - C_albicans_SC5314_version_A22-s08-m01-r36_orf_coding.fasta.gz (Assembly format)
+    - C_dubliniensis_CD36_version_s01-m04-r07_orf_coding.fasta.gz (direct format)
+
+    Args:
+        download_dir: Base download directory for the strain
+        strain_abbrev: Strain abbreviation
+        file_type: File type to find (e.g., 'orf_coding', 'chromosomes')
+
+    Returns:
+        Path to source file or None if not found
+    """
+    # Pattern to match: {strain}_version_*_{file_type}.fasta.gz
+    pattern = f"{strain_abbrev}_version_*_{file_type}.fasta.gz"
+
+    # First, try Assembly directories (sorted in reverse to get latest first)
+    for assembly_dir in sorted(download_dir.glob("Assembly*"), reverse=True):
+        current_dir = assembly_dir / "current"
+        if not current_dir.exists():
+            continue
+
+        matches = list(current_dir.glob(pattern))
+        if matches:
+            return matches[0]
+
+    # Second, try direct current/ directory (for strains without Assembly prefix)
+    current_dir = download_dir / "current"
+    if current_dir.exists():
+        matches = list(current_dir.glob(pattern))
+        if matches:
+            return matches[0]
+
+    return None
+
+
+def get_assembly_abbrev(source_file: Path) -> str:
+    """
+    Extract assembly abbreviation from versioned filename.
+
+    E.g., from 'C_albicans_SC5314_version_A22-s08-m01-r36_orf_coding.fasta.gz'
+    extracts 'A22'
+
+    For files without assembly prefix (e.g., 'C_dubliniensis_CD36_version_s01-m04-r07_orf_coding.fasta.gz')
+    extracts version info like 's01'
+
+    Returns:
+        Assembly abbreviation like 'A22' or 's01'
+    """
+    name = source_file.name
+    # Pattern 1: ..._version_A22-..._... (assembly format)
+    match = re.search(r"_version_(A\d+)-", name)
+    if match:
+        return match.group(1)
+
+    # Pattern 2: ..._version_s##-m##-r##_... (direct format without assembly)
+    match = re.search(r"_version_(s\d+)-", name)
+    if match:
+        return match.group(1)
+
+    return ""
+
+
+def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
     """
     Get dataset configuration for a strain.
 
-    Source file names match those produced by dump_sequence.py.
+    Finds source files in Assembly/current/ directories and configures
+    output filenames with assembly info.
 
-    Returns list of dataset configurations.
+    Args:
+        strain_abbrev: Strain abbreviation
+        download_dir: Base download directory for the strain
+
+    Returns:
+        List of dataset configurations
     """
-    # Datasets matching dump_sequence.py output
-    datasets = [
-        {
-            "name": "orf_coding",
-            "source": "orf_coding.fasta",  # from dump_sequence.py
-            "fasta": f"{strain_abbrev}_orf_coding.fasta",
-            "blast": f"{strain_abbrev}_orf_coding",
-            "type": "dna",
-        },
-        {
-            "name": "orf_trans",
-            "source": "orf_trans_all.fasta",  # from dump_sequence.py
-            "fasta": f"{strain_abbrev}_orf_trans.fasta",
-            "blast": f"{strain_abbrev}_orf_trans",
-            "type": "protein",
-        },
-        {
-            "name": "orf_genomic",
-            "source": "orf_genomic.fasta",  # from dump_sequence.py
-            "fasta": f"{strain_abbrev}_orf_genomic.fasta",
-            "blast": f"{strain_abbrev}_orf_genomic",
-            "type": "dna",
-        },
-        {
-            "name": "1000_up",
-            "source": "orf_genomic_1000.fasta",  # from dump_sequence.py (1000bp flanking)
-            "fasta": f"{strain_abbrev}_1000_up.fasta",
-            "blast": None,
-            "type": "dna",
-        },
-        {
-            "name": "other_features",
-            "source": "other_features_genomic.fasta",  # from dump_sequence.py
-            "fasta": f"{strain_abbrev}_other_features.fasta",
-            "blast": None,
-            "type": "dna",
-        },
-        {
-            "name": "genomic",
-            "source": f"{strain_abbrev}_chromosomes.fasta",  # from dump_sequence.py
-            "fasta": None,
-            "blast": f"{strain_abbrev}_genomic",
-            "type": "dna",
-        },
+    # Dataset types to process
+    dataset_types = [
+        {"name": "orf_coding", "source_type": "orf_coding", "seq_type": "dna", "blast": True},
+        {"name": "orf_trans", "source_type": "orf_trans_all", "seq_type": "protein", "blast": True},
+        {"name": "orf_genomic", "source_type": "orf_genomic", "seq_type": "dna", "blast": True},
+        {"name": "orf_genomic_1000", "source_type": "orf_genomic_1000", "seq_type": "dna", "blast": False},
+        {"name": "other_features", "source_type": "other_features_genomic", "seq_type": "dna", "blast": False},
+        {"name": "other_features_genomic_1000", "source_type": "other_features_genomic_1000", "seq_type": "dna", "blast": False},
+        {"name": "other_features_no_introns", "source_type": "other_features_no_introns", "seq_type": "dna", "blast": False},
+        {"name": "genomic", "source_type": "chromosomes", "seq_type": "dna", "blast": True},
+        {"name": "not_feature", "source_type": "not_feature", "seq_type": "dna", "blast": False},
+        {"name": "default_coding", "source_type": "default_coding", "seq_type": "dna", "blast": False},
+        {"name": "default_genomic", "source_type": "default_genomic", "seq_type": "dna", "blast": False},
+        {"name": "default_protein", "source_type": "default_protein", "seq_type": "protein", "blast": False},
     ]
+
+    datasets = []
+
+    for dt in dataset_types:
+        source_file = find_source_file(download_dir, strain_abbrev, dt["source_type"])
+        if not source_file:
+            continue
+
+        assembly = get_assembly_abbrev(source_file)
+        if not assembly:
+            continue
+
+        # Output filenames match existing pattern: {type}_{strain}_{assembly}.fasta
+        fasta_name = f"{dt['name']}_{strain_abbrev}_{assembly}.fasta"
+        blast_name = f"{dt['name']}_{strain_abbrev}_{assembly}" if dt["blast"] else None
+
+        datasets.append({
+            "name": dt["name"],
+            "source": source_file,
+            "fasta": fasta_name,
+            "blast": blast_name,
+            "type": dt["seq_type"],
+            "assembly": assembly,
+        })
 
     return datasets
 
@@ -975,18 +1041,20 @@ def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bo
             mito_features = get_mito_features(session, strain_abbrev)
             processor.identify_mito_features(mito_features)
 
-            # Get dataset configuration
-            datasets = get_dataset_config(strain_abbrev)
+            # Get dataset configuration - finds source files in Assembly/current/
+            datasets = get_dataset_config(strain_abbrev, processor.download_dir)
+
+            if not datasets:
+                logger.error(f"No source files found for {strain_abbrev}")
+                stats["errors"].append("No source files found in any Assembly/current/ directory")
+                return False, stats
+
+            logger.info(f"Found {len(datasets)} datasets to process")
 
             # Process each dataset (writes to temp directory)
             for ds_config in datasets:
-                # Try both plain and gzipped versions of source file
-                source_file = processor.download_dir / ds_config["source"]
-                if not source_file.exists():
-                    # Try gzipped version
-                    source_file_gz = processor.download_dir / f"{ds_config['source']}.gz"
-                    if source_file_gz.exists():
-                        source_file = source_file_gz
+                # Source file is already a full Path from get_dataset_config
+                source_file = ds_config["source"]
 
                 fasta_file = (
                     processor.fasta_dir / ds_config["fasta"]
@@ -998,6 +1066,8 @@ def update_seq_search_files(strain_abbrev: str, force: bool = False) -> tuple[bo
                     if ds_config["blast"]
                     else None
                 )
+
+                logger.info(f"Processing {ds_config['name']} ({ds_config.get('assembly', 'unknown')})")
 
                 success = processor.process_dataset(
                     dataset=ds_config["name"],
