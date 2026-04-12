@@ -85,10 +85,10 @@ ENV_STATE = os.getenv("ENV_STATE", "dev")
 # Validation thresholds
 MIN_SEQUENCES = {
     "orf_coding": 100,
-    "orf_trans": 100,
+    "orf_trans_all": 100,
     "orf_genomic": 100,
     "1000_up": 100,
-    "other_features": 10,
+    "other_features_genomic": 10,
     "genomic": 5,
 }
 MAX_SEQUENCE_CHANGE_PERCENT = 10.0
@@ -952,10 +952,10 @@ def get_dataset_config(strain_abbrev: str, download_dir: Path) -> list[dict]:
     # Dataset types to process
     dataset_types = [
         {"name": "orf_coding", "source_type": "orf_coding", "seq_type": "dna", "blast": True},
-        {"name": "orf_trans", "source_type": "orf_trans_all", "seq_type": "protein", "blast": True},
+        {"name": "orf_trans_all", "source_type": "orf_trans_all", "seq_type": "protein", "blast": True},
         {"name": "orf_genomic", "source_type": "orf_genomic", "seq_type": "dna", "blast": True},
         {"name": "orf_genomic_1000", "source_type": "orf_genomic_1000", "seq_type": "dna", "blast": False},
-        {"name": "other_features", "source_type": "other_features_genomic", "seq_type": "dna", "blast": False},
+        {"name": "other_features_genomic", "source_type": "other_features_genomic", "seq_type": "dna", "blast": False},
         {"name": "other_features_genomic_1000", "source_type": "other_features_genomic_1000", "seq_type": "dna", "blast": False},
         {"name": "other_features_no_introns", "source_type": "other_features_no_introns", "seq_type": "dna", "blast": False},
         {"name": "genomic", "source_type": "chromosomes", "seq_type": "dna", "blast": True},
