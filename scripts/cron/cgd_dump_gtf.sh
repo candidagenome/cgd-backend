@@ -19,41 +19,11 @@ fi
 # Change to project root for relative paths to work
 cd "$PROJECT_ROOT"
 
-# Output directory
-OUTPUT_DIR="${DOWNLOAD_DIR:-$PROJECT_ROOT/data}/gtf"
-mkdir -p "$OUTPUT_DIR"
-
 echo "CGD GTF Dump"
 echo "Generated: $(date)"
-echo "Output directory: $OUTPUT_DIR"
 echo "========================================"
 
-# Track errors but continue processing all species
-errors=0
+# Run the GTF dump script for all strains
+python3 "$SCRIPT_DIR/dump_gtf.py" --all
 
-run_dump() {
-    local strain=$1
-    echo ""
-    echo "Dumping $strain..."
-    if ! python3 "$SCRIPT_DIR/dump_gtf.py" "$strain" --output "$OUTPUT_DIR/${strain}.gtf" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
-        echo "ERROR: Failed to dump $strain"
-        errors=$((errors + 1))
-    fi
-}
-
-run_dump C_albicans_SC5314
-run_dump C_dubliniensis_CD36
-run_dump C_glabrata_CBS138
-run_dump C_parapsilosis_CDC317
-run_dump C_auris_B8441
-
-echo ""
-echo "========================================"
-
-if [ $errors -gt 0 ]; then
-    echo "ERROR: $errors species failed"
-    exit 1
-fi
-
-echo "All GTF dumps completed successfully."
-exit 0
+exit $?
