@@ -364,10 +364,47 @@ def dump_gtf(
         # Build attribute string
         attr = f'gene_id "{feature_name}"; transcript_id "{transcript_id}";'
 
+        # Calculate frames for multi-exon genes
+        # Frame indicates how many bases to skip to reach first complete codon
+        # For + strand: accumulate from 5' end (first exon)
+        # For - strand: accumulate from 3' end (last exon in coordinate order)
+        if strand == "+":
+            # Calculate frames from 5' to 3' (first to last exon)
+            frames = []
+            cumulative_length = 0
+            for i, sf in enumerate(subfeatures):
+                cds_start = sf["start"]
+                cds_end = sf["end"]
+                if i == len(subfeatures) - 1:
+                    # Last exon: exclude stop codon from length
+                    exon_length = (cds_end - 3) - cds_start + 1
+                else:
+                    exon_length = cds_end - cds_start + 1
+                frame = cumulative_length % 3
+                frames.append(frame)
+                cumulative_length += exon_length
+        else:
+            # For - strand: calculate from 3' to 5' (last to first in coord order)
+            frames = [0] * len(subfeatures)
+            cumulative_length = 0
+            for i in range(len(subfeatures) - 1, -1, -1):
+                sf = subfeatures[i]
+                cds_start = sf["start"]
+                cds_end = sf["end"]
+                if i == 0:
+                    # First exon in coord order (3' end): exclude stop codon
+                    exon_length = cds_end - (cds_start + 3) + 1
+                else:
+                    exon_length = cds_end - cds_start + 1
+                frame = cumulative_length % 3
+                frames[i] = frame
+                cumulative_length += exon_length
+
         # For each CDS segment, output start_codon, CDS, stop_codon
         for i, sf in enumerate(subfeatures):
             cds_start = sf["start"]
             cds_end = sf["end"]
+            frame = frames[i]
 
             if strand == "+":
                 # First segment has start codon
@@ -383,7 +420,7 @@ def dump_gtf(
                     # CDS without stop codon
                     output_file.write(
                         f"{chr_name}\t{source}\tCDS\t{cds_start}\t{cds_end - 3}\t.\t"
-                        f"{strand}\t0\t{attr}\n"
+                        f"{strand}\t{frame}\t{attr}\n"
                     )
                     # Stop codon (last 3 bases)
                     output_file.write(
@@ -394,7 +431,7 @@ def dump_gtf(
                     # Full CDS for non-last segments
                     output_file.write(
                         f"{chr_name}\t{source}\tCDS\t{cds_start}\t{cds_end}\t.\t"
-                        f"{strand}\t0\t{attr}\n"
+                        f"{strand}\t{frame}\t{attr}\n"
                     )
 
             else:  # strand == "-"
@@ -408,13 +445,13 @@ def dump_gtf(
                     # CDS without stop codon
                     output_file.write(
                         f"{chr_name}\t{source}\tCDS\t{cds_start + 3}\t{cds_end}\t.\t"
-                        f"{strand}\t0\t{attr}\n"
+                        f"{strand}\t{frame}\t{attr}\n"
                     )
                 else:
                     # Full CDS for non-first segments
                     output_file.write(
                         f"{chr_name}\t{source}\tCDS\t{cds_start}\t{cds_end}\t.\t"
-                        f"{strand}\t0\t{attr}\n"
+                        f"{strand}\t{frame}\t{attr}\n"
                     )
 
                 # Last segment (highest coordinates) has start codon
