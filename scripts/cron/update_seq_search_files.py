@@ -119,7 +119,7 @@ ASSEMBLY_SKIP_DATASETS = {
 }
 
 # Assemblies that need mito FASTA file generation
-ASSEMBLY_MITO_FASTA = ["A19"]
+ASSEMBLY_MITO_FASTA = ["A22", "A21", "A19"]
 
 # Configure logging
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1052,9 +1052,9 @@ def get_dataset_config(
         {"name": "orf_trans_all", "source_type": "orf_trans_all", "seq_type": "protein", "blast": True},
         {"name": "orf_genomic", "source_type": "orf_genomic", "seq_type": "dna", "blast": True},
         {"name": "orf_genomic_1000", "source_type": "orf_genomic_1000", "seq_type": "dna", "blast": False},
-        {"name": "other_features_genomic", "source_type": "other_features_genomic", "seq_type": "dna", "blast": False},
+        {"name": "other_features_genomic", "source_type": "other_features_genomic", "seq_type": "dna", "blast": True},
         {"name": "other_features_genomic_1000", "source_type": "other_features_genomic_1000", "seq_type": "dna", "blast": False},
-        {"name": "other_features_no_introns", "source_type": "other_features_no_introns", "seq_type": "dna", "blast": False},
+        {"name": "other_features_no_introns", "source_type": "other_features_no_introns", "seq_type": "dna", "blast": True},
         {"name": "genomic", "source_type": "chromosomes", "seq_type": "dna", "blast": True},
         {"name": "not_feature", "source_type": "not_feature", "seq_type": "dna", "blast": False},
         {"name": "default_coding", "source_type": "default_coding", "seq_type": "dna", "blast": True},
