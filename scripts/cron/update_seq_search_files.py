@@ -182,8 +182,8 @@ def validate_fasta_file(
         return False, f"Output file does not exist: {new_file}"
 
     new_count = count_sequences_in_file(new_file)
-    # Strip assembly suffix (A##) for MIN_SEQUENCES lookup
-    base_dataset = re.sub(r"_A\d+$", "", dataset)
+    # Strip assembly suffix (A## or _current) for MIN_SEQUENCES lookup
+    base_dataset = re.sub(r"_(A\d+|current)$", "", dataset)
     min_count = MIN_SEQUENCES.get(base_dataset, 10)
 
     if new_count < min_count:
