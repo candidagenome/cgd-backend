@@ -115,16 +115,24 @@ def send_slack_message(message: str, is_error: bool = False) -> None:
 
 
 def count_features_in_file(file_path: Path) -> int:
-    """Count feature lines in a GTF file."""
+    """Count unique features (gene_ids) in a GTF file."""
     if not file_path.exists():
         return 0
 
-    count = 0
+    gene_ids = set()
     with open(file_path) as f:
         for line in f:
             if line.strip() and not line.startswith("#"):
-                count += 1
-    return count
+                # Extract gene_id from attributes column
+                parts = line.split("\t")
+                if len(parts) >= 9:
+                    attrs = parts[8]
+                    # Parse gene_id "value"; format
+                    if 'gene_id "' in attrs:
+                        start = attrs.index('gene_id "') + 9
+                        end = attrs.index('"', start)
+                        gene_ids.add(attrs[start:end])
+    return len(gene_ids)
 
 
 def validate_output_file(
