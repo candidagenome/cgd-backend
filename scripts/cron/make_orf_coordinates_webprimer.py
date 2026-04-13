@@ -78,14 +78,17 @@ def get_non_standard_genes(session) -> set[str]:
 
 
 def get_strains_with_seq_source(session) -> list[tuple[int, str, str]]:
-    """Get all strains with their seq_source."""
+    """Get strains with their seq_source.
+
+    Only returns C_albicans_SC5314 as web-primer is only used for this strain.
+    """
     strains = []
 
-    # Get all strains
+    # Only get C_albicans_SC5314 (web-primer is only used for this strain)
     strain_query = text(f"""
         SELECT organism_no, organism_abbrev
         FROM {DB_SCHEMA}.organism
-        WHERE organism_abbrev IS NOT NULL
+        WHERE organism_abbrev = 'C_albicans_SC5314'
     """)
 
     for row in session.execute(strain_query).fetchall():
