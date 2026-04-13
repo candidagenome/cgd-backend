@@ -1,0 +1,38 @@
+# CGD Backend Cron Jobs
+# ======================
+
+# TWICE DAILY (7 AM and 7 PM UTC): Curl-based smoke tests
+0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://www.candidagenome.org/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50
+
+# EVERY 6 HOURS: Playwright smoke tests
+0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50
+
+# DAILY
+0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh
+0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_reindex_elasticsearch.sh
+0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
+
+# TUESDAY (Wednesday 00:00 UTC)
+0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh
+
+# SATURDAY - Reports and publications
+0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh
+0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
+
+# SUNDAY - Data dumps and updates (ordered by dependency)
+# Phase 1: Generate source files (GFF, sequences, etc.)
+0 1 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh
+0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh
+0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
+0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh
+
+# Phase 2: Process generated files (depends on Phase 1)
+0 6 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh
+0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
+0 9 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh
+0 10 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh
+
+# Phase 3: Other weekly tasks
+0 11 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
+0 12 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
+0 13 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
