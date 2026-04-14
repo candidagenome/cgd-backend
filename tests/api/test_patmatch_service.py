@@ -22,6 +22,7 @@ from cgd.core.patmatch_config import (
     get_reverse_complement,
     get_dataset_config,
     PATMATCH_DATASETS,
+    _convert_repetitions,
 )
 from cgd.schemas.patmatch_schema import (
     PatternType as SchemaPatternType,
@@ -123,6 +124,111 @@ class TestPatternConversion:
         """Protein pattern with B/Z codes should expand."""
         result = convert_pattern_for_nrgrep("MBAZ", PatternType.PROTEIN)
         assert result == "M[DN]A[EQ]"
+
+
+class TestRepetitionConversion:
+    """Tests for PatMatch repetition syntax conversion."""
+
+    def test_no_repetition_unchanged(self):
+        """Pattern without repetition should pass through unchanged."""
+        assert _convert_repetitions("ATGC") == "ATGC"
+        assert _convert_repetitions("[ST]QPKA") == "[ST]QPKA"
+
+    def test_exact_repetition(self):
+        """Test {m} exact repetition."""
+        assert _convert_repetitions("A{2}") == "AA"
+        assert _convert_repetitions("A{3}") == "AAA"
+        assert _convert_repetitions("G{1}") == "G"
+
+    def test_optional_repetition(self):
+        """Test {0,1} optional repetition."""
+        assert _convert_repetitions("A{0,1}") == "A?"
+
+    def test_range_repetition(self):
+        """Test {m,n} range repetition."""
+        assert _convert_repetitions("A{2,3}") == "AAA?"
+        assert _convert_repetitions("A{1,3}") == "AA?A?"
+        assert _convert_repetitions("A{2,4}") == "AAA?A?"
+
+    def test_minimum_repetition(self):
+        """Test {m,} minimum repetition (m or more)."""
+        assert _convert_repetitions("A{2,}") == "AAA*"
+        assert _convert_repetitions("A{1,}") == "AA*"
+
+    def test_maximum_repetition(self):
+        """Test {,n} maximum repetition (0 to n)."""
+        assert _convert_repetitions("A{,2}") == "A?A?"
+        assert _convert_repetitions("A{,3}") == "A?A?A?"
+
+    def test_character_class_repetition(self):
+        """Test repetition with character class [...]."""
+        assert _convert_repetitions("[ST]{0,1}") == "[ST]?"
+        assert _convert_repetitions("[ST]{2}") == "[ST][ST]"
+        assert _convert_repetitions("[ACG]{1,3}") == "[ACG][ACG]?[ACG]?"
+
+    def test_mixed_pattern_with_repetition(self):
+        """Test pattern with repetition mixed with other characters."""
+        assert _convert_repetitions("M[ST]{0,1}QPKA") == "M[ST]?QPKA"
+        assert _convert_repetitions("ATG{2}C") == "ATGGC"
+        assert _convert_repetitions("[AT]{2}GC[CG]{1,2}") == "[AT][AT]GC[CG][CG]?"
+
+    def test_multiple_repetitions(self):
+        """Test pattern with multiple repetition groups."""
+        assert _convert_repetitions("A{2}T{3}") == "AATTT"
+        assert _convert_repetitions("[ST]{0,1}X{2,3}") == "[ST]?XXX?"
+
+
+class TestPatternConversionWithRepetitions:
+    """Tests for full pattern conversion including repetitions."""
+
+    def test_protein_pattern_with_repetition(self):
+        """Test protein pattern with repetition syntax."""
+        # [ST]{0,1}QPKA should become [ST]?QPKA
+        result = convert_pattern_for_nrgrep("[ST]{0,1}QPKA", PatternType.PROTEIN)
+        assert result == "[ST]?QPKA"
+
+    def test_protein_pattern_with_wildcard_and_repetition(self):
+        """Test protein pattern with X wildcard and repetition."""
+        # M[ST]{0,1}X should become M[ST]?.
+        result = convert_pattern_for_nrgrep("M[ST]{0,1}X", PatternType.PROTEIN)
+        assert result == "M[ST]?."
+
+    def test_protein_iupac_with_repetition(self):
+        """Test protein pattern with IUPAC code and repetition."""
+        # B{2} should become [DN][DN]
+        result = convert_pattern_for_nrgrep("B{2}", PatternType.PROTEIN)
+        assert result == "[DN][DN]"
+
+    def test_dna_pattern_with_repetition(self):
+        """Test DNA pattern with repetition."""
+        result = convert_pattern_for_nrgrep("ATG{2}", PatternType.DNA)
+        assert result == "ATGG"
+
+    def test_dna_n_wildcard_repetition(self):
+        """Test DNA N wildcard with repetition."""
+        # N{3} should become [ACGT][ACGT][ACGT]
+        result = convert_pattern_for_nrgrep("N{3}", PatternType.DNA)
+        assert result == "[ACGT][ACGT][ACGT]"
+
+    def test_dna_iupac_r_with_repetition(self):
+        """Test DNA R (purine) with repetition."""
+        # R{0,1}ATG should become [AG]?ATG
+        result = convert_pattern_for_nrgrep("R{0,1}ATG", PatternType.DNA)
+        assert result == "[AG]?ATG"
+
+    def test_dna_character_class_repetition(self):
+        """Test DNA character class with repetition."""
+        result = convert_pattern_for_nrgrep("[AT]{2,3}", PatternType.DNA)
+        assert result == "[AT][AT][AT]?"
+
+    def test_complex_pattern_with_repetition(self):
+        """Test complex pattern combining multiple features."""
+        # Protein: M[AVILM]{2,4}[ST]{0,1}K
+        result = convert_pattern_for_nrgrep("M[AVILM]{2,4}[ST]{0,1}K", PatternType.PROTEIN)
+        assert "[AVILM]" in result
+        assert "[ST]?" in result
+        assert result.startswith("M")
+        assert result.endswith("K")
 
 
 class TestReverseComplement:
@@ -377,18 +483,21 @@ class TestResultFormatting:
         """TSV should contain column headers."""
         tsv = format_results_tsv(sample_result)
 
-        assert "Sequence\t" in tsv
-        assert "Start\t" in tsv
-        assert "End\t" in tsv
+        # New format with NumHits includes different column names
+        assert "Sequence Name\t" in tsv
+        assert "NumHits\t" in tsv
+        assert "MatchStartCoord\t" in tsv
+        assert "MatchStopCoord\t" in tsv
         assert "Strand\t" in tsv
-        assert "Matched_Sequence" in tsv
+        assert "MatchPattern\t" in tsv
 
     def test_tsv_contains_hit_data(self, sample_result):
         """TSV should contain hit data rows."""
         tsv = format_results_tsv(sample_result)
 
-        assert "seq1\t" in tsv
-        assert "seq2\t" in tsv
+        # Uses sequence_description which is "Test sequence" and "Another sequence"
+        assert "Test sequence\t" in tsv
+        assert "Another sequence\t" in tsv
         assert "ATGCATGCAT" in tsv
         assert "100\t" in tsv
 
@@ -405,6 +514,98 @@ class TestResultFormatting:
         # Each data line should have tabs
         for line in data_lines:
             assert '\t' in line
+
+    def test_tsv_with_num_hits(self):
+        """TSV with include_num_hits=True should have NumHits column."""
+        hits = [
+            PatmatchHit(
+                sequence_name="seq1",
+                sequence_description="seq1/GENE1",
+                match_start=100,
+                match_end=110,
+                strand="+",
+                matched_sequence="ATGCAT",
+            ),
+            PatmatchHit(
+                sequence_name="seq1",
+                sequence_description="seq1/GENE1",
+                match_start=200,
+                match_end=210,
+                strand="+",
+                matched_sequence="ATGCAT",
+            ),
+            PatmatchHit(
+                sequence_name="seq2",
+                sequence_description="seq2/GENE2",
+                match_start=50,
+                match_end=60,
+                strand="-",
+                matched_sequence="ATGCAT",
+            ),
+        ]
+
+        result = PatmatchSearchResult(
+            pattern="ATGCAT",
+            pattern_type="protein",
+            dataset="Test Dataset",
+            strand="both",
+            total_hits=3,
+            hits=hits,
+            search_params={},
+            sequences_searched=100,
+            total_residues_searched=50000,
+        )
+
+        tsv = format_results_tsv(result, include_num_hits=True)
+
+        # Header should have NumHits column
+        assert "NumHits" in tsv
+
+        # seq1 has 2 hits, seq2 has 1 hit
+        lines = tsv.split('\n')
+        data_lines = [l for l in lines if l and not l.startswith('#') and 'Sequence' not in l]
+
+        # Check that seq1 rows show NumHits=2
+        seq1_lines = [l for l in data_lines if 'seq1' in l]
+        for line in seq1_lines:
+            fields = line.split('\t')
+            assert fields[1] == '2'  # NumHits is second column
+
+        # Check that seq2 row shows NumHits=1
+        seq2_lines = [l for l in data_lines if 'seq2' in l]
+        for line in seq2_lines:
+            fields = line.split('\t')
+            assert fields[1] == '1'
+
+    def test_tsv_includes_gene_name_in_description(self):
+        """TSV should show gene name with systematic name when available."""
+        hits = [
+            PatmatchHit(
+                sequence_name="CR_05010W_A",
+                sequence_description="CR_05010W_A/YEN1",  # Gene name included
+                match_start=100,
+                match_end=110,
+                strand="+",
+                matched_sequence="ATGCAT",
+            ),
+        ]
+
+        result = PatmatchSearchResult(
+            pattern="ATGCAT",
+            pattern_type="protein",
+            dataset="Test Dataset",
+            strand="both",
+            total_hits=1,
+            hits=hits,
+            search_params={},
+            sequences_searched=100,
+            total_residues_searched=50000,
+        )
+
+        tsv = format_results_tsv(result, include_num_hits=True)
+
+        # Should contain the systematic name with gene name
+        assert "CR_05010W_A/YEN1" in tsv
 
 
 class TestSchemaValidation:

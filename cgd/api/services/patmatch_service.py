@@ -11,7 +11,11 @@ import re
 import subprocess
 import tempfile
 import logging
+from collections import Counter
 from typing import Optional, List, Dict, Tuple
+
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from cgd.core.patmatch_config import (
     NRGREP_BINARY,
@@ -35,8 +39,44 @@ from cgd.schemas.patmatch_schema import (
     DatasetInfo,
     PatmatchConfigResponse,
 )
+from cgd.models.locus_model import Feature
 
 logger = logging.getLogger(__name__)
+
+
+def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
+    """
+    Look up gene names (standard names) for a list of feature names.
+
+    Args:
+        db: Database session
+        feature_names: List of systematic feature names (e.g., "CR_05010W_A")
+
+    Returns:
+        Dict mapping feature_name to gene_name (empty string if no gene name)
+    """
+    if not feature_names or db is None:
+        return {}
+
+    gene_names = {}
+
+    try:
+        # Query all features in one batch
+        features = (
+            db.query(Feature.feature_name, Feature.gene_name)
+            .filter(func.upper(Feature.feature_name).in_(
+                [fn.upper() for fn in feature_names]
+            ))
+            .all()
+        )
+
+        for feature_name, gene_name in features:
+            gene_names[feature_name.upper()] = gene_name or ""
+
+    except Exception as e:
+        logger.warning(f"Failed to look up gene names: {e}")
+
+    return gene_names
 
 
 def _check_binary_available() -> bool:
@@ -491,12 +531,9 @@ def run_patmatch_search(
     # Convert pattern type
     config_pattern_type = PatternType(request.pattern_type.value)
 
-    # Try binary search first, fall back to Python
-    use_binary = _check_binary_available() and (
-        request.max_mismatches > 0 or
-        request.max_insertions > 0 or
-        request.max_deletions > 0
-    )
+    # Use binary search when available (works for both exact and fuzzy matches)
+    # Fall back to Python regex only when binary is unavailable
+    use_binary = _check_binary_available()
 
     actual_total_hits = 0
 
@@ -577,6 +614,9 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
+    # Look up gene names for all unique sequence names
+    gene_names_map = _lookup_gene_names(db, list(unique_seq_names))
+
     # Convert to PatmatchHit objects
     patmatch_hits = []
     for seq_name, start, end, strand, matched_seq in hits:
@@ -588,13 +628,20 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
+        # Build description with gene name if available
+        gene_name = gene_names_map.get(seq_name.upper(), "")
+        if gene_name:
+            description = f"{seq_name}/{gene_name}"
+        else:
+            description = seq_name
+
         # Build links
         locus_link = f"/locus/{seq_name}"
         jbrowse_link = None  # Could add JBrowse link based on coordinates
 
         patmatch_hits.append(PatmatchHit(
             sequence_name=seq_name,
-            sequence_description=seq_name,
+            sequence_description=description,
             match_start=start,
             match_end=end,
             strand="+" if strand == "W" else "-",
@@ -664,8 +711,17 @@ def _map_dataset_to_config_key(dataset_value: str) -> str:
     return mapping.get(dataset_value, dataset_value)
 
 
-def format_results_tsv(result) -> str:
-    """Format pattern match results as TSV for download."""
+def format_results_tsv(result, include_num_hits: bool = True) -> str:
+    """
+    Format pattern match results as TSV for download.
+
+    Args:
+        result: PatmatchSearchResult object
+        include_num_hits: If True, include NumHits column showing hits per sequence
+
+    Output format matches the old PatMatch tool:
+    Sequence Name    NumHits    MatchPattern    MatchStartCoord    MatchStopCoord    Strand    LocusInfo
+    """
     lines = []
 
     # Header comments
@@ -679,21 +735,41 @@ def format_results_tsv(result) -> str:
     lines.append(f"# Total Residues: {result.total_residues_searched}")
     lines.append("")
 
-    # Column headers
-    lines.append("Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After")
+    # Count hits per sequence if requested
+    if include_num_hits:
+        seq_hit_counts = Counter(hit.sequence_name for hit in result.hits)
+
+    # Column headers - matching old PatMatch output format
+    if include_num_hits:
+        lines.append("Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\tLocusInfo")
+    else:
+        lines.append("Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After")
 
     # Data rows
     for hit in result.hits:
-        row = [
-            hit.sequence_name,
-            hit.sequence_description or "",
-            str(hit.match_start),
-            str(hit.match_end),
-            hit.strand,
-            hit.matched_sequence,
-            hit.context_before,
-            hit.context_after,
-        ]
+        if include_num_hits:
+            # Old format: Sequence Name, NumHits, MatchPattern, Start, End, Strand, LocusInfo
+            num_hits = seq_hit_counts.get(hit.sequence_name, 1)
+            row = [
+                hit.sequence_description or hit.sequence_name,  # Includes gene name if available
+                str(num_hits),
+                hit.matched_sequence,
+                str(hit.match_start),
+                str(hit.match_end),
+                hit.strand,
+                "",  # LocusInfo - could add more details here
+            ]
+        else:
+            row = [
+                hit.sequence_name,
+                hit.sequence_description or "",
+                str(hit.match_start),
+                str(hit.match_end),
+                hit.strand,
+                hit.matched_sequence,
+                hit.context_before,
+                hit.context_after,
+            ]
         lines.append("\t".join(row))
 
     return "\n".join(lines)

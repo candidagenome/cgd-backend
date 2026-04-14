@@ -190,6 +190,7 @@ def resolve_features(
             gene_name=feature.gene_name,
             dbxref_id=feature.dbxref_id,
             feature_type=feature.feature_type,
+            headline=feature.headline,
             organism_name=organism_name,
             chromosome=chromosome,
             start=start,
@@ -284,10 +285,10 @@ def generate_coords_tsv(
     """
     Generate tab-delimited coordinate information.
 
-    Columns: feature_name, gene_name, dbxref_id, chromosome, start, end, strand, feature_type
+    Columns: feature_name, gene_name, dbxref_id, chromosome, start, end, strand, feature_type, description
     """
     lines = [
-        "feature_name\tgene_name\tdbxref_id\tchromosome\tstart\tend\tstrand\tfeature_type"
+        "feature_name\tgene_name\tdbxref_id\tchromosome\tstart\tend\tstrand\tfeature_type\tdescription"
     ]
 
     for feat in features:
@@ -300,7 +301,8 @@ def generate_coords_tsv(
             f"{feat.start or ''}\t"
             f"{feat.end or ''}\t"
             f"{strand_str}\t"
-            f"{feat.feature_type}"
+            f"{feat.feature_type}\t"
+            f"{feat.headline or ''}"
         )
 
     return "\n".join(lines)

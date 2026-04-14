@@ -108,6 +108,7 @@ class ResolvedFeature(BaseModel):
     gene_name: Optional[str] = None
     dbxref_id: str
     feature_type: str
+    headline: Optional[str] = None  # Functional annotation/description
     organism_name: Optional[str] = None
     chromosome: Optional[str] = None
     start: Optional[int] = None
