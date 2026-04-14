@@ -188,6 +188,7 @@ def _format_fasta_header(
     start: Optional[int] = None,
     end: Optional[int] = None,
     strand: Optional[str] = None,
+    headline: Optional[str] = None,
 ) -> str:
     """Format a FASTA header line."""
     parts = []
@@ -213,6 +214,10 @@ def _format_fasta_header(
     if chromosome and start and end:
         strand_char = "+" if strand == "W" else "-" if strand == "C" else ""
         parts.append(f"Chr{chromosome}:{start}-{end}({strand_char})")
+
+    # Headline/description (functional annotation)
+    if headline:
+        parts.append(f"| {headline}")
 
     return ">" + " ".join(parts)
 
@@ -413,6 +418,7 @@ def get_sequence_by_feature(
         start=start_coord,
         end=end_coord,
         strand=strand,
+        headline=feature.headline,
     )
 
     return SequenceResponse(
