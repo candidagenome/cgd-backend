@@ -402,14 +402,14 @@ def convert_pattern_for_nrgrep(
         elif in_bracket:
             # Inside brackets, keep characters as-is
             expanded.append(char)
-        elif char in iupac_map:
-            expanded.append(iupac_map[char])
+        elif char in '?*+()':
+            # Regex quantifiers and grouping - keep as-is (check BEFORE IUPAC)
+            expanded.append(char)
         elif char == '.':
             # Wildcard
             expanded.append('.' if pattern_type == PatternType.PROTEIN else '[ACGT]')
-        elif char in '?*+()':
-            # Regex quantifiers and grouping - keep as-is
-            expanded.append(char)
+        elif char in iupac_map:
+            expanded.append(iupac_map[char])
         else:
             expanded.append(char)
 
