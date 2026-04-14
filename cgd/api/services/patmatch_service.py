@@ -531,12 +531,9 @@ def run_patmatch_search(
     # Convert pattern type
     config_pattern_type = PatternType(request.pattern_type.value)
 
-    # Try binary search first, fall back to Python
-    use_binary = _check_binary_available() and (
-        request.max_mismatches > 0 or
-        request.max_insertions > 0 or
-        request.max_deletions > 0
-    )
+    # Use binary search when available (works for both exact and fuzzy matches)
+    # Fall back to Python regex only when binary is unavailable
+    use_binary = _check_binary_available()
 
     actual_total_hits = 0
 
