@@ -247,6 +247,118 @@ IUPAC_PROTEIN = {
 }
 
 
+def _convert_repetitions(pattern: str) -> str:
+    """
+    Convert PatMatch repetition syntax to nrgrep/regex syntax.
+
+    PatMatch syntax:
+    - {m}    -> exactly m times
+    - {m,n}  -> m to n times
+    - {m,}   -> m or more times
+    - {,n}   -> 0 to n times
+
+    Examples:
+    - A{2}     -> AA
+    - A{0,1}   -> A?
+    - A{2,3}   -> AAA?
+    - A{2,}    -> AAA*
+    - [ST]{0,1} -> [ST]?
+    """
+    import re
+
+    if '{' not in pattern:
+        return pattern
+
+    result = []
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+
+        # Check if we have a repetition coming up
+        if i + 1 < len(pattern) and pattern[i + 1] == '{':
+            # Find the pattern to repeat
+            if char == ']':
+                # Find the opening bracket
+                bracket_start = i
+                while bracket_start > 0 and pattern[bracket_start] != '[':
+                    bracket_start -= 1
+                repeat_pattern = pattern[bracket_start:i + 1]
+                # Remove the bracket pattern from result (already added chars, excluding ']')
+                # The ']' hasn't been added yet since we entered this block first
+                result = result[:-(i - bracket_start)]
+            elif char == ')':
+                # Find the opening parenthesis
+                paren_start = i
+                depth = 1
+                while paren_start > 0 and depth > 0:
+                    paren_start -= 1
+                    if pattern[paren_start] == ')':
+                        depth += 1
+                    elif pattern[paren_start] == '(':
+                        depth -= 1
+                repeat_pattern = pattern[paren_start:i + 1]
+                # Remove the paren pattern from result (already added chars, excluding ')')
+                result = result[:-(i - paren_start)]
+            else:
+                # Single character
+                repeat_pattern = char
+                # Don't add to result yet
+
+            # Parse the repetition info
+            i += 2  # Skip past '{'
+            rep_end = pattern.find('}', i)
+            if rep_end == -1:
+                # Malformed, just add the character
+                result.append(repeat_pattern)
+                continue
+
+            rep_info = pattern[i:rep_end]
+            i = rep_end + 1
+
+            # Parse lower and upper bounds
+            lower = 0
+            upper = 0
+
+            if ',' in rep_info:
+                parts = rep_info.split(',')
+                if rep_info.startswith(','):
+                    # {,n} format
+                    lower = 0
+                    upper = int(parts[1]) if parts[1] else 0
+                elif rep_info.endswith(','):
+                    # {m,} format
+                    lower = int(parts[0]) if parts[0] else 0
+                    upper = -1  # Infinite
+                else:
+                    # {m,n} format
+                    lower = int(parts[0]) if parts[0] else 0
+                    upper = int(parts[1]) if parts[1] else 0
+            else:
+                # {m} format - exact
+                lower = int(rep_info)
+                upper = lower
+
+            # Build the nrgrep pattern
+            # Add the pattern 'lower' times
+            for _ in range(lower):
+                result.append(repeat_pattern)
+
+            # Add optional repeats
+            if upper == -1:
+                # Infinite - add pattern with *
+                result.append(repeat_pattern + '*')
+            elif upper > lower:
+                # Add (upper - lower) optional copies
+                for _ in range(upper - lower):
+                    result.append(repeat_pattern + '?')
+
+        else:
+            result.append(char)
+            i += 1
+
+    return ''.join(result)
+
+
 def convert_pattern_for_nrgrep(
     pattern: str,
     pattern_type: PatternType,
@@ -257,25 +369,51 @@ def convert_pattern_for_nrgrep(
     """
     Convert a user pattern to nrgrep format.
 
-    nrgrep supports fuzzy matching with syntax like:
-    - Simple pattern: ATCG
-    - With mismatches: pattern#k (where k is max errors)
+    Supports:
+    - IUPAC codes: R, Y, S, W, K, M, B, D, H, V, N (DNA) or B, Z, X (protein)
+    - Character classes: [ST], [ACG], etc.
+    - Repetition patterns: {m}, {m,n}, {m,}, {,n}
+    - Wildcards: X (protein) or N (DNA) for any character
 
-    For IUPAC codes, we expand them to character classes.
+    Examples:
+    - [ST]{0,1}QPKA -> [ST]?QPKA (optional S or T)
+    - A{2,3}TG -> AAATG or AAA?TG
     """
     pattern = pattern.upper().strip()
+
+    # First, convert repetition patterns to regex
+    pattern = _convert_repetitions(pattern)
+
     iupac_map = IUPAC_DNA if pattern_type == PatternType.DNA else IUPAC_PROTEIN
 
-    # Expand IUPAC codes
+    # Expand IUPAC codes (but preserve character classes and regex syntax)
     expanded = []
-    for char in pattern:
-        if char in iupac_map:
+    in_bracket = False
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+
+        if char == '[':
+            in_bracket = True
+            expanded.append(char)
+        elif char == ']':
+            in_bracket = False
+            expanded.append(char)
+        elif in_bracket:
+            # Inside brackets, keep characters as-is
+            expanded.append(char)
+        elif char in iupac_map:
             expanded.append(iupac_map[char])
         elif char == '.':
             # Wildcard
             expanded.append('.' if pattern_type == PatternType.PROTEIN else '[ACGT]')
+        elif char in '?*+()':
+            # Regex quantifiers and grouping - keep as-is
+            expanded.append(char)
         else:
             expanded.append(char)
+
+        i += 1
 
     nrgrep_pattern = ''.join(expanded)
 
