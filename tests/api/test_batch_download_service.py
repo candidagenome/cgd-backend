@@ -55,6 +55,7 @@ class MockFeature:
         dbxref_id: str = None,
         feature_type: str = "ORF",
         organism: MockOrganism = None,
+        headline: str = None,
     ):
         self.feature_no = feature_no
         self.feature_name = feature_name
@@ -62,6 +63,7 @@ class MockFeature:
         self.dbxref_id = dbxref_id
         self.feature_type = feature_type
         self.organism = organism
+        self.headline = headline
 
 
 class MockFeatLocation:
@@ -192,6 +194,7 @@ def sample_feature(sample_organism):
         gene_name="ALS1",
         dbxref_id="CGD:CAL0001",
         organism=sample_organism,
+        headline="Cell-surface adhesin",
     )
 
 
@@ -204,6 +207,7 @@ def sample_resolved_feature():
         gene_name="ALS1",
         dbxref_id="CGD:CAL0001",
         feature_type="ORF",
+        headline="Cell-surface adhesin",
         organism_name="Candida albicans SC5314",
         chromosome="Chr1",
         start=1000,
