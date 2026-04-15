@@ -43,6 +43,7 @@ class MockFeature:
         organism_no: int = 1,
         organism: MockOrganism = None,
         feature_type: str = "ORF",
+        headline: str = None,
     ):
         self.feature_no = feature_no
         self.feature_name = feature_name
@@ -51,6 +52,7 @@ class MockFeature:
         self.organism_no = organism_no
         self.organism = organism
         self.feature_type = feature_type
+        self.headline = headline
 
 
 class MockSeq:
@@ -140,6 +142,7 @@ def sample_feature(sample_organism):
         gene_name="ALS1",
         dbxref_id="CGD:CAL0001",
         organism=sample_organism,
+        headline="Cell-surface adhesin",
     )
 
 
