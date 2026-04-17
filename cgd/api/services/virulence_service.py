@@ -22,6 +22,11 @@ from cgd.schemas.virulence_schema import (
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
     EVIDENCE_WEIGHTS,
+    EVIDENCE_TYPES,
+    get_confidence_tier,
+    extract_evidence_types,
+    generate_inclusion_reason,
+    split_evidence,
     VirulenceCategory,
     VirulenceCategoriesResponse,
     VirulenceFactor,
@@ -45,6 +50,8 @@ from cgd.models.models import (
     ExptExptprop,
     HomologyGroup,
     FeatHomology,
+    RefLink,
+    Reference,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +169,44 @@ def _get_ortholog_count(db: Session, feature: Feature) -> int:
     )
 
     return organism_count or 0
+
+
+def _get_paper_count_and_pmids(
+    db: Session,
+    feature: Feature,
+    max_pmids: int = 10,
+) -> tuple[int, list[int]]:
+    """
+    Get paper count and PMID list for a feature.
+
+    Args:
+        db: Database session
+        feature: The feature to get papers for
+        max_pmids: Maximum number of PMIDs to return (default 10)
+
+    Returns:
+        Tuple of (paper_count, pmid_list)
+    """
+    # Query references via RefLink
+    refs = (
+        db.query(Reference.pubmed)
+        .join(RefLink, RefLink.reference_no == Reference.reference_no)
+        .filter(
+            RefLink.tab_name == "FEATURE",
+            RefLink.primary_key == feature.feature_no,
+            Reference.pubmed.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+
+    pmids = [r[0] for r in refs if r[0] is not None]
+    paper_count = len(pmids)
+
+    # Sort by PMID descending (most recent first) and limit
+    pmids_sorted = sorted(pmids, reverse=True)[:max_pmids]
+
+    return paper_count, pmids_sorted
 
 
 def _calculate_confidence_score(
@@ -589,6 +634,7 @@ def get_virulence_factors(
     hide_housekeeping: bool = False,
     sort_by: str = "confidence_score",
     sort_order: str = "desc",
+    evidence_types: Optional[list[str]] = None,
 ) -> VirulenceFactorsResponse:
     """
     Search virulence factors by criteria.
@@ -605,6 +651,7 @@ def get_virulence_factors(
         hide_housekeeping: If True, exclude housekeeping genes
         sort_by: Field to sort by ("confidence_score", "gene_name", "evidence_tier")
         sort_order: Sort order ("asc" or "desc")
+        evidence_types: Filter by evidence types (GO, PHE, KW)
 
     Returns:
         VirulenceFactorsResponse with paginated results
@@ -710,6 +757,23 @@ def get_virulence_factors(
             match_reasons_list, evidence_tier, is_hk
         )
 
+        # Compute quick win fields
+        data["confidence_tier"] = get_confidence_tier(data["confidence_score"])
+        data["evidence_types"] = extract_evidence_types(match_reasons_list)
+        data["inclusion_reason"] = generate_inclusion_reason(
+            match_reasons_list, sorted(data["categories"])
+        )
+
+        # Get paper count and PMIDs
+        paper_count, pmids = _get_paper_count_and_pmids(db, feature)
+        data["paper_count"] = paper_count
+        data["pmids"] = pmids
+
+        # Split evidence into direct and indirect
+        direct_evidence, indirect_evidence = split_evidence(match_reasons_list)
+        data["direct_evidence"] = direct_evidence
+        data["indirect_evidence"] = indirect_evidence
+
     # Apply evidence quality filters
     if max_evidence_tier is not None:
         gene_data = {
@@ -727,6 +791,14 @@ def get_virulence_factors(
         gene_data = {
             k: v for k, v in gene_data.items()
             if not v["is_housekeeping"]
+        }
+
+    # Filter by evidence types (GO, PHE, KW)
+    if evidence_types:
+        evidence_types_upper = [et.upper() for et in evidence_types]
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if any(et in evidence_types_upper for et in v["evidence_types"])
         }
 
     # Convert to list
@@ -749,9 +821,16 @@ def get_virulence_factors(
             evidence_tier=data["evidence_tier"],
             evidence_tier_name=data["evidence_tier_name"],
             confidence_score=data["confidence_score"],
+            confidence_tier=data["confidence_tier"],
             is_housekeeping=data["is_housekeeping"],
             housekeeping_reason=data["housekeeping_reason"],
             ortholog_count=data["ortholog_count"],
+            inclusion_reason=data["inclusion_reason"],
+            evidence_types=data["evidence_types"],
+            paper_count=data["paper_count"],
+            pmids=data["pmids"],
+            direct_evidence=data["direct_evidence"],
+            indirect_evidence=data["indirect_evidence"],
         ))
 
     # Sort results

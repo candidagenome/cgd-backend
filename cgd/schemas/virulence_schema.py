@@ -75,6 +75,221 @@ HOUSEKEEPING_GO_TERMS = [
 ]
 
 # =============================================================================
+# DIRECT VS INDIRECT EVIDENCE CLASSIFICATION
+# =============================================================================
+
+# GO terms that indicate direct virulence evidence
+DIRECT_VIRULENCE_GO_TERMS = [
+    "pathogenesis", "virulence", "host", "invasion", "adhesion",
+    "biofilm", "filament", "hyphal", "morphogenesis",
+]
+
+# Phenotype patterns that indicate direct evidence (Tier 1 & 2)
+DIRECT_PHENOTYPE_PATTERNS = [
+    # Tier 1 - Direct Virulence
+    "virulence", "pathogenesis", "host killing", "infection",
+    "lethality", "colonization",
+    # Tier 2 - Host Interaction
+    "host cell", "phagocytosis", "macrophage", "epithelial",
+    "endothelial", "invasion", "galleria", "mouse", "animal model",
+]
+
+
+def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Split match reasons into direct and indirect evidence.
+
+    Direct evidence includes:
+    - Virulence model evidence
+    - Tier 1 & 2 phenotypes (Direct Virulence, Host Interaction)
+    - Pathogenesis/host-related GO terms
+
+    Indirect evidence includes:
+    - Tier 3 & 4 phenotypes (Stress Response, Indirect)
+    - Gene pattern matches
+    - Headline matches
+    - Literature topic matches
+    - Non-virulence GO terms
+
+    Args:
+        match_reasons: List of match reason strings
+
+    Returns:
+        Tuple of (direct_evidence, indirect_evidence) lists
+    """
+    direct = []
+    indirect = []
+
+    for reason in match_reasons:
+        reason_lower = reason.lower()
+
+        # Virulence model is always direct
+        if reason_lower.startswith("virulence model:"):
+            direct.append(reason)
+            continue
+
+        # Check phenotype evidence
+        if reason_lower.startswith("phenotype:"):
+            phenotype_text = reason_lower.replace("phenotype:", "").strip()
+            is_direct = any(
+                pattern in phenotype_text
+                for pattern in DIRECT_PHENOTYPE_PATTERNS
+            )
+            if is_direct:
+                direct.append(reason)
+            else:
+                indirect.append(reason)
+            continue
+
+        # Check GO evidence
+        if reason_lower.startswith("go:"):
+            is_direct = any(
+                term in reason_lower
+                for term in DIRECT_VIRULENCE_GO_TERMS
+            )
+            if is_direct:
+                direct.append(reason)
+            else:
+                indirect.append(reason)
+            continue
+
+        # Everything else is indirect (gene pattern, headline, literature)
+        indirect.append(reason)
+
+    return direct, indirect
+
+
+# =============================================================================
+# CONFIDENCE TIER DEFINITIONS
+# =============================================================================
+
+# Simple confidence tiers mapped from 0-20 score
+CONFIDENCE_TIERS = {
+    "High": {"min_score": 10, "description": "Strong direct virulence evidence"},
+    "Medium": {"min_score": 5, "description": "Moderate evidence with host interaction"},
+    "Low": {"min_score": 0, "description": "Indirect or weak evidence"},
+}
+
+
+def get_confidence_tier(score: int) -> str:
+    """Map a 0-20 confidence score to High/Medium/Low tier."""
+    if score >= 10:
+        return "High"
+    elif score >= 5:
+        return "Medium"
+    else:
+        return "Low"
+
+
+# =============================================================================
+# EVIDENCE TYPE DEFINITIONS
+# =============================================================================
+
+# Evidence types for filtering
+EVIDENCE_TYPES = {
+    "GO": {
+        "name": "GO Annotation",
+        "description": "Gene Ontology annotation evidence",
+        "match_prefixes": ["GO:"],
+    },
+    "PHE": {
+        "name": "Phenotype",
+        "description": "Phenotype and virulence model evidence",
+        "match_prefixes": ["phenotype:", "virulence model:"],
+    },
+    "KW": {
+        "name": "Keyword",
+        "description": "Gene pattern, headline, or literature matches",
+        "match_prefixes": ["gene pattern:", "headline:", "literature topic:"],
+    },
+}
+
+
+def extract_evidence_types(match_reasons: list[str]) -> list[str]:
+    """Extract evidence type codes (GO/PHE/KW) from match reasons."""
+    types = set()
+    for reason in match_reasons:
+        reason_lower = reason.lower()
+        for type_code, config in EVIDENCE_TYPES.items():
+            for prefix in config["match_prefixes"]:
+                if reason_lower.startswith(prefix.lower()):
+                    types.add(type_code)
+                    break
+    return sorted(types)
+
+
+def generate_inclusion_reason(match_reasons: list[str], categories: list[str]) -> str:
+    """
+    Generate a short human-readable reason for inclusion.
+
+    Examples:
+    - "Virulence model + GO (pathogenesis)"
+    - "Gene pattern (ALS family) + Phenotype (adhesion)"
+    - "GO (host interaction) | Adhesins, Host Interaction"
+    """
+    parts = []
+
+    # Group reasons by type
+    has_virulence_model = False
+    go_terms = []
+    phenotypes = []
+    gene_patterns = []
+    headlines = []
+    literature = []
+
+    for reason in match_reasons:
+        reason_lower = reason.lower()
+        if reason_lower.startswith("virulence model:"):
+            has_virulence_model = True
+        elif reason_lower.startswith("go:"):
+            # Extract just the term name
+            term = reason.split("(")[0].replace("GO:", "").strip()
+            if term and term not in go_terms:
+                go_terms.append(term[:20])  # Truncate long terms
+        elif reason_lower.startswith("phenotype:"):
+            pheno = reason.replace("phenotype:", "").strip()[:20]
+            if pheno and pheno not in phenotypes:
+                phenotypes.append(pheno)
+        elif reason_lower.startswith("gene pattern:"):
+            pattern = reason.replace("gene pattern:", "").strip()
+            # Extract family name (e.g., ALS1 -> ALS)
+            import re
+            family = re.sub(r'\d+$', '', pattern)
+            if family and f"{family} family" not in gene_patterns:
+                gene_patterns.append(f"{family} family")
+        elif reason_lower.startswith("headline:"):
+            headlines.append("headline match")
+        elif reason_lower.startswith("literature topic:"):
+            topic = reason.replace("literature topic:", "").strip()
+            if topic and topic not in literature:
+                literature.append(topic)
+
+    # Build the reason string
+    if has_virulence_model:
+        parts.append("Virulence model")
+    if gene_patterns:
+        parts.append(f"Gene pattern ({', '.join(gene_patterns[:2])})")
+    if go_terms:
+        parts.append(f"GO ({', '.join(go_terms[:2])})")
+    if phenotypes:
+        parts.append(f"Phenotype ({', '.join(phenotypes[:2])})")
+    if literature:
+        parts.append(f"Literature ({', '.join(literature[:2])})")
+    if headlines and not parts:
+        parts.append("Headline match")
+
+    if not parts:
+        parts.append("Category match")
+
+    # Combine with categories if space allows
+    reason_str = " + ".join(parts[:3])
+    if len(reason_str) < 60 and categories:
+        reason_str += f" | {', '.join(categories[:2])}"
+
+    return reason_str[:100]  # Max 100 chars
+
+
+# =============================================================================
 # CONFIDENCE SCORE WEIGHTS
 # =============================================================================
 
@@ -194,9 +409,22 @@ class VirulenceFactor(BaseModel):
     evidence_tier: int = 4                          # 1=best, 4=weakest
     evidence_tier_name: str = "Indirect"
     confidence_score: int = 0                       # 0-20 range
+    confidence_tier: str = "Low"                    # High/Medium/Low
     is_housekeeping: bool = False
     housekeeping_reason: typing.Optional[str] = None
     ortholog_count: int = 0                         # Candida species with orthologs
+
+    # Quick win fields
+    inclusion_reason: str = ""                      # Short human-readable reason
+    evidence_types: list[str] = []                  # List of GO/PHE/KW codes
+
+    # Paper/reference fields
+    paper_count: int = 0                            # Number of associated papers
+    pmids: list[int] = []                           # List of PubMed IDs (top 10)
+
+    # Split evidence fields
+    direct_evidence: list[str] = []                 # Direct virulence evidence
+    indirect_evidence: list[str] = []               # Indirect/supporting evidence
 
 
 class VirulenceFactorsResponse(BaseModel):

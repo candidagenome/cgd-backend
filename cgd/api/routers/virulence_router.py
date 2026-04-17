@@ -108,6 +108,10 @@ def get_virulence_factors(
         "desc",
         description="Sort order: asc or desc"
     ),
+    evidence_types: list[str] = Query(
+        default=[],
+        description="Filter by evidence types: GO (Gene Ontology), PHE (Phenotype), KW (Keyword/pattern)"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -129,6 +133,7 @@ def get_virulence_factors(
         hide_housekeeping: Exclude housekeeping genes
         sort_by: Sort field (confidence_score, gene_name, evidence_tier)
         sort_order: Sort direction (asc, desc)
+        evidence_types: Filter by evidence types (GO, PHE, KW)
 
     Returns:
         Paginated list of virulence factors with category mappings and evidence quality
@@ -151,6 +156,7 @@ def get_virulence_factors(
                     hide_housekeeping=hide_housekeeping,
                     sort_by=sort_by,
                     sort_order=sort_order,
+                    evidence_types=evidence_types if evidence_types else None,
                 )
                 if result:
                     return VirulenceFactorsResponse(
@@ -179,6 +185,7 @@ def get_virulence_factors(
             hide_housekeeping=hide_housekeeping,
             sort_by=sort_by,
             sort_order=sort_order,
+            evidence_types=evidence_types if evidence_types else None,
         )
     except Exception as e:
         logger.error(f"Error in get_virulence_factors: {e}")

@@ -20,12 +20,17 @@ from cgd.models.models import (
     Dbxref, DbxrefFeat, Note, NoteLink, HomologyGroup, FeatHomology,
     DbxrefHomology, RefProperty, GoSynonym, GoGosyn, FeatRelationship,
     PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
+    RefLink,
 )
 from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
     EVIDENCE_WEIGHTS,
+    get_confidence_tier,
+    extract_evidence_types,
+    generate_inclusion_reason,
+    split_evidence,
 )
 
 logger = logging.getLogger(__name__)
@@ -1066,6 +1071,44 @@ def _get_ortholog_count_es(db: Session, feature: Feature) -> int:
     return organism_count or 0
 
 
+def _get_paper_count_and_pmids_es(
+    db: Session,
+    feature: Feature,
+    max_pmids: int = 10,
+) -> tuple[int, list[int]]:
+    """
+    Get paper count and PMID list for a feature.
+
+    Args:
+        db: Database session
+        feature: The feature to get papers for
+        max_pmids: Maximum number of PMIDs to return (default 10)
+
+    Returns:
+        Tuple of (paper_count, pmid_list)
+    """
+    # Query references via RefLink
+    refs = (
+        db.query(Reference.pubmed)
+        .join(RefLink, RefLink.reference_no == Reference.reference_no)
+        .filter(
+            RefLink.tab_name == "FEATURE",
+            RefLink.primary_key == feature.feature_no,
+            Reference.pubmed.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+
+    pmids = [r[0] for r in refs if r[0] is not None]
+    paper_count = len(pmids)
+
+    # Sort by PMID descending (most recent first) and limit
+    pmids_sorted = sorted(pmids, reverse=True)[:max_pmids]
+
+    return paper_count, pmids_sorted
+
+
 def _calculate_confidence_score_es(
     match_reasons: list[str],
     evidence_tier: int,
@@ -1173,6 +1216,17 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
             all_reasons, evidence_tier, is_housekeeping
         )
 
+        # Compute quick win fields
+        confidence_tier = get_confidence_tier(confidence_score)
+        evidence_types = extract_evidence_types(all_reasons)
+        inclusion_reason = generate_inclusion_reason(all_reasons, category_names)
+
+        # Get paper count and PMIDs
+        paper_count, pmids = _get_paper_count_and_pmids_es(db, feat)
+
+        # Split evidence into direct and indirect
+        direct_evidence, indirect_evidence = split_evidence(all_reasons)
+
         display_name = feat.gene_name or feat.feature_name
         organism_name = feat.organism.organism_name if feat.organism else None
         organism_abbrev = feat.organism.organism_abbrev if feat.organism else None
@@ -1200,9 +1254,19 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 "evidence_tier": evidence_tier,
                 "evidence_tier_name": evidence_tier_name,
                 "confidence_score": confidence_score,
+                "confidence_tier": confidence_tier,
                 "is_housekeeping": is_housekeeping,
                 "housekeeping_reason": housekeeping_reason,
                 "ortholog_count": ortholog_count,
+                # Quick win fields
+                "inclusion_reason": inclusion_reason,
+                "evidence_types": evidence_types,
+                # Paper/reference fields
+                "paper_count": paper_count,
+                "pmids": pmids,
+                # Split evidence fields
+                "direct_evidence": direct_evidence,
+                "indirect_evidence": indirect_evidence,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
                 "link": f"/locus/{feat.feature_name}",

@@ -2426,6 +2426,7 @@ def search_virulence_factors(
     hide_housekeeping: bool = False,
     sort_by: str = "confidence_score",
     sort_order: str = "desc",
+    evidence_types: list[str] | None = None,
 ) -> dict | None:
     """
     Search virulence factors using Elasticsearch.
@@ -2442,6 +2443,7 @@ def search_virulence_factors(
         hide_housekeeping: If True, exclude housekeeping genes
         sort_by: Field to sort by (confidence_score, gene_name, evidence_tier)
         sort_order: Sort order (asc, desc)
+        evidence_types: Filter by evidence types (GO, PHE, KW)
 
     Returns:
         Dict with items, total_count, page, page_size, categories_searched
@@ -2490,6 +2492,10 @@ def search_virulence_factors(
 
     if hide_housekeeping:
         must_clauses.append({"term": {"is_housekeeping": False}})
+
+    # Filter by evidence types (GO, PHE, KW)
+    if evidence_types:
+        must_clauses.append({"terms": {"evidence_types": [et.upper() for et in evidence_types]}})
 
     # Build sort clause
     if sort_by == "confidence_score":
@@ -2541,9 +2547,19 @@ def search_virulence_factors(
                 "evidence_tier": source.get("evidence_tier", 4),
                 "evidence_tier_name": source.get("evidence_tier_name", "Indirect"),
                 "confidence_score": source.get("confidence_score", 0),
+                "confidence_tier": source.get("confidence_tier", "Low"),
                 "is_housekeeping": source.get("is_housekeeping", False),
                 "housekeeping_reason": source.get("housekeeping_reason"),
                 "ortholog_count": source.get("ortholog_count", 0),
+                # Quick win fields
+                "inclusion_reason": source.get("inclusion_reason", ""),
+                "evidence_types": source.get("evidence_types", []),
+                # Paper/reference fields
+                "paper_count": source.get("paper_count", 0),
+                "pmids": source.get("pmids", []),
+                # Split evidence fields
+                "direct_evidence": source.get("direct_evidence", []),
+                "indirect_evidence": source.get("indirect_evidence", []),
             })
 
         # Apply pagination
