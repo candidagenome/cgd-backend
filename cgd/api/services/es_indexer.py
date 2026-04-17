@@ -21,7 +21,12 @@ from cgd.models.models import (
     DbxrefHomology, RefProperty, GoSynonym, GoGosyn, FeatRelationship,
     PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
 )
-from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
+from cgd.schemas.virulence_schema import (
+    VIRULENCE_CATEGORIES,
+    PHENOTYPE_EVIDENCE_TIERS,
+    HOUSEKEEPING_GO_TERMS,
+    EVIDENCE_WEIGHTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -928,11 +933,191 @@ def _get_virulence_category_matches(
     return matches
 
 
+def _classify_phenotype_tier_es(observable: str) -> tuple[int, str]:
+    """
+    Classify phenotype observable into evidence tiers (1=best, 4=weakest).
+
+    Args:
+        observable: The phenotype observable string
+
+    Returns:
+        Tuple of (tier_number, tier_name)
+    """
+    import re
+    observable_lower = observable.lower()
+
+    for tier_num in sorted(PHENOTYPE_EVIDENCE_TIERS.keys()):
+        tier_config = PHENOTYPE_EVIDENCE_TIERS[tier_num]
+        for pattern in tier_config["patterns"]:
+            # Convert SQL LIKE pattern to regex
+            regex_pattern = pattern.replace("%", ".*")
+            if re.search(regex_pattern, observable_lower):
+                return tier_num, tier_config["name"]
+
+    return 4, "Indirect"
+
+
+def _get_best_evidence_tier_es(match_reasons: list[str]) -> tuple[int, str]:
+    """
+    Determine the best (lowest number) evidence tier from match reasons.
+
+    Args:
+        match_reasons: List of match reason strings
+
+    Returns:
+        Tuple of (best_tier_number, tier_name)
+    """
+    best_tier = 4
+    best_tier_name = "Indirect"
+
+    for reason in match_reasons:
+        if reason.startswith("phenotype:"):
+            observable = reason.replace("phenotype: ", "")
+            tier, tier_name = _classify_phenotype_tier_es(observable)
+            if tier < best_tier:
+                best_tier = tier
+                best_tier_name = tier_name
+        elif reason.startswith("virulence model:"):
+            # Virulence model evidence is tier 1
+            if 1 < best_tier:
+                best_tier = 1
+                best_tier_name = "Direct Virulence"
+
+    return best_tier, best_tier_name
+
+
+def _is_housekeeping_gene_es(db: Session, feature: Feature) -> tuple[bool, Optional[str]]:
+    """
+    Detect if gene is likely housekeeping/essential.
+
+    Methods:
+    1. GO annotation to housekeeping terms (translation, DNA replication, etc.)
+    2. Conserved across all 5 Candida species (ortholog groups)
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Tuple of (is_housekeeping, reason_string)
+    """
+    from sqlalchemy import func, distinct
+
+    # Method 1: Check GO annotations for housekeeping terms
+    housekeeping_goids = [_convert_goid_to_int(g) for g in HOUSEKEEPING_GO_TERMS]
+    housekeeping_goids = [g for g in housekeeping_goids if g is not None]
+
+    if housekeeping_goids:
+        go_match = (
+            db.query(Go.go_term)
+            .join(GoAnnotation, GoAnnotation.go_no == Go.go_no)
+            .filter(GoAnnotation.feature_no == feature.feature_no)
+            .filter(Go.goid.in_(housekeeping_goids))
+            .first()
+        )
+
+        if go_match:
+            return True, f"GO: {go_match[0]}"
+
+    # Method 2: Check ortholog conservation across Candida species
+    ortholog_count = _get_ortholog_count_es(db, feature)
+    if ortholog_count >= 5:
+        return True, f"Conserved in {ortholog_count} Candida species"
+
+    return False, None
+
+
+def _get_ortholog_count_es(db: Session, feature: Feature) -> int:
+    """
+    Count how many Candida species have orthologs of this gene.
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Number of distinct Candida species with orthologs
+    """
+    from sqlalchemy import func, distinct
+
+    # Find homology groups this feature belongs to
+    homology_group_nos = (
+        db.query(FeatHomology.homology_group_no)
+        .filter(FeatHomology.feature_no == feature.feature_no)
+        .all()
+    )
+
+    if not homology_group_nos:
+        return 0
+
+    hg_nos = [h[0] for h in homology_group_nos]
+
+    # Count distinct organisms in these homology groups
+    organism_count = (
+        db.query(func.count(distinct(Feature.organism_no)))
+        .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(FeatHomology.homology_group_no.in_(hg_nos))
+        .filter(HomologyGroup.method == 'CGOB')
+        .filter(HomologyGroup.homology_group_type == 'ortholog')
+        .scalar()
+    )
+
+    return organism_count or 0
+
+
+def _calculate_confidence_score_es(
+    match_reasons: list[str],
+    evidence_tier: int,
+    is_housekeeping: bool,
+) -> int:
+    """
+    Calculate confidence score (0-20 range) based on evidence quality.
+
+    Args:
+        match_reasons: List of match reason strings
+        evidence_tier: The best evidence tier (1-4)
+        is_housekeeping: Whether the gene is a housekeeping gene
+
+    Returns:
+        Confidence score (0-20)
+    """
+    score = 0
+
+    for reason in match_reasons:
+        reason_lower = reason.lower()
+
+        if "virulence model:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["virulence_model"]
+        elif "phenotype:" in reason_lower:
+            if evidence_tier == 1:
+                score += EVIDENCE_WEIGHTS["tier1_phenotype"]
+            elif evidence_tier == 2:
+                score += EVIDENCE_WEIGHTS["tier2_phenotype"]
+            # Tier 3 and 4 phenotypes don't add points
+        elif "go:" in reason_lower:
+            # Check for virulence-related GO terms
+            if any(t in reason_lower for t in ["pathogenesis", "host", "virulence"]):
+                score += EVIDENCE_WEIGHTS["virulence_go"]
+        elif "literature topic: disease" in reason_lower:
+            score += EVIDENCE_WEIGHTS["disease_literature"]
+        elif "gene pattern:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["gene_pattern"]
+        elif "headline:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["keyword_match"]
+
+    if is_housekeeping:
+        score += EVIDENCE_WEIGHTS["housekeeping_penalty"]
+
+    return max(0, min(20, score))  # Clamp to 0-20 range
+
+
 def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
     """
     Generate Elasticsearch documents for virulence factors.
 
-    Pre-computes category assignments for each gene so searches are fast.
+    Pre-computes category assignments and evidence quality scores for each gene
+    so searches are fast.
     """
     from sqlalchemy import func
 
@@ -980,6 +1165,14 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
             elif reason.startswith("virulence model:"):
                 match_types.add("virulence_model")
 
+        # Calculate evidence quality fields
+        evidence_tier, evidence_tier_name = _get_best_evidence_tier_es(all_reasons)
+        is_housekeeping, housekeeping_reason = _is_housekeeping_gene_es(db, feat)
+        ortholog_count = _get_ortholog_count_es(db, feat)
+        confidence_score = _calculate_confidence_score_es(
+            all_reasons, evidence_tier, is_housekeeping
+        )
+
         display_name = feat.gene_name or feat.feature_name
         organism_name = feat.organism.organism_name if feat.organism else None
         organism_abbrev = feat.organism.organism_abbrev if feat.organism else None
@@ -1003,6 +1196,13 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 "category_names": category_names,  # ["Adhesins", "Biofilm Formation"]
                 "match_reasons": all_reasons,  # ["gene pattern: ALS1", "GO: cell adhesion"]
                 "match_types": list(match_types),  # ["gene_pattern", "go_term"]
+                # Evidence quality fields
+                "evidence_tier": evidence_tier,
+                "evidence_tier_name": evidence_tier_name,
+                "confidence_score": confidence_score,
+                "is_housekeeping": is_housekeeping,
+                "housekeeping_reason": housekeeping_reason,
+                "ortholog_count": ortholog_count,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
                 "link": f"/locus/{feat.feature_name}",

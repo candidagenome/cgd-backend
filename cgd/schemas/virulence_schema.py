@@ -12,6 +12,85 @@ class ORMSchema(BaseModel):
 
 
 # =============================================================================
+# PHENOTYPE EVIDENCE TIER DEFINITIONS
+# =============================================================================
+
+# Evidence tiers rank phenotype evidence by biological relevance to virulence
+# Tier 1 = most direct virulence evidence, Tier 4 = indirect/weak evidence
+PHENOTYPE_EVIDENCE_TIERS = {
+    1: {
+        "name": "Direct Virulence",
+        "description": "Direct evidence of virulence/pathogenesis",
+        "patterns": [
+            "%virulence%", "%pathogenesis%", "%host killing%",
+            "%infection%", "%lethality%", "%colonization%"
+        ],
+        "score_contribution": 5,
+    },
+    2: {
+        "name": "Host Interaction",
+        "description": "Host cell/tissue interactions",
+        "patterns": [
+            "%host cell%", "%phagocytosis%", "%macrophage%",
+            "%epithelial%", "%endothelial%", "%invasion%",
+            "%galleria%", "%mouse%", "%animal model%"
+        ],
+        "score_contribution": 4,
+    },
+    3: {
+        "name": "Stress Response",
+        "description": "Stress resistance that may enable survival in host",
+        "patterns": [
+            "%oxidative stress%", "%heat shock%", "%antifungal%",
+            "%azole%", "%echinocandin%"
+        ],
+        "score_contribution": 2,
+    },
+    4: {
+        "name": "Indirect",
+        "description": "Broad phenotypes with indirect virulence relevance",
+        "patterns": ["%resistance%", "%susceptibility%", "%sensitivity%"],
+        "score_contribution": 1,
+    },
+}
+
+# =============================================================================
+# HOUSEKEEPING GENE GO TERMS
+# =============================================================================
+
+# GO terms that indicate housekeeping/essential cellular functions
+HOUSEKEEPING_GO_TERMS = [
+    "GO:0006412",  # translation
+    "GO:0006414",  # translational elongation
+    "GO:0006260",  # DNA replication
+    "GO:0006350",  # transcription
+    "GO:0006457",  # protein folding
+    "GO:0007049",  # cell cycle
+    "GO:0006096",  # glycolysis
+    "GO:0006099",  # tricarboxylic acid cycle
+    "GO:0015031",  # protein transport
+    "GO:0006886",  # intracellular protein transport
+    "GO:0000715",  # nucleotide-excision repair
+    "GO:0006281",  # DNA repair
+]
+
+# =============================================================================
+# CONFIDENCE SCORE WEIGHTS
+# =============================================================================
+
+# Weights for calculating confidence scores (0-20 range)
+EVIDENCE_WEIGHTS = {
+    "virulence_model": 5,       # Tested in mouse/Galleria
+    "tier1_phenotype": 4,       # Direct virulence phenotype
+    "tier2_phenotype": 3,       # Host interaction phenotype
+    "virulence_go": 3,          # Pathogenesis/host GO terms
+    "disease_literature": 2,    # Disease literature topic
+    "gene_pattern": 1,          # Gene name pattern match
+    "keyword_match": 1,         # Headline keyword
+    "housekeeping_penalty": -3,  # Housekeeping gene penalty
+}
+
+# =============================================================================
 # VIRULENCE CATEGORY DEFINITIONS
 # =============================================================================
 
@@ -110,6 +189,14 @@ class VirulenceFactor(BaseModel):
     description: typing.Optional[str] = None
     categories: list[str] = []  # List of category names this gene belongs to
     match_reasons: list[str] = []  # Why this gene matched (e.g., "gene pattern: ALS1", "GO: pathogenesis")
+
+    # Evidence quality fields
+    evidence_tier: int = 4                          # 1=best, 4=weakest
+    evidence_tier_name: str = "Indirect"
+    confidence_score: int = 0                       # 0-20 range
+    is_housekeeping: bool = False
+    housekeeping_reason: typing.Optional[str] = None
+    ortholog_count: int = 0                         # Candida species with orthologs
 
 
 class VirulenceFactorsResponse(BaseModel):

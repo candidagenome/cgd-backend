@@ -10,6 +10,7 @@ This service dynamically maps existing data to virulence categories:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 from collections import defaultdict
 
@@ -18,6 +19,9 @@ from sqlalchemy import func, or_, distinct
 
 from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
+    PHENOTYPE_EVIDENCE_TIERS,
+    HOUSEKEEPING_GO_TERMS,
+    EVIDENCE_WEIGHTS,
     VirulenceCategory,
     VirulenceCategoriesResponse,
     VirulenceFactor,
@@ -39,6 +43,8 @@ from cgd.models.models import (
     RefpropFeat,
     ExptProperty,
     ExptExptprop,
+    HomologyGroup,
+    FeatHomology,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +58,185 @@ def _convert_goid_to_int(goid_str: str) -> Optional[int]:
         except ValueError:
             return None
     return None
+
+
+# =============================================================================
+# EVIDENCE TIER AND SCORING FUNCTIONS
+# =============================================================================
+
+
+def _classify_phenotype_tier(observable: str) -> tuple[int, str]:
+    """
+    Classify phenotype observable into evidence tiers (1=best, 4=weakest).
+
+    Args:
+        observable: The phenotype observable string
+
+    Returns:
+        Tuple of (tier_number, tier_name)
+    """
+    observable_lower = observable.lower()
+
+    for tier_num in sorted(PHENOTYPE_EVIDENCE_TIERS.keys()):
+        tier_config = PHENOTYPE_EVIDENCE_TIERS[tier_num]
+        for pattern in tier_config["patterns"]:
+            # Convert SQL LIKE pattern to regex
+            regex_pattern = pattern.replace("%", ".*")
+            if re.search(regex_pattern, observable_lower):
+                return tier_num, tier_config["name"]
+
+    return 4, "Indirect"
+
+
+def _is_housekeeping_gene(db: Session, feature: Feature) -> tuple[bool, Optional[str]]:
+    """
+    Detect if gene is likely housekeeping/essential.
+
+    Methods:
+    1. GO annotation to housekeeping terms (translation, DNA replication, etc.)
+    2. Conserved across all 5 Candida species (ortholog groups)
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Tuple of (is_housekeeping, reason_string)
+    """
+    # Method 1: Check GO annotations for housekeeping terms
+    housekeeping_goids = [_convert_goid_to_int(g) for g in HOUSEKEEPING_GO_TERMS]
+    housekeeping_goids = [g for g in housekeeping_goids if g is not None]
+
+    if housekeeping_goids:
+        go_match = (
+            db.query(Go.go_term)
+            .join(GoAnnotation, GoAnnotation.go_no == Go.go_no)
+            .filter(GoAnnotation.feature_no == feature.feature_no)
+            .filter(Go.goid.in_(housekeeping_goids))
+            .first()
+        )
+
+        if go_match:
+            return True, f"GO: {go_match[0]}"
+
+    # Method 2: Check ortholog conservation across Candida species
+    ortholog_count = _get_ortholog_count(db, feature)
+    if ortholog_count >= 5:
+        return True, f"Conserved in {ortholog_count} Candida species"
+
+    return False, None
+
+
+def _get_ortholog_count(db: Session, feature: Feature) -> int:
+    """
+    Count how many Candida species have orthologs of this gene.
+
+    Args:
+        db: Database session
+        feature: The feature to check
+
+    Returns:
+        Number of distinct Candida species with orthologs
+    """
+    # Find homology groups this feature belongs to
+    homology_group_nos = (
+        db.query(FeatHomology.homology_group_no)
+        .filter(FeatHomology.feature_no == feature.feature_no)
+        .all()
+    )
+
+    if not homology_group_nos:
+        return 0
+
+    hg_nos = [h[0] for h in homology_group_nos]
+
+    # Count distinct organisms in these homology groups
+    organism_count = (
+        db.query(func.count(distinct(Feature.organism_no)))
+        .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(FeatHomology.homology_group_no.in_(hg_nos))
+        .filter(HomologyGroup.method == 'CGOB')
+        .filter(HomologyGroup.homology_group_type == 'ortholog')
+        .scalar()
+    )
+
+    return organism_count or 0
+
+
+def _calculate_confidence_score(
+    match_reasons: list[str],
+    evidence_tier: int,
+    is_housekeeping: bool,
+) -> int:
+    """
+    Calculate confidence score (0-20 range) based on evidence quality.
+
+    Args:
+        match_reasons: List of match reason strings
+        evidence_tier: The best evidence tier (1-4)
+        is_housekeeping: Whether the gene is a housekeeping gene
+
+    Returns:
+        Confidence score (0-20)
+    """
+    score = 0
+
+    for reason in match_reasons:
+        reason_lower = reason.lower()
+
+        if "virulence model:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["virulence_model"]
+        elif "phenotype:" in reason_lower:
+            if evidence_tier == 1:
+                score += EVIDENCE_WEIGHTS["tier1_phenotype"]
+            elif evidence_tier == 2:
+                score += EVIDENCE_WEIGHTS["tier2_phenotype"]
+            # Tier 3 and 4 phenotypes don't add points
+        elif "go:" in reason_lower:
+            # Check for virulence-related GO terms
+            if any(t in reason_lower for t in ["pathogenesis", "host", "virulence"]):
+                score += EVIDENCE_WEIGHTS["virulence_go"]
+        elif "literature topic: disease" in reason_lower:
+            score += EVIDENCE_WEIGHTS["disease_literature"]
+        elif "gene pattern:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["gene_pattern"]
+        elif "headline:" in reason_lower:
+            score += EVIDENCE_WEIGHTS["keyword_match"]
+
+    if is_housekeeping:
+        score += EVIDENCE_WEIGHTS["housekeeping_penalty"]
+
+    return max(0, min(20, score))  # Clamp to 0-20 range
+
+
+def _get_best_evidence_tier(match_reasons: list[str]) -> tuple[int, str]:
+    """
+    Determine the best (lowest number) evidence tier from match reasons.
+
+    Args:
+        match_reasons: List of match reason strings
+
+    Returns:
+        Tuple of (best_tier_number, tier_name)
+    """
+    best_tier = 4
+    best_tier_name = "Indirect"
+
+    for reason in match_reasons:
+        if reason.startswith("phenotype:"):
+            observable = reason.replace("phenotype: ", "")
+            tier, tier_name = _classify_phenotype_tier(observable)
+            if tier < best_tier:
+                best_tier = tier
+                best_tier_name = tier_name
+        elif reason.startswith("virulence model:"):
+            # Virulence model evidence is tier 1
+            if 1 < best_tier:
+                best_tier = 1
+                best_tier_name = "Direct Virulence"
+
+    return best_tier, best_tier_name
 
 
 def _query_by_gene_patterns(
@@ -399,6 +584,11 @@ def get_virulence_factors(
     search_term: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
+    max_evidence_tier: Optional[int] = None,
+    min_confidence_score: Optional[int] = None,
+    hide_housekeeping: bool = False,
+    sort_by: str = "confidence_score",
+    sort_order: str = "desc",
 ) -> VirulenceFactorsResponse:
     """
     Search virulence factors by criteria.
@@ -410,6 +600,11 @@ def get_virulence_factors(
         search_term: Keyword search for gene name or headline
         page: Page number (1-indexed)
         page_size: Results per page
+        max_evidence_tier: Only include tiers <= this value (1=best, 4=weakest)
+        min_confidence_score: Only include scores >= this value
+        hide_housekeeping: If True, exclude housekeeping genes
+        sort_by: Field to sort by ("confidence_score", "gene_name", "evidence_tier")
+        sort_order: Sort order ("asc" or "desc")
 
     Returns:
         VirulenceFactorsResponse with paginated results
@@ -492,7 +687,49 @@ def get_virulence_factors(
                 filtered_data[feature_no] = data
         gene_data = filtered_data
 
-    # Convert to list and sort
+    # Compute evidence quality fields for each gene
+    for feature_no, data in gene_data.items():
+        feature = data["feature"]
+        match_reasons_list = list(data["match_reasons"])
+
+        # Determine best evidence tier from phenotype matches
+        evidence_tier, evidence_tier_name = _get_best_evidence_tier(match_reasons_list)
+        data["evidence_tier"] = evidence_tier
+        data["evidence_tier_name"] = evidence_tier_name
+
+        # Check housekeeping status
+        is_hk, hk_reason = _is_housekeeping_gene(db, feature)
+        data["is_housekeeping"] = is_hk
+        data["housekeeping_reason"] = hk_reason
+
+        # Get ortholog count
+        data["ortholog_count"] = _get_ortholog_count(db, feature)
+
+        # Calculate confidence score
+        data["confidence_score"] = _calculate_confidence_score(
+            match_reasons_list, evidence_tier, is_hk
+        )
+
+    # Apply evidence quality filters
+    if max_evidence_tier is not None:
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if v["evidence_tier"] <= max_evidence_tier
+        }
+
+    if min_confidence_score is not None:
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if v["confidence_score"] >= min_confidence_score
+        }
+
+    if hide_housekeeping:
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if not v["is_housekeeping"]
+        }
+
+    # Convert to list
     gene_list = []
     for feature_no, data in gene_data.items():
         feature = data["feature"]
@@ -509,10 +746,26 @@ def get_virulence_factors(
             description=feature.headline,  # Use headline as description
             categories=sorted(data["categories"]),
             match_reasons=sorted(data["match_reasons"]),
+            evidence_tier=data["evidence_tier"],
+            evidence_tier_name=data["evidence_tier_name"],
+            confidence_score=data["confidence_score"],
+            is_housekeeping=data["is_housekeeping"],
+            housekeeping_reason=data["housekeeping_reason"],
+            ortholog_count=data["ortholog_count"],
         ))
 
-    # Sort by gene name
-    gene_list.sort(key=lambda g: (g.gene_name or g.feature_name or "").lower())
+    # Sort results
+    reverse_sort = sort_order.lower() == "desc"
+    if sort_by == "confidence_score":
+        gene_list.sort(key=lambda g: (g.confidence_score, g.gene_name or g.feature_name or ""),
+                       reverse=reverse_sort)
+    elif sort_by == "evidence_tier":
+        # Lower tier is better, so reverse the reverse for ascending
+        gene_list.sort(key=lambda g: (g.evidence_tier, g.gene_name or g.feature_name or ""),
+                       reverse=not reverse_sort if sort_order.lower() == "desc" else reverse_sort)
+    else:  # Default to gene_name
+        gene_list.sort(key=lambda g: (g.gene_name or g.feature_name or "").lower(),
+                       reverse=reverse_sort)
 
     total_count = len(gene_list)
 

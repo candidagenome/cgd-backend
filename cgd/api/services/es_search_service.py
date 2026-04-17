@@ -2421,6 +2421,11 @@ def search_virulence_factors(
     search_term: str | None = None,
     page: int = 1,
     page_size: int = 25,
+    max_evidence_tier: int | None = None,
+    min_confidence_score: int | None = None,
+    hide_housekeeping: bool = False,
+    sort_by: str = "confidence_score",
+    sort_order: str = "desc",
 ) -> dict | None:
     """
     Search virulence factors using Elasticsearch.
@@ -2432,6 +2437,11 @@ def search_virulence_factors(
         search_term: Optional keyword search
         page: Page number (1-indexed)
         page_size: Results per page
+        max_evidence_tier: Only include genes with evidence tier <= this value
+        min_confidence_score: Only include genes with confidence score >= this value
+        hide_housekeeping: If True, exclude housekeeping genes
+        sort_by: Field to sort by (confidence_score, gene_name, evidence_tier)
+        sort_order: Sort order (asc, desc)
 
     Returns:
         Dict with items, total_count, page, page_size, categories_searched
@@ -2471,6 +2481,34 @@ def search_virulence_factors(
             }
         })
 
+    # Evidence quality filters
+    if max_evidence_tier is not None:
+        must_clauses.append({"range": {"evidence_tier": {"lte": max_evidence_tier}}})
+
+    if min_confidence_score is not None:
+        must_clauses.append({"range": {"confidence_score": {"gte": min_confidence_score}}})
+
+    if hide_housekeeping:
+        must_clauses.append({"term": {"is_housekeeping": False}})
+
+    # Build sort clause
+    if sort_by == "confidence_score":
+        sort_clause = [
+            {"confidence_score": {"order": sort_order}},
+            {"gene_name.keyword": {"order": "asc", "missing": "_last"}},
+        ]
+    elif sort_by == "evidence_tier":
+        # For evidence tier, lower is better, so reverse the sort direction
+        tier_order = "asc" if sort_order == "desc" else "desc"
+        sort_clause = [
+            {"evidence_tier": {"order": tier_order}},
+            {"gene_name.keyword": {"order": "asc", "missing": "_last"}},
+        ]
+    else:  # gene_name
+        sort_clause = [
+            {"gene_name.keyword": {"order": sort_order, "missing": "_last"}},
+        ]
+
     es_query = {
         "query": {
             "bool": {
@@ -2478,9 +2516,7 @@ def search_virulence_factors(
             }
         },
         "size": 10000,  # Get all for pagination
-        "sort": [
-            {"gene_name.keyword": {"order": "asc", "missing": "_last"}},
-        ],
+        "sort": sort_clause,
     }
 
     try:
@@ -2501,6 +2537,13 @@ def search_virulence_factors(
                 "description": source.get("headline"),
                 "categories": source.get("category_names", []),
                 "match_reasons": source.get("match_reasons", []),
+                # Evidence quality fields
+                "evidence_tier": source.get("evidence_tier", 4),
+                "evidence_tier_name": source.get("evidence_tier_name", "Indirect"),
+                "confidence_score": source.get("confidence_score", 0),
+                "is_housekeeping": source.get("is_housekeeping", False),
+                "housekeeping_reason": source.get("housekeeping_reason"),
+                "ortholog_count": source.get("ortholog_count", 0),
             })
 
         # Apply pagination

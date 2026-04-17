@@ -88,13 +88,33 @@ def get_virulence_factors(
     search_term: Optional[str] = Query(None, description="Search term for gene name or description"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(25, ge=1, le=1000, description="Results per page"),
+    max_evidence_tier: Optional[int] = Query(
+        None, ge=1, le=4,
+        description="Only include genes with evidence tier <= this value (1=best, 4=weakest)"
+    ),
+    min_confidence_score: Optional[int] = Query(
+        None, ge=0, le=20,
+        description="Only include genes with confidence score >= this value"
+    ),
+    hide_housekeeping: bool = Query(
+        False,
+        description="If true, exclude housekeeping/essential genes"
+    ),
+    sort_by: str = Query(
+        "confidence_score",
+        description="Field to sort by: confidence_score, gene_name, or evidence_tier"
+    ),
+    sort_order: str = Query(
+        "desc",
+        description="Sort order: asc or desc"
+    ),
     db: Session = Depends(get_db),
 ):
     """
     Search virulence factors by criteria.
 
     Returns genes matching the specified virulence categories, with optional
-    filtering by organism and keyword search.
+    filtering by organism, keyword search, and evidence quality filters.
 
     Uses Elasticsearch when enabled and available, falls back to Oracle.
 
@@ -104,9 +124,14 @@ def get_virulence_factors(
         search_term: Keyword to search gene names and headlines
         page: Page number (1-indexed)
         page_size: Number of results per page
+        max_evidence_tier: Only include tiers <= this (1=Direct Virulence, 4=Indirect)
+        min_confidence_score: Only include scores >= this (0-20 range)
+        hide_housekeeping: Exclude housekeeping genes
+        sort_by: Sort field (confidence_score, gene_name, evidence_tier)
+        sort_order: Sort direction (asc, desc)
 
     Returns:
-        Paginated list of virulence factors with category mappings
+        Paginated list of virulence factors with category mappings and evidence quality
     """
     # Try Elasticsearch first if enabled
     if settings.use_elasticsearch:
@@ -121,6 +146,11 @@ def get_virulence_factors(
                     search_term=search_term,
                     page=page,
                     page_size=page_size,
+                    max_evidence_tier=max_evidence_tier,
+                    min_confidence_score=min_confidence_score,
+                    hide_housekeeping=hide_housekeeping,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
                 )
                 if result:
                     return VirulenceFactorsResponse(
@@ -144,6 +174,11 @@ def get_virulence_factors(
             search_term=search_term,
             page=page,
             page_size=page_size,
+            max_evidence_tier=max_evidence_tier,
+            min_confidence_score=min_confidence_score,
+            hide_housekeeping=hide_housekeeping,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
     except Exception as e:
         logger.error(f"Error in get_virulence_factors: {e}")
