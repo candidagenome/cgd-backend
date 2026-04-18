@@ -87,7 +87,7 @@ def get_virulence_factors(
     organisms: list[str] = Query(default=[], description="Organism abbreviations to filter by"),
     search_term: Optional[str] = Query(None, description="Search term for gene name or description"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(25, ge=1, le=1000, description="Results per page"),
+    page_size: int = Query(25, ge=1, le=5000, description="Results per page"),
     max_evidence_tier: Optional[int] = Query(
         None, ge=1, le=4,
         description="Only include genes with evidence tier <= this value (1=best, 4=weakest)"
