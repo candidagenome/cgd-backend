@@ -2495,7 +2495,7 @@ def search_virulence_factors(
 
     # Filter by evidence types (GO, PHE, KW)
     if evidence_types:
-        must_clauses.append({"terms": {"evidence_types": [et.upper() for et in evidence_types]}})
+        must_clauses.append({"terms": {"evidence_types.keyword": [et.upper() for et in evidence_types]}})
 
     # Build sort clause
     if sort_by == "confidence_score":
