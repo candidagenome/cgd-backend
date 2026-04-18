@@ -27,6 +27,8 @@ from cgd.schemas.virulence_schema import (
     extract_evidence_types,
     generate_inclusion_reason,
     split_evidence,
+    generate_summary,
+    generate_evidence_breakdown,
     VirulenceCategory,
     VirulenceCategoriesResponse,
     VirulenceFactor,
@@ -806,6 +808,23 @@ def get_virulence_factors(
         # Need to load organism relationship
         organism = db.query(Organism).filter(Organism.organism_no == feature.organism_no).first()
 
+        # Generate summary and evidence breakdown
+        display_name = feature.gene_name or feature.feature_name
+        summary = generate_summary(
+            gene_name=display_name,
+            categories=sorted(data["categories"]),
+            direct_evidence=data["direct_evidence"],
+            indirect_evidence=data["indirect_evidence"],
+            headline=feature.headline,
+            confidence_tier=data["confidence_tier"],
+        )
+        evidence_breakdown = generate_evidence_breakdown(
+            direct_evidence=data["direct_evidence"],
+            indirect_evidence=data["indirect_evidence"],
+            paper_count=data["paper_count"],
+            confidence_score=data["confidence_score"],
+        )
+
         gene_list.append(VirulenceFactor(
             feature_no=feature.feature_no,
             feature_name=feature.feature_name,
@@ -829,6 +848,8 @@ def get_virulence_factors(
             pmids=data["pmids"],
             direct_evidence=data["direct_evidence"],
             indirect_evidence=data["indirect_evidence"],
+            summary=summary,
+            evidence_breakdown=evidence_breakdown,
         ))
 
     # Sort results
