@@ -231,6 +231,28 @@ CATEGORY_VIRULENCE_PHRASES = {
     "Drug Resistance": "drug response",
 }
 
+# Semantic normalization to deduplicate similar concepts
+# Maps phrases to canonical form to avoid "adhesion and biofilm and adhesion"
+CONCEPT_NORMALIZATION = {
+    "biofilm formation": "adhesion",
+    "cell adhesion": "adhesion",
+    "host adhesion": "adhesion",
+    "host interaction": "host interaction",
+    "immune evasion": "host interaction",
+    "secreted enzymatic activity": "secreted enzymatic activity",
+    "morphogenesis": "morphogenesis",
+    "drug response": "drug response",
+}
+
+# Role normalization for verbose headline-derived phrases
+ROLE_NORMALIZATION = {
+    "protein that is required for the normal transcriptional response": "transcriptional regulator",
+    "protein that plays a role in proteolysis": "protease",
+    "protein that is involved in proteolysis": "protease",
+    "protein that plays a role in transcription": "transcriptional regulator",
+    "protein that is associated with transcription": "transcriptional regulator",
+}
+
 
 def determine_evidence_language_tier(
     confidence_tier: str,
@@ -280,22 +302,30 @@ def determine_evidence_language_tier(
     return "indirect_low"
 
 
-def get_virulence_phrase(categories: list[str], max_items: int = 2) -> str | None:
+def get_virulence_phrase(categories: list[str], max_items: int = 1) -> str | None:
     """
     Get virulence relevance phrase from categories.
 
     These describe virulence context, NOT gene identity.
+    Deduplicates semantically similar concepts (e.g., adhesion + biofilm -> adhesion).
+    Limited to max_items=1 by default to avoid repetition.
     """
     phrases = []
+    seen_normalized = set()
+
     for cat in categories:
         if cat in CATEGORY_VIRULENCE_PHRASES:
             phrase = CATEGORY_VIRULENCE_PHRASES[cat]
-            if phrase not in phrases:
+            # Normalize to detect semantic duplicates
+            normalized = CONCEPT_NORMALIZATION.get(phrase, phrase)
+            if normalized not in seen_normalized:
+                seen_normalized.add(normalized)
                 phrases.append(phrase)
 
     if not phrases:
         return None
 
+    # Limit to max_items (default 1 to keep summaries tight)
     phrases = phrases[:max_items]
     if len(phrases) == 1:
         return phrases[0]
@@ -720,6 +750,16 @@ def calculate_importance_level(
     return level, label
 
 
+def _is_generic_gene(role: str) -> bool:
+    """Check if gene role is generic (housekeeping-like)."""
+    generic_roles = {
+        "actin cytoskeletal protein", "tubulin cytoskeletal protein",
+        "ribosomal protein", "elongation factor", "translation initiation factor",
+        "histone protein", "glycolytic enzyme", "metabolic enzyme",
+    }
+    return role.lower() in generic_roles
+
+
 def generate_summary(
     gene_name: str,
     categories: list[str],
@@ -763,10 +803,13 @@ def generate_summary(
     # Get primary action (core function clause)
     action_info = _get_primary_action(actions)
 
-    # Get virulence relevance phrase from categories
-    virulence_phrase = get_virulence_phrase(categories)
+    # Get virulence relevance phrase from categories (max 1 to avoid repetition)
+    virulence_phrase = get_virulence_phrase(categories, max_items=1)
 
     # Build first clause: core identity + function
+    action_phrase = ""
+    has_plays_role = False
+
     if action_info:
         verb, target = action_info
 
@@ -778,6 +821,9 @@ def generate_summary(
                 verb = "involved in"
             elif verb in ("regulates", "promotes", "activates"):
                 verb = "associated with"
+            # For annotation_supported, skip "role in" entirely - too assertive
+            if verb == "role in":
+                verb = "involved in"
 
         # Format action phrase with proper grammar
         # Verbs needing "that X" construction
@@ -787,9 +833,10 @@ def generate_summary(
         # Verbs needing "that is X" construction
         elif verb in ("required for", "essential for", "involved in", "associated with"):
             action_phrase = f"that is {verb} {target}"
-        # "role in" gets special phrasing
+        # "role in" gets special phrasing (only for strong evidence)
         elif verb == "role in":
             action_phrase = f"that plays a role in {target}"
+            has_plays_role = True
         # Verbs with "may" stay as-is
         elif verb.startswith("may "):
             action_phrase = f"that {verb} {target}"
@@ -802,12 +849,19 @@ def generate_summary(
         first_clause = f"{gene_name} is {article(role)} {role}"
 
     # Build virulence clause based on evidence tier
+    # AVOID redundant phrasing: don't use "contributing to" if we already have "plays a role"
     virulence_clause = ""
     if virulence_phrase:
-        if evidence_tier == "in_vivo_strong":
+        if evidence_tier == "in_vivo_strong" and not has_plays_role:
             virulence_clause = f", contributing to {virulence_phrase}"
-        elif evidence_tier == "experimental_strong":
+        elif evidence_tier == "in_vivo_strong" and has_plays_role:
+            # Skip virulence clause to avoid "plays a role ... contributing to"
+            virulence_clause = ""
+        elif evidence_tier == "experimental_strong" and not has_plays_role:
             virulence_clause = f", involved in {virulence_phrase}"
+        elif evidence_tier == "experimental_strong" and has_plays_role:
+            # Already have "plays a role", skip redundant clause
+            virulence_clause = ""
         elif evidence_tier == "experimental_moderate":
             virulence_clause = f", associated with {virulence_phrase}"
         elif evidence_tier == "annotation_supported":
@@ -820,13 +874,23 @@ def generate_summary(
     if not summary.endswith("."):
         summary += "."
 
-    # Add evidence ending phrase ONLY for strong evidence
+    # Check for verbose role patterns and normalize
+    for verbose, normalized in ROLE_NORMALIZATION.items():
+        if verbose in summary.lower():
+            summary = summary.replace(verbose, normalized)
+            break
+
+    # Add evidence ending phrase ONLY for strong evidence AND non-generic genes
     ending = tier_config.get("ending_phrase")
-    if ending and evidence_tier in ("in_vivo_strong", "experimental_strong"):
-        # Only add ending if it fits without truncation
-        combined = summary.rstrip(".") + ". " + ending
-        if len(combined) <= 180:
-            summary = combined
+    if ending and evidence_tier == "in_vivo_strong":
+        # Only add "Virulence demonstrated in vivo" if:
+        # - confidence is High
+        # - gene is not generic (e.g., ACT1, housekeeping)
+        confidence = confidence_tier.lower() if confidence_tier else "low"
+        if confidence == "high" and not _is_generic_gene(role):
+            combined = summary.rstrip(".") + ". " + ending
+            if len(combined) <= 180:
+                summary = combined
 
     # Cap at 180 chars for table display, truncate at word boundary
     if len(summary) > 180:
@@ -906,28 +970,34 @@ def generate_summary_full(
         else:
             parts.append(f"that {formatted[0]} and {formatted[1]}")
 
-    # Add virulence context based on evidence tier
-    virulence_phrase = get_virulence_phrase(categories)
-    if virulence_phrase:
+    # Add virulence context based on evidence tier (max 1 concept to avoid repetition)
+    virulence_phrase = get_virulence_phrase(categories, max_items=1)
+
+    # Check if we already mentioned similar concepts in the action phrase
+    has_role_phrase = any("plays a" in p or "role in" in p for p in parts)
+
+    if virulence_phrase and not has_role_phrase:
         if evidence_tier == "in_vivo_strong":
-            parts.append(f"and plays a key role in {virulence_phrase}")
-        elif evidence_tier == "experimental_strong":
             parts.append(f"and contributes to {virulence_phrase}")
-        elif evidence_tier == "experimental_moderate":
+        elif evidence_tier == "experimental_strong":
             parts.append(f"and is involved in {virulence_phrase}")
-        elif evidence_tier == "annotation_supported":
+        elif evidence_tier == "experimental_moderate":
             parts.append(f"and is associated with {virulence_phrase}")
+        elif evidence_tier == "annotation_supported":
+            parts.append(f"with annotation support for {virulence_phrase}")
         else:
-            parts.append(f"with limited evidence linking it to {virulence_phrase}")
+            parts.append(f"with limited evidence for {virulence_phrase}")
 
     summary = " ".join(parts).strip()
     if not summary.endswith("."):
         summary += "."
 
-    # Add evidence ending for strong evidence
+    # Add evidence ending for strong evidence (same rules as generate_summary)
     ending = tier_config.get("ending_phrase")
-    if ending:
-        summary += " " + ending
+    if ending and evidence_tier == "in_vivo_strong":
+        confidence = confidence_tier.lower() if confidence_tier else "low"
+        if confidence == "high" and not _is_generic_gene(role):
+            summary += " " + ending
 
     # Add study signal
     if paper_count >= 10:
