@@ -823,13 +823,19 @@ def generate_summary(
     # Add evidence ending phrase ONLY for strong evidence
     ending = tier_config.get("ending_phrase")
     if ending and evidence_tier in ("in_vivo_strong", "experimental_strong"):
-        # Check if summary is short enough to add ending
-        if len(summary) + len(ending) + 1 <= 160:
-            summary = summary.rstrip(".") + ". " + ending
+        # Only add ending if it fits without truncation
+        combined = summary.rstrip(".") + ". " + ending
+        if len(combined) <= 180:
+            summary = combined
 
-    # Cap at 160 chars for table display
-    if len(summary) > 160:
-        summary = summary[:157] + "..."
+    # Cap at 180 chars for table display, truncate at word boundary
+    if len(summary) > 180:
+        # Find last space before limit to truncate at word boundary
+        truncate_at = summary.rfind(' ', 0, 177)
+        if truncate_at > 100:  # Ensure we keep a reasonable amount
+            summary = summary[:truncate_at] + "..."
+        else:
+            summary = summary[:177] + "..."
 
     return summary
 
