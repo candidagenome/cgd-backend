@@ -291,9 +291,12 @@ def generate_inclusion_reason(match_reasons: list[str], categories: list[str]) -
 
 def _extract_function_from_headline(headline: str) -> str | None:
     """
-    Extract the biological function/role from headline text.
+    Extract the CORE MOLECULAR FUNCTION from headline text.
 
-    Looks for patterns like "transcription factor", "adhesin", "kinase", etc.
+    IMPORTANT: Prioritizes actual biological role (actin, kinase, etc.)
+    over category-derived labels. This ensures summaries reflect true
+    gene function, not just virulence category membership.
+
     Returns the function phrase or None.
     """
     import re
@@ -302,6 +305,31 @@ def _extract_function_from_headline(headline: str) -> str | None:
         return None
 
     headline_lower = headline.lower()
+
+    # First check: Does headline START with a protein name/type?
+    # Many headlines begin with "Actin;", "Kinase;", etc.
+    first_word_patterns = [
+        (r'^actin\b', 'actin cytoskeletal protein'),
+        (r'^tubulin\b', 'tubulin cytoskeletal protein'),
+        (r'^histone\b', 'histone protein'),
+        (r'^ribosomal\b', 'ribosomal protein'),
+        (r'^ubiquitin\b', 'ubiquitin-related protein'),
+        (r'^cyclophilin\b', 'cyclophilin'),
+        (r'^thioredoxin\b', 'thioredoxin'),
+        (r'^glutathione\b', 'glutathione-related protein'),
+        (r'^superoxide dismutase\b', 'superoxide dismutase'),
+        (r'^catalase\b', 'catalase'),
+        (r'^peroxidase\b', 'peroxidase'),
+        (r'^elongation factor\b', 'elongation factor'),
+        (r'^initiation factor\b', 'translation initiation factor'),
+        (r'^glyceraldehyde\b', 'glycolytic enzyme'),
+        (r'^enolase\b', 'enolase'),
+        (r'^pyruvate\b', 'metabolic enzyme'),
+    ]
+
+    for pattern, func_name in first_word_patterns:
+        if re.search(pattern, headline_lower):
+            return func_name
 
     # Function patterns - ordered by specificity
     function_patterns = [
@@ -322,6 +350,12 @@ def _extract_function_from_headline(headline: str) -> str | None:
         (r'\btransferase\b', 'transferase'),
         (r'\boxidase\b', 'oxidase'),
         (r'\breductase\b', 'reductase'),
+        (r'\bdehydrogenase\b', 'dehydrogenase'),
+        (r'\bisomerase\b', 'isomerase'),
+        # Cytoskeleton/structural (anywhere in headline)
+        (r'\bactin\b', 'actin cytoskeletal protein'),
+        (r'\btubulin\b', 'tubulin'),
+        (r'\bcytoskeletal\b', 'cytoskeletal protein'),
         # Surface/structural
         (r'\bcell (?:surface|wall) (?:protein|adhesin)\b', 'cell surface protein'),
         (r'\badhesin\b', 'adhesin'),
@@ -336,6 +370,7 @@ def _extract_function_from_headline(headline: str) -> str | None:
         # Chaperones/stress
         (r'\bheat shock protein\b', 'heat shock protein'),
         (r'\bchaperone\b', 'chaperone'),
+        (r'\bsuperoxide dismutase\b', 'superoxide dismutase'),
         # Generic regulators
         (r'\bregulator\b', 'regulator'),
     ]
@@ -588,20 +623,15 @@ def generate_summary(
     actions = _extract_actions_from_headline(headline)
     models = _extract_model_systems(headline, direct_evidence)
 
-    # Determine role
+    # Determine role - PRIORITIZE molecular function over category
     if function:
         role = function
+        has_molecular_function = True
     else:
-        category_roles = {
-            "Adhesins": "adhesin",
-            "Secreted Enzymes": "secreted enzyme",
-            "Morphogenesis": "morphogenesis regulator",
-            "Host Interaction": "host interaction factor",
-            "Biofilm Formation": "biofilm-associated protein",
-            "Immune Evasion": "immune evasion factor",
-            "Drug Resistance": "drug resistance protein",
-        }
-        role = next((category_roles[c] for c in categories if c in category_roles), "virulence factor")
+        # No clear molecular function found - use neutral "protein" phrasing
+        # to avoid misleading statements like "ACT1 is a drug resistance protein"
+        role = "protein"
+        has_molecular_function = False
 
     # Get primary action
     action_info = _get_primary_action(actions)
@@ -626,18 +656,41 @@ def generate_summary(
         else:
             summary = f"{gene_name} is {article(role)} {role} that {action_phrase}, contributing to pathogenesis."
     else:
-        # No specific action found - use category-based summary
-        if models:
-            model_short = models[0].replace(" model", "").replace(" interaction", "")
-            summary = f"{gene_name} is {article(role)} {role} contributing to virulence in {model_short}."
-        elif "Biofilm Formation" in categories:
-            summary = f"{gene_name} is {article(role)} {role} involved in biofilm formation and pathogenesis."
-        elif "Host Interaction" in categories:
-            summary = f"{gene_name} is {article(role)} {role} involved in host-pathogen interaction."
-        elif "Drug Resistance" in categories:
-            summary = f"{gene_name} is {article(role)} {role} involved in antifungal drug resistance."
+        # No specific action found
+        if has_molecular_function:
+            # We have a real function (actin, kinase, etc.)
+            if models:
+                model_short = models[0].replace(" model", "").replace(" interaction", "")
+                summary = f"{gene_name} is {article(role)} {role} with virulence evidence in {model_short}."
+            else:
+                # Mention category context without asserting gene IS that type
+                cat_context = ""
+                if "Biofilm Formation" in categories:
+                    cat_context = "linked to biofilm formation"
+                elif "Host Interaction" in categories:
+                    cat_context = "implicated in host interaction"
+                elif "Drug Resistance" in categories:
+                    cat_context = "associated with drug response"
+                elif "Morphogenesis" in categories:
+                    cat_context = "involved in morphogenesis"
+                else:
+                    cat_context = "associated with virulence"
+                summary = f"{gene_name} is {article(role)} {role} {cat_context}."
         else:
-            summary = f"{gene_name} is {article(role)} {role} associated with Candida virulence."
+            # No molecular function found - use very neutral phrasing
+            if models:
+                model_short = models[0].replace(" model", "").replace(" interaction", "")
+                summary = f"{gene_name} has virulence phenotype evidence in {model_short}."
+            elif "Biofilm Formation" in categories:
+                summary = f"{gene_name} is associated with biofilm formation."
+            elif "Host Interaction" in categories:
+                summary = f"{gene_name} is implicated in host-pathogen interaction."
+            elif "Drug Resistance" in categories:
+                summary = f"{gene_name} is associated with drug resistance phenotypes."
+            elif "Morphogenesis" in categories:
+                summary = f"{gene_name} is involved in morphogenesis."
+            else:
+                summary = f"{gene_name} is associated with Candida virulence."
 
     # Cap at 160 chars for table display
     if len(summary) > 160:
