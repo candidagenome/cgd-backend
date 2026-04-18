@@ -817,6 +817,7 @@ def get_virulence_factors(
             indirect_evidence=data["indirect_evidence"],
             headline=feature.headline,
             confidence_tier=data["confidence_tier"],
+            paper_count=data["paper_count"],
         )
         evidence_breakdown = generate_evidence_breakdown(
             direct_evidence=data["direct_evidence"],

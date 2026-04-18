@@ -289,6 +289,162 @@ def generate_inclusion_reason(match_reasons: list[str], categories: list[str]) -
     return reason_str[:100]  # Max 100 chars
 
 
+def _extract_function_from_headline(headline: str) -> str | None:
+    """
+    Extract the biological function/role from headline text.
+
+    Looks for patterns like "transcription factor", "adhesin", "kinase", etc.
+    Returns the function phrase or None.
+    """
+    import re
+
+    if not headline:
+        return None
+
+    headline_lower = headline.lower()
+
+    # Function patterns - ordered by specificity
+    function_patterns = [
+        # Transcription/regulation
+        (r'\btranscription factor\b', 'transcription factor'),
+        (r'\btranscriptional (?:activator|repressor|regulator)\b', 'transcriptional regulator'),
+        (r'\bDNA[- ]binding (?:protein|factor)\b', 'DNA-binding protein'),
+        (r'\bzinc finger (?:protein|transcription factor)\b', 'zinc finger protein'),
+        # Enzymes
+        (r'\baspartyl protease\b', 'secreted aspartyl protease'),
+        (r'\bsecretory? (?:aspartyl )?protease\b', 'secreted protease'),
+        (r'\bprotease\b', 'protease'),
+        (r'\blipase\b', 'lipase'),
+        (r'\bphospholipase\b', 'phospholipase'),
+        (r'\bkinase\b', 'kinase'),
+        (r'\bphosphatase\b', 'phosphatase'),
+        (r'\bsynthase\b', 'synthase'),
+        (r'\btransferase\b', 'transferase'),
+        (r'\boxidase\b', 'oxidase'),
+        (r'\breductase\b', 'reductase'),
+        # Surface/structural
+        (r'\bcell (?:surface|wall) (?:protein|adhesin)\b', 'cell surface protein'),
+        (r'\badhesin\b', 'adhesin'),
+        (r'\bGPI[- ]anchored (?:protein|adhesin)\b', 'GPI-anchored protein'),
+        (r'\bmembrane protein\b', 'membrane protein'),
+        (r'\btransporter\b', 'transporter'),
+        (r'\befflux pump\b', 'efflux pump'),
+        # Signaling
+        (r'\bMAP kinase\b', 'MAP kinase'),
+        (r'\bsignal(?:ing)? (?:protein|molecule)\b', 'signaling protein'),
+        (r'\breceptor\b', 'receptor'),
+        # Chaperones/stress
+        (r'\bheat shock protein\b', 'heat shock protein'),
+        (r'\bchaperone\b', 'chaperone'),
+        # Generic regulators
+        (r'\bregulator\b', 'regulator'),
+    ]
+
+    for pattern, func_name in function_patterns:
+        if re.search(pattern, headline_lower):
+            return func_name
+
+    return None
+
+
+def _extract_actions_from_headline(headline: str) -> list[str]:
+    """
+    Extract biological actions/mechanisms from headline.
+
+    Looks for patterns like "regulates X", "required for Y", "promotes Z".
+    Returns list of action phrases.
+    """
+    import re
+
+    if not headline:
+        return []
+
+    actions = []
+
+    # Action verb patterns with their targets
+    action_patterns = [
+        # Regulation patterns
+        (r'regulates? ([^;,\.]+?)(?:;|,|\.|$)', 'regulates'),
+        (r'controls? ([^;,\.]+?)(?:;|,|\.|$)', 'controls'),
+        (r'modulates? ([^;,\.]+?)(?:;|,|\.|$)', 'modulates'),
+        # Requirement patterns
+        (r'required for ([^;,\.]+?)(?:;|,|\.|$)', 'required for'),
+        (r'essential for ([^;,\.]+?)(?:;|,|\.|$)', 'essential for'),
+        (r'necessary for ([^;,\.]+?)(?:;|,|\.|$)', 'necessary for'),
+        # Promotion/induction
+        (r'promotes? ([^;,\.]+?)(?:;|,|\.|$)', 'promotes'),
+        (r'induces? ([^;,\.]+?)(?:;|,|\.|$)', 'induces'),
+        (r'activates? ([^;,\.]+?)(?:;|,|\.|$)', 'activates'),
+        (r'enhances? ([^;,\.]+?)(?:;|,|\.|$)', 'enhances'),
+        # Inhibition
+        (r'inhibits? ([^;,\.]+?)(?:;|,|\.|$)', 'inhibits'),
+        (r'represses? ([^;,\.]+?)(?:;|,|\.|$)', 'represses'),
+        (r'suppresses? ([^;,\.]+?)(?:;|,|\.|$)', 'suppresses'),
+        # Involvement
+        (r'involved in ([^;,\.]+?)(?:;|,|\.|$)', 'involved in'),
+        (r'contributes? to ([^;,\.]+?)(?:;|,|\.|$)', 'contributes to'),
+        (r'mediates? ([^;,\.]+?)(?:;|,|\.|$)', 'mediates'),
+        (r'participates? in ([^;,\.]+?)(?:;|,|\.|$)', 'participates in'),
+        # Role patterns
+        (r'role in ([^;,\.]+?)(?:;|,|\.|$)', 'role in'),
+        (r'functions? in ([^;,\.]+?)(?:;|,|\.|$)', 'functions in'),
+    ]
+
+    for pattern, verb in action_patterns:
+        matches = re.findall(pattern, headline, re.IGNORECASE)
+        for match in matches:
+            target = match.strip()
+            # Clean up and limit length
+            if target and len(target) > 3 and len(target) < 60:
+                # Skip if it's just a gene name reference
+                if not re.match(r'^[A-Z][a-z]+\d*$', target):
+                    actions.append(f"{verb} {target}")
+
+    return actions[:3]  # Limit to top 3 actions
+
+
+def _extract_model_systems(headline: str, direct_evidence: list[str]) -> list[str]:
+    """
+    Extract experimental model systems from headline and evidence.
+
+    Returns list of model system descriptions.
+    """
+    import re
+
+    models = []
+
+    # Check headline for model mentions
+    if headline:
+        headline_lower = headline.lower()
+
+        model_patterns = [
+            (r'\bmouse\b|\bmurine\b|\bmice\b', 'mouse infection model'),
+            (r'\bgalleria\b', 'Galleria mellonella model'),
+            (r'\bcatheter\b', 'catheter biofilm model'),
+            (r'\brat\b', 'rat model'),
+            (r'\bmacrophage\b', 'macrophage interaction'),
+            (r'\bepithelial\b', 'epithelial cell interaction'),
+            (r'\bendothelial\b', 'endothelial cell interaction'),
+            (r'\bin vivo\b', 'in vivo studies'),
+        ]
+
+        for pattern, model_name in model_patterns:
+            if re.search(pattern, headline_lower):
+                if model_name not in models:
+                    models.append(model_name)
+
+    # Check direct evidence for virulence models
+    for evidence in direct_evidence:
+        ev_lower = evidence.lower()
+        if 'virulence model' in ev_lower:
+            if 'mouse' in ev_lower and 'mouse infection model' not in models:
+                models.append('mouse infection model')
+            elif 'galleria' in ev_lower and 'Galleria mellonella model' not in models:
+                models.append('Galleria mellonella model')
+
+    return models[:2]  # Limit to 2
+
+
 def generate_summary(
     gene_name: str,
     categories: list[str],
@@ -296,92 +452,140 @@ def generate_summary(
     indirect_evidence: list[str],
     headline: str | None,
     confidence_tier: str,
+    paper_count: int = 0,
 ) -> str:
     """
-    Generate a 1-2 line curated summary explaining why this is a virulence factor.
+    Generate a biological summary explaining the gene's role in virulence.
+
+    This extracts real biological meaning from the headline and evidence,
+    not just metadata labels.
+
+    Structure:
+    1. Function (what it is): transcription factor, adhesin, protease...
+    2. Mechanism (what it does): regulates X, promotes Y, required for Z...
+    3. Evidence context (where shown): mouse model, biofilm assay...
 
     Example output:
-    "ALS3: Adhesin with direct virulence evidence (mouse model), involved in
-     biofilm formation and host cell adhesion."
+    "ACE2 is a transcription factor that regulates morphogenesis and adhesion,
+     contributing to virulence in mouse infection models."
     """
+    # Extract biological information from headline
+    function = _extract_function_from_headline(headline)
+    actions = _extract_actions_from_headline(headline)
+    models = _extract_model_systems(headline, direct_evidence)
+
+    # Build the summary sentence
     parts = []
 
-    # Start with gene name
-    gene_prefix = f"{gene_name}: " if gene_name else ""
+    # Helper for a/an article selection
+    def article(word: str) -> str:
+        """Return 'an' if word starts with vowel sound, else 'a'."""
+        vowels = 'aeiouAEIOU'
+        return 'an' if word and word[0] in vowels else 'a'
 
-    # Determine primary role from categories
-    category_roles = {
-        "Adhesins": "adhesin",
-        "Secreted Enzymes": "secreted enzyme",
-        "Morphogenesis": "morphogenesis regulator",
-        "Host Interaction": "host interaction factor",
-        "Biofilm Formation": "biofilm-associated protein",
-        "Immune Evasion": "immune evasion factor",
-        "Drug Resistance": "drug resistance factor",
-    }
+    # Part 1: Gene name + function (what it is)
+    if function:
+        parts.append(f"{gene_name} is {article(function)} {function}")
+    elif gene_name:
+        # Fallback to category-based role
+        category_roles = {
+            "Adhesins": "cell surface adhesin",
+            "Secreted Enzymes": "secreted enzyme",
+            "Morphogenesis": "morphogenesis-related protein",
+            "Host Interaction": "host interaction factor",
+            "Biofilm Formation": "biofilm-associated protein",
+            "Immune Evasion": "immune evasion factor",
+            "Drug Resistance": "drug resistance protein",
+        }
+        for cat in categories:
+            if cat in category_roles:
+                role = category_roles[cat]
+                parts.append(f"{gene_name} is {article(role)} {role}")
+                break
+        if not parts:
+            parts.append(f"{gene_name} is a virulence-associated protein")
 
-    primary_role = None
-    for cat in categories:
-        if cat in category_roles:
-            primary_role = category_roles[cat]
-            break
+    # Part 2: Mechanism (what it does)
+    if actions:
+        # Fix grammar for certain phrases
+        def format_action(action: str) -> str:
+            # "role in X" -> "plays a role in X"
+            if action.startswith("role in "):
+                return "plays a " + action
+            # "required for X" -> "is required for X"
+            if action.startswith("required for "):
+                return "is " + action
+            # "essential for X" -> "is essential for X"
+            if action.startswith("essential for "):
+                return "is " + action
+            # "necessary for X" -> "is necessary for X"
+            if action.startswith("necessary for "):
+                return "is " + action
+            # "involved in X" -> "is involved in X"
+            if action.startswith("involved in "):
+                return "is " + action
+            return action
 
-    if primary_role:
-        parts.append(primary_role.capitalize())
+        formatted_actions = [format_action(a) for a in actions]
 
-    # Add evidence strength context
-    evidence_context = []
-
-    # Check for virulence model in direct evidence
-    virulence_models = [e for e in direct_evidence if "virulence model" in e.lower()]
-    if virulence_models:
-        # Extract model type
-        model_text = virulence_models[0]
-        if "mouse" in model_text.lower():
-            evidence_context.append("mouse model")
-        elif "galleria" in model_text.lower():
-            evidence_context.append("Galleria model")
+        # Join actions with appropriate conjunctions
+        if len(formatted_actions) == 1:
+            parts.append(f"that {formatted_actions[0]}")
+        elif len(formatted_actions) == 2:
+            parts.append(f"that {formatted_actions[0]} and {formatted_actions[1]}")
         else:
-            evidence_context.append("virulence model")
-
-    # Check for GO terms
-    go_direct = [e for e in direct_evidence if e.lower().startswith("go:")]
-    if go_direct:
-        evidence_context.append("GO annotation")
-
-    # Check for phenotypes
-    pheno_direct = [e for e in direct_evidence if "phenotype:" in e.lower()]
-    if pheno_direct:
-        evidence_context.append("phenotype data")
-
-    if evidence_context:
-        parts.append(f"with {confidence_tier.lower()} confidence ({', '.join(evidence_context[:2])})")
-
-    # Add functional context from categories
-    functions = []
-    for cat in categories:
-        if cat == "Biofilm Formation" and "biofilm" not in str(parts).lower():
-            functions.append("biofilm formation")
-        elif cat == "Host Interaction" and "host" not in str(parts).lower():
-            functions.append("host interaction")
-        elif cat == "Drug Resistance":
-            functions.append("drug resistance")
-        elif cat == "Immune Evasion":
-            functions.append("immune evasion")
-
-    if functions:
-        parts.append(f"involved in {' and '.join(functions[:2])}")
-
-    # Build summary
-    if parts:
-        summary = gene_prefix + ", ".join(parts) + "."
+            parts.append(f"that {formatted_actions[0]}, {formatted_actions[1]}, and {formatted_actions[2]}")
     elif headline:
-        # Fallback to truncated headline
-        summary = gene_prefix + headline[:150] + ("..." if len(headline) > 150 else "")
-    else:
-        summary = f"{gene_prefix}Virulence-associated gene in {', '.join(categories[:2])} categories."
+        # Try to extract key processes from categories if no actions found
+        processes = []
+        if "Biofilm Formation" in categories:
+            processes.append("biofilm formation")
+        if "Morphogenesis" in categories:
+            processes.append("morphogenesis")
+        if "Host Interaction" in categories:
+            processes.append("host-pathogen interaction")
+        if "Drug Resistance" in categories:
+            processes.append("drug resistance")
 
-    return summary[:250]  # Max 250 chars
+        if processes:
+            if len(processes) == 1:
+                parts.append(f"involved in {processes[0]}")
+            else:
+                parts.append(f"involved in {' and '.join(processes[:2])}")
+
+    # Part 3: Evidence context (where shown)
+    if models:
+        if len(models) == 1:
+            parts.append(f"with demonstrated virulence in {models[0]}")
+        else:
+            parts.append(f"with virulence shown in {' and '.join(models)}")
+    elif direct_evidence:
+        # Mention evidence strength if no specific models
+        direct_count = len(direct_evidence)
+        if direct_count >= 3:
+            parts.append("supported by strong experimental evidence")
+        elif direct_count >= 1:
+            parts.append("supported by direct experimental evidence")
+
+    # Part 4: Add study signal (well-studied indicator)
+    if paper_count >= 10:
+        parts.append("(well-studied)")
+    elif paper_count >= 5:
+        parts.append("(multiple studies)")
+
+    # Assemble final summary
+    if parts:
+        summary = " ".join(parts)
+        # Ensure it ends with a period
+        if not summary.endswith("."):
+            summary += "."
+    elif headline:
+        # Fallback to cleaned headline
+        summary = f"{gene_name}: {headline[:180]}" + ("..." if len(headline) > 180 else "")
+    else:
+        summary = f"{gene_name} is associated with virulence in {', '.join(categories[:2])} pathways."
+
+    return summary[:300]  # Allow slightly longer summaries
 
 
 def generate_evidence_breakdown(

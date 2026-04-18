@@ -1237,6 +1237,7 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
             indirect_evidence=indirect_evidence,
             headline=feat.headline,
             confidence_tier=confidence_tier,
+            paper_count=paper_count,
         )
         evidence_breakdown = generate_evidence_breakdown(
             direct_evidence=direct_evidence,
