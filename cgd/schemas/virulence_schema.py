@@ -232,16 +232,53 @@ CATEGORY_VIRULENCE_PHRASES = {
 }
 
 # Semantic normalization to deduplicate similar concepts
-# Maps phrases to canonical form to avoid "adhesion and biofilm and adhesion"
+# Maps phrases to canonical form to avoid "adhesion and host adhesion"
 CONCEPT_NORMALIZATION = {
-    "biofilm formation": "adhesion",
+    # Adhesion family - all collapse to "adhesion"
+    "biofilm formation": "biofilm",
+    "biofilm": "biofilm",
     "cell adhesion": "adhesion",
     "host adhesion": "adhesion",
+    "adhesion": "adhesion",
+    # Host interaction family
     "host interaction": "host interaction",
     "immune evasion": "host interaction",
-    "secreted enzymatic activity": "secreted enzymatic activity",
+    # Other concepts stay distinct
+    "secreted enzymatic activity": "enzymatic activity",
     "morphogenesis": "morphogenesis",
     "drug response": "drug response",
+    "hyphal growth": "morphogenesis",
+    "filamentous growth": "morphogenesis",
+}
+
+# Protein-type-specific verb mappings
+# Different protein classes use different verbs for scientific accuracy
+PROTEIN_TYPE_VERBS = {
+    "transcription factor": "regulating",
+    "transcriptional regulator": "regulating",
+    "zinc finger protein": "regulating",
+    "DNA-binding protein": "regulating",
+    "kinase": "involved in",
+    "phosphatase": "involved in",
+    "dehydrogenase": "involved in",
+    "oxidase": "involved in",
+    "reductase": "involved in",
+    "synthase": "involved in",
+    "transferase": "involved in",
+    "isomerase": "involved in",
+    "adhesin": "mediating",
+    "cell surface protein": "mediating",
+    "GPI-anchored protein": "mediating",
+    "membrane protein": "involved in",
+    "transporter": "involved in",
+    "efflux pump": "involved in",
+    "protease": "involved in",
+    "secreted aspartyl protease": "involved in",
+    "secreted protease": "involved in",
+    "lipase": "involved in",
+    "phospholipase": "involved in",
+    "chaperone": "supporting",
+    "heat shock protein": "supporting",
 }
 
 # Role normalization for verbose headline-derived phrases
@@ -300,6 +337,43 @@ def determine_evidence_language_tier(
         return "annotation_supported"
 
     return "indirect_low"
+
+
+def get_verb_for_protein_type(role: str) -> str:
+    """
+    Get the appropriate verb for a protein type.
+
+    Transcription factors "regulate", enzymes are "involved in",
+    adhesins "mediate", etc.
+    """
+    role_lower = role.lower()
+    for protein_type, verb in PROTEIN_TYPE_VERBS.items():
+        if protein_type in role_lower:
+            return verb
+    return "involved in"  # Default for unknown types
+
+
+def normalize_concept(concept: str) -> str:
+    """Normalize a concept to its canonical form for deduplication."""
+    concept_lower = concept.lower().strip()
+    return CONCEPT_NORMALIZATION.get(concept_lower, concept_lower)
+
+
+def dedupe_concepts(concepts: list[str]) -> list[str]:
+    """
+    Deduplicate concepts semantically.
+
+    "adhesion" and "host adhesion" both normalize to "adhesion",
+    so only keep the first one encountered.
+    """
+    seen_normalized = set()
+    result = []
+    for concept in concepts:
+        normalized = normalize_concept(concept)
+        if normalized not in seen_normalized:
+            seen_normalized.add(normalized)
+            result.append(concept)
+    return result
 
 
 def get_virulence_phrase(categories: list[str], max_items: int = 1) -> str | None:
@@ -760,6 +834,48 @@ def _is_generic_gene(role: str) -> bool:
     return role.lower() in generic_roles
 
 
+def _has_causal_evidence(direct_evidence: list[str]) -> bool:
+    """
+    Check if evidence supports causal claims ("required for").
+
+    Only returns True if there's:
+    - Tier 1 phenotype evidence (virulence, pathogenesis, lethality)
+    - OR strong knockout/mutant phenotype
+
+    This prevents overuse of "required for" when evidence is weak.
+    """
+    causal_patterns = [
+        "virulence", "pathogenesis", "lethality", "killing",
+        "colonization", "infection", "mutant", "knockout",
+        "deletion", "null", "loss of function"
+    ]
+
+    for evidence in direct_evidence:
+        ev_lower = evidence.lower()
+        if any(pattern in ev_lower for pattern in causal_patterns):
+            return True
+
+    return False
+
+
+def _get_paper_scaled_phrase(paper_count: int, has_in_vivo: bool) -> str:
+    """
+    Get evidence phrase scaled by paper count.
+
+    - 10+ papers: "with strong/multiple studies supporting"
+    - 3-9 papers: "with evidence supporting"
+    - 1-2 papers: "with in vivo evidence suggesting" or "suggesting"
+    """
+    if paper_count >= 10:
+        return "with multiple studies supporting a role in virulence"
+    elif paper_count >= 5:
+        return "with evidence supporting a role in virulence"
+    elif has_in_vivo:
+        return "with in vivo evidence supporting a role in virulence"
+    else:
+        return ""
+
+
 def repair_summary(summary: str) -> str:
     """
     Post-process summary to remove generated-feeling patterns.
@@ -831,113 +947,101 @@ def generate_summary(
     """
     Generate a concise biological summary (~150 chars) for table display.
 
-    Uses evidence-calibrated language:
-    - Strong evidence → strong verbs ("required for", "promotes")
-    - Weak evidence → hedged language ("associated with", "limited evidence for")
+    Key principles:
+    1. "required for" ONLY with causal evidence (tier 1 phenotype, knockout)
+    2. Protein-type-specific verbs (TF → regulates, enzyme → involved in)
+    3. Deduplicate concepts semantically (adhesion vs host adhesion)
+    4. Scale evidence phrase by paper count
 
-    Template: "[Gene] is a [role] [required for/that X] [and Y][, with in vivo evidence...]"
-
-    BANNED PATTERNS for strong evidence:
-    - "plays a role in" → use "required for" or "promotes"
-    - "contributing to" subordinate clauses → use coordinated "and Y"
-    - "is involved in" → use "required for" or "mediates"
+    Templates by evidence strength:
+    - Strong + causal: "X is a TF regulating morphogenesis, with multiple studies..."
+    - Strong + no causal: "X is an adhesin mediating adhesion, with in vivo evidence..."
+    - Moderate: "X is a kinase involved in drug response"
+    - Weak: "X is a protein with limited evidence linking it to Y"
     """
     # Helper for a/an article selection
     def article(word: str) -> str:
         vowels = 'aeiouAEIOU'
         return 'an' if word and word[0] in vowels else 'a'
 
-    # Determine evidence tier for calibrated language
+    # Determine evidence tier
     evidence_tier = determine_evidence_language_tier(
         confidence_tier, direct_evidence, indirect_evidence
     )
-    tier_config = EVIDENCE_LANGUAGE_TIERS.get(evidence_tier, EVIDENCE_LANGUAGE_TIERS["indirect_low"])
 
     # Extract biological information
     function = _extract_function_from_headline(headline)
     actions = _extract_actions_from_headline(headline)
 
-    # Determine role - PRIORITIZE molecular function over category
-    if function:
-        role = function
-    else:
-        role = "protein"
+    # Determine role - prioritize molecular function
+    role = function if function else "protein"
 
-    # Get primary action
+    # Get primary action target
     action_info = _get_primary_action(actions)
+    action_target = action_info[1] if action_info else None
 
-    # Get virulence relevance phrase (max 1 to avoid repetition)
+    # Get virulence relevance phrase
     virulence_phrase = get_virulence_phrase(categories, max_items=1)
 
-    # Extract the core target from action (e.g., "morphogenesis" from "regulates morphogenesis")
-    action_target = None
-    action_verb = None
-    if action_info:
-        action_verb, action_target = action_info
+    # Collect and deduplicate concepts
+    concepts = []
+    if action_target:
+        concepts.append(action_target)
+    if virulence_phrase:
+        concepts.append(virulence_phrase)
+    concepts = dedupe_concepts(concepts)[:2]  # Max 2, deduplicated
 
-    # For strong evidence, upgrade weak verbs
+    # Check evidence quality
+    has_in_vivo = any(
+        "virulence model" in e.lower() or "mouse" in e.lower() or "galleria" in e.lower()
+        for e in direct_evidence + indirect_evidence
+    )
+    has_causal = _has_causal_evidence(direct_evidence)
+    confidence = confidence_tier.lower() if confidence_tier else "low"
+
+    # Get protein-type-specific verb
+    protein_verb = get_verb_for_protein_type(role)
+
+    # BUILD SUMMARY based on evidence tier
     if evidence_tier in ("in_vivo_strong", "experimental_strong"):
-        if action_verb in ("role in", "involved in", "plays a role in"):
-            action_verb = "required for"
-        elif action_verb in ("contributes to",):
-            action_verb = "promotes"
-
-    # For weak evidence, downgrade strong verbs
-    if evidence_tier in ("indirect_low", "annotation_supported"):
-        if action_verb in ("controls", "required for", "essential for", "drives"):
-            action_verb = "linked to"
-        elif action_verb in ("regulates", "promotes", "activates"):
-            action_verb = "associated with"
-        elif action_verb == "role in":
-            action_verb = "linked to"
-
-    # Build the summary using coordinated structure
-    # Strong evidence: "X is a Y required for A and B"
-    # Weak evidence: "X is a Y with limited evidence linking it to A"
-
-    if evidence_tier in ("in_vivo_strong", "experimental_strong"):
-        # STRONG EVIDENCE: Use direct, confident language with coordination
-        concepts = []
-        if action_target:
-            concepts.append(action_target)
-        if virulence_phrase and virulence_phrase.lower() != (action_target or "").lower():
-            # Only add if not duplicating the action target
-            concepts.append(virulence_phrase)
-
+        # STRONG EVIDENCE
         if concepts:
-            concepts_str = " and ".join(concepts[:2])  # Max 2 concepts
-            summary = f"{gene_name} is {article(role)} {role} {action_verb or 'required for'} {concepts_str}"
+            concepts_str = " and ".join(concepts)
+
+            # Use "required for" ONLY with causal evidence
+            if has_causal and confidence == "high":
+                summary = f"{gene_name} is {article(role)} {role} required for {concepts_str}"
+            else:
+                # Use protein-type-specific verb
+                summary = f"{gene_name} is {article(role)} {role} {protein_verb} {concepts_str}"
         else:
             summary = f"{gene_name} is {article(role)} {role}"
 
-    elif evidence_tier == "experimental_moderate":
-        # MODERATE: Use "associated with"
-        concepts = []
-        if action_target:
-            concepts.append(action_target)
-        if virulence_phrase and virulence_phrase.lower() != (action_target or "").lower():
-            concepts.append(virulence_phrase)
+        # Add paper-scaled evidence phrase for strong evidence
+        if confidence == "high" and not _is_generic_gene(role):
+            ending = _get_paper_scaled_phrase(paper_count, has_in_vivo)
+            if ending:
+                summary = summary.rstrip(".") + ", " + ending
 
+    elif evidence_tier == "experimental_moderate":
+        # MODERATE EVIDENCE: Use "involved in" or "associated with"
         if concepts:
-            concepts_str = " and ".join(concepts[:2])
-            summary = f"{gene_name} is {article(role)} {role} associated with {concepts_str}"
+            concepts_str = " and ".join(concepts)
+            summary = f"{gene_name} is {article(role)} {role} {protein_verb} {concepts_str}"
         else:
             summary = f"{gene_name} is {article(role)} {role}"
 
     elif evidence_tier == "annotation_supported":
-        # ANNOTATION ONLY: Use hedged language
-        if virulence_phrase:
-            summary = f"{gene_name} is {article(role)} {role}, annotated to {virulence_phrase}"
-        elif action_target:
-            summary = f"{gene_name} is {article(role)} {role} linked to {action_target}"
+        # ANNOTATION ONLY: Hedged language
+        if concepts:
+            summary = f"{gene_name} is {article(role)} {role} linked to {concepts[0]}"
         else:
             summary = f"{gene_name} is {article(role)} {role}"
 
     else:  # indirect_low
-        # WEAK: Use "limited evidence" phrasing
-        concept = virulence_phrase or action_target
-        if concept:
-            summary = f"{gene_name} is {article(role)} {role} with limited evidence linking it to {concept}"
+        # WEAK EVIDENCE: "limited evidence"
+        if concepts:
+            summary = f"{gene_name} is {article(role)} {role} with limited evidence linking it to {concepts[0]}"
         else:
             summary = f"{gene_name} is {article(role)} {role}"
 
@@ -945,24 +1049,16 @@ def generate_summary(
     if not summary.endswith("."):
         summary += "."
 
-    # Check for verbose role patterns and normalize
+    # Normalize verbose role patterns
     for verbose, normalized in ROLE_NORMALIZATION.items():
         if verbose in summary.lower():
             summary = summary.replace(verbose, normalized)
             break
 
-    # Add in vivo ending phrase ONLY for in_vivo_strong + High confidence + non-generic genes
-    ending = tier_config.get("ending_phrase")
-    if ending and evidence_tier == "in_vivo_strong":
-        confidence = confidence_tier.lower() if confidence_tier else "low"
-        if confidence == "high" and not _is_generic_gene(role):
-            # Integrate smoothly: remove period, add ending
-            summary = summary.rstrip(".") + ending
-
     # Apply post-processing repairs
     summary = repair_summary(summary)
 
-    # Cap at 180 chars for table display
+    # Cap at 180 chars
     if len(summary) > 180:
         truncate_at = summary.rfind(' ', 0, 177)
         if truncate_at > 100:
@@ -985,8 +1081,11 @@ def generate_summary_full(
     """
     Generate a detailed biological summary for tooltips/expansion.
 
-    Uses evidence-calibrated language with same principles as generate_summary().
-    Includes: function, mechanisms, virulence context, evidence quality, study count.
+    Uses same principles as generate_summary():
+    - Protein-type-specific verbs
+    - "required for" only with causal evidence
+    - Deduplicated concepts
+    - Paper-count scaling
     """
     # Helper for a/an article selection
     def article(word: str) -> str:
@@ -997,61 +1096,71 @@ def generate_summary_full(
     evidence_tier = determine_evidence_language_tier(
         confidence_tier, direct_evidence, indirect_evidence
     )
-    tier_config = EVIDENCE_LANGUAGE_TIERS.get(evidence_tier, EVIDENCE_LANGUAGE_TIERS["indirect_low"])
 
     # Extract biological information
     function = _extract_function_from_headline(headline)
     actions = _extract_actions_from_headline(headline)
-    models = _extract_model_systems(headline, direct_evidence)
 
-    # Determine role - prioritize molecular function
-    if function:
-        role = function
-    else:
-        role = "protein"
+    # Determine role
+    role = function if function else "protein"
 
-    # Get virulence context (max 1 concept)
+    # Get virulence context
     virulence_phrase = get_virulence_phrase(categories, max_items=1)
 
-    # Collect all concepts to mention
+    # Collect concepts from actions
     concepts = []
-
-    # Add action targets
     for action in actions[:2]:
         if " " in action:
-            verb, target = action.split(" ", 1)
-            # Skip weak verbs for strong evidence
-            if evidence_tier in ("in_vivo_strong", "experimental_strong"):
-                if verb in ("role", "involved"):
-                    continue
+            _, target = action.split(" ", 1)
             if target and len(target) > 3:
                 concepts.append(target)
 
-    # Add virulence phrase if not duplicating
+    # Add virulence phrase
     if virulence_phrase:
-        is_dup = any(virulence_phrase.lower() in c.lower() for c in concepts)
-        if not is_dup:
-            concepts.append(virulence_phrase)
+        concepts.append(virulence_phrase)
+
+    # Deduplicate concepts
+    concepts = dedupe_concepts(concepts)[:3]
+
+    # Check evidence quality
+    has_in_vivo = any(
+        "virulence model" in e.lower() or "mouse" in e.lower()
+        for e in direct_evidence + indirect_evidence
+    )
+    has_causal = _has_causal_evidence(direct_evidence)
+    confidence = confidence_tier.lower() if confidence_tier else "low"
+
+    # Get protein-type-specific verb
+    protein_verb = get_verb_for_protein_type(role)
 
     # Build summary based on evidence tier
     if evidence_tier in ("in_vivo_strong", "experimental_strong"):
         if concepts:
-            concepts_str = " and ".join(concepts[:3])
-            summary = f"{gene_name} is {article(role)} {role} required for {concepts_str}."
+            concepts_str = " and ".join(concepts)
+            # Use "required for" only with causal evidence
+            if has_causal and confidence == "high":
+                summary = f"{gene_name} is {article(role)} {role} required for {concepts_str}."
+            else:
+                summary = f"{gene_name} is {article(role)} {role} {protein_verb} {concepts_str}."
         else:
             summary = f"{gene_name} is {article(role)} {role}."
+
+        # Add paper-scaled evidence phrase
+        if confidence == "high" and not _is_generic_gene(role):
+            ending = _get_paper_scaled_phrase(paper_count, has_in_vivo)
+            if ending:
+                summary = summary.rstrip(".") + ", " + ending + "."
 
     elif evidence_tier == "experimental_moderate":
         if concepts:
             concepts_str = " and ".join(concepts[:2])
-            summary = f"{gene_name} is {article(role)} {role} associated with {concepts_str}."
+            summary = f"{gene_name} is {article(role)} {role} {protein_verb} {concepts_str}."
         else:
             summary = f"{gene_name} is {article(role)} {role}."
 
     elif evidence_tier == "annotation_supported":
         if concepts:
-            concepts_str = " and ".join(concepts[:2])
-            summary = f"{gene_name} is {article(role)} {role}, annotated to {concepts_str}."
+            summary = f"{gene_name} is {article(role)} {role} linked to {concepts[0]}."
         else:
             summary = f"{gene_name} is {article(role)} {role}."
 
@@ -1061,21 +1170,14 @@ def generate_summary_full(
         else:
             summary = f"{gene_name} is {article(role)} {role}."
 
-    # Add in vivo ending for strong evidence (integrated into sentence)
-    ending = tier_config.get("ending_phrase")
-    if ending and evidence_tier == "in_vivo_strong":
-        confidence = confidence_tier.lower() if confidence_tier else "low"
-        if confidence == "high" and not _is_generic_gene(role):
-            summary = summary.rstrip(".") + ending
-
     # Apply post-processing repairs
     summary = repair_summary(summary)
 
-    # Add study signal
+    # Add study count for well-studied genes
     if paper_count >= 10:
-        summary += f" ({paper_count} publications)"
+        summary = summary.rstrip(".") + f". ({paper_count} publications)"
     elif paper_count >= 5:
-        summary += f" ({paper_count} studies)"
+        summary = summary.rstrip(".") + f". ({paper_count} studies)"
 
     return summary[:400]
 
