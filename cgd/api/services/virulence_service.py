@@ -28,7 +28,9 @@ from cgd.schemas.virulence_schema import (
     generate_inclusion_reason,
     split_evidence,
     generate_summary,
+    generate_summary_full,
     generate_evidence_breakdown,
+    calculate_importance_level,
     VirulenceCategory,
     VirulenceCategoriesResponse,
     VirulenceFactor,
@@ -808,16 +810,33 @@ def get_virulence_factors(
         # Need to load organism relationship
         organism = db.query(Organism).filter(Organism.organism_no == feature.organism_no).first()
 
-        # Generate summary and evidence breakdown
+        # Generate summary, importance, and evidence breakdown
         display_name = feature.gene_name or feature.feature_name
+        cats_sorted = sorted(data["categories"])
+
         summary = generate_summary(
             gene_name=display_name,
-            categories=sorted(data["categories"]),
+            categories=cats_sorted,
             direct_evidence=data["direct_evidence"],
             indirect_evidence=data["indirect_evidence"],
             headline=feature.headline,
             confidence_tier=data["confidence_tier"],
             paper_count=data["paper_count"],
+        )
+        summary_full = generate_summary_full(
+            gene_name=display_name,
+            categories=cats_sorted,
+            direct_evidence=data["direct_evidence"],
+            indirect_evidence=data["indirect_evidence"],
+            headline=feature.headline,
+            confidence_tier=data["confidence_tier"],
+            paper_count=data["paper_count"],
+        )
+        importance_level, importance_label = calculate_importance_level(
+            direct_evidence=data["direct_evidence"],
+            indirect_evidence=data["indirect_evidence"],
+            paper_count=data["paper_count"],
+            confidence_score=data["confidence_score"],
         )
         evidence_breakdown = generate_evidence_breakdown(
             direct_evidence=data["direct_evidence"],
@@ -834,7 +853,7 @@ def get_virulence_factors(
             organism_abbrev=organism.organism_abbrev if organism else "",
             headline=feature.headline,
             description=feature.headline,  # Use headline as description
-            categories=sorted(data["categories"]),
+            categories=cats_sorted,
             match_reasons=sorted(data["match_reasons"]),
             evidence_tier=data["evidence_tier"],
             evidence_tier_name=data["evidence_tier_name"],
@@ -850,7 +869,10 @@ def get_virulence_factors(
             direct_evidence=data["direct_evidence"],
             indirect_evidence=data["indirect_evidence"],
             summary=summary,
+            summary_full=summary_full,
             evidence_breakdown=evidence_breakdown,
+            importance_level=importance_level,
+            importance_label=importance_label,
         ))
 
     # Sort results

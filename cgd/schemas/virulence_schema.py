@@ -445,6 +445,122 @@ def _extract_model_systems(headline: str, direct_evidence: list[str]) -> list[st
     return models[:2]  # Limit to 2
 
 
+def _get_primary_action(actions: list[str]) -> str | None:
+    """Get the most important action, cleaned up for template use."""
+    if not actions:
+        return None
+
+    # Priority order for action verbs
+    priority = [
+        "regulates", "controls", "required for", "essential for",
+        "mediates", "promotes", "activates", "inhibits",
+        "contributes to", "involved in", "role in"
+    ]
+
+    for verb in priority:
+        for action in actions:
+            if action.startswith(verb + " "):
+                # Extract just the target (what it regulates/controls/etc)
+                target = action[len(verb) + 1:].strip()
+                # Truncate long targets
+                if len(target) > 40:
+                    target = target[:37] + "..."
+                return (verb, target)
+
+    # Fallback to first action
+    if actions:
+        parts = actions[0].split(" ", 1)
+        if len(parts) == 2:
+            verb, target = parts
+            if len(target) > 40:
+                target = target[:37] + "..."
+            return (verb, target)
+
+    return None
+
+
+def calculate_importance_level(
+    direct_evidence: list[str],
+    indirect_evidence: list[str],
+    paper_count: int,
+    confidence_score: int,
+) -> tuple[str, str]:
+    """
+    Calculate importance level based on evidence strength.
+
+    Returns:
+        Tuple of (level, label) where:
+        - level: "high", "medium", or "low"
+        - label: Human-readable badge text
+    """
+    # Count key evidence types
+    has_virulence_model = any("virulence model" in e.lower() for e in direct_evidence)
+    direct_count = len(direct_evidence)
+    phenotype_count = sum(1 for e in direct_evidence + indirect_evidence if "phenotype:" in e.lower())
+    go_count = sum(1 for e in direct_evidence + indirect_evidence if e.lower().startswith("go:"))
+
+    # Calculate importance score
+    importance_score = 0
+
+    # Virulence model is strongest signal
+    if has_virulence_model:
+        importance_score += 4
+
+    # Direct evidence count
+    if direct_count >= 3:
+        importance_score += 3
+    elif direct_count >= 1:
+        importance_score += 1
+
+    # Paper count (well-studied)
+    if paper_count >= 10:
+        importance_score += 3
+    elif paper_count >= 5:
+        importance_score += 2
+    elif paper_count >= 2:
+        importance_score += 1
+
+    # Multiple evidence types
+    if phenotype_count >= 2 and go_count >= 1:
+        importance_score += 2
+
+    # Confidence score factor
+    if confidence_score >= 15:
+        importance_score += 2
+    elif confidence_score >= 10:
+        importance_score += 1
+
+    # Determine level and label
+    if importance_score >= 8:
+        level = "high"
+        if has_virulence_model and paper_count >= 10:
+            label = "Core virulence factor"
+        elif has_virulence_model:
+            label = "Validated in vivo"
+        elif paper_count >= 10:
+            label = "Well-characterized"
+        else:
+            label = "Strong evidence"
+    elif importance_score >= 4:
+        level = "medium"
+        if paper_count >= 5:
+            label = "Multiple studies"
+        elif direct_count >= 2:
+            label = "Direct evidence"
+        else:
+            label = "Moderate evidence"
+    else:
+        level = "low"
+        if phenotype_count >= 1:
+            label = "Phenotype support"
+        elif go_count >= 1:
+            label = "GO annotation"
+        else:
+            label = "Indirect evidence"
+
+    return level, label
+
+
 def generate_summary(
     gene_name: str,
     categories: list[str],
@@ -455,39 +571,113 @@ def generate_summary(
     paper_count: int = 0,
 ) -> str:
     """
-    Generate a biological summary explaining the gene's role in virulence.
+    Generate a concise biological summary (~150 chars) for table display.
 
-    This extracts real biological meaning from the headline and evidence,
-    not just metadata labels.
+    Uses a consistent template:
+    "[Gene] is a [role] that [primary action], contributing to virulence."
 
-    Structure:
-    1. Function (what it is): transcription factor, adhesin, protease...
-    2. Mechanism (what it does): regulates X, promotes Y, required for Z...
-    3. Evidence context (where shown): mouse model, biofilm assay...
-
-    Example output:
-    "ACE2 is a transcription factor that regulates morphogenesis and adhesion,
-     contributing to virulence in mouse infection models."
+    For longer summaries, use generate_summary_full().
     """
-    # Extract biological information from headline
+    # Helper for a/an article selection
+    def article(word: str) -> str:
+        vowels = 'aeiouAEIOU'
+        return 'an' if word and word[0] in vowels else 'a'
+
+    # Extract biological information
     function = _extract_function_from_headline(headline)
     actions = _extract_actions_from_headline(headline)
     models = _extract_model_systems(headline, direct_evidence)
 
-    # Build the summary sentence
-    parts = []
+    # Determine role
+    if function:
+        role = function
+    else:
+        category_roles = {
+            "Adhesins": "adhesin",
+            "Secreted Enzymes": "secreted enzyme",
+            "Morphogenesis": "morphogenesis regulator",
+            "Host Interaction": "host interaction factor",
+            "Biofilm Formation": "biofilm-associated protein",
+            "Immune Evasion": "immune evasion factor",
+            "Drug Resistance": "drug resistance protein",
+        }
+        role = next((category_roles[c] for c in categories if c in category_roles), "virulence factor")
 
+    # Get primary action
+    action_info = _get_primary_action(actions)
+
+    # Build summary using consistent template
+    # Template: "[Gene] is a [role] that [verb]s [target], contributing to [virulence aspect]."
+
+    if action_info:
+        verb, target = action_info
+        # Fix verb grammar
+        if verb in ("required for", "essential for", "involved in"):
+            action_phrase = f"is {verb} {target}"
+        elif verb == "role in":
+            action_phrase = f"plays a role in {target}"
+        else:
+            action_phrase = f"{verb} {target}"
+
+        # Add virulence context
+        if models:
+            model_short = models[0].replace(" model", "").replace(" interaction", "")
+            summary = f"{gene_name} is {article(role)} {role} that {action_phrase}, with virulence shown in {model_short}."
+        else:
+            summary = f"{gene_name} is {article(role)} {role} that {action_phrase}, contributing to pathogenesis."
+    else:
+        # No specific action found - use category-based summary
+        if models:
+            model_short = models[0].replace(" model", "").replace(" interaction", "")
+            summary = f"{gene_name} is {article(role)} {role} contributing to virulence in {model_short}."
+        elif "Biofilm Formation" in categories:
+            summary = f"{gene_name} is {article(role)} {role} involved in biofilm formation and pathogenesis."
+        elif "Host Interaction" in categories:
+            summary = f"{gene_name} is {article(role)} {role} involved in host-pathogen interaction."
+        elif "Drug Resistance" in categories:
+            summary = f"{gene_name} is {article(role)} {role} involved in antifungal drug resistance."
+        else:
+            summary = f"{gene_name} is {article(role)} {role} associated with Candida virulence."
+
+    # Cap at 160 chars for table display
+    if len(summary) > 160:
+        summary = summary[:157] + "..."
+
+    return summary
+
+
+def generate_summary_full(
+    gene_name: str,
+    categories: list[str],
+    direct_evidence: list[str],
+    indirect_evidence: list[str],
+    headline: str | None,
+    confidence_tier: str,
+    paper_count: int = 0,
+) -> str:
+    """
+    Generate a detailed biological summary for tooltips/expansion.
+
+    Includes:
+    - Full function description
+    - Multiple mechanisms
+    - Evidence context with specifics
+    - Study indication
+    """
     # Helper for a/an article selection
     def article(word: str) -> str:
-        """Return 'an' if word starts with vowel sound, else 'a'."""
         vowels = 'aeiouAEIOU'
         return 'an' if word and word[0] in vowels else 'a'
 
-    # Part 1: Gene name + function (what it is)
+    # Extract biological information
+    function = _extract_function_from_headline(headline)
+    actions = _extract_actions_from_headline(headline)
+    models = _extract_model_systems(headline, direct_evidence)
+
+    # Determine role
     if function:
-        parts.append(f"{gene_name} is {article(function)} {function}")
-    elif gene_name:
-        # Fallback to category-based role
+        role = function
+    else:
         category_roles = {
             "Adhesins": "cell surface adhesin",
             "Secreted Enzymes": "secreted enzyme",
@@ -497,95 +687,45 @@ def generate_summary(
             "Immune Evasion": "immune evasion factor",
             "Drug Resistance": "drug resistance protein",
         }
-        for cat in categories:
-            if cat in category_roles:
-                role = category_roles[cat]
-                parts.append(f"{gene_name} is {article(role)} {role}")
-                break
-        if not parts:
-            parts.append(f"{gene_name} is a virulence-associated protein")
+        role = next((category_roles[c] for c in categories if c in category_roles), "virulence-associated protein")
 
-    # Part 2: Mechanism (what it does)
+    parts = [f"{gene_name} is {article(role)} {role}"]
+
+    # Add mechanisms (up to 2)
     if actions:
-        # Fix grammar for certain phrases
-        def format_action(action: str) -> str:
-            # "role in X" -> "plays a role in X"
-            if action.startswith("role in "):
-                return "plays a " + action
-            # "required for X" -> "is required for X"
+        formatted = []
+        for action in actions[:2]:
             if action.startswith("required for "):
-                return "is " + action
-            # "essential for X" -> "is essential for X"
-            if action.startswith("essential for "):
-                return "is " + action
-            # "necessary for X" -> "is necessary for X"
-            if action.startswith("necessary for "):
-                return "is " + action
-            # "involved in X" -> "is involved in X"
-            if action.startswith("involved in "):
-                return "is " + action
-            return action
-
-        formatted_actions = [format_action(a) for a in actions]
-
-        # Join actions with appropriate conjunctions
-        if len(formatted_actions) == 1:
-            parts.append(f"that {formatted_actions[0]}")
-        elif len(formatted_actions) == 2:
-            parts.append(f"that {formatted_actions[0]} and {formatted_actions[1]}")
-        else:
-            parts.append(f"that {formatted_actions[0]}, {formatted_actions[1]}, and {formatted_actions[2]}")
-    elif headline:
-        # Try to extract key processes from categories if no actions found
-        processes = []
-        if "Biofilm Formation" in categories:
-            processes.append("biofilm formation")
-        if "Morphogenesis" in categories:
-            processes.append("morphogenesis")
-        if "Host Interaction" in categories:
-            processes.append("host-pathogen interaction")
-        if "Drug Resistance" in categories:
-            processes.append("drug resistance")
-
-        if processes:
-            if len(processes) == 1:
-                parts.append(f"involved in {processes[0]}")
+                formatted.append("is " + action)
+            elif action.startswith("essential for "):
+                formatted.append("is " + action)
+            elif action.startswith("involved in "):
+                formatted.append("is " + action)
+            elif action.startswith("role in "):
+                formatted.append("plays a " + action)
             else:
-                parts.append(f"involved in {' and '.join(processes[:2])}")
+                formatted.append(action)
 
-    # Part 3: Evidence context (where shown)
-    if models:
-        if len(models) == 1:
-            parts.append(f"with demonstrated virulence in {models[0]}")
+        if len(formatted) == 1:
+            parts.append(f"that {formatted[0]}")
         else:
-            parts.append(f"with virulence shown in {' and '.join(models)}")
-    elif direct_evidence:
-        # Mention evidence strength if no specific models
-        direct_count = len(direct_evidence)
-        if direct_count >= 3:
-            parts.append("supported by strong experimental evidence")
-        elif direct_count >= 1:
-            parts.append("supported by direct experimental evidence")
+            parts.append(f"that {formatted[0]} and {formatted[1]}")
 
-    # Part 4: Add study signal (well-studied indicator)
+    # Add evidence context
+    if models:
+        parts.append(f"as demonstrated in {' and '.join(models)}")
+
+    # Add study signal
     if paper_count >= 10:
-        parts.append("(well-studied)")
+        parts.append(f"({paper_count} publications)")
     elif paper_count >= 5:
-        parts.append("(multiple studies)")
+        parts.append(f"({paper_count} studies)")
 
-    # Assemble final summary
-    if parts:
-        summary = " ".join(parts)
-        # Ensure it ends with a period
-        if not summary.endswith("."):
-            summary += "."
-    elif headline:
-        # Fallback to cleaned headline
-        summary = f"{gene_name}: {headline[:180]}" + ("..." if len(headline) > 180 else "")
-    else:
-        summary = f"{gene_name} is associated with virulence in {', '.join(categories[:2])} pathways."
+    summary = " ".join(parts)
+    if not summary.endswith("."):
+        summary += "."
 
-    return summary[:300]  # Allow slightly longer summaries
+    return summary[:400]
 
 
 def generate_evidence_breakdown(
@@ -802,10 +942,15 @@ class VirulenceFactor(BaseModel):
     indirect_evidence: list[str] = []               # Indirect/supporting evidence
 
     # Auto-generated summary (#1 improvement)
-    summary: str = ""                               # 1-2 line curated summary
+    summary: str = ""                               # Concise summary for table (~150 chars)
+    summary_full: str = ""                          # Detailed summary for tooltip/expansion
 
     # Evidence breakdown (#2 improvement)
     evidence_breakdown: dict = {}                   # Structured: {virulence_models: 2, go_terms: 5, phenotypes: 3, ...}
+
+    # Importance/prioritization fields (#3 improvement)
+    importance_level: str = "low"                   # high/medium/low
+    importance_label: str = "Indirect evidence"    # Human-readable badge (e.g., "Core virulence factor")
 
 
 class VirulenceFactorsResponse(BaseModel):

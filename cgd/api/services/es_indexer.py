@@ -31,7 +31,9 @@ from cgd.schemas.virulence_schema import (
     extract_evidence_types,
     generate_inclusion_reason,
     generate_summary,
+    generate_summary_full,
     generate_evidence_breakdown,
+    calculate_importance_level,
     split_evidence,
 )
 
@@ -1229,7 +1231,7 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
 
         display_name = feat.gene_name or feat.feature_name
 
-        # Generate summary and evidence breakdown (#1 and #2 improvements)
+        # Generate summary, importance, and evidence breakdown
         summary = generate_summary(
             gene_name=display_name,
             categories=category_names,
@@ -1238,6 +1240,21 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
             headline=feat.headline,
             confidence_tier=confidence_tier,
             paper_count=paper_count,
+        )
+        summary_full = generate_summary_full(
+            gene_name=display_name,
+            categories=category_names,
+            direct_evidence=direct_evidence,
+            indirect_evidence=indirect_evidence,
+            headline=feat.headline,
+            confidence_tier=confidence_tier,
+            paper_count=paper_count,
+        )
+        importance_level, importance_label = calculate_importance_level(
+            direct_evidence=direct_evidence,
+            indirect_evidence=indirect_evidence,
+            paper_count=paper_count,
+            confidence_score=confidence_score,
         )
         evidence_breakdown = generate_evidence_breakdown(
             direct_evidence=direct_evidence,
@@ -1284,8 +1301,11 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 # Split evidence fields
                 "direct_evidence": direct_evidence,
                 "indirect_evidence": indirect_evidence,
-                # Summary and breakdown (#1 and #2 improvements)
+                # Summary and importance fields
                 "summary": summary,
+                "summary_full": summary_full,
+                "importance_level": importance_level,
+                "importance_label": importance_label,
                 "evidence_breakdown": evidence_breakdown,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",

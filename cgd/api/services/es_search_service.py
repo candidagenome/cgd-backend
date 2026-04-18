@@ -2560,8 +2560,11 @@ def search_virulence_factors(
                 # Split evidence fields
                 "direct_evidence": source.get("direct_evidence", []),
                 "indirect_evidence": source.get("indirect_evidence", []),
-                # Summary and breakdown (#1 and #2 improvements)
+                # Summary and importance fields
                 "summary": source.get("summary", ""),
+                "summary_full": source.get("summary_full", ""),
+                "importance_level": source.get("importance_level", "low"),
+                "importance_label": source.get("importance_label", "Indirect evidence"),
                 "evidence_breakdown": source.get("evidence_breakdown", {}),
             })
 
