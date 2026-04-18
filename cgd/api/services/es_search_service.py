@@ -2560,6 +2560,9 @@ def search_virulence_factors(
                 # Split evidence fields
                 "direct_evidence": source.get("direct_evidence", []),
                 "indirect_evidence": source.get("indirect_evidence", []),
+                # Summary and breakdown (#1 and #2 improvements)
+                "summary": source.get("summary", ""),
+                "evidence_breakdown": source.get("evidence_breakdown", {}),
             })
 
         # Apply pagination

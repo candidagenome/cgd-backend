@@ -30,6 +30,8 @@ from cgd.schemas.virulence_schema import (
     get_confidence_tier,
     extract_evidence_types,
     generate_inclusion_reason,
+    generate_summary,
+    generate_evidence_breakdown,
     split_evidence,
 )
 
@@ -1226,6 +1228,22 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
         direct_evidence, indirect_evidence = split_evidence(all_reasons)
 
         display_name = feat.gene_name or feat.feature_name
+
+        # Generate summary and evidence breakdown (#1 and #2 improvements)
+        summary = generate_summary(
+            gene_name=display_name,
+            categories=category_names,
+            direct_evidence=direct_evidence,
+            indirect_evidence=indirect_evidence,
+            headline=feat.headline,
+            confidence_tier=confidence_tier,
+        )
+        evidence_breakdown = generate_evidence_breakdown(
+            direct_evidence=direct_evidence,
+            indirect_evidence=indirect_evidence,
+            paper_count=paper_count,
+            confidence_score=confidence_score,
+        )
         organism_name = feat.organism.organism_name if feat.organism else None
         organism_abbrev = feat.organism.organism_abbrev if feat.organism else None
 
@@ -1265,6 +1283,9 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 # Split evidence fields
                 "direct_evidence": direct_evidence,
                 "indirect_evidence": indirect_evidence,
+                # Summary and breakdown (#1 and #2 improvements)
+                "summary": summary,
+                "evidence_breakdown": evidence_breakdown,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
                 "link": f"/locus/{feat.feature_name}",

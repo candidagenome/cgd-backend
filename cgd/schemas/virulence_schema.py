@@ -289,6 +289,177 @@ def generate_inclusion_reason(match_reasons: list[str], categories: list[str]) -
     return reason_str[:100]  # Max 100 chars
 
 
+def generate_summary(
+    gene_name: str,
+    categories: list[str],
+    direct_evidence: list[str],
+    indirect_evidence: list[str],
+    headline: str | None,
+    confidence_tier: str,
+) -> str:
+    """
+    Generate a 1-2 line curated summary explaining why this is a virulence factor.
+
+    Example output:
+    "ALS3: Adhesin with direct virulence evidence (mouse model), involved in
+     biofilm formation and host cell adhesion."
+    """
+    parts = []
+
+    # Start with gene name
+    gene_prefix = f"{gene_name}: " if gene_name else ""
+
+    # Determine primary role from categories
+    category_roles = {
+        "Adhesins": "adhesin",
+        "Secreted Enzymes": "secreted enzyme",
+        "Morphogenesis": "morphogenesis regulator",
+        "Host Interaction": "host interaction factor",
+        "Biofilm Formation": "biofilm-associated protein",
+        "Immune Evasion": "immune evasion factor",
+        "Drug Resistance": "drug resistance factor",
+    }
+
+    primary_role = None
+    for cat in categories:
+        if cat in category_roles:
+            primary_role = category_roles[cat]
+            break
+
+    if primary_role:
+        parts.append(primary_role.capitalize())
+
+    # Add evidence strength context
+    evidence_context = []
+
+    # Check for virulence model in direct evidence
+    virulence_models = [e for e in direct_evidence if "virulence model" in e.lower()]
+    if virulence_models:
+        # Extract model type
+        model_text = virulence_models[0]
+        if "mouse" in model_text.lower():
+            evidence_context.append("mouse model")
+        elif "galleria" in model_text.lower():
+            evidence_context.append("Galleria model")
+        else:
+            evidence_context.append("virulence model")
+
+    # Check for GO terms
+    go_direct = [e for e in direct_evidence if e.lower().startswith("go:")]
+    if go_direct:
+        evidence_context.append("GO annotation")
+
+    # Check for phenotypes
+    pheno_direct = [e for e in direct_evidence if "phenotype:" in e.lower()]
+    if pheno_direct:
+        evidence_context.append("phenotype data")
+
+    if evidence_context:
+        parts.append(f"with {confidence_tier.lower()} confidence ({', '.join(evidence_context[:2])})")
+
+    # Add functional context from categories
+    functions = []
+    for cat in categories:
+        if cat == "Biofilm Formation" and "biofilm" not in str(parts).lower():
+            functions.append("biofilm formation")
+        elif cat == "Host Interaction" and "host" not in str(parts).lower():
+            functions.append("host interaction")
+        elif cat == "Drug Resistance":
+            functions.append("drug resistance")
+        elif cat == "Immune Evasion":
+            functions.append("immune evasion")
+
+    if functions:
+        parts.append(f"involved in {' and '.join(functions[:2])}")
+
+    # Build summary
+    if parts:
+        summary = gene_prefix + ", ".join(parts) + "."
+    elif headline:
+        # Fallback to truncated headline
+        summary = gene_prefix + headline[:150] + ("..." if len(headline) > 150 else "")
+    else:
+        summary = f"{gene_prefix}Virulence-associated gene in {', '.join(categories[:2])} categories."
+
+    return summary[:250]  # Max 250 chars
+
+
+def generate_evidence_breakdown(
+    direct_evidence: list[str],
+    indirect_evidence: list[str],
+    paper_count: int,
+    confidence_score: int,
+) -> dict:
+    """
+    Generate a structured breakdown of evidence types.
+
+    Returns dict like:
+    {
+        "virulence_models": 2,
+        "go_annotations": 5,
+        "phenotypes": 3,
+        "keyword_matches": 1,
+        "papers": 12,
+        "score_breakdown": {
+            "direct_evidence_points": 15,
+            "indirect_evidence_points": 5,
+            "paper_bonus": 2,
+            "total": 22
+        }
+    }
+    """
+    breakdown = {
+        "virulence_models": 0,
+        "go_annotations": 0,
+        "phenotypes": 0,
+        "keyword_matches": 0,
+        "papers": paper_count,
+    }
+
+    # Count direct evidence types
+    for evidence in direct_evidence:
+        ev_lower = evidence.lower()
+        if "virulence model:" in ev_lower:
+            breakdown["virulence_models"] += 1
+        elif ev_lower.startswith("go:"):
+            breakdown["go_annotations"] += 1
+        elif "phenotype:" in ev_lower:
+            breakdown["phenotypes"] += 1
+        else:
+            breakdown["keyword_matches"] += 1
+
+    # Count indirect evidence types
+    for evidence in indirect_evidence:
+        ev_lower = evidence.lower()
+        if ev_lower.startswith("go:"):
+            breakdown["go_annotations"] += 1
+        elif "phenotype:" in ev_lower:
+            breakdown["phenotypes"] += 1
+        else:
+            breakdown["keyword_matches"] += 1
+
+    # Add score breakdown explanation
+    direct_points = (
+        breakdown["virulence_models"] * 5 +
+        len([e for e in direct_evidence if e.lower().startswith("go:")]) * 3
+    )
+    indirect_points = (
+        breakdown["go_annotations"] * 2 +
+        breakdown["phenotypes"] * 2
+    )
+    paper_bonus = min(3, paper_count // 5)  # +1 point per 5 papers, max 3
+
+    breakdown["score_explanation"] = {
+        "virulence_models": f"{breakdown['virulence_models']} x 5 = {breakdown['virulence_models'] * 5}",
+        "go_direct": f"GO (direct) x 3",
+        "phenotypes": f"{breakdown['phenotypes']} x 2 = {breakdown['phenotypes'] * 2}",
+        "papers": f"{paper_count} papers",
+        "total_score": confidence_score,
+    }
+
+    return breakdown
+
+
 # =============================================================================
 # CONFIDENCE SCORE WEIGHTS
 # =============================================================================
@@ -425,6 +596,12 @@ class VirulenceFactor(BaseModel):
     # Split evidence fields
     direct_evidence: list[str] = []                 # Direct virulence evidence
     indirect_evidence: list[str] = []               # Indirect/supporting evidence
+
+    # Auto-generated summary (#1 improvement)
+    summary: str = ""                               # 1-2 line curated summary
+
+    # Evidence breakdown (#2 improvement)
+    evidence_breakdown: dict = {}                   # Structured: {virulence_models: 2, go_terms: 5, phenotypes: 3, ...}
 
 
 class VirulenceFactorsResponse(BaseModel):
