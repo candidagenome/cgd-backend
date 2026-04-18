@@ -177,6 +177,61 @@ def _get_ortholog_count(db: Session, feature: Feature) -> int:
     return organism_count or 0
 
 
+def _get_ortholog_details(
+    db: Session,
+    feature: Feature,
+) -> list[dict]:
+    """
+    Get ortholog details for a feature across Candida species.
+
+    Returns list of dicts with organism_abbrev, gene_name, feature_name for each ortholog.
+    Excludes the query gene itself.
+    """
+    # Find homology groups this feature belongs to
+    homology_group_nos = (
+        db.query(FeatHomology.homology_group_no)
+        .filter(FeatHomology.feature_no == feature.feature_no)
+        .all()
+    )
+
+    if not homology_group_nos:
+        return []
+
+    hg_nos = [h[0] for h in homology_group_nos]
+
+    # Get all orthologs in these groups (excluding the query feature)
+    orthologs = (
+        db.query(
+            Feature.feature_name,
+            Feature.gene_name,
+            Organism.organism_abbrev,
+            Organism.organism_name,
+        )
+        .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(FeatHomology.homology_group_no.in_(hg_nos))
+        .filter(HomologyGroup.method == 'CGOB')
+        .filter(HomologyGroup.homology_group_type == 'ortholog')
+        .filter(Feature.feature_no != feature.feature_no)  # Exclude query gene
+        .distinct()
+        .all()
+    )
+
+    # Group by organism and pick one representative gene per organism
+    organism_orthologs = {}
+    for feat_name, gene_name, org_abbrev, org_name in orthologs:
+        if org_abbrev not in organism_orthologs:
+            organism_orthologs[org_abbrev] = {
+                "organism_abbrev": org_abbrev,
+                "organism_name": org_name,
+                "gene_name": gene_name or feat_name,
+                "feature_name": feat_name,
+            }
+
+    return list(organism_orthologs.values())
+
+
 def _get_paper_count_and_pmids(
     db: Session,
     feature: Feature,
@@ -800,8 +855,9 @@ def get_virulence_factors(
         data["is_housekeeping"] = is_hk
         data["housekeeping_reason"] = hk_reason
 
-        # Get ortholog count
+        # Get ortholog count and details
         data["ortholog_count"] = _get_ortholog_count(db, feature)
+        data["orthologs"] = _get_ortholog_details(db, feature)
 
         # Calculate confidence score
         data["confidence_score"] = _calculate_confidence_score(
@@ -929,6 +985,7 @@ def get_virulence_factors(
             importance_label=importance_label,
             uniprot_id=data.get("uniprot_id"),
             alphafold_url=data.get("alphafold_url"),
+            orthologs=data.get("orthologs", []),
         ))
 
     # Sort results

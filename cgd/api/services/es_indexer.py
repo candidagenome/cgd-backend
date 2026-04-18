@@ -1111,6 +1111,62 @@ def _get_paper_count_and_pmids_es(
     return paper_count, pmids_sorted
 
 
+def _get_ortholog_details_es(db: Session, feature: Feature) -> list[dict]:
+    """
+    Get ortholog details for a feature across Candida species.
+
+    Args:
+        db: Database session
+        feature: The feature to get orthologs for
+
+    Returns:
+        List of dicts with ortholog info (one per organism)
+    """
+    # Find homology groups this feature belongs to
+    homology_group_nos = (
+        db.query(FeatHomology.homology_group_no)
+        .filter(FeatHomology.feature_no == feature.feature_no)
+        .all()
+    )
+
+    if not homology_group_nos:
+        return []
+
+    hg_nos = [h[0] for h in homology_group_nos]
+
+    # Get all orthologs in these groups (excluding the query feature)
+    orthologs = (
+        db.query(
+            Feature.feature_name,
+            Feature.gene_name,
+            Organism.organism_abbrev,
+            Organism.organism_name,
+        )
+        .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+        .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(FeatHomology.homology_group_no.in_(hg_nos))
+        .filter(HomologyGroup.method == 'CGOB')
+        .filter(HomologyGroup.homology_group_type == 'ortholog')
+        .filter(Feature.feature_no != feature.feature_no)
+        .distinct()
+        .all()
+    )
+
+    # Group by organism and pick one representative gene per organism
+    organism_orthologs = {}
+    for feat_name, gene_name, org_abbrev, org_name in orthologs:
+        if org_abbrev not in organism_orthologs:
+            organism_orthologs[org_abbrev] = {
+                "organism_abbrev": org_abbrev,
+                "organism_name": org_name,
+                "gene_name": gene_name or feat_name,
+                "feature_name": feat_name,
+            }
+
+    return list(organism_orthologs.values())
+
+
 def _get_uniprot_and_alphafold_es(
     db: Session,
     feature: Feature,
@@ -1276,6 +1332,9 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
         # Get UniProt ID and AlphaFold URL
         uniprot_id, alphafold_url = _get_uniprot_and_alphafold_es(db, feat)
 
+        # Get ortholog details
+        orthologs = _get_ortholog_details_es(db, feat)
+
         # Split evidence into direct and indirect
         direct_evidence, indirect_evidence = split_evidence(all_reasons)
 
@@ -1360,6 +1419,8 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 # Structural data links
                 "uniprot_id": uniprot_id,
                 "alphafold_url": alphafold_url,
+                # Cross-species ortholog data
+                "orthologs": orthologs,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
                 "link": f"/locus/{feat.feature_name}",

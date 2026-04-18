@@ -1410,6 +1410,9 @@ class VirulenceFactor(BaseModel):
     uniprot_id: typing.Optional[str] = None         # UniProt accession (SwissProt/TrEMBL)
     alphafold_url: typing.Optional[str] = None      # AlphaFold structure link
 
+    # Cross-species ortholog data (#5 improvement)
+    orthologs: list[dict] = []                      # List of {organism_abbrev, gene_name, feature_name}
+
 
 class VirulenceFactorsResponse(BaseModel):
     """Response from factors search endpoint."""

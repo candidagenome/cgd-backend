@@ -2569,6 +2569,8 @@ def search_virulence_factors(
                 # Structural data links
                 "uniprot_id": source.get("uniprot_id"),
                 "alphafold_url": source.get("alphafold_url"),
+                # Cross-species ortholog data
+                "orthologs": source.get("orthologs", []),
             })
 
         # Apply pagination
