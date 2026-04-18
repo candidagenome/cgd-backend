@@ -190,15 +190,15 @@ def get_confidence_tier(score: int) -> str:
 EVIDENCE_LANGUAGE_TIERS = {
     "in_vivo_strong": {
         "description": "in vivo evidence + high confidence",
-        "allowed_verbs": ["required for", "plays a key role in", "promotes", "drives"],
-        "avoid_verbs": ["may", "suggests"],
-        "ending_phrase": "Virulence demonstrated in vivo.",
+        "allowed_verbs": ["required for", "promotes", "drives", "mediates"],
+        "avoid_verbs": ["may", "suggests", "plays a role in", "is involved in"],
+        "ending_phrase": ", with in vivo evidence supporting a role in virulence.",
     },
     "experimental_strong": {
         "description": "phenotype/model evidence + high confidence, no in vivo",
-        "allowed_verbs": ["contributes to", "is involved in", "supports", "promotes"],
-        "avoid_verbs": ["required for", "is essential for"],
-        "ending_phrase": "Experimental evidence supports virulence role.",
+        "allowed_verbs": ["required for", "contributes to", "promotes", "mediates"],
+        "avoid_verbs": ["plays a role in", "is involved in"],
+        "ending_phrase": None,  # No extra ending for experimental
     },
     "experimental_moderate": {
         "description": "phenotype/model evidence + medium confidence",
@@ -760,6 +760,65 @@ def _is_generic_gene(role: str) -> bool:
     return role.lower() in generic_roles
 
 
+def repair_summary(summary: str) -> str:
+    """
+    Post-process summary to remove generated-feeling patterns.
+
+    Fixes:
+    - "plays a role in X, contributing to Y" -> "required for X and Y"
+    - "is involved in X, involved in Y" -> "is involved in X and Y"
+    - Double spaces, trailing punctuation issues
+    - "that that" and other stutter patterns
+    """
+    import re
+
+    # Fix "plays a role in X, contributing to Y" patterns
+    summary = re.sub(
+        r'plays a role in ([^,]+),\s*contributing to ([^\.]+)',
+        r'required for \1 and \2',
+        summary
+    )
+
+    # Fix "plays a key role in X, contributing to Y"
+    summary = re.sub(
+        r'plays a key role in ([^,]+),\s*contributing to ([^\.]+)',
+        r'required for \1 and \2',
+        summary
+    )
+
+    # Fix "is involved in X, involved in Y"
+    summary = re.sub(
+        r'is involved in ([^,]+),\s*involved in ([^\.]+)',
+        r'is involved in \1 and \2',
+        summary
+    )
+
+    # Fix "is associated with X, associated with Y"
+    summary = re.sub(
+        r'is associated with ([^,]+),\s*associated with ([^\.]+)',
+        r'is associated with \1 and \2',
+        summary
+    )
+
+    # Remove redundant "that that"
+    summary = re.sub(r'\bthat\s+that\b', 'that', summary)
+
+    # Remove double spaces
+    summary = re.sub(r'  +', ' ', summary)
+
+    # Fix ", ." pattern
+    summary = re.sub(r',\s*\.', '.', summary)
+
+    # Fix ".. " pattern
+    summary = re.sub(r'\.\.+', '.', summary)
+
+    # Ensure single period at end
+    summary = summary.rstrip('.')
+    summary += '.'
+
+    return summary
+
+
 def generate_summary(
     gene_name: str,
     categories: list[str],
@@ -773,10 +832,15 @@ def generate_summary(
     Generate a concise biological summary (~150 chars) for table display.
 
     Uses evidence-calibrated language:
-    - Strong evidence → strong verbs ("required for", "contributes to")
-    - Weak evidence → hedged language ("associated with", "may be linked to")
+    - Strong evidence → strong verbs ("required for", "promotes")
+    - Weak evidence → hedged language ("associated with", "limited evidence for")
 
-    Template: "[Gene] is a [core role] [core function], [virulence clause]. [evidence clause]"
+    Template: "[Gene] is a [role] [required for/that X] [and Y][, with in vivo evidence...]"
+
+    BANNED PATTERNS for strong evidence:
+    - "plays a role in" → use "required for" or "promotes"
+    - "contributing to" subordinate clauses → use coordinated "and Y"
+    - "is involved in" → use "required for" or "mediates"
     """
     # Helper for a/an article selection
     def article(word: str) -> str:
@@ -797,80 +861,87 @@ def generate_summary(
     if function:
         role = function
     else:
-        # No clear molecular function found - use neutral "protein"
         role = "protein"
 
-    # Get primary action (core function clause)
+    # Get primary action
     action_info = _get_primary_action(actions)
 
-    # Get virulence relevance phrase from categories (max 1 to avoid repetition)
+    # Get virulence relevance phrase (max 1 to avoid repetition)
     virulence_phrase = get_virulence_phrase(categories, max_items=1)
 
-    # Build first clause: core identity + function
-    action_phrase = ""
-    has_plays_role = False
-
+    # Extract the core target from action (e.g., "morphogenesis" from "regulates morphogenesis")
+    action_target = None
+    action_verb = None
     if action_info:
-        verb, target = action_info
+        action_verb, action_target = action_info
 
-        # Calibrate verb based on evidence tier
-        # Strong verbs like "controls", "required for" need strong evidence
-        if evidence_tier in ("indirect_low", "annotation_supported"):
-            # Downgrade strong verbs for weak evidence
-            if verb in ("controls", "required for", "essential for", "drives"):
-                verb = "involved in"
-            elif verb in ("regulates", "promotes", "activates"):
-                verb = "associated with"
-            # For annotation_supported, skip "role in" entirely - too assertive
-            if verb == "role in":
-                verb = "involved in"
+    # For strong evidence, upgrade weak verbs
+    if evidence_tier in ("in_vivo_strong", "experimental_strong"):
+        if action_verb in ("role in", "involved in", "plays a role in"):
+            action_verb = "required for"
+        elif action_verb in ("contributes to",):
+            action_verb = "promotes"
 
-        # Format action phrase with proper grammar
-        # Verbs needing "that X" construction
-        if verb in ("regulates", "controls", "promotes", "activates", "inhibits",
-                    "mediates", "modulates", "induces", "represses", "suppresses"):
-            action_phrase = f"that {verb} {target}"
-        # Verbs needing "that is X" construction
-        elif verb in ("required for", "essential for", "involved in", "associated with"):
-            action_phrase = f"that is {verb} {target}"
-        # "role in" gets special phrasing (only for strong evidence)
-        elif verb == "role in":
-            action_phrase = f"that plays a role in {target}"
-            has_plays_role = True
-        # Verbs with "may" stay as-is
-        elif verb.startswith("may "):
-            action_phrase = f"that {verb} {target}"
-        # Default: use "that" + verb
+    # For weak evidence, downgrade strong verbs
+    if evidence_tier in ("indirect_low", "annotation_supported"):
+        if action_verb in ("controls", "required for", "essential for", "drives"):
+            action_verb = "linked to"
+        elif action_verb in ("regulates", "promotes", "activates"):
+            action_verb = "associated with"
+        elif action_verb == "role in":
+            action_verb = "linked to"
+
+    # Build the summary using coordinated structure
+    # Strong evidence: "X is a Y required for A and B"
+    # Weak evidence: "X is a Y with limited evidence linking it to A"
+
+    if evidence_tier in ("in_vivo_strong", "experimental_strong"):
+        # STRONG EVIDENCE: Use direct, confident language with coordination
+        concepts = []
+        if action_target:
+            concepts.append(action_target)
+        if virulence_phrase and virulence_phrase.lower() != (action_target or "").lower():
+            # Only add if not duplicating the action target
+            concepts.append(virulence_phrase)
+
+        if concepts:
+            concepts_str = " and ".join(concepts[:2])  # Max 2 concepts
+            summary = f"{gene_name} is {article(role)} {role} {action_verb or 'required for'} {concepts_str}"
         else:
-            action_phrase = f"that {verb} {target}"
+            summary = f"{gene_name} is {article(role)} {role}"
 
-        first_clause = f"{gene_name} is {article(role)} {role} {action_phrase}"
-    else:
-        first_clause = f"{gene_name} is {article(role)} {role}"
+    elif evidence_tier == "experimental_moderate":
+        # MODERATE: Use "associated with"
+        concepts = []
+        if action_target:
+            concepts.append(action_target)
+        if virulence_phrase and virulence_phrase.lower() != (action_target or "").lower():
+            concepts.append(virulence_phrase)
 
-    # Build virulence clause based on evidence tier
-    # AVOID redundant phrasing: don't use "contributing to" if we already have "plays a role"
-    virulence_clause = ""
-    if virulence_phrase:
-        if evidence_tier == "in_vivo_strong" and not has_plays_role:
-            virulence_clause = f", contributing to {virulence_phrase}"
-        elif evidence_tier == "in_vivo_strong" and has_plays_role:
-            # Skip virulence clause to avoid "plays a role ... contributing to"
-            virulence_clause = ""
-        elif evidence_tier == "experimental_strong" and not has_plays_role:
-            virulence_clause = f", involved in {virulence_phrase}"
-        elif evidence_tier == "experimental_strong" and has_plays_role:
-            # Already have "plays a role", skip redundant clause
-            virulence_clause = ""
-        elif evidence_tier == "experimental_moderate":
-            virulence_clause = f", associated with {virulence_phrase}"
-        elif evidence_tier == "annotation_supported":
-            virulence_clause = f", with annotation linking it to {virulence_phrase}"
-        else:  # indirect_low
-            virulence_clause = f", with limited evidence for {virulence_phrase}"
+        if concepts:
+            concepts_str = " and ".join(concepts[:2])
+            summary = f"{gene_name} is {article(role)} {role} associated with {concepts_str}"
+        else:
+            summary = f"{gene_name} is {article(role)} {role}"
 
-    # Combine clauses
-    summary = first_clause + virulence_clause
+    elif evidence_tier == "annotation_supported":
+        # ANNOTATION ONLY: Use hedged language
+        if virulence_phrase:
+            summary = f"{gene_name} is {article(role)} {role}, annotated to {virulence_phrase}"
+        elif action_target:
+            summary = f"{gene_name} is {article(role)} {role} linked to {action_target}"
+        else:
+            summary = f"{gene_name} is {article(role)} {role}"
+
+    else:  # indirect_low
+        # WEAK: Use "limited evidence" phrasing
+        concept = virulence_phrase or action_target
+        if concept:
+            summary = f"{gene_name} is {article(role)} {role} with limited evidence linking it to {concept}"
+        else:
+            summary = f"{gene_name} is {article(role)} {role}"
+
+    # Ensure period
     if not summary.endswith("."):
         summary += "."
 
@@ -880,23 +951,21 @@ def generate_summary(
             summary = summary.replace(verbose, normalized)
             break
 
-    # Add evidence ending phrase ONLY for strong evidence AND non-generic genes
+    # Add in vivo ending phrase ONLY for in_vivo_strong + High confidence + non-generic genes
     ending = tier_config.get("ending_phrase")
     if ending and evidence_tier == "in_vivo_strong":
-        # Only add "Virulence demonstrated in vivo" if:
-        # - confidence is High
-        # - gene is not generic (e.g., ACT1, housekeeping)
         confidence = confidence_tier.lower() if confidence_tier else "low"
         if confidence == "high" and not _is_generic_gene(role):
-            combined = summary.rstrip(".") + ". " + ending
-            if len(combined) <= 180:
-                summary = combined
+            # Integrate smoothly: remove period, add ending
+            summary = summary.rstrip(".") + ending
 
-    # Cap at 180 chars for table display, truncate at word boundary
+    # Apply post-processing repairs
+    summary = repair_summary(summary)
+
+    # Cap at 180 chars for table display
     if len(summary) > 180:
-        # Find last space before limit to truncate at word boundary
         truncate_at = summary.rfind(' ', 0, 177)
-        if truncate_at > 100:  # Ensure we keep a reasonable amount
+        if truncate_at > 100:
             summary = summary[:truncate_at] + "..."
         else:
             summary = summary[:177] + "..."
@@ -941,63 +1010,66 @@ def generate_summary_full(
     else:
         role = "protein"
 
-    parts = [f"{gene_name} is {article(role)} {role}"]
-
-    # Add mechanisms (up to 2), with calibrated verbs
-    if actions:
-        formatted = []
-        for action in actions[:2]:
-            verb_part = action.split(" ", 1)[0] if " " in action else action
-
-            # Calibrate verbs for weak evidence
-            if evidence_tier in ("indirect_low", "annotation_supported"):
-                if verb_part in ("controls", "required", "essential", "drives"):
-                    action = action.replace(verb_part, "is associated with", 1)
-
-            if action.startswith("required for "):
-                formatted.append("is " + action)
-            elif action.startswith("essential for "):
-                formatted.append("is " + action)
-            elif action.startswith("involved in "):
-                formatted.append("is " + action)
-            elif action.startswith("role in "):
-                formatted.append("plays a " + action)
-            else:
-                formatted.append(action)
-
-        if len(formatted) == 1:
-            parts.append(f"that {formatted[0]}")
-        else:
-            parts.append(f"that {formatted[0]} and {formatted[1]}")
-
-    # Add virulence context based on evidence tier (max 1 concept to avoid repetition)
+    # Get virulence context (max 1 concept)
     virulence_phrase = get_virulence_phrase(categories, max_items=1)
 
-    # Check if we already mentioned similar concepts in the action phrase
-    has_role_phrase = any("plays a" in p or "role in" in p for p in parts)
+    # Collect all concepts to mention
+    concepts = []
 
-    if virulence_phrase and not has_role_phrase:
-        if evidence_tier == "in_vivo_strong":
-            parts.append(f"and contributes to {virulence_phrase}")
-        elif evidence_tier == "experimental_strong":
-            parts.append(f"and is involved in {virulence_phrase}")
-        elif evidence_tier == "experimental_moderate":
-            parts.append(f"and is associated with {virulence_phrase}")
-        elif evidence_tier == "annotation_supported":
-            parts.append(f"with annotation support for {virulence_phrase}")
+    # Add action targets
+    for action in actions[:2]:
+        if " " in action:
+            verb, target = action.split(" ", 1)
+            # Skip weak verbs for strong evidence
+            if evidence_tier in ("in_vivo_strong", "experimental_strong"):
+                if verb in ("role", "involved"):
+                    continue
+            if target and len(target) > 3:
+                concepts.append(target)
+
+    # Add virulence phrase if not duplicating
+    if virulence_phrase:
+        is_dup = any(virulence_phrase.lower() in c.lower() for c in concepts)
+        if not is_dup:
+            concepts.append(virulence_phrase)
+
+    # Build summary based on evidence tier
+    if evidence_tier in ("in_vivo_strong", "experimental_strong"):
+        if concepts:
+            concepts_str = " and ".join(concepts[:3])
+            summary = f"{gene_name} is {article(role)} {role} required for {concepts_str}."
         else:
-            parts.append(f"with limited evidence for {virulence_phrase}")
+            summary = f"{gene_name} is {article(role)} {role}."
 
-    summary = " ".join(parts).strip()
-    if not summary.endswith("."):
-        summary += "."
+    elif evidence_tier == "experimental_moderate":
+        if concepts:
+            concepts_str = " and ".join(concepts[:2])
+            summary = f"{gene_name} is {article(role)} {role} associated with {concepts_str}."
+        else:
+            summary = f"{gene_name} is {article(role)} {role}."
 
-    # Add evidence ending for strong evidence (same rules as generate_summary)
+    elif evidence_tier == "annotation_supported":
+        if concepts:
+            concepts_str = " and ".join(concepts[:2])
+            summary = f"{gene_name} is {article(role)} {role}, annotated to {concepts_str}."
+        else:
+            summary = f"{gene_name} is {article(role)} {role}."
+
+    else:  # indirect_low
+        if concepts:
+            summary = f"{gene_name} is {article(role)} {role} with limited evidence linking it to {concepts[0]}."
+        else:
+            summary = f"{gene_name} is {article(role)} {role}."
+
+    # Add in vivo ending for strong evidence (integrated into sentence)
     ending = tier_config.get("ending_phrase")
     if ending and evidence_tier == "in_vivo_strong":
         confidence = confidence_tier.lower() if confidence_tier else "low"
         if confidence == "high" and not _is_generic_gene(role):
-            summary += " " + ending
+            summary = summary.rstrip(".") + ending
+
+    # Apply post-processing repairs
+    summary = repair_summary(summary)
 
     # Add study signal
     if paper_count >= 10:

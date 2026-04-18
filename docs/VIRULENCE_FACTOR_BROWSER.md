@@ -75,25 +75,33 @@ Summaries are generated using evidence-calibrated language - stronger evidence a
 | `generate_summary_full()` | 843-938 | Full tooltip summary |
 | `_extract_function_from_headline()` | 416-506 | Extract protein function |
 | `_extract_actions_from_headline()` | 509-562 | Extract biological actions |
+| `repair_summary()` | 763-820 | Post-processing cleanup |
 
 ### Evidence Language Tiers
 
-| Tier | Description | Allowed Verbs |
-|------|-------------|---------------|
-| `in_vivo_strong` | in vivo + high confidence | "required for", "plays a key role in", "promotes", "drives" |
-| `experimental_strong` | phenotype/model + high confidence | "contributes to", "is involved in", "supports", "promotes" |
-| `experimental_moderate` | phenotype/model + medium confidence | "is associated with", "has been linked to", "may contribute to" |
-| `annotation_supported` | GO/KW only | "is associated with", "is annotated to" |
-| `indirect_low` | weak/indirect evidence | "has limited evidence for", "may be linked to" |
+| Tier | Description | Allowed Verbs | Banned Phrases |
+|------|-------------|---------------|----------------|
+| `in_vivo_strong` | in vivo + high confidence | "required for", "promotes", "drives", "mediates" | "plays a role in", "is involved in" |
+| `experimental_strong` | phenotype/model + high confidence | "required for", "contributes to", "promotes", "mediates" | "plays a role in", "is involved in" |
+| `experimental_moderate` | phenotype/model + medium confidence | "is associated with", "has been linked to" | "required for", "controls" |
+| `annotation_supported` | GO/KW only | "annotated to", "linked to" | "required for", "contributes to" |
+| `indirect_low` | weak/indirect evidence | "limited evidence linking it to" | "required for", "contributes to" |
 
 ### Summary Template
 ```
-[Gene] is a [core function] that [action], [virulence clause]. [evidence ending if strong]
+[Gene] is a [role] [required for/associated with] [X and Y][, with in vivo evidence...].
 ```
 
+**Key principles:**
+- Use coordinated structure ("X and Y") instead of subordinate clauses ("X, contributing to Y")
+- Match verb strength to evidence strength
+- Limit to 2 concepts maximum to avoid repetition
+- In vivo ending integrates smoothly: ", with in vivo evidence supporting a role in virulence."
+
 Example outputs:
-- Strong: "ALS1 is an adhesin that promotes host adhesion, contributing to biofilm formation. Virulence demonstrated in vivo."
-- Weak: "ACT1 is an actin cytoskeletal protein, with limited evidence for host interaction."
+- Strong in vivo: "ACE2 is a transcription factor required for morphogenesis and adhesion, with in vivo evidence supporting a role in virulence."
+- Strong experimental: "ALS1 is an adhesin required for host adhesion and biofilm formation."
+- Weak: "ACT1 is an actin cytoskeletal protein with limited evidence linking it to drug response."
 
 ---
 
