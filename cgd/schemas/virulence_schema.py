@@ -182,6 +182,130 @@ def get_confidence_tier(score: int) -> str:
 
 
 # =============================================================================
+# EVIDENCE-CALIBRATED LANGUAGE SYSTEM
+# =============================================================================
+
+# Evidence tiers determine allowed verb strength (scientific precision)
+# Based on: confidence level + evidence type (in_vivo, phenotype, GO/KW)
+EVIDENCE_LANGUAGE_TIERS = {
+    "in_vivo_strong": {
+        "description": "in vivo evidence + high confidence",
+        "allowed_verbs": ["required for", "plays a key role in", "promotes", "drives"],
+        "avoid_verbs": ["may", "suggests"],
+        "ending_phrase": "Virulence demonstrated in vivo.",
+    },
+    "experimental_strong": {
+        "description": "phenotype/model evidence + high confidence, no in vivo",
+        "allowed_verbs": ["contributes to", "is involved in", "supports", "promotes"],
+        "avoid_verbs": ["required for", "is essential for"],
+        "ending_phrase": "Experimental evidence supports virulence role.",
+    },
+    "experimental_moderate": {
+        "description": "phenotype/model evidence + medium confidence",
+        "allowed_verbs": ["is associated with", "has been linked to", "is implicated in", "may contribute to"],
+        "avoid_verbs": ["controls", "drives", "is essential for"],
+        "ending_phrase": None,  # No ending for moderate evidence
+    },
+    "annotation_supported": {
+        "description": "GO/KW only",
+        "allowed_verbs": ["is associated with", "is linked to", "is annotated to", "has annotation support for"],
+        "avoid_verbs": ["required for", "contributes to", "pathogenesis", "controls"],
+        "ending_phrase": None,  # No ending for annotation-only
+    },
+    "indirect_low": {
+        "description": "low confidence / weak indirect evidence",
+        "allowed_verbs": ["has limited evidence for", "shows possible association with", "may be linked to"],
+        "avoid_verbs": ["required for", "contributes to", "plays a role in", "controls"],
+        "ending_phrase": None,  # No strong ending for weak evidence
+    },
+}
+
+# Category phrases describe VIRULENCE RELEVANCE, not gene identity
+CATEGORY_VIRULENCE_PHRASES = {
+    "Adhesins": "host adhesion",
+    "Secreted Enzymes": "secreted enzymatic activity",
+    "Morphogenesis": "morphogenesis",
+    "Host Interaction": "host interaction",
+    "Biofilm Formation": "biofilm formation",
+    "Immune Evasion": "immune evasion",
+    "Drug Resistance": "drug response",
+}
+
+
+def determine_evidence_language_tier(
+    confidence_tier: str,
+    direct_evidence: list[str],
+    indirect_evidence: list[str],
+) -> str:
+    """
+    Determine evidence tier for calibrated language selection.
+
+    Returns one of: in_vivo_strong, experimental_strong, experimental_moderate,
+                    annotation_supported, indirect_low
+    """
+    confidence = confidence_tier.lower() if confidence_tier else "low"
+    all_evidence = direct_evidence + indirect_evidence
+
+    # Check for in vivo / virulence model evidence
+    has_in_vivo = any(
+        "virulence model" in e.lower() or
+        "mouse" in e.lower() or
+        "galleria" in e.lower() or
+        "in vivo" in e.lower()
+        for e in all_evidence
+    )
+
+    # Check for phenotype evidence
+    has_phenotype = any("phenotype:" in e.lower() for e in all_evidence)
+
+    # Check for GO evidence
+    has_go = any(e.lower().startswith("go:") for e in all_evidence)
+
+    # Check for keyword/pattern evidence only
+    has_kw_only = not has_phenotype and not has_go and len(all_evidence) > 0
+
+    # Determine tier based on evidence + confidence
+    if has_in_vivo and confidence == "high":
+        return "in_vivo_strong"
+
+    if has_phenotype and confidence == "high":
+        return "experimental_strong"
+
+    if has_phenotype and confidence in ("medium", "med"):
+        return "experimental_moderate"
+
+    if (has_go or has_kw_only) and not has_phenotype:
+        return "annotation_supported"
+
+    return "indirect_low"
+
+
+def get_virulence_phrase(categories: list[str], max_items: int = 2) -> str | None:
+    """
+    Get virulence relevance phrase from categories.
+
+    These describe virulence context, NOT gene identity.
+    """
+    phrases = []
+    for cat in categories:
+        if cat in CATEGORY_VIRULENCE_PHRASES:
+            phrase = CATEGORY_VIRULENCE_PHRASES[cat]
+            if phrase not in phrases:
+                phrases.append(phrase)
+
+    if not phrases:
+        return None
+
+    phrases = phrases[:max_items]
+    if len(phrases) == 1:
+        return phrases[0]
+    elif len(phrases) == 2:
+        return f"{phrases[0]} and {phrases[1]}"
+    else:
+        return ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+
+
+# =============================================================================
 # EVIDENCE TYPE DEFINITIONS
 # =============================================================================
 
@@ -608,89 +732,100 @@ def generate_summary(
     """
     Generate a concise biological summary (~150 chars) for table display.
 
-    Uses a consistent template:
-    "[Gene] is a [role] that [primary action], contributing to virulence."
+    Uses evidence-calibrated language:
+    - Strong evidence → strong verbs ("required for", "contributes to")
+    - Weak evidence → hedged language ("associated with", "may be linked to")
 
-    For longer summaries, use generate_summary_full().
+    Template: "[Gene] is a [core role] [core function], [virulence clause]. [evidence clause]"
     """
     # Helper for a/an article selection
     def article(word: str) -> str:
         vowels = 'aeiouAEIOU'
         return 'an' if word and word[0] in vowels else 'a'
 
+    # Determine evidence tier for calibrated language
+    evidence_tier = determine_evidence_language_tier(
+        confidence_tier, direct_evidence, indirect_evidence
+    )
+    tier_config = EVIDENCE_LANGUAGE_TIERS.get(evidence_tier, EVIDENCE_LANGUAGE_TIERS["indirect_low"])
+
     # Extract biological information
     function = _extract_function_from_headline(headline)
     actions = _extract_actions_from_headline(headline)
-    models = _extract_model_systems(headline, direct_evidence)
 
     # Determine role - PRIORITIZE molecular function over category
     if function:
         role = function
-        has_molecular_function = True
     else:
-        # No clear molecular function found - use neutral "protein" phrasing
-        # to avoid misleading statements like "ACT1 is a drug resistance protein"
+        # No clear molecular function found - use neutral "protein"
         role = "protein"
-        has_molecular_function = False
 
-    # Get primary action
+    # Get primary action (core function clause)
     action_info = _get_primary_action(actions)
 
-    # Build summary using consistent template
-    # Template: "[Gene] is a [role] that [verb]s [target], contributing to [virulence aspect]."
+    # Get virulence relevance phrase from categories
+    virulence_phrase = get_virulence_phrase(categories)
 
+    # Build first clause: core identity + function
     if action_info:
         verb, target = action_info
-        # Fix verb grammar
-        if verb in ("required for", "essential for", "involved in"):
-            action_phrase = f"is {verb} {target}"
-        elif verb == "role in":
-            action_phrase = f"plays a role in {target}"
-        else:
-            action_phrase = f"{verb} {target}"
 
-        # Add virulence context
-        if models:
-            model_short = models[0].replace(" model", "").replace(" interaction", "")
-            summary = f"{gene_name} is {article(role)} {role} that {action_phrase}, with virulence shown in {model_short}."
+        # Calibrate verb based on evidence tier
+        # Strong verbs like "controls", "required for" need strong evidence
+        if evidence_tier in ("indirect_low", "annotation_supported"):
+            # Downgrade strong verbs for weak evidence
+            if verb in ("controls", "required for", "essential for", "drives"):
+                verb = "involved in"
+            elif verb in ("regulates", "promotes", "activates"):
+                verb = "associated with"
+
+        # Format action phrase with proper grammar
+        # Verbs needing "that X" construction
+        if verb in ("regulates", "controls", "promotes", "activates", "inhibits",
+                    "mediates", "modulates", "induces", "represses", "suppresses"):
+            action_phrase = f"that {verb} {target}"
+        # Verbs needing "that is X" construction
+        elif verb in ("required for", "essential for", "involved in", "associated with"):
+            action_phrase = f"that is {verb} {target}"
+        # "role in" gets special phrasing
+        elif verb == "role in":
+            action_phrase = f"that plays a role in {target}"
+        # Verbs with "may" stay as-is
+        elif verb.startswith("may "):
+            action_phrase = f"that {verb} {target}"
+        # Default: use "that" + verb
         else:
-            summary = f"{gene_name} is {article(role)} {role} that {action_phrase}, contributing to pathogenesis."
+            action_phrase = f"that {verb} {target}"
+
+        first_clause = f"{gene_name} is {article(role)} {role} {action_phrase}"
     else:
-        # No specific action found
-        if has_molecular_function:
-            # We have a real function (actin, kinase, etc.)
-            if models:
-                model_short = models[0].replace(" model", "").replace(" interaction", "")
-                summary = f"{gene_name} is {article(role)} {role} with virulence evidence in {model_short}."
-            else:
-                # Mention category context without asserting gene IS that type
-                cat_context = ""
-                if "Biofilm Formation" in categories:
-                    cat_context = "linked to biofilm formation"
-                elif "Host Interaction" in categories:
-                    cat_context = "implicated in host interaction"
-                elif "Drug Resistance" in categories:
-                    cat_context = "associated with drug response"
-                elif "Morphogenesis" in categories:
-                    cat_context = "involved in morphogenesis"
-                else:
-                    cat_context = "associated with virulence"
-                summary = f"{gene_name} is {article(role)} {role} {cat_context}."
-        else:
-            # No molecular function found - use very neutral phrasing
-            if models:
-                model_short = models[0].replace(" model", "").replace(" interaction", "")
-                summary = f"{gene_name} has virulence phenotype evidence in {model_short}."
-            elif "Biofilm Formation" in categories:
-                summary = f"{gene_name} is associated with biofilm formation."
-            elif "Host Interaction" in categories:
-                summary = f"{gene_name} is implicated in host-pathogen interaction."
-            elif "Drug Resistance" in categories:
-                summary = f"{gene_name} is associated with drug resistance phenotypes."
-            elif "Morphogenesis" in categories:
-                summary = f"{gene_name} is involved in morphogenesis."
-            else:
-                summary = f"{gene_name} is associated with Candida virulence."
+        first_clause = f"{gene_name} is {article(role)} {role}"
+
+    # Build virulence clause based on evidence tier
+    virulence_clause = ""
+    if virulence_phrase:
+        if evidence_tier == "in_vivo_strong":
+            virulence_clause = f", contributing to {virulence_phrase}"
+        elif evidence_tier == "experimental_strong":
+            virulence_clause = f", involved in {virulence_phrase}"
+        elif evidence_tier == "experimental_moderate":
+            virulence_clause = f", associated with {virulence_phrase}"
+        elif evidence_tier == "annotation_supported":
+            virulence_clause = f", with annotation linking it to {virulence_phrase}"
+        else:  # indirect_low
+            virulence_clause = f", with limited evidence for {virulence_phrase}"
+
+    # Combine clauses
+    summary = first_clause + virulence_clause
+    if not summary.endswith("."):
+        summary += "."
+
+    # Add evidence ending phrase ONLY for strong evidence
+    ending = tier_config.get("ending_phrase")
+    if ending and evidence_tier in ("in_vivo_strong", "experimental_strong"):
+        # Check if summary is short enough to add ending
+        if len(summary) + len(ending) + 1 <= 160:
+            summary = summary.rstrip(".") + ". " + ending
 
     # Cap at 160 chars for table display
     if len(summary) > 160:
@@ -711,43 +846,44 @@ def generate_summary_full(
     """
     Generate a detailed biological summary for tooltips/expansion.
 
-    Includes:
-    - Full function description
-    - Multiple mechanisms
-    - Evidence context with specifics
-    - Study indication
+    Uses evidence-calibrated language with same principles as generate_summary().
+    Includes: function, mechanisms, virulence context, evidence quality, study count.
     """
     # Helper for a/an article selection
     def article(word: str) -> str:
         vowels = 'aeiouAEIOU'
         return 'an' if word and word[0] in vowels else 'a'
 
+    # Determine evidence tier
+    evidence_tier = determine_evidence_language_tier(
+        confidence_tier, direct_evidence, indirect_evidence
+    )
+    tier_config = EVIDENCE_LANGUAGE_TIERS.get(evidence_tier, EVIDENCE_LANGUAGE_TIERS["indirect_low"])
+
     # Extract biological information
     function = _extract_function_from_headline(headline)
     actions = _extract_actions_from_headline(headline)
     models = _extract_model_systems(headline, direct_evidence)
 
-    # Determine role
+    # Determine role - prioritize molecular function
     if function:
         role = function
     else:
-        category_roles = {
-            "Adhesins": "cell surface adhesin",
-            "Secreted Enzymes": "secreted enzyme",
-            "Morphogenesis": "morphogenesis-related protein",
-            "Host Interaction": "host interaction factor",
-            "Biofilm Formation": "biofilm-associated protein",
-            "Immune Evasion": "immune evasion factor",
-            "Drug Resistance": "drug resistance protein",
-        }
-        role = next((category_roles[c] for c in categories if c in category_roles), "virulence-associated protein")
+        role = "protein"
 
     parts = [f"{gene_name} is {article(role)} {role}"]
 
-    # Add mechanisms (up to 2)
+    # Add mechanisms (up to 2), with calibrated verbs
     if actions:
         formatted = []
         for action in actions[:2]:
+            verb_part = action.split(" ", 1)[0] if " " in action else action
+
+            # Calibrate verbs for weak evidence
+            if evidence_tier in ("indirect_low", "annotation_supported"):
+                if verb_part in ("controls", "required", "essential", "drives"):
+                    action = action.replace(verb_part, "is associated with", 1)
+
             if action.startswith("required for "):
                 formatted.append("is " + action)
             elif action.startswith("essential for "):
@@ -764,19 +900,34 @@ def generate_summary_full(
         else:
             parts.append(f"that {formatted[0]} and {formatted[1]}")
 
-    # Add evidence context
-    if models:
-        parts.append(f"as demonstrated in {' and '.join(models)}")
+    # Add virulence context based on evidence tier
+    virulence_phrase = get_virulence_phrase(categories)
+    if virulence_phrase:
+        if evidence_tier == "in_vivo_strong":
+            parts.append(f"and plays a key role in {virulence_phrase}")
+        elif evidence_tier == "experimental_strong":
+            parts.append(f"and contributes to {virulence_phrase}")
+        elif evidence_tier == "experimental_moderate":
+            parts.append(f"and is involved in {virulence_phrase}")
+        elif evidence_tier == "annotation_supported":
+            parts.append(f"and is associated with {virulence_phrase}")
+        else:
+            parts.append(f"with limited evidence linking it to {virulence_phrase}")
+
+    summary = " ".join(parts).strip()
+    if not summary.endswith("."):
+        summary += "."
+
+    # Add evidence ending for strong evidence
+    ending = tier_config.get("ending_phrase")
+    if ending:
+        summary += " " + ending
 
     # Add study signal
     if paper_count >= 10:
-        parts.append(f"({paper_count} publications)")
+        summary += f" ({paper_count} publications)"
     elif paper_count >= 5:
-        parts.append(f"({paper_count} studies)")
-
-    summary = " ".join(parts)
-    if not summary.endswith("."):
-        summary += "."
+        summary += f" ({paper_count} studies)"
 
     return summary[:400]
 
