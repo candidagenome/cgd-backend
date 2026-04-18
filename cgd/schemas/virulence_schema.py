@@ -1406,6 +1406,10 @@ class VirulenceFactor(BaseModel):
     importance_level: str = "low"                   # high/medium/low
     importance_label: str = "Indirect evidence"    # Human-readable badge (e.g., "Core virulence factor")
 
+    # Structural data links (#4 improvement)
+    uniprot_id: typing.Optional[str] = None         # UniProt accession (SwissProt/TrEMBL)
+    alphafold_url: typing.Optional[str] = None      # AlphaFold structure link
+
 
 class VirulenceFactorsResponse(BaseModel):
     """Response from factors search endpoint."""

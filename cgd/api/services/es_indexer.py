@@ -1111,6 +1111,53 @@ def _get_paper_count_and_pmids_es(
     return paper_count, pmids_sorted
 
 
+def _get_uniprot_and_alphafold_es(
+    db: Session,
+    feature: Feature,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Get UniProt ID and AlphaFold URL for a feature.
+
+    Prefers SwissProt over TrEMBL entries.
+
+    Args:
+        db: Database session
+        feature: The feature to get UniProt for
+
+    Returns:
+        Tuple of (uniprot_id, alphafold_url) - both may be None
+    """
+    # Query for UniProt IDs (source='EBI', type in SwissProt/TrEMBL)
+    uniprot_entries = (
+        db.query(Dbxref.dbxref_id, Dbxref.dbxref_type)
+        .join(DbxrefFeat, DbxrefFeat.dbxref_no == Dbxref.dbxref_no)
+        .filter(
+            DbxrefFeat.feature_no == feature.feature_no,
+            Dbxref.source == 'EBI',
+            Dbxref.dbxref_type.in_(['SwissProt', 'TrEMBL']),
+        )
+        .all()
+    )
+
+    if not uniprot_entries:
+        return None, None
+
+    # Prefer SwissProt over TrEMBL
+    uniprot_id = None
+    for entry_id, entry_type in uniprot_entries:
+        if entry_type == 'SwissProt':
+            uniprot_id = entry_id
+            break
+        elif entry_type == 'TrEMBL' and uniprot_id is None:
+            uniprot_id = entry_id
+
+    if uniprot_id:
+        alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{uniprot_id}"
+        return uniprot_id, alphafold_url
+
+    return None, None
+
+
 def _calculate_confidence_score_es(
     match_reasons: list[str],
     evidence_tier: int,
@@ -1226,6 +1273,9 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
         # Get paper count and PMIDs
         paper_count, pmids = _get_paper_count_and_pmids_es(db, feat)
 
+        # Get UniProt ID and AlphaFold URL
+        uniprot_id, alphafold_url = _get_uniprot_and_alphafold_es(db, feat)
+
         # Split evidence into direct and indirect
         direct_evidence, indirect_evidence = split_evidence(all_reasons)
 
@@ -1307,6 +1357,9 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
                 "importance_level": importance_level,
                 "importance_label": importance_label,
                 "evidence_breakdown": evidence_breakdown,
+                # Structural data links
+                "uniprot_id": uniprot_id,
+                "alphafold_url": alphafold_url,
                 # Searchable text
                 "searchable_text": f"{display_name} {feat.feature_name} {feat.headline or ''} {' '.join(all_reasons)}",
                 "link": f"/locus/{feat.feature_name}",

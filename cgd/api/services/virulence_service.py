@@ -56,6 +56,8 @@ from cgd.models.models import (
     FeatHomology,
     RefLink,
     Reference,
+    Dbxref,
+    DbxrefFeat,
 )
 
 logger = logging.getLogger(__name__)
@@ -209,6 +211,53 @@ def _get_paper_count_and_pmids(
     pmids_sorted = sorted(pmids, reverse=True)
 
     return paper_count, pmids_sorted
+
+
+def _get_uniprot_and_alphafold(
+    db: Session,
+    feature: Feature,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Get UniProt ID and AlphaFold URL for a feature.
+
+    Prefers SwissProt over TrEMBL entries.
+
+    Args:
+        db: Database session
+        feature: The feature to get UniProt for
+
+    Returns:
+        Tuple of (uniprot_id, alphafold_url) - both may be None
+    """
+    # Query for UniProt IDs (source='EBI', type in SwissProt/TrEMBL)
+    uniprot_entries = (
+        db.query(Dbxref.dbxref_id, Dbxref.dbxref_type)
+        .join(DbxrefFeat, DbxrefFeat.dbxref_no == Dbxref.dbxref_no)
+        .filter(
+            DbxrefFeat.feature_no == feature.feature_no,
+            Dbxref.source == 'EBI',
+            Dbxref.dbxref_type.in_(['SwissProt', 'TrEMBL']),
+        )
+        .all()
+    )
+
+    if not uniprot_entries:
+        return None, None
+
+    # Prefer SwissProt over TrEMBL
+    uniprot_id = None
+    for entry_id, entry_type in uniprot_entries:
+        if entry_type == 'SwissProt':
+            uniprot_id = entry_id
+            break
+        elif entry_type == 'TrEMBL' and uniprot_id is None:
+            uniprot_id = entry_id
+
+    if uniprot_id:
+        alphafold_url = f"https://alphafold.ebi.ac.uk/entry/{uniprot_id}"
+        return uniprot_id, alphafold_url
+
+    return None, None
 
 
 def _calculate_confidence_score(
@@ -771,6 +820,11 @@ def get_virulence_factors(
         data["paper_count"] = paper_count
         data["pmids"] = pmids
 
+        # Get UniProt ID and AlphaFold URL
+        uniprot_id, alphafold_url = _get_uniprot_and_alphafold(db, feature)
+        data["uniprot_id"] = uniprot_id
+        data["alphafold_url"] = alphafold_url
+
         # Split evidence into direct and indirect
         direct_evidence, indirect_evidence = split_evidence(match_reasons_list)
         data["direct_evidence"] = direct_evidence
@@ -873,6 +927,8 @@ def get_virulence_factors(
             evidence_breakdown=evidence_breakdown,
             importance_level=importance_level,
             importance_label=importance_label,
+            uniprot_id=data.get("uniprot_id"),
+            alphafold_url=data.get("alphafold_url"),
         ))
 
     # Sort results

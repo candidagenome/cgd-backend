@@ -2566,6 +2566,9 @@ def search_virulence_factors(
                 "importance_level": source.get("importance_level", "low"),
                 "importance_label": source.get("importance_label", "Indirect evidence"),
                 "evidence_breakdown": source.get("evidence_breakdown", {}),
+                # Structural data links
+                "uniprot_id": source.get("uniprot_id"),
+                "alphafold_url": source.get("alphafold_url"),
             })
 
         # Apply pagination
