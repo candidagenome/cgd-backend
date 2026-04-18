@@ -420,7 +420,7 @@ class VirulenceFactor(BaseModel):
 
     # Paper/reference fields
     paper_count: int = 0                            # Number of associated papers
-    pmids: list[int] = []                           # List of PubMed IDs (top 10)
+    pmids: list[int] = []                           # List of PubMed IDs (sorted by recency)
 
     # Split evidence fields
     direct_evidence: list[str] = []                 # Direct virulence evidence

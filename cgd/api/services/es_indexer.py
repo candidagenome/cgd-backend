@@ -1074,7 +1074,6 @@ def _get_ortholog_count_es(db: Session, feature: Feature) -> int:
 def _get_paper_count_and_pmids_es(
     db: Session,
     feature: Feature,
-    max_pmids: int = 10,
 ) -> tuple[int, list[int]]:
     """
     Get paper count and PMID list for a feature.
@@ -1082,10 +1081,9 @@ def _get_paper_count_and_pmids_es(
     Args:
         db: Database session
         feature: The feature to get papers for
-        max_pmids: Maximum number of PMIDs to return (default 10)
 
     Returns:
-        Tuple of (paper_count, pmid_list)
+        Tuple of (paper_count, pmid_list) - all PMIDs sorted by recency
     """
     # Query references via RefLink
     refs = (
@@ -1103,8 +1101,8 @@ def _get_paper_count_and_pmids_es(
     pmids = [r[0] for r in refs if r[0] is not None]
     paper_count = len(pmids)
 
-    # Sort by PMID descending (most recent first) and limit
-    pmids_sorted = sorted(pmids, reverse=True)[:max_pmids]
+    # Sort by PMID descending (most recent first)
+    pmids_sorted = sorted(pmids, reverse=True)
 
     return paper_count, pmids_sorted
 
