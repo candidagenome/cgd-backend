@@ -12,6 +12,8 @@ This document explains how the Virulence Factor Browser works, including evidenc
 4. [PMID Collection](#4-pmid-collection)
 5. [Summary Header Statistics](#5-summary-header-statistics)
 6. [Confidence Score Calculation](#6-confidence-score-calculation)
+7. [Cross-Species Orthologs](#7-cross-species-orthologs)
+8. [AlphaFold Structure Links](#8-alphafold-structure-links)
 
 ---
 
@@ -291,6 +293,79 @@ def _calculate_confidence_score(match_reasons, evidence_tier, is_housekeeping):
 | High | 10-20 | Strong direct virulence evidence |
 | Medium | 5-9 | Moderate evidence with host interaction |
 | Low | 0-4 | Indirect or weak evidence |
+
+---
+
+## 7. Cross-Species Orthologs
+
+### Overview
+Each gene displays orthologs across Candida species, prioritized by clinical importance.
+
+### Backend Code
+
+**File:** `cgd/api/services/virulence_service.py`
+
+| Function | Description |
+|----------|-------------|
+| `_get_ortholog_count()` | Count distinct species with orthologs |
+| `_get_ortholog_details()` | Get ortholog gene names and species |
+
+### Query Logic
+Orthologs are retrieved from `FeatHomology` and `HomologyGroup` tables:
+- Filter: `HomologyGroup.method == 'CGOB'`
+- Filter: `HomologyGroup.homology_group_type == 'ortholog'`
+- Excludes the query gene itself
+
+### Frontend Display
+
+**File:** `cgd-frontend/src/pages/VirulenceFactorBrowserPage.jsx`
+
+Species are sorted by clinical importance (not alphabetically):
+
+```javascript
+const SPECIES_PRIORITY = {
+  'auris': 1,      // Emerging multidrug-resistant pathogen
+  'glabrata': 2,   // Common clinical isolate
+  'albicans': 3,   // Most common pathogen
+  'tropicalis': 4, // Clinical relevance
+  'parapsilosis': 5,
+  'dubliniensis': 6,
+  'lusitaniae': 7,
+};
+```
+
+**Display format:** `Orthologs: C. auris, C. glabrata, C. tropicalis +1 more → View`
+
+The "→ View" link opens the Synteny Browser at `/synteny-browser?gene={feature_name}`.
+
+---
+
+## 8. AlphaFold Structure Links
+
+### Overview
+Genes with UniProt IDs display a 🔬 icon linking to AlphaFold predicted structures.
+
+### Backend Code
+
+**File:** `cgd/api/services/virulence_service.py`
+
+| Function | Description |
+|----------|-------------|
+| `_get_uniprot_and_alphafold()` | Query UniProt ID and generate AlphaFold URL |
+
+### Query Logic
+UniProt IDs are retrieved from `Dbxref` table:
+- Filter: `source == 'EBI'`
+- Filter: `dbxref_type IN ('SwissProt', 'TrEMBL')`
+- Prefers SwissProt over TrEMBL entries
+
+### URL Format
+```
+https://alphafold.ebi.ac.uk/entry/{uniprot_id}
+```
+
+### Frontend Display
+The 🔬 icon appears next to the gene name with hover tooltip showing the UniProt ID.
 
 ---
 

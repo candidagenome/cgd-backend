@@ -7,10 +7,14 @@
 - [x] Split direct vs indirect evidence display
 - [x] Expandable PMID list
 - [x] Wider table layout with adjustable columns
-
-## In Progress
-- [ ] #1 Auto-generated summary per gene
-- [ ] #2 Evidence transparency/breakdown
+- [x] #1 Auto-generated summary per gene (evidence-calibrated language)
+- [x] #2 Evidence transparency/breakdown (virulence models, GO, phenotypes, papers)
+- [x] Importance badges ("In vivo", "Multi-study") for gene prioritization
+- [x] AlphaFold structure links (🔬 icon) for genes with UniProt IDs
+- [x] Cross-species orthologs display with clinical priority sorting
+  - Species ordered by clinical importance: C. auris → C. glabrata → C. albicans → etc.
+  - Links to Synteny Browser for detailed ortholog view
+- [x] Gene links open in new window
 
 ## Future Improvements
 
