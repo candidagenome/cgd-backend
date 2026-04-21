@@ -718,11 +718,9 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
-    # Get base ORF names (without allele suffix) for gene lookup
-    base_orf_names = {_strip_allele_suffix(name) for name in unique_seq_names}
-
-    # Look up gene names using base ORF names
-    gene_names_map = _lookup_gene_names(db, list(base_orf_names))
+    # Look up gene names using full sequence names (with allele suffix)
+    # Database stores feature_name with allele suffix (e.g., C1_00150C_A)
+    gene_names_map = _lookup_gene_names(db, list(unique_seq_names))
 
     # Convert to PatmatchHit objects
     patmatch_hits = []
@@ -735,11 +733,8 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Get base ORF name (without allele suffix) for gene name lookup
-        base_orf_name = _strip_allele_suffix(seq_name)
-
         # Build description: "C1_00150C_A/RIM8" or same as seq_name if no gene
-        gene_name = gene_names_map.get(base_orf_name.upper(), "")
+        gene_name = gene_names_map.get(seq_name.upper(), "")
         if gene_name:
             description = f"{seq_name}/{gene_name}"
         else:
