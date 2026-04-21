@@ -146,21 +146,45 @@ def _parse_nrgrep_output(
 
 
 def _find_sequence_offset(position: int, offsets: List[int]) -> int:
-    """Find the sequence offset for a given global position."""
-    result = 0
-    for offset in offsets:
-        if offset <= position:
-            result = offset
+    """
+    Find the sequence offset for a given global position using binary search.
+
+    Returns the largest offset that is <= position, which identifies which
+    sequence the position belongs to.
+    """
+    if not offsets:
+        return 0
+
+    low = 0
+    high = len(offsets) - 1
+
+    while high > low:
+        middle = (low + high) // 2
+        if offsets[middle] == position:
+            return position
+        elif high - low == 1:
+            # Only two elements left - pick the right one
+            if position >= offsets[high]:
+                return offsets[high]
+            else:
+                return offsets[low]
+        elif offsets[middle] < position:
+            low = middle
         else:
-            break
-    return result
+            high = middle - 1
+
+    return offsets[low]
 
 
 def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
     """
-    Generate an index of sequence names and their file offsets.
+    Generate an index of sequence names and their offsets in a concatenated
+    sequence view (no headers, no newlines).
 
     Returns: (offset_to_name dict, sorted list of offsets)
+
+    The offsets represent positions in a hypothetical file where all sequences
+    are concatenated together without headers or newlines.
     """
     index = {}
     offsets = []
@@ -177,12 +201,55 @@ def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
                     offsets.append(current_offset)
                     current_name = name
                 else:
-                    # Sequence data - add to offset
+                    # Sequence data - add to offset (count only sequence chars)
                     current_offset += len(line.strip())
     except IOError as e:
         logger.error(f"Failed to read FASTA file {fasta_file}: {e}")
 
     return index, sorted(offsets)
+
+
+def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], List[int]]:
+    """
+    Create a temporary file with sequences concatenated (no headers, no newlines).
+
+    This allows nrgrep_coords to return positions that directly correspond
+    to the index offsets.
+
+    Returns: (temp_file_path, offset_to_name dict, sorted list of offsets)
+    """
+    index = {}
+    offsets = []
+    current_offset = 0
+    current_name = None
+
+    # Create temp file
+    fd, temp_path = tempfile.mkstemp(suffix='.seq')
+
+    try:
+        with os.fdopen(fd, 'w') as temp_f:
+            with open(fasta_file, 'r') as f:
+                for line in f:
+                    if line.startswith('>'):
+                        # New sequence - record the offset
+                        name = line[1:].split()[0].strip()
+                        index[current_offset] = name
+                        offsets.append(current_offset)
+                        current_name = name
+                    else:
+                        # Write sequence data without newlines
+                        seq_data = line.strip()
+                        if seq_data:
+                            temp_f.write(seq_data)
+                            current_offset += len(seq_data)
+    except IOError as e:
+        logger.error(f"Failed to create clean sequence file: {e}")
+        # Clean up temp file on error
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+
+    return temp_path, index, sorted(offsets)
 
 
 def _run_nrgrep_search(
@@ -196,6 +263,9 @@ def _run_nrgrep_search(
     """
     Run pattern search using nrgrep_coords binary.
 
+    Creates a temporary clean sequence file (no headers, no newlines) so that
+    nrgrep_coords returns positions that directly map to sequence offsets.
+
     Returns: (list of (seq_name, start, end, strand, matched_seq) tuples, total_count)
     """
     if not _check_binary_available():
@@ -204,29 +274,30 @@ def _run_nrgrep_search(
     if not os.path.exists(fasta_file):
         raise FileNotFoundError(f"FASTA file not found: {fasta_file}")
 
-    # Generate index for the FASTA file
-    fasta_index, file_offsets = _generate_fasta_index(fasta_file)
-
-    # Build mismatch option
-    k_option = _build_mismatch_option(mismatches, insertions, deletions)
-
-    # Build command
-    # nrgrep_coords options:
-    # -i: case insensitive
-    # -k N: allow up to N errors
-    # -b SIZE: buffer size
-    cmd = [
-        NRGREP_BINARY,
-        '-i',  # case insensitive
-        '-k', k_option,
-        '-b', '1600000',  # buffer size
-        pattern,
-        fasta_file
-    ]
-
-    logger.debug(f"Running nrgrep: {' '.join(cmd)}")
-
+    # Create clean sequence file (no headers, no newlines) and index
+    temp_file = None
     try:
+        temp_file, fasta_index, file_offsets = _create_clean_sequence_file(fasta_file)
+
+        # Build mismatch option
+        k_option = _build_mismatch_option(mismatches, insertions, deletions)
+
+        # Build command
+        # nrgrep_coords options:
+        # -i: case insensitive
+        # -k N: allow up to N errors
+        # -b SIZE: buffer size
+        cmd = [
+            NRGREP_BINARY,
+            '-i',  # case insensitive
+            '-k', k_option,
+            '-b', '1600000',  # buffer size
+            pattern,
+            temp_file  # Search the clean file, not the original FASTA
+        ]
+
+        logger.debug(f"Running nrgrep: {' '.join(cmd)}")
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -253,6 +324,13 @@ def _run_nrgrep_search(
         raise RuntimeError("Pattern search timed out")
     except Exception as e:
         raise RuntimeError(f"Pattern search failed: {e}")
+    finally:
+        # Clean up temporary file
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass  # Best effort cleanup
 
 
 def _run_python_search(
