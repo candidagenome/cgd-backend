@@ -835,6 +835,7 @@ class LitGuideCurationService:
         reference_no: int,
         feature_identifier: str,
         curator_userid: str,
+        organism_abbrev: Optional[str] = None,
     ) -> dict:
         """
         Unlink a feature from a reference.
@@ -846,6 +847,7 @@ class LitGuideCurationService:
             reference_no: Reference number
             feature_identifier: Feature name, gene name, or feature_no
             curator_userid: Curator user ID for logging
+            organism_abbrev: Optional organism abbreviation to filter feature lookup
 
         Returns:
             Dict with feature info and status
@@ -855,7 +857,7 @@ class LitGuideCurationService:
             feature_no = int(feature_identifier)
             feature = self.get_feature_by_no(feature_no)
         except ValueError:
-            feature = self.get_feature_by_name(feature_identifier)
+            feature = self.get_feature_by_name(feature_identifier, organism_abbrev)
 
         if not feature:
             raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")

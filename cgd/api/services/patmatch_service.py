@@ -39,14 +39,144 @@ from cgd.schemas.patmatch_schema import (
     DatasetInfo,
     PatmatchConfigResponse,
 )
-from cgd.models.locus_model import Feature
+from cgd.models.locus_model import Feature, FeatAlias
+from cgd.models.models import Alias
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_allele_suffix(seq_name: str) -> str:
+    """
+    Strip allele suffix (_A or _B) from a sequence name to get base ORF name.
+
+    C. albicans is diploid, so sequences have allele suffixes like:
+    - CR_08640C_B -> CR_08640C
+    - C1_08940C_A -> C1_08940C
+
+    Args:
+        seq_name: Sequence name potentially with allele suffix
+
+    Returns:
+        Base ORF name without allele suffix
+    """
+    if seq_name and len(seq_name) >= 2:
+        if seq_name[-2:] in ('_A', '_B', '_a', '_b'):
+            return seq_name[:-2]
+    return seq_name
+
+
+def _lookup_feature_details(
+    db: Session, feature_names: List[str]
+) -> Dict[str, Dict[str, str]]:
+    """
+    Look up feature details (gene name, orf19 identifier) for a list of feature names.
+
+    Args:
+        db: Database session
+        feature_names: List of systematic feature names (e.g., "CR_05010W_A")
+
+    Returns:
+        Dict mapping feature_name to dict with keys: gene_name, orf19_id
+    """
+    if not feature_names or db is None:
+        return {}
+
+    details = {}
+    feature_no_to_name = {}  # Map feature_no to feature_name for alias lookup
+
+    try:
+        # Oracle has a 1000-item limit on IN clauses, so batch the queries
+        batch_size = 900  # Use 900 to be safe
+        upper_names = [fn.upper() for fn in feature_names]
+
+        for i in range(0, len(upper_names), batch_size):
+            batch = upper_names[i:i + batch_size]
+            features = (
+                db.query(Feature.feature_no, Feature.feature_name, Feature.gene_name)
+                .filter(func.upper(Feature.feature_name).in_(batch))
+                .all()
+            )
+
+            for feature_no, feature_name, gene_name in features:
+                details[feature_name.upper()] = {
+                    "gene_name": gene_name or "",
+                    "orf19_id": "",  # Will be filled in below
+                }
+                feature_no_to_name[feature_no] = feature_name.upper()
+
+        # Now look up orf19 aliases for all features found
+        if feature_no_to_name:
+            feature_nos = list(feature_no_to_name.keys())
+            for i in range(0, len(feature_nos), batch_size):
+                batch = feature_nos[i:i + batch_size]
+                # Query aliases that start with "orf19."
+                aliases = (
+                    db.query(FeatAlias.feature_no, Alias.alias_name)
+                    .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+                    .filter(
+                        FeatAlias.feature_no.in_(batch),
+                        func.lower(Alias.alias_name).like('orf19.%')
+                    )
+                    .all()
+                )
+
+                for feature_no, alias_name in aliases:
+                    fname = feature_no_to_name.get(feature_no)
+                    if fname and fname in details:
+                        # Keep the first orf19 alias found (there should only be one)
+                        if not details[fname]["orf19_id"]:
+                            details[fname]["orf19_id"] = alias_name
+
+    except Exception as e:
+        logger.warning(f"Failed to look up feature details: {e}")
+
+    return details
+
+
+def _extract_chromosome_name(seq_name: str) -> str:
+    """
+    Extract chromosome name from a sequence name.
+
+    C. albicans sequence names follow patterns like:
+    - CR_02210W_A -> ChrR (CR = ChrR)
+    - C1_08940C_A -> Chr1 (C1 = Chr1)
+    - C2_... -> Chr2
+
+    Args:
+        seq_name: Sequence name like CR_02210W_A
+
+    Returns:
+        Chromosome name like "ChrR" or "Chr1"
+    """
+    if not seq_name:
+        return ""
+
+    # Get the prefix before first underscore
+    parts = seq_name.split('_')
+    if not parts:
+        return ""
+
+    prefix = parts[0].upper()
+
+    # Map prefix to chromosome name
+    # CR -> ChrR, C1 -> Chr1, C2 -> Chr2, etc.
+    if prefix == "CR":
+        return "ChrR"
+    elif prefix.startswith("C") and len(prefix) >= 2:
+        # C1, C2, C3, C4, C5, C6, C7 -> Chr1, Chr2, etc.
+        chr_num = prefix[1:]
+        if chr_num.isdigit():
+            return f"Chr{chr_num}"
+
+    # Return prefix as-is if we can't map it
+    return prefix
 
 
 def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
     """
     Look up gene names (standard names) for a list of feature names.
+
+    This is a backwards-compatible wrapper around _lookup_feature_details.
 
     Args:
         db: Database session
@@ -55,28 +185,8 @@ def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
     Returns:
         Dict mapping feature_name to gene_name (empty string if no gene name)
     """
-    if not feature_names or db is None:
-        return {}
-
-    gene_names = {}
-
-    try:
-        # Query all features in one batch
-        features = (
-            db.query(Feature.feature_name, Feature.gene_name)
-            .filter(func.upper(Feature.feature_name).in_(
-                [fn.upper() for fn in feature_names]
-            ))
-            .all()
-        )
-
-        for feature_name, gene_name in features:
-            gene_names[feature_name.upper()] = gene_name or ""
-
-    except Exception as e:
-        logger.warning(f"Failed to look up gene names: {e}")
-
-    return gene_names
+    details = _lookup_feature_details(db, feature_names)
+    return {k: v["gene_name"] for k, v in details.items()}
 
 
 def _check_binary_available() -> bool:
@@ -146,21 +256,45 @@ def _parse_nrgrep_output(
 
 
 def _find_sequence_offset(position: int, offsets: List[int]) -> int:
-    """Find the sequence offset for a given global position."""
-    result = 0
-    for offset in offsets:
-        if offset <= position:
-            result = offset
+    """
+    Find the sequence offset for a given global position using binary search.
+
+    Returns the largest offset that is <= position, which identifies which
+    sequence the position belongs to.
+    """
+    if not offsets:
+        return 0
+
+    low = 0
+    high = len(offsets) - 1
+
+    while high > low:
+        middle = (low + high) // 2
+        if offsets[middle] == position:
+            return position
+        elif high - low == 1:
+            # Only two elements left - pick the right one
+            if position >= offsets[high]:
+                return offsets[high]
+            else:
+                return offsets[low]
+        elif offsets[middle] < position:
+            low = middle
         else:
-            break
-    return result
+            high = middle - 1
+
+    return offsets[low]
 
 
 def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
     """
-    Generate an index of sequence names and their file offsets.
+    Generate an index of sequence names and their offsets in a concatenated
+    sequence view (no headers, no newlines).
 
     Returns: (offset_to_name dict, sorted list of offsets)
+
+    The offsets represent positions in a hypothetical file where all sequences
+    are concatenated together without headers or newlines.
     """
     index = {}
     offsets = []
@@ -177,12 +311,60 @@ def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
                     offsets.append(current_offset)
                     current_name = name
                 else:
-                    # Sequence data - add to offset
+                    # Sequence data - add to offset (count only sequence chars)
                     current_offset += len(line.strip())
     except IOError as e:
         logger.error(f"Failed to read FASTA file {fasta_file}: {e}")
 
     return index, sorted(offsets)
+
+
+def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], List[int], int, int]:
+    """
+    Create a temporary file with sequences concatenated (no headers, no newlines).
+
+    This allows nrgrep_coords to return positions that directly correspond
+    to the index offsets.
+
+    Returns: (temp_file_path, offset_to_name dict, sorted list of offsets,
+              sequences_count, total_residues)
+    """
+    index = {}
+    offsets = []
+    current_offset = 0
+    current_name = None
+    sequences_count = 0
+    total_residues = 0
+
+    # Create temp file
+    fd, temp_path = tempfile.mkstemp(suffix='.seq')
+
+    try:
+        with os.fdopen(fd, 'w') as temp_f:
+            with open(fasta_file, 'r') as f:
+                for line in f:
+                    if line.startswith('>'):
+                        # New sequence - record the offset
+                        name = line[1:].split()[0].strip()
+                        index[current_offset] = name
+                        offsets.append(current_offset)
+                        current_name = name
+                        sequences_count += 1
+                    else:
+                        # Write sequence data without newlines
+                        seq_data = line.strip()
+                        if seq_data:
+                            temp_f.write(seq_data)
+                            current_offset += len(seq_data)
+                            total_residues += len(seq_data)
+    except IOError as e:
+        logger.error(f"Failed to create clean sequence file: {e}")
+        # Clean up temp file on error
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+
+    return temp_path, index, sorted(offsets), sequences_count, total_residues
 
 
 def _run_nrgrep_search(
@@ -192,11 +374,15 @@ def _run_nrgrep_search(
     insertions: int = 0,
     deletions: int = 0,
     max_results: int = 1000,
-) -> Tuple[List[Tuple[str, int, int, str, str]], int]:
+) -> Tuple[List[Tuple[str, int, int, str, str]], int, int, int]:
     """
     Run pattern search using nrgrep_coords binary.
 
-    Returns: (list of (seq_name, start, end, strand, matched_seq) tuples, total_count)
+    Creates a temporary clean sequence file (no headers, no newlines) so that
+    nrgrep_coords returns positions that directly map to sequence offsets.
+
+    Returns: (list of (seq_name, start, end, strand, matched_seq) tuples,
+              total_count, sequences_searched, total_residues)
     """
     if not _check_binary_available():
         raise RuntimeError("nrgrep_coords binary not available")
@@ -204,29 +390,33 @@ def _run_nrgrep_search(
     if not os.path.exists(fasta_file):
         raise FileNotFoundError(f"FASTA file not found: {fasta_file}")
 
-    # Generate index for the FASTA file
-    fasta_index, file_offsets = _generate_fasta_index(fasta_file)
-
-    # Build mismatch option
-    k_option = _build_mismatch_option(mismatches, insertions, deletions)
-
-    # Build command
-    # nrgrep_coords options:
-    # -i: case insensitive
-    # -k N: allow up to N errors
-    # -b SIZE: buffer size
-    cmd = [
-        NRGREP_BINARY,
-        '-i',  # case insensitive
-        '-k', k_option,
-        '-b', '1600000',  # buffer size
-        pattern,
-        fasta_file
-    ]
-
-    logger.debug(f"Running nrgrep: {' '.join(cmd)}")
-
+    # Create clean sequence file (no headers, no newlines) and index
+    temp_file = None
+    sequences_searched = 0
+    total_residues = 0
     try:
+        temp_file, fasta_index, file_offsets, sequences_searched, total_residues = \
+            _create_clean_sequence_file(fasta_file)
+
+        # Build mismatch option
+        k_option = _build_mismatch_option(mismatches, insertions, deletions)
+
+        # Build command
+        # nrgrep_coords options:
+        # -i: case insensitive
+        # -k N: allow up to N errors
+        # -b SIZE: buffer size
+        cmd = [
+            NRGREP_BINARY,
+            '-i',  # case insensitive
+            '-k', k_option,
+            '-b', '1600000',  # buffer size
+            pattern,
+            temp_file  # Search the clean file, not the original FASTA
+        ]
+
+        logger.debug(f"Running nrgrep: {' '.join(cmd)}")
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -247,12 +437,19 @@ def _run_nrgrep_search(
         if len(hits) > max_results:
             hits = hits[:max_results]
 
-        return hits, actual_total
+        return hits, actual_total, sequences_searched, total_residues
 
     except subprocess.TimeoutExpired:
         raise RuntimeError("Pattern search timed out")
     except Exception as e:
         raise RuntimeError(f"Pattern search failed: {e}")
+    finally:
+        # Clean up temporary file
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass  # Best effort cleanup
 
 
 def _run_python_search(
@@ -537,6 +734,11 @@ def run_patmatch_search(
 
     actual_total_hits = 0
 
+    # Use a higher internal limit to ensure we capture both A and B alleles
+    # before sorting. We sort by sequence name to group alleles together,
+    # then apply the user's max_results limit.
+    internal_limit = max(request.max_results * 2, 10000)
+
     try:
         if use_binary:
             # Convert pattern for nrgrep
@@ -547,14 +749,14 @@ def run_patmatch_search(
                 request.max_deletions,
             )
 
-            # Run Watson strand search
-            hits, watson_total = _run_nrgrep_search(
+            # Run Watson strand search with higher internal limit
+            hits, watson_total, sequences_searched, total_residues = _run_nrgrep_search(
                 nrgrep_pattern,
                 dataset_config.fasta_file,
                 request.max_mismatches,
                 request.max_insertions,
                 request.max_deletions,
-                request.max_results,
+                internal_limit,
             )
             actual_total_hits = watson_total
 
@@ -562,13 +764,13 @@ def run_patmatch_search(
             if (config_pattern_type == PatternType.DNA and
                     request.strand in [StrandOption.BOTH, StrandOption.CRICK]):
                 rc_pattern = get_reverse_complement(nrgrep_pattern)
-                crick_hits, crick_total = _run_nrgrep_search(
+                crick_hits, crick_total, _, _ = _run_nrgrep_search(
                     rc_pattern,
                     dataset_config.fasta_file,
                     request.max_mismatches,
                     request.max_insertions,
                     request.max_deletions,
-                    request.max_results,
+                    internal_limit,
                 )
                 actual_total_hits += crick_total
                 # Mark as Crick strand hits
@@ -584,17 +786,15 @@ def run_patmatch_search(
                 # actual_total_hits was set to watson + crick, but we only want crick
                 actual_total_hits = actual_total_hits - watson_total
 
-            sequences_searched = 0  # Not tracked with binary
-            total_residues = 0
-
         else:
             # Use Python regex (no fuzzy matching support)
+            # Use internal_limit to capture more hits before sorting
             hits, sequences_searched, total_residues, actual_total_hits = _run_python_search(
                 pattern,
                 dataset_config.fasta_file,
                 config_pattern_type,
                 request.strand,
-                request.max_results,
+                internal_limit,
             )
 
     except Exception as e:
@@ -604,7 +804,23 @@ def run_patmatch_search(
             error=f"Search failed: {str(e)}",
         )
 
-    # Limit results
+    # Sort hits by sequence name to group A and B alleles together
+    # Sort by base name (without _A/_B suffix) first, then by full name
+    def hit_sort_key(hit):
+        name = hit[0] or ""  # hit is tuple: (seq_name, start, end, strand, matched_seq)
+        # Strip _A or _B suffix for primary sort to group alleles together
+        if name.endswith('_A') or name.endswith('_B'):
+            base_name = name[:-2]
+        elif name.endswith('_a') or name.endswith('_b'):
+            base_name = name[:-2]
+        else:
+            base_name = name
+        # Secondary sort by full name puts _A before _B
+        return (base_name.upper(), name.upper())
+
+    hits = sorted(hits, key=hit_sort_key)
+
+    # Limit results after sorting
     hits = hits[:request.max_results]
 
     # Batch load sequences for context (much faster than loading per-hit)
@@ -614,8 +830,14 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
-    # Look up gene names for all unique sequence names
-    gene_names_map = _lookup_gene_names(db, list(unique_seq_names))
+    # Look up feature details (gene name, orf_id) - try both original name and _A allele version
+    # Database may only have Feature entries for _A alleles
+    lookup_names = set(unique_seq_names)
+    # Also try _A version for _B alleles
+    for name in unique_seq_names:
+        if name.endswith('_B') or name.endswith('_b'):
+            lookup_names.add(name[:-2] + '_A')
+    feature_details_map = _lookup_feature_details(db, list(lookup_names))
 
     # Convert to PatmatchHit objects
     patmatch_hits = []
@@ -628,14 +850,31 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Build description with gene name if available
-        gene_name = gene_names_map.get(seq_name.upper(), "")
+        # Look up feature details - try _A version for _B alleles since DB has _A entries
+        # B alleles may exist in the table but with empty gene_name/orf19_id
+        details = feature_details_map.get(seq_name.upper(), {})
+        gene_name = details.get("gene_name", "")
+        orf_id = details.get("orf19_id", "")
+
+        # Fall back to A allele if B allele has no gene_name or orf19_id
+        if (seq_name.endswith('_B') or seq_name.endswith('_b')) and (not gene_name or not orf_id):
+            a_version = seq_name[:-2] + '_A'
+            a_details = feature_details_map.get(a_version.upper(), {})
+            if not gene_name:
+                gene_name = a_details.get("gene_name", "")
+            if not orf_id:
+                orf_id = a_details.get("orf19_id", "")
+
+        # Build description with actual allele name where match was found
         if gene_name:
             description = f"{seq_name}/{gene_name}"
         else:
             description = seq_name
 
-        # Build links
+        # Extract chromosome name from sequence name
+        chromosome = _extract_chromosome_name(seq_name)
+
+        # Link to the actual allele where match was found
         locus_link = f"/locus/{seq_name}"
         jbrowse_link = None  # Could add JBrowse link based on coordinates
 
@@ -648,6 +887,10 @@ def run_patmatch_search(
             matched_sequence=matched_seq,
             context_before=ctx_before,
             context_after=ctx_after,
+            chromosome=chromosome,
+            gene_name=gene_name,
+            orf_name=seq_name,  # The actual allele where match was found
+            orf_id=orf_id,
             locus_link=locus_link,
             jbrowse_link=jbrowse_link,
         ))
@@ -739,37 +982,106 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
     if include_num_hits:
         seq_hit_counts = Counter(hit.sequence_name for hit in result.hits)
 
-    # Column headers - matching old PatMatch output format
+    # Check if this is a protein search (no strand needed for protein)
+    is_protein = result.pattern_type.lower() == "protein"
+
+    # Column headers - includes chromosome, gene name, and ORF ID (orf19.XXXX)
+    # Note: ORF Name removed as it's redundant with Sequence Name
+    # Note: Strand omitted for protein searches (always single direction)
     if include_num_hits:
-        lines.append("Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\tLocusInfo")
+        if is_protein:
+            lines.append(
+                "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
+        else:
+            lines.append(
+                "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
     else:
-        lines.append("Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After")
+        if is_protein:
+            lines.append(
+                "Sequence\tDescription\tStart\tEnd\tMatched_Sequence\tContext_Before\tContext_After\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
+        else:
+            lines.append(
+                "Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
+
+    # Sort hits by sequence name to group A and B alleles together
+    # Sort by base name (without _A/_B suffix) first, then by full name
+    def sort_key(hit):
+        name = hit.sequence_name or ""
+        # Strip _A or _B suffix for primary sort to group alleles together
+        if name.endswith('_A') or name.endswith('_B'):
+            base_name = name[:-2]
+        elif name.endswith('_a') or name.endswith('_b'):
+            base_name = name[:-2]
+        else:
+            base_name = name
+        # Secondary sort by full name puts _A before _B
+        return (base_name.upper(), name.upper())
+
+    sorted_hits = sorted(result.hits, key=sort_key)
 
     # Data rows
-    for hit in result.hits:
+    for hit in sorted_hits:
         if include_num_hits:
-            # Old format: Sequence Name, NumHits, MatchPattern, Start, End, Strand, LocusInfo
             num_hits = seq_hit_counts.get(hit.sequence_name, 1)
-            row = [
-                hit.sequence_description or hit.sequence_name,  # Includes gene name if available
-                str(num_hits),
-                hit.matched_sequence,
-                str(hit.match_start),
-                str(hit.match_end),
-                hit.strand,
-                "",  # LocusInfo - could add more details here
-            ]
+            if is_protein:
+                row = [
+                    hit.sequence_description or hit.sequence_name,
+                    str(num_hits),
+                    hit.matched_sequence,
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
+            else:
+                row = [
+                    hit.sequence_description or hit.sequence_name,
+                    str(num_hits),
+                    hit.matched_sequence,
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.strand,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
         else:
-            row = [
-                hit.sequence_name,
-                hit.sequence_description or "",
-                str(hit.match_start),
-                str(hit.match_end),
-                hit.strand,
-                hit.matched_sequence,
-                hit.context_before,
-                hit.context_after,
-            ]
+            if is_protein:
+                row = [
+                    hit.sequence_name,
+                    hit.sequence_description or "",
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.matched_sequence,
+                    hit.context_before,
+                    hit.context_after,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
+            else:
+                row = [
+                    hit.sequence_name,
+                    hit.sequence_description or "",
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.strand,
+                    hit.matched_sequence,
+                    hit.context_before,
+                    hit.context_after,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
         lines.append("\t".join(row))
 
     return "\n".join(lines)
