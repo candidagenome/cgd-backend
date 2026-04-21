@@ -60,6 +60,7 @@ CURATION_STATUSES = [
     "Done: No genes",
     "Done: All genes HTP",
     "Done: Curated",
+    "not gene specific",
 ]
 
 
@@ -433,11 +434,9 @@ class LitGuideCurationService:
 
         Returns ref_property_no.
         """
-        if curation_status not in CURATION_STATUSES:
-            raise LitGuideCurationError(
-                f"Invalid status '{curation_status}'. "
-                f"Valid statuses: {', '.join(CURATION_STATUSES)}"
-            )
+        # Note: We don't validate against CURATION_STATUSES anymore since
+        # the frontend loads valid values from the database CV tree.
+        # Any value from the curation_status CV is acceptable.
 
         reference = (
             self.db.query(Reference)
@@ -447,21 +446,42 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
-        # Check for existing curation status property
-        existing = (
+        # Delete ALL existing curation status properties (to ensure clean replacement)
+        existing_statuses = (
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
                 RefProperty.property_type == "curation_status",
             )
-            .first()
+            .all()
         )
 
-        if existing:
-            existing.property_value = curation_status
-            existing.date_last_reviewed = datetime.now()
-            self.db.commit()
-            return existing.ref_property_no
+        logger.info(
+            f"Deleting {len(existing_statuses)} existing curation status records for reference {reference_no}: "
+            f"{[s.property_value for s in existing_statuses]}"
+        )
+
+        # First delete all RefpropFeat records linked to these RefProperty records
+        # (Oracle DB may not have CASCADE DELETE configured, so we do it manually)
+        for existing in existing_statuses:
+            linked_refprop_feats = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == existing.ref_property_no)
+                .all()
+            )
+            logger.info(
+                f"Deleting {len(linked_refprop_feats)} RefpropFeat records "
+                f"linked to ref_property_no {existing.ref_property_no}"
+            )
+            for rpf in linked_refprop_feats:
+                self.db.delete(rpf)
+
+        self.db.flush()
+
+        # Now delete the RefProperty records
+        for existing in existing_statuses:
+            self.db.delete(existing)
+        self.db.flush()
 
         # Create new property
         prop = RefProperty(
