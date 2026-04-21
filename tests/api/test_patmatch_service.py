@@ -771,7 +771,7 @@ YZ
 
     def test_create_clean_sequence_file_concatenates_sequences(self, multi_seq_fasta):
         """Clean file should have all sequences concatenated without headers/newlines."""
-        temp_file, index, offsets = _create_clean_sequence_file(multi_seq_fasta)
+        temp_file, index, offsets, seq_count, total_res = _create_clean_sequence_file(multi_seq_fasta)
 
         try:
             with open(temp_file, 'r') as f:
@@ -780,12 +780,14 @@ YZ
             # Should be: seq1 (20 chars) + seq2 (10 chars) + seq3 (22 chars) = 52 chars
             assert content == "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ"
             assert len(content) == 52
+            assert seq_count == 3
+            assert total_res == 52
         finally:
             os.unlink(temp_file)
 
     def test_create_clean_sequence_file_builds_correct_index(self, multi_seq_fasta):
         """Index should map sequence start offsets to sequence names."""
-        temp_file, index, offsets = _create_clean_sequence_file(multi_seq_fasta)
+        temp_file, index, offsets, seq_count, total_res = _create_clean_sequence_file(multi_seq_fasta)
 
         try:
             # seq1 starts at 0, has 20 chars
@@ -795,6 +797,8 @@ YZ
             assert index[0] == "seq1"
             assert index[20] == "seq2"
             assert index[30] == "seq3"
+            assert seq_count == 3
+            assert total_res == 52
         finally:
             os.unlink(temp_file)
 
@@ -925,11 +929,15 @@ MNHPKRQQSXY
     def test_generate_fasta_index_matches_clean_file(self, protein_fasta):
         """Regular index should produce same offsets as clean file index."""
         regular_index, regular_offsets = _generate_fasta_index(protein_fasta)
-        temp_file, clean_index, clean_offsets = _create_clean_sequence_file(protein_fasta)
+        temp_file, clean_index, clean_offsets, seq_count, total_res = \
+            _create_clean_sequence_file(protein_fasta)
 
         try:
             # Both should have same offsets and sequence names
             assert regular_offsets == clean_offsets
             assert regular_index == clean_index
+            # Verify stats are tracked
+            assert seq_count == 3
+            assert total_res > 0
         finally:
             os.unlink(temp_file)

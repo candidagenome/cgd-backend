@@ -209,19 +209,22 @@ def _generate_fasta_index(fasta_file: str) -> Tuple[Dict[int, str], List[int]]:
     return index, sorted(offsets)
 
 
-def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], List[int]]:
+def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], List[int], int, int]:
     """
     Create a temporary file with sequences concatenated (no headers, no newlines).
 
     This allows nrgrep_coords to return positions that directly correspond
     to the index offsets.
 
-    Returns: (temp_file_path, offset_to_name dict, sorted list of offsets)
+    Returns: (temp_file_path, offset_to_name dict, sorted list of offsets,
+              sequences_count, total_residues)
     """
     index = {}
     offsets = []
     current_offset = 0
     current_name = None
+    sequences_count = 0
+    total_residues = 0
 
     # Create temp file
     fd, temp_path = tempfile.mkstemp(suffix='.seq')
@@ -236,12 +239,14 @@ def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], L
                         index[current_offset] = name
                         offsets.append(current_offset)
                         current_name = name
+                        sequences_count += 1
                     else:
                         # Write sequence data without newlines
                         seq_data = line.strip()
                         if seq_data:
                             temp_f.write(seq_data)
                             current_offset += len(seq_data)
+                            total_residues += len(seq_data)
     except IOError as e:
         logger.error(f"Failed to create clean sequence file: {e}")
         # Clean up temp file on error
@@ -249,7 +254,7 @@ def _create_clean_sequence_file(fasta_file: str) -> Tuple[str, Dict[int, str], L
             os.unlink(temp_path)
         raise
 
-    return temp_path, index, sorted(offsets)
+    return temp_path, index, sorted(offsets), sequences_count, total_residues
 
 
 def _run_nrgrep_search(
@@ -259,14 +264,15 @@ def _run_nrgrep_search(
     insertions: int = 0,
     deletions: int = 0,
     max_results: int = 1000,
-) -> Tuple[List[Tuple[str, int, int, str, str]], int]:
+) -> Tuple[List[Tuple[str, int, int, str, str]], int, int, int]:
     """
     Run pattern search using nrgrep_coords binary.
 
     Creates a temporary clean sequence file (no headers, no newlines) so that
     nrgrep_coords returns positions that directly map to sequence offsets.
 
-    Returns: (list of (seq_name, start, end, strand, matched_seq) tuples, total_count)
+    Returns: (list of (seq_name, start, end, strand, matched_seq) tuples,
+              total_count, sequences_searched, total_residues)
     """
     if not _check_binary_available():
         raise RuntimeError("nrgrep_coords binary not available")
@@ -276,8 +282,11 @@ def _run_nrgrep_search(
 
     # Create clean sequence file (no headers, no newlines) and index
     temp_file = None
+    sequences_searched = 0
+    total_residues = 0
     try:
-        temp_file, fasta_index, file_offsets = _create_clean_sequence_file(fasta_file)
+        temp_file, fasta_index, file_offsets, sequences_searched, total_residues = \
+            _create_clean_sequence_file(fasta_file)
 
         # Build mismatch option
         k_option = _build_mismatch_option(mismatches, insertions, deletions)
@@ -318,7 +327,7 @@ def _run_nrgrep_search(
         if len(hits) > max_results:
             hits = hits[:max_results]
 
-        return hits, actual_total
+        return hits, actual_total, sequences_searched, total_residues
 
     except subprocess.TimeoutExpired:
         raise RuntimeError("Pattern search timed out")
@@ -626,7 +635,7 @@ def run_patmatch_search(
             )
 
             # Run Watson strand search
-            hits, watson_total = _run_nrgrep_search(
+            hits, watson_total, sequences_searched, total_residues = _run_nrgrep_search(
                 nrgrep_pattern,
                 dataset_config.fasta_file,
                 request.max_mismatches,
@@ -640,7 +649,7 @@ def run_patmatch_search(
             if (config_pattern_type == PatternType.DNA and
                     request.strand in [StrandOption.BOTH, StrandOption.CRICK]):
                 rc_pattern = get_reverse_complement(nrgrep_pattern)
-                crick_hits, crick_total = _run_nrgrep_search(
+                crick_hits, crick_total, _, _ = _run_nrgrep_search(
                     rc_pattern,
                     dataset_config.fasta_file,
                     request.max_mismatches,
@@ -661,9 +670,6 @@ def run_patmatch_search(
                 hits = [(n, s, e, st, m) for n, s, e, st, m in hits if st == "C"]
                 # actual_total_hits was set to watson + crick, but we only want crick
                 actual_total_hits = actual_total_hits - watson_total
-
-            sequences_searched = 0  # Not tracked with binary
-            total_residues = 0
 
         else:
             # Use Python regex (no fuzzy matching support)
