@@ -798,7 +798,23 @@ def run_patmatch_search(
             error=f"Search failed: {str(e)}",
         )
 
-    # Limit results
+    # Sort hits by sequence name to group A and B alleles together
+    # Sort by base name (without _A/_B suffix) first, then by full name
+    def hit_sort_key(hit):
+        name = hit[0] or ""  # hit is tuple: (seq_name, start, end, strand, matched_seq)
+        # Strip _A or _B suffix for primary sort to group alleles together
+        if name.endswith('_A') or name.endswith('_B'):
+            base_name = name[:-2]
+        elif name.endswith('_a') or name.endswith('_b'):
+            base_name = name[:-2]
+        else:
+            base_name = name
+        # Secondary sort by full name puts _A before _B
+        return (base_name.upper(), name.upper())
+
+    hits = sorted(hits, key=hit_sort_key)
+
+    # Limit results after sorting
     hits = hits[:request.max_results]
 
     # Batch load sequences for context (much faster than loading per-hit)
