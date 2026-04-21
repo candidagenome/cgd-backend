@@ -738,23 +738,27 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Build description: "C1_00150C_A/RIM8" or same as seq_name if no gene
-        # Try original name first, then _A version for _B alleles
-        gene_name = gene_names_map.get(seq_name.upper(), "")
-        if not gene_name and (seq_name.endswith('_B') or seq_name.endswith('_b')):
-            a_version = seq_name[:-2] + '_A'
-            gene_name = gene_names_map.get(a_version.upper(), "")
-        if gene_name:
-            description = f"{seq_name}/{gene_name}"
-        else:
-            description = seq_name
+        # For C. albicans, convert _B allele to _A (systematic name) for display
+        # The systematic name is always the _A allele
+        display_name = seq_name
+        if seq_name.endswith('_B') or seq_name.endswith('_b'):
+            display_name = seq_name[:-2] + '_A'
 
-        # Build links using full allele name
-        locus_link = f"/locus/{seq_name}"
+        # Build description: "CR_02210W_A/FRK1" or just systematic name if no gene
+        gene_name = gene_names_map.get(display_name.upper(), "")
+        if not gene_name:
+            gene_name = gene_names_map.get(seq_name.upper(), "")
+        if gene_name:
+            description = f"{display_name}/{gene_name}"
+        else:
+            description = display_name
+
+        # Build links using systematic name (_A version)
+        locus_link = f"/locus/{display_name}"
         jbrowse_link = None  # Could add JBrowse link based on coordinates
 
         patmatch_hits.append(PatmatchHit(
-            sequence_name=seq_name,
+            sequence_name=display_name,
             sequence_description=description,
             match_start=start,
             match_end=end,
