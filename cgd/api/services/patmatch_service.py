@@ -735,22 +735,22 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Get base ORF name (without allele suffix) for links and display
+        # Get base ORF name (without allele suffix) for gene name lookup
         base_orf_name = _strip_allele_suffix(seq_name)
 
-        # Build description with gene name if available
+        # Build description: "CR_02210W_A / FRK1" or just "CR_02210W_A"
         gene_name = gene_names_map.get(base_orf_name.upper(), "")
         if gene_name:
-            description = f"{base_orf_name}/{gene_name}"
+            description = f"{seq_name} / {gene_name}"
         else:
-            description = base_orf_name
+            description = seq_name
 
-        # Build links using base ORF name (locus pages use base name, not allele)
-        locus_link = f"/locus/{base_orf_name}"
+        # Build links using full allele name
+        locus_link = f"/locus/{seq_name}"
         jbrowse_link = None  # Could add JBrowse link based on coordinates
 
         patmatch_hits.append(PatmatchHit(
-            sequence_name=base_orf_name,
+            sequence_name=seq_name,
             sequence_description=description,
             match_start=start,
             match_end=end,
