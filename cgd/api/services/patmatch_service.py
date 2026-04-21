@@ -718,9 +718,14 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
-    # Look up gene names using full sequence names (with allele suffix)
-    # Database stores feature_name with allele suffix (e.g., C1_00150C_A)
-    gene_names_map = _lookup_gene_names(db, list(unique_seq_names))
+    # Look up gene names - try both original name and _A allele version
+    # Database may only have Feature entries for _A alleles
+    lookup_names = set(unique_seq_names)
+    # Also try _A version for _B alleles
+    for name in unique_seq_names:
+        if name.endswith('_B') or name.endswith('_b'):
+            lookup_names.add(name[:-2] + '_A')
+    gene_names_map = _lookup_gene_names(db, list(lookup_names))
 
     # Convert to PatmatchHit objects
     patmatch_hits = []
@@ -734,7 +739,11 @@ def run_patmatch_search(
             ctx_before, ctx_after = "", ""
 
         # Build description: "C1_00150C_A/RIM8" or same as seq_name if no gene
+        # Try original name first, then _A version for _B alleles
         gene_name = gene_names_map.get(seq_name.upper(), "")
+        if not gene_name and (seq_name.endswith('_B') or seq_name.endswith('_b')):
+            a_version = seq_name[:-2] + '_A'
+            gene_name = gene_names_map.get(a_version.upper(), "")
         if gene_name:
             description = f"{seq_name}/{gene_name}"
         else:
