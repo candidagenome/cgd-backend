@@ -829,13 +829,19 @@ def run_patmatch_search(
             ctx_before, ctx_after = "", ""
 
         # Look up feature details - try _A version for _B alleles since DB has _A entries
+        # B alleles may exist in the table but with empty gene_name/orf19_id
         details = feature_details_map.get(seq_name.upper(), {})
-        if not details and (seq_name.endswith('_B') or seq_name.endswith('_b')):
-            a_version = seq_name[:-2] + '_A'
-            details = feature_details_map.get(a_version.upper(), {})
-
         gene_name = details.get("gene_name", "")
         orf_id = details.get("orf19_id", "")
+
+        # Fall back to A allele if B allele has no gene_name or orf19_id
+        if (seq_name.endswith('_B') or seq_name.endswith('_b')) and (not gene_name or not orf_id):
+            a_version = seq_name[:-2] + '_A'
+            a_details = feature_details_map.get(a_version.upper(), {})
+            if not gene_name:
+                gene_name = a_details.get("gene_name", "")
+            if not orf_id:
+                orf_id = a_details.get("orf19_id", "")
 
         # Build description with actual allele name where match was found
         if gene_name:
