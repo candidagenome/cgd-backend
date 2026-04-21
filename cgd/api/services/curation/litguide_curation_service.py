@@ -434,11 +434,9 @@ class LitGuideCurationService:
 
         Returns ref_property_no.
         """
-        if curation_status not in CURATION_STATUSES:
-            raise LitGuideCurationError(
-                f"Invalid status '{curation_status}'. "
-                f"Valid statuses: {', '.join(CURATION_STATUSES)}"
-            )
+        # Note: We don't validate against CURATION_STATUSES anymore since
+        # the frontend loads valid values from the database CV tree.
+        # Any value from the curation_status CV is acceptable.
 
         reference = (
             self.db.query(Reference)
