@@ -989,8 +989,24 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
                 "Chromosome\tGene Name\tORF ID"
             )
 
+    # Sort hits by sequence name to group A and B alleles together
+    # Sort by base name (without _A/_B suffix) first, then by full name
+    def sort_key(hit):
+        name = hit.sequence_name or ""
+        # Strip _A or _B suffix for primary sort to group alleles together
+        if name.endswith('_A') or name.endswith('_B'):
+            base_name = name[:-2]
+        elif name.endswith('_a') or name.endswith('_b'):
+            base_name = name[:-2]
+        else:
+            base_name = name
+        # Secondary sort by full name puts _A before _B
+        return (base_name.upper(), name.upper())
+
+    sorted_hits = sorted(result.hits, key=sort_key)
+
     # Data rows
-    for hit in result.hits:
+    for hit in sorted_hits:
         if include_num_hits:
             num_hits = seq_hit_counts.get(hit.sequence_name, 1)
             if is_protein:
