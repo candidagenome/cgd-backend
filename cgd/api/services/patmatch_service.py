@@ -738,10 +738,10 @@ def run_patmatch_search(
         # Get base ORF name (without allele suffix) for gene name lookup
         base_orf_name = _strip_allele_suffix(seq_name)
 
-        # Build description: "CR_02210W_A / FRK1" or just "CR_02210W_A"
+        # Build description: "C1_00150C_A/RIM8" or same as seq_name if no gene
         gene_name = gene_names_map.get(base_orf_name.upper(), "")
         if gene_name:
-            description = f"{seq_name} / {gene_name}"
+            description = f"{seq_name}/{gene_name}"
         else:
             description = seq_name
 
