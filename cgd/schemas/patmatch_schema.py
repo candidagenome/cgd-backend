@@ -126,6 +126,11 @@ class PatmatchHit(BaseModel):
     mismatches: int = 0
     insertions: int = 0
     deletions: int = 0
+    # Additional details for TSV download
+    chromosome: Optional[str] = None  # e.g., "ChrR", "Chr1"
+    gene_name: Optional[str] = None   # e.g., "FRK1"
+    orf_name: Optional[str] = None    # Systematic name where match was found, e.g., "CR_02210W_A"
+    orf_id: Optional[str] = None      # e.g., "orf19.3751"
     # Links
     locus_link: Optional[str] = None
     jbrowse_link: Optional[str] = None

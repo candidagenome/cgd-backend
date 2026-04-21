@@ -64,9 +64,90 @@ def _strip_allele_suffix(seq_name: str) -> str:
     return seq_name
 
 
+def _lookup_feature_details(
+    db: Session, feature_names: List[str]
+) -> Dict[str, Dict[str, str]]:
+    """
+    Look up feature details (gene name, dbxref_id) for a list of feature names.
+
+    Args:
+        db: Database session
+        feature_names: List of systematic feature names (e.g., "CR_05010W_A")
+
+    Returns:
+        Dict mapping feature_name to dict with keys: gene_name, dbxref_id
+    """
+    if not feature_names or db is None:
+        return {}
+
+    details = {}
+
+    try:
+        # Query all features in one batch
+        features = (
+            db.query(Feature.feature_name, Feature.gene_name, Feature.dbxref_id)
+            .filter(func.upper(Feature.feature_name).in_(
+                [fn.upper() for fn in feature_names]
+            ))
+            .all()
+        )
+
+        for feature_name, gene_name, dbxref_id in features:
+            details[feature_name.upper()] = {
+                "gene_name": gene_name or "",
+                "dbxref_id": dbxref_id or "",
+            }
+
+    except Exception as e:
+        logger.warning(f"Failed to look up feature details: {e}")
+
+    return details
+
+
+def _extract_chromosome_name(seq_name: str) -> str:
+    """
+    Extract chromosome name from a sequence name.
+
+    C. albicans sequence names follow patterns like:
+    - CR_02210W_A -> ChrR (CR = ChrR)
+    - C1_08940C_A -> Chr1 (C1 = Chr1)
+    - C2_... -> Chr2
+
+    Args:
+        seq_name: Sequence name like CR_02210W_A
+
+    Returns:
+        Chromosome name like "ChrR" or "Chr1"
+    """
+    if not seq_name:
+        return ""
+
+    # Get the prefix before first underscore
+    parts = seq_name.split('_')
+    if not parts:
+        return ""
+
+    prefix = parts[0].upper()
+
+    # Map prefix to chromosome name
+    # CR -> ChrR, C1 -> Chr1, C2 -> Chr2, etc.
+    if prefix == "CR":
+        return "ChrR"
+    elif prefix.startswith("C") and len(prefix) >= 2:
+        # C1, C2, C3, C4, C5, C6, C7 -> Chr1, Chr2, etc.
+        chr_num = prefix[1:]
+        if chr_num.isdigit():
+            return f"Chr{chr_num}"
+
+    # Return prefix as-is if we can't map it
+    return prefix
+
+
 def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
     """
     Look up gene names (standard names) for a list of feature names.
+
+    This is a backwards-compatible wrapper around _lookup_feature_details.
 
     Args:
         db: Database session
@@ -75,28 +156,8 @@ def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
     Returns:
         Dict mapping feature_name to gene_name (empty string if no gene name)
     """
-    if not feature_names or db is None:
-        return {}
-
-    gene_names = {}
-
-    try:
-        # Query all features in one batch
-        features = (
-            db.query(Feature.feature_name, Feature.gene_name)
-            .filter(func.upper(Feature.feature_name).in_(
-                [fn.upper() for fn in feature_names]
-            ))
-            .all()
-        )
-
-        for feature_name, gene_name in features:
-            gene_names[feature_name.upper()] = gene_name or ""
-
-    except Exception as e:
-        logger.warning(f"Failed to look up gene names: {e}")
-
-    return gene_names
+    details = _lookup_feature_details(db, feature_names)
+    return {k: v["gene_name"] for k, v in details.items()}
 
 
 def _check_binary_available() -> bool:
@@ -718,14 +779,14 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
-    # Look up gene names - try both original name and _A allele version
+    # Look up feature details (gene name, orf_id) - try both original name and _A allele version
     # Database may only have Feature entries for _A alleles
     lookup_names = set(unique_seq_names)
     # Also try _A version for _B alleles
     for name in unique_seq_names:
         if name.endswith('_B') or name.endswith('_b'):
             lookup_names.add(name[:-2] + '_A')
-    gene_names_map = _lookup_gene_names(db, list(lookup_names))
+    feature_details_map = _lookup_feature_details(db, list(lookup_names))
 
     # Convert to PatmatchHit objects
     patmatch_hits = []
@@ -738,17 +799,23 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Look up gene name - try _A version for _B alleles since DB has _A entries
-        gene_name = gene_names_map.get(seq_name.upper(), "")
-        if not gene_name and (seq_name.endswith('_B') or seq_name.endswith('_b')):
+        # Look up feature details - try _A version for _B alleles since DB has _A entries
+        details = feature_details_map.get(seq_name.upper(), {})
+        if not details and (seq_name.endswith('_B') or seq_name.endswith('_b')):
             a_version = seq_name[:-2] + '_A'
-            gene_name = gene_names_map.get(a_version.upper(), "")
+            details = feature_details_map.get(a_version.upper(), {})
+
+        gene_name = details.get("gene_name", "")
+        orf_id = details.get("dbxref_id", "")
 
         # Build description with actual allele name where match was found
         if gene_name:
             description = f"{seq_name}/{gene_name}"
         else:
             description = seq_name
+
+        # Extract chromosome name from sequence name
+        chromosome = _extract_chromosome_name(seq_name)
 
         # Link to the actual allele where match was found
         locus_link = f"/locus/{seq_name}"
@@ -763,6 +830,10 @@ def run_patmatch_search(
             matched_sequence=matched_seq,
             context_before=ctx_before,
             context_after=ctx_after,
+            chromosome=chromosome,
+            gene_name=gene_name,
+            orf_name=seq_name,  # The actual allele where match was found
+            orf_id=orf_id,
             locus_link=locus_link,
             jbrowse_link=jbrowse_link,
         ))
@@ -854,16 +925,21 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
     if include_num_hits:
         seq_hit_counts = Counter(hit.sequence_name for hit in result.hits)
 
-    # Column headers - matching old PatMatch output format
+    # Column headers - includes chromosome, gene name, ORF name, and ORF ID
     if include_num_hits:
-        lines.append("Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\tLocusInfo")
+        lines.append(
+            "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\t"
+            "Chromosome\tGene Name\tORF Name\tORF ID"
+        )
     else:
-        lines.append("Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After")
+        lines.append(
+            "Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After\t"
+            "Chromosome\tGene Name\tORF Name\tORF ID"
+        )
 
     # Data rows
     for hit in result.hits:
         if include_num_hits:
-            # Old format: Sequence Name, NumHits, MatchPattern, Start, End, Strand, LocusInfo
             num_hits = seq_hit_counts.get(hit.sequence_name, 1)
             row = [
                 hit.sequence_description or hit.sequence_name,  # Includes gene name if available
@@ -872,7 +948,10 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
                 str(hit.match_start),
                 str(hit.match_end),
                 hit.strand,
-                "",  # LocusInfo - could add more details here
+                hit.chromosome or "",
+                hit.gene_name or "",
+                hit.orf_name or hit.sequence_name,
+                hit.orf_id or "",
             ]
         else:
             row = [
@@ -884,6 +963,10 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
                 hit.matched_sequence,
                 hit.context_before,
                 hit.context_after,
+                hit.chromosome or "",
+                hit.gene_name or "",
+                hit.orf_name or hit.sequence_name,
+                hit.orf_id or "",
             ]
         lines.append("\t".join(row))
 
