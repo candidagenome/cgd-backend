@@ -83,20 +83,23 @@ def _lookup_feature_details(
     details = {}
 
     try:
-        # Query all features in one batch
-        features = (
-            db.query(Feature.feature_name, Feature.gene_name, Feature.dbxref_id)
-            .filter(func.upper(Feature.feature_name).in_(
-                [fn.upper() for fn in feature_names]
-            ))
-            .all()
-        )
+        # Oracle has a 1000-item limit on IN clauses, so batch the queries
+        batch_size = 900  # Use 900 to be safe
+        upper_names = [fn.upper() for fn in feature_names]
 
-        for feature_name, gene_name, dbxref_id in features:
-            details[feature_name.upper()] = {
-                "gene_name": gene_name or "",
-                "dbxref_id": dbxref_id or "",
-            }
+        for i in range(0, len(upper_names), batch_size):
+            batch = upper_names[i:i + batch_size]
+            features = (
+                db.query(Feature.feature_name, Feature.gene_name, Feature.dbxref_id)
+                .filter(func.upper(Feature.feature_name).in_(batch))
+                .all()
+            )
+
+            for feature_name, gene_name, dbxref_id in features:
+                details[feature_name.upper()] = {
+                    "gene_name": gene_name or "",
+                    "dbxref_id": dbxref_id or "",
+                }
 
     except Exception as e:
         logger.warning(f"Failed to look up feature details: {e}")
