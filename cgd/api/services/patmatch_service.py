@@ -734,6 +734,11 @@ def run_patmatch_search(
 
     actual_total_hits = 0
 
+    # Use a higher internal limit to ensure we capture both A and B alleles
+    # before sorting. We sort by sequence name to group alleles together,
+    # then apply the user's max_results limit.
+    internal_limit = max(request.max_results * 2, 10000)
+
     try:
         if use_binary:
             # Convert pattern for nrgrep
@@ -744,14 +749,14 @@ def run_patmatch_search(
                 request.max_deletions,
             )
 
-            # Run Watson strand search
+            # Run Watson strand search with higher internal limit
             hits, watson_total, sequences_searched, total_residues = _run_nrgrep_search(
                 nrgrep_pattern,
                 dataset_config.fasta_file,
                 request.max_mismatches,
                 request.max_insertions,
                 request.max_deletions,
-                request.max_results,
+                internal_limit,
             )
             actual_total_hits = watson_total
 
@@ -765,7 +770,7 @@ def run_patmatch_search(
                     request.max_mismatches,
                     request.max_insertions,
                     request.max_deletions,
-                    request.max_results,
+                    internal_limit,
                 )
                 actual_total_hits += crick_total
                 # Mark as Crick strand hits
@@ -783,12 +788,13 @@ def run_patmatch_search(
 
         else:
             # Use Python regex (no fuzzy matching support)
+            # Use internal_limit to capture more hits before sorting
             hits, sequences_searched, total_residues, actual_total_hits = _run_python_search(
                 pattern,
                 dataset_config.fasta_file,
                 config_pattern_type,
                 request.strand,
-                request.max_results,
+                internal_limit,
             )
 
     except Exception as e:
