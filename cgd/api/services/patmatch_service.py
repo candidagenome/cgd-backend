@@ -925,49 +925,90 @@ def format_results_tsv(result, include_num_hits: bool = True) -> str:
     if include_num_hits:
         seq_hit_counts = Counter(hit.sequence_name for hit in result.hits)
 
-    # Column headers - includes chromosome, gene name, ORF name, and ORF ID
+    # Check if this is a protein search (no strand needed for protein)
+    is_protein = result.pattern_type.lower() == "protein"
+
+    # Column headers - includes chromosome, gene name, and ORF ID (orf19.XXXX)
+    # Note: ORF Name removed as it's redundant with Sequence Name
+    # Note: Strand omitted for protein searches (always single direction)
     if include_num_hits:
-        lines.append(
-            "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\t"
-            "Chromosome\tGene Name\tORF Name\tORF ID"
-        )
+        if is_protein:
+            lines.append(
+                "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
+        else:
+            lines.append(
+                "Sequence Name\tNumHits\tMatchPattern\tMatchStartCoord\tMatchStopCoord\tStrand\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
     else:
-        lines.append(
-            "Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After\t"
-            "Chromosome\tGene Name\tORF Name\tORF ID"
-        )
+        if is_protein:
+            lines.append(
+                "Sequence\tDescription\tStart\tEnd\tMatched_Sequence\tContext_Before\tContext_After\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
+        else:
+            lines.append(
+                "Sequence\tDescription\tStart\tEnd\tStrand\tMatched_Sequence\tContext_Before\tContext_After\t"
+                "Chromosome\tGene Name\tORF ID"
+            )
 
     # Data rows
     for hit in result.hits:
         if include_num_hits:
             num_hits = seq_hit_counts.get(hit.sequence_name, 1)
-            row = [
-                hit.sequence_description or hit.sequence_name,  # Includes gene name if available
-                str(num_hits),
-                hit.matched_sequence,
-                str(hit.match_start),
-                str(hit.match_end),
-                hit.strand,
-                hit.chromosome or "",
-                hit.gene_name or "",
-                hit.orf_name or hit.sequence_name,
-                hit.orf_id or "",
-            ]
+            if is_protein:
+                row = [
+                    hit.sequence_description or hit.sequence_name,
+                    str(num_hits),
+                    hit.matched_sequence,
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
+            else:
+                row = [
+                    hit.sequence_description or hit.sequence_name,
+                    str(num_hits),
+                    hit.matched_sequence,
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.strand,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
         else:
-            row = [
-                hit.sequence_name,
-                hit.sequence_description or "",
-                str(hit.match_start),
-                str(hit.match_end),
-                hit.strand,
-                hit.matched_sequence,
-                hit.context_before,
-                hit.context_after,
-                hit.chromosome or "",
-                hit.gene_name or "",
-                hit.orf_name or hit.sequence_name,
-                hit.orf_id or "",
-            ]
+            if is_protein:
+                row = [
+                    hit.sequence_name,
+                    hit.sequence_description or "",
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.matched_sequence,
+                    hit.context_before,
+                    hit.context_after,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
+            else:
+                row = [
+                    hit.sequence_name,
+                    hit.sequence_description or "",
+                    str(hit.match_start),
+                    str(hit.match_end),
+                    hit.strand,
+                    hit.matched_sequence,
+                    hit.context_before,
+                    hit.context_after,
+                    hit.chromosome or "",
+                    hit.gene_name or "",
+                    hit.orf_id or "",
+                ]
         lines.append("\t".join(row))
 
     return "\n".join(lines)
