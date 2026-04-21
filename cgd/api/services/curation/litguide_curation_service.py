@@ -461,6 +461,24 @@ class LitGuideCurationService:
             f"{[s.property_value for s in existing_statuses]}"
         )
 
+        # First delete all RefpropFeat records linked to these RefProperty records
+        # (Oracle DB may not have CASCADE DELETE configured, so we do it manually)
+        for existing in existing_statuses:
+            linked_refprop_feats = (
+                self.db.query(RefpropFeat)
+                .filter(RefpropFeat.ref_property_no == existing.ref_property_no)
+                .all()
+            )
+            logger.info(
+                f"Deleting {len(linked_refprop_feats)} RefpropFeat records "
+                f"linked to ref_property_no {existing.ref_property_no}"
+            )
+            for rpf in linked_refprop_feats:
+                self.db.delete(rpf)
+
+        self.db.flush()
+
+        # Now delete the RefProperty records
         for existing in existing_statuses:
             self.db.delete(existing)
         self.db.flush()
