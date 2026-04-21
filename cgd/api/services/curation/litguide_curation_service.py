@@ -869,30 +869,13 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
-        # Find the RefLink entry
-        ref_link = (
-            self.db.query(RefLink)
-            .filter(
-                RefLink.reference_no == reference_no,
-                RefLink.tab_name == "FEATURE",
-                RefLink.col_name == "FEATURE_NO",
-                RefLink.primary_key == feature.feature_no,
-            )
-            .first()
-        )
-
-        if not ref_link:
-            raise LitGuideCurationError(
-                f"Feature '{feature.feature_name}' is not linked to reference {reference_no}"
-            )
-
         # Remove any topic associations for this feature-reference pair
-        # Find all ref_property entries for this reference with literature_topic
+        # Find all ref_property entries for this reference (both literature_topic and curation_status)
         topic_props = (
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
-                RefProperty.property_type == "literature_topic",
+                RefProperty.property_type.in_(["literature_topic", "curation_status"]),
             )
             .all()
         )
@@ -910,8 +893,27 @@ class LitGuideCurationService:
             )
             removed_topics += deleted
 
-        # Delete the RefLink entry
-        self.db.delete(ref_link)
+        # Also check for and delete any RefLink entry (if exists)
+        ref_link = (
+            self.db.query(RefLink)
+            .filter(
+                RefLink.reference_no == reference_no,
+                RefLink.tab_name == "FEATURE",
+                RefLink.col_name == "FEATURE_NO",
+                RefLink.primary_key == feature.feature_no,
+            )
+            .first()
+        )
+
+        if ref_link:
+            self.db.delete(ref_link)
+
+        # If no topics were removed and no RefLink existed, the feature wasn't linked
+        if removed_topics == 0 and not ref_link:
+            raise LitGuideCurationError(
+                f"Feature '{feature.feature_name}' is not linked to reference {reference_no}"
+            )
+
         self.db.commit()
 
         logger.info(
