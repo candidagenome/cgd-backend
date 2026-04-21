@@ -448,21 +448,19 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
-        # Check for existing curation status property
-        existing = (
+        # Delete ALL existing curation status properties (to ensure clean replacement)
+        existing_statuses = (
             self.db.query(RefProperty)
             .filter(
                 RefProperty.reference_no == reference_no,
                 RefProperty.property_type == "curation_status",
             )
-            .first()
+            .all()
         )
 
-        if existing:
-            existing.property_value = curation_status
-            existing.date_last_reviewed = datetime.now()
-            self.db.commit()
-            return existing.ref_property_no
+        for existing in existing_statuses:
+            self.db.delete(existing)
+        self.db.flush()
 
         # Create new property
         prop = RefProperty(
