@@ -39,7 +39,8 @@ from cgd.schemas.patmatch_schema import (
     DatasetInfo,
     PatmatchConfigResponse,
 )
-from cgd.models.locus_model import Feature
+from cgd.models.locus_model import Feature, FeatAlias
+from cgd.models.models import Alias
 
 logger = logging.getLogger(__name__)
 
@@ -68,19 +69,20 @@ def _lookup_feature_details(
     db: Session, feature_names: List[str]
 ) -> Dict[str, Dict[str, str]]:
     """
-    Look up feature details (gene name, dbxref_id) for a list of feature names.
+    Look up feature details (gene name, orf19 identifier) for a list of feature names.
 
     Args:
         db: Database session
         feature_names: List of systematic feature names (e.g., "CR_05010W_A")
 
     Returns:
-        Dict mapping feature_name to dict with keys: gene_name, dbxref_id
+        Dict mapping feature_name to dict with keys: gene_name, orf19_id
     """
     if not feature_names or db is None:
         return {}
 
     details = {}
+    feature_no_to_name = {}  # Map feature_no to feature_name for alias lookup
 
     try:
         # Oracle has a 1000-item limit on IN clauses, so batch the queries
@@ -90,16 +92,40 @@ def _lookup_feature_details(
         for i in range(0, len(upper_names), batch_size):
             batch = upper_names[i:i + batch_size]
             features = (
-                db.query(Feature.feature_name, Feature.gene_name, Feature.dbxref_id)
+                db.query(Feature.feature_no, Feature.feature_name, Feature.gene_name)
                 .filter(func.upper(Feature.feature_name).in_(batch))
                 .all()
             )
 
-            for feature_name, gene_name, dbxref_id in features:
+            for feature_no, feature_name, gene_name in features:
                 details[feature_name.upper()] = {
                     "gene_name": gene_name or "",
-                    "dbxref_id": dbxref_id or "",
+                    "orf19_id": "",  # Will be filled in below
                 }
+                feature_no_to_name[feature_no] = feature_name.upper()
+
+        # Now look up orf19 aliases for all features found
+        if feature_no_to_name:
+            feature_nos = list(feature_no_to_name.keys())
+            for i in range(0, len(feature_nos), batch_size):
+                batch = feature_nos[i:i + batch_size]
+                # Query aliases that start with "orf19."
+                aliases = (
+                    db.query(FeatAlias.feature_no, Alias.alias_name)
+                    .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+                    .filter(
+                        FeatAlias.feature_no.in_(batch),
+                        func.lower(Alias.alias_name).like('orf19.%')
+                    )
+                    .all()
+                )
+
+                for feature_no, alias_name in aliases:
+                    fname = feature_no_to_name.get(feature_no)
+                    if fname and fname in details:
+                        # Keep the first orf19 alias found (there should only be one)
+                        if not details[fname]["orf19_id"]:
+                            details[fname]["orf19_id"] = alias_name
 
     except Exception as e:
         logger.warning(f"Failed to look up feature details: {e}")
@@ -809,7 +835,7 @@ def run_patmatch_search(
             details = feature_details_map.get(a_version.upper(), {})
 
         gene_name = details.get("gene_name", "")
-        orf_id = details.get("dbxref_id", "")
+        orf_id = details.get("orf19_id", "")
 
         # Build description with actual allele name where match was found
         if gene_name:
