@@ -60,6 +60,7 @@ CURATION_STATUSES = [
     "Done: No genes",
     "Done: All genes HTP",
     "Done: Curated",
+    "not gene specific",
 ]
 
 
