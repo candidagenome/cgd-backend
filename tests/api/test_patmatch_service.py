@@ -40,6 +40,7 @@ from cgd.api.services.patmatch_service import (
     _generate_fasta_index,
     _parse_nrgrep_output,
     _find_sequence_offset,
+    _strip_allele_suffix,
 )
 
 
@@ -941,3 +942,38 @@ MNHPKRQQSXY
             assert total_res > 0
         finally:
             os.unlink(temp_file)
+
+
+class TestStripAlleleSuffix:
+    """Tests for allele suffix stripping (C. albicans diploid alleles)."""
+
+    def test_strip_a_allele(self):
+        """Should strip _A suffix."""
+        assert _strip_allele_suffix("CR_08640C_A") == "CR_08640C"
+        assert _strip_allele_suffix("C1_08940C_A") == "C1_08940C"
+
+    def test_strip_b_allele(self):
+        """Should strip _B suffix."""
+        assert _strip_allele_suffix("CR_08640C_B") == "CR_08640C"
+        assert _strip_allele_suffix("C1_08940C_B") == "C1_08940C"
+
+    def test_strip_lowercase_allele(self):
+        """Should strip lowercase _a and _b suffixes."""
+        assert _strip_allele_suffix("CR_08640C_a") == "CR_08640C"
+        assert _strip_allele_suffix("CR_08640C_b") == "CR_08640C"
+
+    def test_no_allele_suffix(self):
+        """Should return unchanged if no allele suffix."""
+        assert _strip_allele_suffix("CR_08640C") == "CR_08640C"
+        assert _strip_allele_suffix("YEN1") == "YEN1"
+
+    def test_short_names(self):
+        """Should handle short names without error."""
+        assert _strip_allele_suffix("A") == "A"
+        assert _strip_allele_suffix("AB") == "AB"
+        assert _strip_allele_suffix("") == ""
+
+    def test_other_suffixes_unchanged(self):
+        """Should not strip other suffixes."""
+        assert _strip_allele_suffix("CR_08640C_C") == "CR_08640C_C"
+        assert _strip_allele_suffix("CR_08640C_1") == "CR_08640C_1"

@@ -44,6 +44,26 @@ from cgd.models.locus_model import Feature
 logger = logging.getLogger(__name__)
 
 
+def _strip_allele_suffix(seq_name: str) -> str:
+    """
+    Strip allele suffix (_A or _B) from a sequence name to get base ORF name.
+
+    C. albicans is diploid, so sequences have allele suffixes like:
+    - CR_08640C_B -> CR_08640C
+    - C1_08940C_A -> C1_08940C
+
+    Args:
+        seq_name: Sequence name potentially with allele suffix
+
+    Returns:
+        Base ORF name without allele suffix
+    """
+    if seq_name and len(seq_name) >= 2:
+        if seq_name[-2:] in ('_A', '_B', '_a', '_b'):
+            return seq_name[:-2]
+    return seq_name
+
+
 def _lookup_gene_names(db: Session, feature_names: List[str]) -> Dict[str, str]:
     """
     Look up gene names (standard names) for a list of feature names.
@@ -698,8 +718,11 @@ def run_patmatch_search(
         dataset_config.fasta_file, unique_seq_names
     )
 
-    # Look up gene names for all unique sequence names
-    gene_names_map = _lookup_gene_names(db, list(unique_seq_names))
+    # Get base ORF names (without allele suffix) for gene lookup
+    base_orf_names = {_strip_allele_suffix(name) for name in unique_seq_names}
+
+    # Look up gene names using base ORF names
+    gene_names_map = _lookup_gene_names(db, list(base_orf_names))
 
     # Convert to PatmatchHit objects
     patmatch_hits = []
@@ -712,19 +735,22 @@ def run_patmatch_search(
         else:
             ctx_before, ctx_after = "", ""
 
-        # Build description with gene name if available
-        gene_name = gene_names_map.get(seq_name.upper(), "")
-        if gene_name:
-            description = f"{seq_name}/{gene_name}"
-        else:
-            description = seq_name
+        # Get base ORF name (without allele suffix) for links and display
+        base_orf_name = _strip_allele_suffix(seq_name)
 
-        # Build links
-        locus_link = f"/locus/{seq_name}"
+        # Build description with gene name if available
+        gene_name = gene_names_map.get(base_orf_name.upper(), "")
+        if gene_name:
+            description = f"{base_orf_name}/{gene_name}"
+        else:
+            description = base_orf_name
+
+        # Build links using base ORF name (locus pages use base name, not allele)
+        locus_link = f"/locus/{base_orf_name}"
         jbrowse_link = None  # Could add JBrowse link based on coordinates
 
         patmatch_hits.append(PatmatchHit(
-            sequence_name=seq_name,
+            sequence_name=base_orf_name,
             sequence_description=description,
             match_start=start,
             match_end=end,
