@@ -458,6 +458,11 @@ class LitGuideCurationService:
             .all()
         )
 
+        logger.info(
+            f"Deleting {len(existing_statuses)} existing curation status records for reference {reference_no}: "
+            f"{[s.property_value for s in existing_statuses]}"
+        )
+
         for existing in existing_statuses:
             self.db.delete(existing)
         self.db.flush()
