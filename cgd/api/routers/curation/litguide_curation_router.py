@@ -412,6 +412,9 @@ class UnlinkFeatureRequest(BaseModel):
     """Request to unlink feature from reference."""
 
     feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
+    organism_abbrev: Optional[str] = Field(
+        None, description="Organism abbreviation to filter feature lookup (e.g., 'C_albicans_SC5314')"
+    )
 
 
 class UnlinkFeatureResponse(BaseModel):
@@ -708,6 +711,7 @@ def unlink_feature_from_reference(
             reference_no,
             request.feature_identifier,
             current_user.userid,
+            organism_abbrev=request.organism_abbrev,
         )
 
         return UnlinkFeatureResponse(
