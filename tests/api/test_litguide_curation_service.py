@@ -359,14 +359,9 @@ class TestRemoveTopicAssociation:
 class TestSetReferenceCurationStatus:
     """Tests for setting curation status."""
 
-    def test_raises_for_invalid_status(self, mock_db):
-        """Should raise error for invalid status."""
-        service = LitGuideCurationService(mock_db)
-
-        with pytest.raises(LitGuideCurationError) as exc_info:
-            service.set_reference_curation_status(1, "Invalid Status", "curator1")
-
-        assert "Invalid status" in str(exc_info.value)
+    # Note: test_raises_for_invalid_status was removed because the service
+    # no longer validates status values - the frontend loads valid values
+    # from the database CV tree, so any value is now acceptable.
 
     def test_raises_for_unknown_reference(self, mock_db):
         """Should raise error for unknown reference."""
@@ -380,19 +375,21 @@ class TestSetReferenceCurationStatus:
         assert "not found" in str(exc_info.value)
 
     def test_updates_existing_status(self, mock_db, sample_references):
-        """Should update existing curation status."""
-        existing_prop = MockRefProperty(1, 1, "Curation status", "Not Yet Curated")
+        """Should update existing curation status by deleting old and creating new."""
+        existing_prop = MockRefProperty(1, 1, "curation_status", "Not Yet Curated")
 
         mock_db.query.side_effect = [
             MockQuery([sample_references[0]]),  # Reference found
-            MockQuery([existing_prop]),  # Existing property
+            MockQuery([existing_prop]),  # Existing curation_status property
+            MockQuery([]),  # RefpropFeat records linked to the property (none)
         ]
 
         service = LitGuideCurationService(mock_db)
         result = service.set_reference_curation_status(1, "Done: Curated", "curator1")
 
-        assert result == 1
-        assert existing_prop.property_value == "Done: Curated"
+        # Service deletes old status and creates new one
+        mock_db.delete.assert_called_once_with(existing_prop)
+        mock_db.add.assert_called_once()  # New RefProperty added
 
     def test_creates_new_status(self, mock_db, sample_references):
         """Should create new curation status property."""
