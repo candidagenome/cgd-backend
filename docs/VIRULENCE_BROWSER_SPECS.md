@@ -202,7 +202,7 @@ for each match_reason:
     if "virulence model:" -> score += 5
     elif "phenotype:" and tier == 1 -> score += 4
     elif "phenotype:" and tier == 2 -> score += 3
-    elif "GO:" with pathogenesis/host/virulence -> score += 3
+    elif "GO:" with host interaction/symbiont terms -> score += 3
     elif "literature topic: disease" -> score += 2
     elif "gene pattern:" -> score += 1
     elif "headline:" -> score += 1
@@ -265,7 +265,7 @@ Match reasons:
 - "virulence model: mouse systemic infection" -> +5
 - "phenotype: adhesion" (tier 1) -> +4
 - "phenotype: biofilm formation" (tier 1) -> +4
-- "GO: pathogenesis" -> +3
+- "GO: interaction with host" -> +3
 - "gene pattern: ALS3" -> +1
 
 Raw score: 17

@@ -345,8 +345,9 @@ def _calculate_confidence_score(
                 score += EVIDENCE_WEIGHTS["tier2_phenotype"]
             # Tier 3 and 4 phenotypes don't add points
         elif "go:" in reason_lower:
-            # Check for virulence-related GO terms
-            if any(t in reason_lower for t in ["pathogenesis", "host", "virulence"]):
+            # Check for host interaction GO terms (symbiont-host related)
+            # Note: GO:0009405 (pathogenesis) was obsoleted by GO in 2021
+            if any(t in reason_lower for t in ["host", "symbiont", "interaction", "evasion"]):
                 score += EVIDENCE_WEIGHTS["virulence_go"]
         elif "literature topic: disease" in reason_lower:
             score += EVIDENCE_WEIGHTS["disease_literature"]

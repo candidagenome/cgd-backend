@@ -1267,7 +1267,7 @@ EVIDENCE_WEIGHTS = {
     "virulence_model": 5,       # Tested in mouse/Galleria
     "tier1_phenotype": 4,       # Direct virulence phenotype
     "tier2_phenotype": 3,       # Host interaction phenotype
-    "virulence_go": 3,          # Pathogenesis/host GO terms
+    "virulence_go": 3,          # Host interaction GO terms (symbiont-host)
     "disease_literature": 2,    # Disease literature topic
     "gene_pattern": 1,          # Gene name pattern match
     "keyword_match": 1,         # Headline keyword
@@ -1313,7 +1313,11 @@ VIRULENCE_CATEGORIES = {
         "rules": {
             "phenotype_has_virulence_model": True,  # genes tested in animal models
             "literature_topics": ["Disease"],
-            "go_terms": ["GO:0009405", "GO:0044419"],  # pathogenesis, host-pathogen interaction
+            # GO:0051701 (71 genes) - biological process involved in interaction with host
+            # GO:0044114 (38 genes) - development of symbiont in host
+            # GO:0044409 (29 genes) - symbiont entry into host
+            # Note: GO:0009405 (pathogenesis) was obsoleted by GO in 2021
+            "go_terms": ["GO:0051701", "GO:0044114", "GO:0044409"],
         }
     },
     "biofilm": {
@@ -1328,7 +1332,10 @@ VIRULENCE_CATEGORIES = {
         "name": "Immune Evasion",
         "description": "Genes involved in evading host immune responses",
         "rules": {
-            "go_terms": ["GO:0042832", "GO:0009615"],  # defense response to protozoan, defense evasion
+            # GO:0042783 (22 genes) - symbiont-mediated evasion of host immune response
+            # GO:0052553 (20 genes) - symbiont-mediated perturbation of host immune response
+            # GO:0030682 (10 genes) - symbiont-mediated perturbation of host defenses
+            "go_terms": ["GO:0042783", "GO:0052553", "GO:0030682"],
             "phenotype_observables": ["%immune%", "%phagocyt%"],
         }
     },
@@ -1372,7 +1379,7 @@ class VirulenceFactor(BaseModel):
     headline: typing.Optional[str] = None
     description: typing.Optional[str] = None
     categories: list[str] = []  # List of category names this gene belongs to
-    match_reasons: list[str] = []  # Why this gene matched (e.g., "gene pattern: ALS1", "GO: pathogenesis")
+    match_reasons: list[str] = []  # Why this gene matched (e.g., "gene pattern: ALS1", "GO: host interaction")
 
     # Evidence quality fields
     evidence_tier: int = 4                          # 1=best, 4=weakest
