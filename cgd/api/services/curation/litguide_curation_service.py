@@ -433,6 +433,10 @@ class LitGuideCurationService:
         Set or update curation status for a reference.
 
         Returns ref_property_no.
+
+        Note: Feature links (RefpropFeat) are preserved when changing status.
+        Features linked to the old status are reassigned to the new status,
+        ensuring features don't disappear when the paper status changes.
         """
         # Note: We don't validate against CURATION_STATUSES anymore since
         # the frontend loads valid values from the database CV tree.
@@ -446,7 +450,7 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
-        # Delete ALL existing curation status properties (to ensure clean replacement)
+        # Find existing curation status properties
         existing_statuses = (
             self.db.query(RefProperty)
             .filter(
@@ -457,33 +461,36 @@ class LitGuideCurationService:
         )
 
         logger.info(
-            f"Deleting {len(existing_statuses)} existing curation status records for reference {reference_no}: "
+            f"Replacing {len(existing_statuses)} existing curation status records for reference {reference_no}: "
             f"{[s.property_value for s in existing_statuses]}"
         )
 
-        # First delete all RefpropFeat records linked to these RefProperty records
-        # (Oracle DB may not have CASCADE DELETE configured, so we do it manually)
+        # Collect all RefpropFeat entries from old statuses to reassign
+        features_to_reassign = []
         for existing in existing_statuses:
             linked_refprop_feats = (
                 self.db.query(RefpropFeat)
                 .filter(RefpropFeat.ref_property_no == existing.ref_property_no)
                 .all()
             )
+            for rpf in linked_refprop_feats:
+                features_to_reassign.append(rpf.feature_no)
             logger.info(
-                f"Deleting {len(linked_refprop_feats)} RefpropFeat records "
-                f"linked to ref_property_no {existing.ref_property_no}"
+                f"Found {len(linked_refprop_feats)} RefpropFeat records "
+                f"linked to ref_property_no {existing.ref_property_no} - will reassign"
             )
+            # Delete the RefpropFeat entries (we'll recreate them with the new status)
             for rpf in linked_refprop_feats:
                 self.db.delete(rpf)
 
         self.db.flush()
 
-        # Now delete the RefProperty records
+        # Now delete the old RefProperty records
         for existing in existing_statuses:
             self.db.delete(existing)
         self.db.flush()
 
-        # Create new property
+        # Create new property with the new status
         prop = RefProperty(
             reference_no=reference_no,
             source=SOURCE,
@@ -493,11 +500,23 @@ class LitGuideCurationService:
             created_by=curator_userid[:12],
         )
         self.db.add(prop)
+        self.db.flush()  # Get the new ref_property_no
+
+        # Reassign features to the new status (preserving feature links)
+        reassigned_count = 0
+        for feature_no in set(features_to_reassign):  # Use set to avoid duplicates
+            new_rpf = RefpropFeat(
+                feature_no=feature_no,
+                ref_property_no=prop.ref_property_no,
+            )
+            self.db.add(new_rpf)
+            reassigned_count += 1
+
         self.db.commit()
 
         logger.info(
             f"Set curation status '{curation_status}' for reference {reference_no} "
-            f"by {curator_userid}"
+            f"by {curator_userid}. Reassigned {reassigned_count} feature links."
         )
 
         return prop.ref_property_no
