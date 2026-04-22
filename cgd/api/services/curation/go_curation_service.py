@@ -615,6 +615,7 @@ class GoCurationService:
                 support_type="With",
             )
             self.db.add(goref_dbxref)
+            self.db.flush()  # Flush to ensure unique goref_dbxref_no for next iteration
             logger.info(
                 f"Added with support: go_ref_no={go_ref_no}, "
                 f"dbxref={with_db}:{db_id}"
