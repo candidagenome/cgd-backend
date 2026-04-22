@@ -683,6 +683,44 @@ class LitGuideCurationService:
                 "refprop_feat_no": row.refprop_feat_no,
             })
 
+        # Also get features linked via RefLink that don't have any RefpropFeat entries yet
+        # These are features that were auto-matched but haven't had topics assigned
+        # Get feature_nos that already have RefpropFeat entries for this reference
+        features_with_topics = set(features_dict.keys())
+
+        # Query RefLink for features linked to this reference
+        ref_link_query = (
+            self.db.query(
+                Feature.feature_no,
+                Feature.feature_name,
+                Feature.gene_name,
+                Feature.feature_type,
+                Organism.organism_abbrev,
+                Organism.organism_name,
+            )
+            .join(RefLink, Feature.feature_no == RefLink.primary_key)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
+            .filter(RefLink.reference_no == reference_no)
+            .filter(RefLink.tab_name == "FEATURE")
+            .filter(RefLink.col_name == "FEATURE_NO")
+            .order_by(Organism.organism_order, Feature.feature_name)
+        )
+
+        ref_link_results = ref_link_query.all()
+
+        # Add RefLink-only features to features_dict (with empty topics list)
+        for row in ref_link_results:
+            if row.feature_no not in features_with_topics:
+                features_dict[row.feature_no] = {
+                    "feature_no": row.feature_no,
+                    "feature_name": row.feature_name,
+                    "gene_name": row.gene_name,
+                    "feature_type": row.feature_type,
+                    "organism_abbrev": row.organism_abbrev,
+                    "organism_name": row.organism_name,
+                    "topics": [],  # No topics assigned yet - needs curation
+                }
+
         all_features = list(features_dict.values())
 
         # Get unlinked features for this reference (via ref_unlink table)
@@ -915,6 +953,32 @@ class LitGuideCurationService:
             raise LitGuideCurationError(
                 f"Feature '{feature.feature_name}' is not linked to reference {reference_no}"
             )
+
+        # Add the feature to RefUnlink so it shows as "unlinked" rather than disappearing
+        # Only if the reference has a pubmed ID (RefUnlink uses pubmed, not reference_no)
+        if reference.pubmed:
+            # Check if already in RefUnlink
+            existing_unlink = (
+                self.db.query(RefUnlink)
+                .filter(
+                    RefUnlink.pubmed == reference.pubmed,
+                    RefUnlink.tab_name == "FEATURE",
+                    RefUnlink.primary_key == feature.feature_no,
+                )
+                .first()
+            )
+
+            if not existing_unlink:
+                ref_unlink = RefUnlink(
+                    pubmed=reference.pubmed,
+                    tab_name="FEATURE",
+                    primary_key=feature.feature_no,
+                    created_by=curator_userid[:12],
+                )
+                self.db.add(ref_unlink)
+                logger.info(
+                    f"Added feature {feature.feature_name} to RefUnlink for pubmed {reference.pubmed}"
+                )
 
         self.db.commit()
 
