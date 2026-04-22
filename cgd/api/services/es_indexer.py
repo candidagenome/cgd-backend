@@ -139,6 +139,11 @@ def _generate_gene_docs(db: Session) -> Generator[dict, None, None]:
         display_name = feat.gene_name or feat.feature_name
         organism_name = feat.organism.organism_name if feat.organism else None
 
+        # Uppercase gene_name and feature_name for case-insensitive search
+        # (ES search query converts search term to uppercase)
+        gene_name_upper = feat.gene_name.upper() if feat.gene_name else None
+        feature_name_upper = feat.feature_name.upper() if feat.feature_name else None
+
         doc = {
             "_index": INDEX_NAME,
             "_id": f"gene_{feat.feature_no}",
@@ -146,15 +151,15 @@ def _generate_gene_docs(db: Session) -> Generator[dict, None, None]:
                 "type": "gene",
                 "id": feat.dbxref_id,
                 "name": display_name,
-                "gene_name": feat.gene_name,
-                "feature_name": feat.feature_name,
+                "gene_name": gene_name_upper,
+                "feature_name": feature_name_upper,
                 "feature_no": feat.feature_no,
                 "dbxref_id": feat.dbxref_id,
                 "headline": feat.headline,
                 "name_description": feat.name_description,
                 "aliases": " ".join(aliases) if aliases else None,
                 "organism": organism_name,
-                "link": f"/locus/{feat.feature_name}",
+                "link": f"/locus/{feat.feature_name}",  # Keep original case for URL
             }
         }
         yield doc
