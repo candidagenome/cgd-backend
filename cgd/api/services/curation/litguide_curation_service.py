@@ -508,6 +508,7 @@ class LitGuideCurationService:
             new_rpf = RefpropFeat(
                 feature_no=feature_no,
                 ref_property_no=prop.ref_property_no,
+                created_by=curator_userid[:12],
             )
             self.db.add(new_rpf)
             reassigned_count += 1
