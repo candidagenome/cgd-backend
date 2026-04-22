@@ -9,6 +9,7 @@ Mirrors validation rules from legacy UpdatePhenotype.pm:
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -50,6 +51,40 @@ class PhenotypeCurationService:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def get_chebi_term_name(self, chebi_id: str) -> Optional[str]:
+        """
+        Look up CHEBI term name from CV_TERM table.
+
+        Args:
+            chebi_id: CHEBI ID in format "CHEBI:XXXXX"
+
+        Returns:
+            Chemical name if found, None otherwise
+        """
+        if not chebi_id:
+            return None
+
+        # Extract CHEBI:xxxxx format (normalize input)
+        match = re.match(r"(CHEBI:\d+)", chebi_id.upper())
+        if not match:
+            return None
+
+        normalized_chebi_id = match.group(1)
+
+        # Look up in CV_TERM table by dbxref_id
+        cv_term = (
+            self.db.query(CvTerm)
+            .filter(func.upper(CvTerm.dbxref_id) == normalized_chebi_id)
+            .first()
+        )
+
+        if cv_term:
+            logger.info(f"Found CHEBI term: {normalized_chebi_id} -> {cv_term.term_name}")
+            return cv_term.term_name
+
+        logger.warning(f"CHEBI term not found: {normalized_chebi_id}")
+        return None
 
     def get_feature_by_name(
         self, name: str, organism_abbrev: Optional[str] = None
@@ -372,9 +407,25 @@ class PhenotypeCurationService:
         """
         Get existing expt_property_no or create new entry.
 
+        For chebi_ontology properties, converts CHEBI ID to chemical name.
+
         Returns:
             expt_property_no
+
+        Raises:
+            PhenotypeCurationError: If CHEBI ID not found in CV_TERM table
         """
+        # For chebi_ontology, convert CHEBI ID to chemical name
+        if property_type == "chebi_ontology" and property_value:
+            chebi_name = self.get_chebi_term_name(property_value)
+            if chebi_name:
+                property_value = chebi_name
+            else:
+                raise PhenotypeCurationError(
+                    f"CHEBI term not found: {property_value}. "
+                    "Please verify the CHEBI ID is correct."
+                )
+
         # Try to find existing property
         query = self.db.query(ExptProperty).filter(
             ExptProperty.property_type == property_type,
