@@ -848,6 +848,39 @@ def get_autocomplete_suggestions(
                     ))
                     seen_genes.add(display)
 
+        # If we still need more genes, try CGDID (dbxref_id) prefix
+        # This allows searching by CGDIDs like CAL0000123456
+        if len(suggestions) < gene_limit:
+            extra_needed = gene_limit - len(suggestions)
+            cgdid_prefix_query = (
+                db.query(Feature.gene_name, Feature.feature_name, Feature.headline, Feature.dbxref_id)
+                .filter(
+                    Feature.feature_type.in_(GENE_FEATURE_TYPES),
+                    func.upper(Feature.dbxref_id).like(prefix_pattern)
+                )
+                .distinct()
+                .limit(extra_needed + len(seen_genes))
+                .all()
+            )
+
+            for gene_name, feature_name, headline, dbxref_id in cgdid_prefix_query:
+                display = gene_name or feature_name
+                if display not in seen_genes and len(suggestions) < gene_limit:
+                    # Show the CGDID in the description for clarity
+                    description = f"CGDID: {dbxref_id}"
+                    if headline:
+                        description += f" - {headline[:60]}..." if len(headline) > 60 else f" - {headline}"
+                    link_name = gene_name or feature_name
+                    suggestions.append(AutocompleteSuggestion(
+                        text=display,
+                        category="gene",
+                        link=f"/locus/{link_name}",
+                        description=description,
+                        highlighted_text=_highlight_text(display, query),
+                        highlighted_description=_highlight_text(description, query),
+                    ))
+                    seen_genes.add(display)
+
         remaining = limit - len(suggestions)
 
     # 2. Search GO terms - prefix match on go_term
@@ -1184,6 +1217,27 @@ def search_category(
         total_count = _count_genes(db, query)
         results = _search_genes_all(db, query)
         organism_counts = _count_genes_by_organism(db, query)
+    elif category == "cgdid":
+        from cgd.api.services.text_search_service import (
+            search_cgdid, _count_cgdid, _count_cgdid_by_organism
+        )
+        total_count = _count_cgdid(db, query)
+        cgdid_results = search_cgdid(db, query, limit=1000)
+        # Convert TextSearchResult to SearchResult
+        results = []
+        for r in cgdid_results:
+            results.append(SearchResult(
+                category="cgdid",
+                id=r.id or "",
+                name=r.name,
+                description=r.description,
+                link=r.link or f"/locus/{r.name}",
+                organism=r.organism,
+                highlighted_name=r.highlighted_name,
+                highlighted_description=r.highlighted_description,
+                gene_name=r.gene_name,
+            ))
+        organism_counts = _count_cgdid_by_organism(db, query)
     elif category == "go_terms":
         total_count = _count_go_terms(db, query)
         results = _search_go_terms_all(db, query)

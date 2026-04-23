@@ -120,7 +120,7 @@ def search_category(
     category: str = Query(
         ...,
         description="Category to search",
-        pattern="^(genes|go_terms|phenotypes|references|orthologs)$"
+        pattern="^(genes|cgdid|go_terms|phenotypes|references|orthologs)$"
     ),
     db: Session = Depends(get_db),
 ):

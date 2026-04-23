@@ -51,6 +51,7 @@ from cgd.models.models import (
 # Category display names for the frontend
 CATEGORY_DISPLAY_NAMES = {
     "genes": "Genes / Loci",
+    "cgdid": "CGD ID",
     "descriptions": "Locus Descriptions",
     "go_terms": "GO Terms",
     "colleagues": "Colleagues",
@@ -583,6 +584,59 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 ))
                 if len(results) >= limit:
                     break
+
+    # Sort by organism priority (C. albicans first), then by name
+    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
+    return results
+
+
+def search_cgdid(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
+    """
+    Search genes/loci by CGDID (dbxref_id) only.
+    Returns TextSearchResult list with category="cgdid".
+
+    CGDIDs are the primary identifiers used in CGD, e.g., CAL0000123456.
+
+    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
+    to avoid duplicate results for the same gene.
+    """
+    results = []
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
+
+    # Search in Feature table by dbxref_id only
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
+    feature_query = (
+        db.query(Feature)
+        .outerjoin(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Feature.dbxref_id).like(upper_pattern),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
+        )
+        .limit(limit)
+    )
+
+    for feat in feature_query:
+        display_name = feat.gene_name or feat.feature_name
+        # For CGDID search, show the CGDID prominently in the description
+        description = f"CGDID: {feat.dbxref_id}"
+        if feat.headline:
+            description += f" - {feat.headline}"
+        results.append(TextSearchResult(
+            category="cgdid",
+            id=feat.dbxref_id,
+            name=display_name,
+            description=description,
+            link=f"/locus/{feat.gene_name or feat.feature_name}",
+            organism=_get_organism_name(feat.organism),
+            highlighted_name=_highlight_text(display_name, query),
+            highlighted_description=_highlight_text(description, query),
+            gene_name=feat.gene_name,
+        ))
 
     # Sort by organism priority (C. albicans first), then by name
     results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
@@ -1635,6 +1689,80 @@ def _count_genes(db: Session, query: str) -> int:
     return total_count or 0
 
 
+def _count_cgdid(db: Session, query: str) -> int:
+    """
+    Count total genes matching the query by CGDID (dbxref_id) only.
+
+    Note: Excludes Assembly 21 features that have Assembly 22 equivalents
+    to avoid counting duplicates.
+    """
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery for features matching by dbxref_id only
+    # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
+    direct_subq = (
+        db.query(Feature.feature_no.label('fno'))
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Feature.dbxref_id).like(upper_pattern),
+        )
+    )
+
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
+
+    # Count distinct feature_nos, excluding Assembly 21 duplicates
+    total_count = (
+        db.query(func.count(direct_subq.subquery().c.fno))
+        .filter(
+            ~direct_subq.subquery().c.fno.in_(db.query(a21_subq.c.feature_no))
+        )
+        .scalar()
+    )
+
+    return total_count or 0
+
+
+def _count_cgdid_by_organism(db: Session, query: str) -> dict[str, int]:
+    """
+    Count genes matching the query by CGDID (dbxref_id) grouped by organism.
+
+    Returns a dict mapping organism name to count.
+    """
+    like_pattern = _get_like_pattern(query)
+    upper_pattern = like_pattern.upper()
+
+    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
+    a21_subq = _get_a21_exclusion_subquery(db)
+
+    # Subquery for features matching by dbxref_id only
+    direct_subq = (
+        db.query(
+            Feature.feature_no.label('fno'),
+            Feature.organism_no.label('org_no')
+        )
+        .filter(
+            Feature.feature_type.in_(GENE_FEATURE_TYPES),
+            func.upper(Feature.dbxref_id).like(upper_pattern),
+            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
+        )
+    ).subquery()
+
+    # Join with Organism to get organism names and count by organism
+    organism_counts = (
+        db.query(
+            Organism.organism_name,
+            func.count(func.distinct(direct_subq.c.fno))
+        )
+        .join(Organism, direct_subq.c.org_no == Organism.organism_no)
+        .group_by(Organism.organism_name)
+        .all()
+    )
+
+    return {name: count for name, count in organism_counts if name}
+
+
 def _count_genes_by_organism(db: Session, query: str) -> dict[str, int]:
     """
     Count genes matching the query grouped by organism.
@@ -2164,6 +2292,7 @@ def _count_literature_topics(db: Session, query: str) -> int:
 # Mapping of category to search and count functions
 CATEGORY_SEARCH_FUNCTIONS = {
     "genes": search_genes,
+    "cgdid": search_cgdid,
     "descriptions": search_descriptions,
     "go_terms": search_go_terms,
     "colleagues": search_colleagues,
@@ -2182,6 +2311,7 @@ CATEGORY_SEARCH_FUNCTIONS = {
 
 CATEGORY_COUNT_FUNCTIONS = {
     "genes": _count_genes,
+    "cgdid": _count_cgdid,
     "descriptions": _count_descriptions,
     "go_terms": _count_go_terms,
     "colleagues": _count_colleagues,
@@ -2325,10 +2455,12 @@ def text_search_category(
     # Filter out results with empty or null names
     all_results = [r for r in all_results if r.name]
 
-    # Get organism counts for genes category
+    # Get organism counts for genes and cgdid categories
     organism_counts = None
     if category == "genes":
         organism_counts = _count_genes_by_organism(db, query)
+    elif category == "cgdid":
+        organism_counts = _count_cgdid_by_organism(db, query)
 
     return TextSearchCategoryPagedResponse(
         query=query,
