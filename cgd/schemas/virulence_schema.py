@@ -106,10 +106,12 @@ def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
 
     Indirect evidence includes:
     - Tier 3 & 4 phenotypes (Stress Response, Indirect)
-    - Gene pattern matches
     - Headline matches
     - Literature topic matches
     - Non-virulence GO terms
+
+    Note: Gene pattern matches are excluded from display (redundant with gene name)
+    but are still used for categorization and scoring.
 
     Args:
         match_reasons: List of match reason strings
@@ -153,7 +155,11 @@ def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
                 indirect.append(reason)
             continue
 
-        # Everything else is indirect (gene pattern, headline, literature)
+        # Skip gene pattern matches - redundant with gene name
+        if reason_lower.startswith("gene pattern:"):
+            continue
+
+        # Everything else is indirect (headline, literature)
         indirect.append(reason)
 
     return direct, indirect
