@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from cgd.models.models import (
     Dbxref,
     Feature,
+    FeatLocation,
     Go,
     GoAnnotation,
     GoQualifier,
@@ -26,6 +27,7 @@ from cgd.models.models import (
     GorefDbxref,
     Reference,
     RefUnlink,
+    Seq,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,8 +86,15 @@ class GoCurationService:
         self.db = db
 
     def get_feature_by_name(self, name: str) -> Optional[Feature]:
-        """Look up feature by name or gene_name."""
-        return (
+        """
+        Look up feature by name or gene_name.
+
+        When multiple features match (e.g., Assembly 19 and Assembly 22 versions
+        with the same gene_name), prioritize features with current sequences
+        (is_seq_current='Y') to return the active version.
+        """
+        # Get all matching features
+        features = (
             self.db.query(Feature)
             .filter(
                 or_(
@@ -93,8 +102,47 @@ class GoCurationService:
                     func.upper(Feature.gene_name) == name.upper(),
                 )
             )
-            .first()
+            .all()
         )
+
+        if not features:
+            return None
+
+        if len(features) == 1:
+            return features[0]
+
+        # Multiple features found - prioritize features with current sequences
+        # This handles cases like IST2 where both orf19.2792 (Assembly 19) and
+        # C1_07520C_A (Assembly 22) exist with the same gene_name
+        features_with_current_seq = []
+        for f in features:
+            has_current = (
+                self.db.query(Seq)
+                .join(FeatLocation, Seq.seq_no == FeatLocation.root_seq_no)
+                .filter(
+                    FeatLocation.feature_no == f.feature_no,
+                    FeatLocation.is_loc_current == 'Y',
+                    Seq.is_seq_current == 'Y',
+                )
+                .first()
+            )
+            if has_current:
+                features_with_current_seq.append(f)
+
+        if features_with_current_seq:
+            # If still multiple, prefer Assembly 22 naming convention (C*_*_A)
+            for f in features_with_current_seq:
+                if f.feature_name and f.feature_name.endswith('_A'):
+                    return f
+            return features_with_current_seq[0]
+
+        # Fallback: prefer Assembly 22 naming if no current seq info
+        for f in features:
+            if f.feature_name and f.feature_name.endswith('_A'):
+                return f
+
+        # Last resort: return first match
+        return features[0]
 
     def get_go_by_goid(self, goid: int) -> Optional[Go]:
         """Look up GO term by GO ID."""
