@@ -404,6 +404,7 @@ class GoCurationService:
                 existing_exact.go_annotation_no, reference_no, qualifiers, curator_userid,
                 with_db=with_db, with_id=with_id,
             )
+            self.db.commit()  # Commit the added reference
             return existing_exact.go_annotation_no
 
         # Create new annotation
