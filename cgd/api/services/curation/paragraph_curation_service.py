@@ -16,13 +16,17 @@ from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from sqlalchemy import or_
+
 from cgd.models.models import (
     Feature,
+    FeatLocation,
     FeatPara,
     Organism,
     Paragraph,
     Reference,
     RefLink,
+    Seq,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,30 +50,60 @@ class ParagraphCurationService:
     def get_feature_by_name(
         self, feature_name: str, organism_abbrev: Optional[str] = None
     ) -> Optional[Feature]:
-        """Look up feature by name or gene name."""
-        query = self.db.query(Feature).filter(
-            func.upper(Feature.feature_name) == feature_name.upper()
-        )
-        if organism_abbrev:
-            # Join to organism to filter by abbreviation
-            query = query.join(
-                Organism, Feature.organism_no == Organism.organism_no
-            ).filter(Organism.organism_abbrev == organism_abbrev)
+        """
+        Look up feature by name or gene name.
 
-        feature = query.first()
-        if feature:
-            return feature
-
-        # Try gene name
+        When multiple features match (e.g., Assembly 19 and Assembly 22 versions
+        with the same gene_name), prioritize features with current sequences.
+        """
         query = self.db.query(Feature).filter(
-            func.upper(Feature.gene_name) == feature_name.upper()
+            or_(
+                func.upper(Feature.feature_name) == feature_name.upper(),
+                func.upper(Feature.gene_name) == feature_name.upper(),
+            )
         )
         if organism_abbrev:
             query = query.join(
                 Organism, Feature.organism_no == Organism.organism_no
             ).filter(Organism.organism_abbrev == organism_abbrev)
 
-        return query.first()
+        features = query.all()
+
+        if not features:
+            return None
+
+        if len(features) == 1:
+            return features[0]
+
+        # Multiple features - prioritize features with current sequences
+        features_with_current_seq = []
+        for f in features:
+            has_current = (
+                self.db.query(Seq)
+                .join(FeatLocation, Seq.seq_no == FeatLocation.root_seq_no)
+                .filter(
+                    FeatLocation.feature_no == f.feature_no,
+                    FeatLocation.is_loc_current == 'Y',
+                    Seq.is_seq_current == 'Y',
+                )
+                .first()
+            )
+            if has_current:
+                features_with_current_seq.append(f)
+
+        if features_with_current_seq:
+            # Prefer Assembly 22 naming convention
+            for f in features_with_current_seq:
+                if f.feature_name and (f.feature_name.endswith('_A') or '_W_A' in f.feature_name):
+                    return f
+            return features_with_current_seq[0]
+
+        # Fallback: prefer Assembly 22 naming
+        for f in features:
+            if f.feature_name and (f.feature_name.endswith('_A') or '_W_A' in f.feature_name):
+                return f
+
+        return features[0]
 
     def get_paragraphs_for_feature(
         self, feature_name: str, organism_abbrev: Optional[str] = None

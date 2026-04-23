@@ -26,12 +26,14 @@ from cgd.models.models import (
     ExptExptprop,
     ExptProperty,
     Feature,
+    FeatLocation,
     PhenoAnnotation,
     Phenotype,
     RefLink,
     RefUnlink,
     Reference,
     RefUrl,
+    Seq,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,7 +95,9 @@ class PhenotypeCurationService:
         Look up feature by name or gene_name.
 
         If organism_abbrev is provided, filter by organism.
-        Returns the first matching feature (use get_features_by_name for all matches).
+        When multiple features match (e.g., Assembly 19 and Assembly 22 versions
+        with the same gene_name), prioritize features with current sequences
+        (is_seq_current='Y') to return the active version.
         """
         from cgd.models.models import Organism
 
@@ -109,16 +113,69 @@ class PhenotypeCurationService:
                 func.upper(Organism.organism_abbrev) == organism_abbrev.upper()
             )
 
-        feature = query.first()
+        features = query.all()
 
-        if feature:
+        if not features:
+            logger.warning(f"Feature not found: name={name}, organism={organism_abbrev}")
+            return None
+
+        if len(features) == 1:
+            feature = features[0]
             logger.info(
                 f"Found feature: name={name} -> feature_no={feature.feature_no}, "
                 f"feature_name={feature.feature_name}, gene_name={feature.gene_name}"
             )
-        else:
-            logger.warning(f"Feature not found: name={name}, organism={organism_abbrev}")
+            return feature
 
+        # Multiple features found - prioritize features with current sequences
+        # This handles cases like ADH1 where both orf19.3997 (Assembly 19) and
+        # C5_05050W_A (Assembly 22) exist with the same gene_name
+        features_with_current_seq = []
+        for f in features:
+            has_current = (
+                self.db.query(Seq)
+                .join(FeatLocation, Seq.seq_no == FeatLocation.root_seq_no)
+                .filter(
+                    FeatLocation.feature_no == f.feature_no,
+                    FeatLocation.is_loc_current == 'Y',
+                    Seq.is_seq_current == 'Y',
+                )
+                .first()
+            )
+            if has_current:
+                features_with_current_seq.append(f)
+
+        if features_with_current_seq:
+            # If still multiple, prefer Assembly 22 naming convention (C*_*_A or C*_*_W_A)
+            for f in features_with_current_seq:
+                if f.feature_name and (f.feature_name.endswith('_A') or '_W_A' in f.feature_name):
+                    logger.info(
+                        f"Found feature (Assembly 22 preferred): name={name} -> "
+                        f"feature_no={f.feature_no}, feature_name={f.feature_name}"
+                    )
+                    return f
+            feature = features_with_current_seq[0]
+            logger.info(
+                f"Found feature (current seq): name={name} -> feature_no={feature.feature_no}, "
+                f"feature_name={feature.feature_name}"
+            )
+            return feature
+
+        # Fallback: prefer Assembly 22 naming if no current seq info
+        for f in features:
+            if f.feature_name and (f.feature_name.endswith('_A') or '_W_A' in f.feature_name):
+                logger.info(
+                    f"Found feature (Assembly 22 fallback): name={name} -> "
+                    f"feature_no={f.feature_no}, feature_name={f.feature_name}"
+                )
+                return f
+
+        # Last resort: return first match
+        feature = features[0]
+        logger.info(
+            f"Found feature (first match): name={name} -> feature_no={feature.feature_no}, "
+            f"feature_name={feature.feature_name}"
+        )
         return feature
 
     def get_reference_no_by_pubmed(self, pubmed: int) -> Optional[int]:
