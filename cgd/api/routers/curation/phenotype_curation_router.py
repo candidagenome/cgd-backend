@@ -118,6 +118,10 @@ class CreateAnnotationRequest(BaseModel):
         None,
         description="Experiment properties (strain_background, allele, etc.)",
     )
+    organism: Optional[str] = Field(
+        None,
+        description="Organism abbreviation (e.g., C_auris_B8441) to disambiguate features with same name across species",
+    )
 
 
 class CreateAnnotationResponse(BaseModel):
@@ -410,11 +414,13 @@ def create_phenotype_annotation(
     try:
         service = PhenotypeCurationService(db)
 
-        feature = service.get_feature_by_name(feature_name)
+        # Pass organism to disambiguate features with same name across species
+        feature = service.get_feature_by_name(feature_name, request.organism)
         if not feature:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Feature '{feature_name}' not found",
+                detail=f"Feature '{feature_name}' not found"
+                + (f" for organism '{request.organism}'" if request.organism else ""),
             )
 
         # Resolve reference_no from pubmed if not provided directly
