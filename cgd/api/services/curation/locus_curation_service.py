@@ -461,7 +461,7 @@ class LocusCurationService:
                 # Try to create reference from PubMed
                 try:
                     reference_no = ref_service.create_reference_from_pubmed(
-                        pmid=pmid,
+                        pubmed=pmid,
                         reference_status="Published",
                         curator_userid=curator_userid,
                     )
