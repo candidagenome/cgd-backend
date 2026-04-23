@@ -9,6 +9,7 @@ This document provides detailed technical specifications for the key algorithms 
 1. [Gene Summary Generation](#1-gene-summary-generation)
 2. [Confidence Scoring System](#2-confidence-scoring-system)
 3. [Ortholog Mapping System](#3-ortholog-mapping-system)
+4. [Virulence Categories and GO Terms](#4-virulence-categories-and-go-terms)
 
 ---
 
@@ -639,6 +640,24 @@ Orthologs: C. auris, C. glabrata, C. tropicalis +1 more -> View
 | **>=5 orthologs = housekeeping** | Highly conserved genes are likely essential, not virulence-specific |
 | **Synteny viewer link** | Enables comparative genomics exploration |
 | **Short species names** | "C. auris" is more readable than full strain names |
+
+---
+
+## 4. Virulence Categories and GO Terms
+
+The virulence factor browser classifies genes into categories based on GO terms, phenotype patterns, and gene name patterns. Here are the GO terms used for each category:
+
+| Category | GO Terms | Description |
+|----------|----------|-------------|
+| **Adhesins** | `GO:0007155`, `GO:0044406` | cell adhesion, adhesion to host |
+| **Secreted Enzymes** | `GO:0008233`, `GO:0016298`, `GO:0008970` | protease, lipase, phospholipase |
+| **Morphogenesis** | `GO:0001403` | invasive filamentous growth |
+| **Host Interaction** | `GO:0051701`, `GO:0044114`, `GO:0044409` | interaction with host, development of symbiont in host, symbiont entry into host |
+| **Biofilm Formation** | `GO:0044010`, `GO:0043709` | biofilm formation, biofilm matrix |
+| **Immune Evasion** | `GO:0042783`, `GO:0052553`, `GO:0030682` | symbiont-mediated evasion/perturbation of host immune response/defenses |
+| **Drug Resistance** | `GO:0042493`, `GO:0046677`, `GO:0071466` | response to drug, response to antibiotic, cellular response to xenobiotic stimulus |
+
+**Note**: `GO:0009405` (pathogenesis) was obsoleted by GO in 2021 and is no longer used.
 
 ---
 
