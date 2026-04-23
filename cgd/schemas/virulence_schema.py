@@ -1351,7 +1351,7 @@ VIRULENCE_CATEGORIES = {
         "rules": {
             "gene_patterns": ["CDR%", "MDR%", "ERG%", "FKS%"],
             "phenotype_observables": ["%resistance%", "%susceptibility%"],
-            "go_terms": ["GO:0042493", "GO:0046677"],  # response to drug, response to antibiotic
+            "go_terms": ["GO:0042493", "GO:0046677", "GO:0071466"],  # response to drug, response to antibiotic, cellular response to xenobiotic stimulus
         }
     }
 }
