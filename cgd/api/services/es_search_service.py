@@ -1791,7 +1791,7 @@ def text_search(
             # For genes, we search multiple fields - build wildcard for each field
             gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
             feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
-            dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=False)
+            dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=True)
             gene_query = {
                 "query": {
                     "bool": {
@@ -2197,7 +2197,7 @@ def text_search_category(
         # NOTE: Oracle doesn't apply match_mode to genes, so always use "exact"
         gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
         feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
-        dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=False)
+        dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=True)
         es_query = {
             "query": {
                 "bool": {
