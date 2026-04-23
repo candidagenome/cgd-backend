@@ -993,6 +993,8 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                         {"term": {"type": es_type}},
                     ],
                     "should": [
+                        # CGDID exact/prefix match (high priority)
+                        {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 20}}},
                         # Exact gene name match
                         {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
                         {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
@@ -1010,6 +1012,7 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                 "fields": {
                     "gene_name": {},
                     "feature_name": {},
+                    "dbxref_id": {},
                     "aliases": {},
                 },
                 "pre_tags": ["<mark>"],
