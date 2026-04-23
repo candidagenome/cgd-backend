@@ -1405,42 +1405,43 @@ def _get_text_search_fields() -> list[str]:
     ]
 
 
+def _is_cgdid_query(query: str) -> bool:
+    """Check if query looks like a CGDID (e.g., CAL0000191211)."""
+    import re
+    # CGDIDs start with 2-4 uppercase letters followed by digits
+    return bool(re.match(r'^[A-Z]{2,4}\d+$', query.upper()))
+
+
 def _build_text_search_counts_query(query: str) -> dict:
     """Build ES query to get counts per type for text search."""
-    # For numeric queries, also search pubmed field for references
-    if query.isdigit():
-        return {
-            "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "multi_match": {
-                                "query": query,
-                                "fields": _get_text_search_fields(),
-                                "type": "best_fields",
-                                "fuzziness": "AUTO",
-                            }
-                        },
-                        {"term": {"pubmed": {"value": int(query), "boost": 10}}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
-            "size": 0,
-            "aggs": {
-                "by_type": {
-                    "terms": {"field": "type", "size": 20}
-                }
-            },
-        }
-
-    return {
-        "query": {
+    should_clauses = [
+        {
             "multi_match": {
                 "query": query,
                 "fields": _get_text_search_fields(),
                 "type": "best_fields",
                 "fuzziness": "AUTO",
+            }
+        },
+    ]
+
+    # For numeric queries, also search pubmed field for references
+    if query.isdigit():
+        should_clauses.append(
+            {"term": {"pubmed": {"value": int(query), "boost": 10}}}
+        )
+
+    # For CGDID-like queries, add exact term match on dbxref_id
+    if _is_cgdid_query(query):
+        should_clauses.append(
+            {"term": {"dbxref_id": {"value": query.upper(), "boost": 20}}}
+        )
+
+    return {
+        "query": {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1,
             }
         },
         "size": 0,
@@ -1454,6 +1455,29 @@ def _build_text_search_counts_query(query: str) -> dict:
 
 def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> dict:
     """Build ES query for text search filtered to a specific type."""
+    highlight_config = {
+        "fields": {
+            "name": {},
+            "gene_name": {},
+            "headline": {},
+            "go_term": {},
+            "observable": {},
+            "title": {},
+            "aliases": {},
+            "paragraph_text": {},
+            "author_name": {},
+            "last_name": {},
+            "pathway_name": {},
+            "note_text": {},
+            "external_id": {},
+            "ortholog_name": {},
+            "literature_topic": {},
+            "dbxref_id": {},
+        },
+        "pre_tags": ["<mark>"],
+        "post_tags": ["</mark>"],
+    }
+
     # For reference type with numeric query, also search pubmed
     if doc_type == "reference" and query.isdigit():
         return {
@@ -1477,27 +1501,33 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
                 }
             },
             "size": size,
-            "highlight": {
-                "fields": {
-                    "name": {},
-                    "gene_name": {},
-                    "headline": {},
-                    "go_term": {},
-                                    "observable": {},
-                    "title": {},
-                    "aliases": {},
-                    "paragraph_text": {},
-                    "author_name": {},
-                    "last_name": {},
-                    "pathway_name": {},
-                    "note_text": {},
-                    "external_id": {},
-                    "ortholog_name": {},
-                    "literature_topic": {},
-                },
-                "pre_tags": ["<mark>"],
-                "post_tags": ["</mark>"],
+            "highlight": highlight_config,
+        }
+
+    # For gene type with CGDID-like query, also search dbxref_id
+    if doc_type == "gene" and _is_cgdid_query(query):
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"type": doc_type}},
+                    ],
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": _get_text_search_fields(),
+                                "type": "best_fields",
+                                "fuzziness": "AUTO",
+                            }
+                        },
+                        {"term": {"dbxref_id": {"value": query.upper(), "boost": 20}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
             },
+            "size": size,
+            "highlight": highlight_config,
         }
 
     return {
@@ -1517,27 +1547,7 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
             }
         },
         "size": size,
-        "highlight": {
-            "fields": {
-                "name": {},
-                "gene_name": {},
-                "headline": {},
-                "go_term": {},
-                                "observable": {},
-                "title": {},
-                "aliases": {},
-                "paragraph_text": {},
-                "author_name": {},
-                "last_name": {},
-                "pathway_name": {},
-                "note_text": {},
-                "external_id": {},
-                "ortholog_name": {},
-                "literature_topic": {},
-            },
-            "pre_tags": ["<mark>"],
-            "post_tags": ["</mark>"],
-        },
+        "highlight": highlight_config,
     }
 
 
