@@ -1376,6 +1376,7 @@ def _get_text_search_fields() -> list[str]:
     """Get the list of fields to search for text search.
 
     Search fields:
+    - Genes: gene_name, feature_name, dbxref_id (CGDID), aliases, headline
     - GO terms: go_term + goid
     - References: title (+ pubmed for numeric queries)
     """
@@ -1383,6 +1384,7 @@ def _get_text_search_fields() -> list[str]:
         "name^3",
         "gene_name^3",
         "feature_name^2",
+        "dbxref_id^3",  # CGDID - primary identifier for genes
         "aliases^2",
         "headline^2",
         "name_description",
