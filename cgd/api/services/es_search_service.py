@@ -142,6 +142,8 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     # Exact match (highest priority) - genes
                     {"term": {"gene_name.keyword": {"value": query_upper, "boost": 30}}},
                     {"term": {"feature_name": {"value": query_upper, "boost": 30}}},
+                    # CGDID exact/prefix match (high priority)
+                    {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 28}}},
                     # Case-insensitive wildcard for gene prefix (high priority)
                     {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 25}}},
                     {"wildcard": {"feature_name": {"value": f"{query_upper}*", "boost": 20}}},
@@ -165,6 +167,7 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
             "fields": {
                 "name": {},
                 "gene_name": {},
+                "dbxref_id": {},
                 "go_term": {},
                 "observable": {},
             },
