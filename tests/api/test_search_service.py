@@ -612,6 +612,7 @@ class TestGetAutocompleteSuggestions:
         mock_db.query.side_effect = [
             MockQuery([("ALS1", "CAL0001", "Cell adhesin")]),  # gene prefix
             MockQuery([]),  # gene feature prefix
+            MockQuery([]),  # CGDID prefix
             MockQuery([]),  # GO terms
             MockQuery([]),  # phenotypes
         ]
