@@ -339,7 +339,14 @@ The API supports filtering by confidence:
 | `min_confidence_score` | int (0-20) | Only include genes with score >= this value |
 | `min_paper_count` | int (0+) | Only include genes with >= this many associated papers |
 | `max_paper_count` | int (0+) | Only include genes with <= this many associated papers |
+| `evidence_types` | list[string] | Filter by evidence types: `GO`, `PHE` |
 | `sort_by` | string | Sort by `confidence_score`, `gene_name`, or `evidence_tier` |
+
+**Note on Evidence Types**: The UI exposes only two evidence type filters:
+- **GO**: Gene Ontology annotations
+- **PHE**: Phenotype evidence (including virulence phenotypes)
+
+The KW (Keyword) filter was removed because gene pattern and headline matches are no longer displayed as evidence (they were redundant with information already shown). Literature topic matches are rare and displayed with a "LIT" label when present.
 
 ---
 
