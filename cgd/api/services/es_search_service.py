@@ -2445,6 +2445,8 @@ def search_virulence_factors(
     sort_by: str = "confidence_score",
     sort_order: str = "desc",
     evidence_types: list[str] | None = None,
+    min_paper_count: int | None = None,
+    max_paper_count: int | None = None,
 ) -> dict | None:
     """
     Search virulence factors using Elasticsearch.
@@ -2462,6 +2464,8 @@ def search_virulence_factors(
         sort_by: Field to sort by (confidence_score, gene_name, evidence_tier)
         sort_order: Sort order (asc, desc)
         evidence_types: Filter by evidence types (GO, PHE, KW)
+        min_paper_count: Only include genes with >= this many papers
+        max_paper_count: Only include genes with <= this many papers
 
     Returns:
         Dict with items, total_count, page, page_size, categories_searched
@@ -2514,6 +2518,13 @@ def search_virulence_factors(
     # Filter by evidence types (GO, PHE, KW)
     if evidence_types:
         must_clauses.append({"terms": {"evidence_types.keyword": [et.upper() for et in evidence_types]}})
+
+    # Filter by paper count
+    if min_paper_count is not None:
+        must_clauses.append({"range": {"paper_count": {"gte": min_paper_count}}})
+
+    if max_paper_count is not None:
+        must_clauses.append({"range": {"paper_count": {"lte": max_paper_count}}})
 
     # Build sort clause
     if sort_by == "confidence_score":

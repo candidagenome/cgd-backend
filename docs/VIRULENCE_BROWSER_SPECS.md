@@ -337,6 +337,8 @@ The API supports filtering by confidence:
 |-----------|------|-------------|
 | `max_evidence_tier` | int (1-4) | Only include genes with tier <= this value |
 | `min_confidence_score` | int (0-20) | Only include genes with score >= this value |
+| `min_paper_count` | int (0+) | Only include genes with >= this many associated papers |
+| `max_paper_count` | int (0+) | Only include genes with <= this many associated papers |
 | `sort_by` | string | Sort by `confidence_score`, `gene_name`, or `evidence_tier` |
 
 ---

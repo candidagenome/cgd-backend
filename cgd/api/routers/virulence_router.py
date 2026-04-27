@@ -112,6 +112,14 @@ def get_virulence_factors(
         default=[],
         description="Filter by evidence types: GO (Gene Ontology), PHE (Phenotype), KW (Keyword/pattern)"
     ),
+    min_paper_count: Optional[int] = Query(
+        None, ge=0,
+        description="Only include genes with at least this many associated papers"
+    ),
+    max_paper_count: Optional[int] = Query(
+        None, ge=0,
+        description="Only include genes with at most this many associated papers"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -134,6 +142,8 @@ def get_virulence_factors(
         sort_by: Sort field (confidence_score, gene_name, evidence_tier)
         sort_order: Sort direction (asc, desc)
         evidence_types: Filter by evidence types (GO, PHE, KW)
+        min_paper_count: Only include genes with >= this many papers
+        max_paper_count: Only include genes with <= this many papers
 
     Returns:
         Paginated list of virulence factors with category mappings and evidence quality
@@ -157,6 +167,8 @@ def get_virulence_factors(
                     sort_by=sort_by,
                     sort_order=sort_order,
                     evidence_types=evidence_types if evidence_types else None,
+                    min_paper_count=min_paper_count,
+                    max_paper_count=max_paper_count,
                 )
                 if result:
                     return VirulenceFactorsResponse(
@@ -186,6 +198,8 @@ def get_virulence_factors(
             sort_by=sort_by,
             sort_order=sort_order,
             evidence_types=evidence_types if evidence_types else None,
+            min_paper_count=min_paper_count,
+            max_paper_count=max_paper_count,
         )
     except Exception as e:
         logger.error(f"Error in get_virulence_factors: {e}")

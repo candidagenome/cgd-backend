@@ -765,6 +765,8 @@ def get_virulence_factors(
     sort_by: str = "confidence_score",
     sort_order: str = "desc",
     evidence_types: Optional[list[str]] = None,
+    min_paper_count: Optional[int] = None,
+    max_paper_count: Optional[int] = None,
 ) -> VirulenceFactorsResponse:
     """
     Search virulence factors by criteria.
@@ -782,6 +784,8 @@ def get_virulence_factors(
         sort_by: Field to sort by ("confidence_score", "gene_name", "evidence_tier")
         sort_order: Sort order ("asc" or "desc")
         evidence_types: Filter by evidence types (GO, PHE, KW)
+        min_paper_count: Only include genes with >= this many associated papers
+        max_paper_count: Only include genes with <= this many associated papers
 
     Returns:
         VirulenceFactorsResponse with paginated results
@@ -935,6 +939,19 @@ def get_virulence_factors(
         gene_data = {
             k: v for k, v in gene_data.items()
             if any(et in evidence_types_upper for et in v["evidence_types"])
+        }
+
+    # Filter by paper count
+    if min_paper_count is not None:
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if v["paper_count"] >= min_paper_count
+        }
+
+    if max_paper_count is not None:
+        gene_data = {
+            k: v for k, v in gene_data.items()
+            if v["paper_count"] <= max_paper_count
         }
 
     # Convert to list
