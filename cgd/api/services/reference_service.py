@@ -815,10 +815,11 @@ def _get_papers_by_topics(
     Returns:
         GenomeWideAnalysisPapersResponse with list of papers
     """
-    # Get total count
+    # Get total count - filter by property_type to ensure we're matching literature topics
     total_count = (
         db.query(Reference.reference_no)
         .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+        .filter(RefProperty.property_type == "literature_topic")
         .filter(RefProperty.property_value.in_(filter_topics))
         .distinct()
         .count()
@@ -832,6 +833,7 @@ def _get_papers_by_topics(
     ref_nos = (
         db.query(Reference.reference_no)
         .join(RefProperty, Reference.reference_no == RefProperty.reference_no)
+        .filter(RefProperty.property_type == "literature_topic")
         .filter(RefProperty.property_value.in_(filter_topics))
         .distinct()
         .order_by(Reference.reference_no.desc())
@@ -865,6 +867,7 @@ def _get_papers_by_topics(
         db.query(RefProperty.reference_no, RefProperty.property_value)
         .filter(
             RefProperty.reference_no.in_(ref_no_list),
+            RefProperty.property_type == "literature_topic",
             RefProperty.property_value.in_(available_topics),
         )
         .distinct()
