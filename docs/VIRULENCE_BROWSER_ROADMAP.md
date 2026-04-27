@@ -8,13 +8,19 @@
 - [x] Expandable PMID list
 - [x] Wider table layout with adjustable columns
 - [x] #1 Auto-generated summary per gene (evidence-calibrated language)
-- [x] #2 Evidence transparency/breakdown (virulence models, GO, phenotypes, papers)
-- [x] Importance badges ("In vivo", "Multi-study") for gene prioritization
+- [x] #2 Evidence transparency/breakdown (GO annotations, phenotypes, papers)
 - [x] AlphaFold structure links (🔬 icon) for genes with UniProt IDs
 - [x] Cross-species orthologs display with clinical priority sorting
   - Species ordered by clinical importance: C. auris → C. glabrata → C. albicans → etc.
   - Links to Synteny Browser for detailed ortholog view
 - [x] Gene links open in new window
+- [x] GO evidence codes displayed (IDA, IMP, IEA, etc.) with manual evidence weighted higher
+- [x] "Normal" qualifier phenotypes excluded from selection and scoring
+- [x] Removed redundant evidence display (headline, gene pattern matches)
+- [x] User-facing help page explaining methodology and limitations
+
+## Removed Features
+- ~~Importance badges ("In vivo", "Multi-study")~~ - Removed because computational labels were potentially misleading. Users should sort by confidence and review evidence directly.
 
 ## Future Improvements
 
@@ -104,14 +110,21 @@
 ### Current Evidence Weights (from virulence_schema.py)
 ```python
 EVIDENCE_WEIGHTS = {
-    "virulence_model": 5,      # Direct virulence evidence
-    "go_pathogenesis": 4,      # GO pathogenesis terms
-    "go_host_interaction": 3,  # GO host interaction
-    "phenotype_direct": 3,     # Direct phenotypes (virulence, killing)
-    "phenotype_indirect": 2,   # Indirect phenotypes (biofilm, adhesion)
-    "keyword_match": 1,        # Gene name/headline patterns
+    "virulence_model": 5,       # Virulence phenotype (non-normal qualifier)
+    "tier1_phenotype": 4,       # Direct virulence phenotype
+    "tier2_phenotype": 3,       # Host interaction phenotype
+    "virulence_go": 3,          # Pathogenesis/host GO terms (IEA)
+    "virulence_go_manual": 4,   # Pathogenesis/host GO terms (IDA, IMP, etc.)
+    "other_go_manual": 2,       # Other GO terms with manual evidence
+    "other_go_iea": 1,          # Other GO terms with IEA evidence
+    "disease_literature": 2,    # Disease literature topic
+    "gene_pattern": 1,          # Gene name pattern match
+    "keyword_match": 1,         # Headline keyword
+    "housekeeping_penalty": -3, # Housekeeping gene penalty
 }
 ```
+
+**Note:** Phenotypes with "Normal" qualifier are excluded from scoring.
 
 ### Database Tables to Explore
 - `FeatRelationship` - gene-gene relationships
@@ -121,4 +134,4 @@ EVIDENCE_WEIGHTS = {
 
 ---
 
-*Last updated: 2026-04-17*
+*Last updated: 2026-04-27*

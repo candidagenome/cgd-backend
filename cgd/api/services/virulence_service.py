@@ -323,6 +323,9 @@ def _calculate_confidence_score(
     """
     Calculate confidence score (0-20 range) based on evidence quality.
 
+    Manual GO evidence codes (IDA, IMP, IGI, IPI, etc.) are weighted higher
+    than computational evidence (IEA).
+
     Args:
         match_reasons: List of match reason strings
         evidence_tier: The best evidence tier (1-4)
@@ -331,24 +334,46 @@ def _calculate_confidence_score(
     Returns:
         Confidence score (0-20)
     """
+    # Manual GO evidence codes (experimental and author statement)
+    MANUAL_GO_CODES = {'IDA', 'IMP', 'IGI', 'IPI', 'IEP', 'TAS', 'NAS', 'IC', 'EXP'}
+
     score = 0
 
     for reason in match_reasons:
         reason_lower = reason.lower()
 
-        if "virulence model:" in reason_lower:
-            score += EVIDENCE_WEIGHTS["virulence_model"]
-        elif "phenotype:" in reason_lower:
-            if evidence_tier == 1:
+        if "phenotype:" in reason_lower:
+            # Check if it's a virulence phenotype (tier 1)
+            if "virulence" in reason_lower:
+                score += EVIDENCE_WEIGHTS["virulence_model"]
+            elif evidence_tier == 1:
                 score += EVIDENCE_WEIGHTS["tier1_phenotype"]
             elif evidence_tier == 2:
                 score += EVIDENCE_WEIGHTS["tier2_phenotype"]
             # Tier 3 and 4 phenotypes don't add points
-        elif "go:" in reason_lower:
+        elif reason_lower.startswith("go:"):
+            # Extract evidence code if present (format: "GO: term (GO:XXXXXXX) [IDA]")
+            evidence_code = None
+            if "[" in reason and "]" in reason:
+                code_start = reason.rfind("[") + 1
+                code_end = reason.rfind("]")
+                evidence_code = reason[code_start:code_end].upper()
+
             # Check for host interaction GO terms (symbiont-host related)
-            # Note: GO:0009405 (pathogenesis) was obsoleted by GO in 2021
-            if any(t in reason_lower for t in ["host", "symbiont", "interaction", "evasion"]):
-                score += EVIDENCE_WEIGHTS["virulence_go"]
+            is_virulence_go = any(t in reason_lower for t in ["host", "symbiont", "interaction", "evasion"])
+
+            if is_virulence_go:
+                # Virulence-related GO terms get higher weight
+                if evidence_code and evidence_code in MANUAL_GO_CODES:
+                    score += EVIDENCE_WEIGHTS["virulence_go"] + 1  # +4 for manual
+                else:
+                    score += EVIDENCE_WEIGHTS["virulence_go"]  # +3 for IEA
+            else:
+                # Other GO terms (MF, etc.) - still valuable with manual evidence
+                if evidence_code and evidence_code in MANUAL_GO_CODES:
+                    score += 2  # Manual non-virulence GO
+                else:
+                    score += 1  # IEA non-virulence GO
         elif "literature topic: disease" in reason_lower:
             score += EVIDENCE_WEIGHTS["disease_literature"]
         elif "gene pattern:" in reason_lower:
@@ -437,6 +462,9 @@ def _query_by_phenotype_observables(
     """
     Query features with phenotype annotations matching observable patterns.
 
+    Excludes phenotypes with "Normal" qualifier since these indicate
+    no effect on the phenotype (e.g., "virulence: Normal" means no virulence defect).
+
     Args:
         db: Database session
         observables: List of SQL LIKE patterns for observables
@@ -455,6 +483,13 @@ def _query_by_phenotype_observables(
             .join(Feature.organism)
             .filter(func.lower(Feature.feature_type) == 'orf')
             .filter(func.upper(Phenotype.observable).like(func.upper(obs_pattern)))
+            # Exclude "Normal" qualifier - these indicate no phenotypic effect
+            .filter(
+                or_(
+                    Phenotype.qualifier.is_(None),
+                    func.upper(Phenotype.qualifier) != 'NORMAL'
+                )
+            )
             .distinct()
         )
 
@@ -477,13 +512,16 @@ def _query_by_go_terms(
     """
     Query features with GO annotations matching the given GO IDs.
 
+    Returns GO annotations with evidence codes. Manual evidence codes
+    (IDA, IMP, IGI, IPI, etc.) are considered stronger than computational (IEA).
+
     Args:
         db: Database session
         go_ids: List of GO IDs (e.g., ["GO:0007155", "GO:0044406"])
         organism_abbrevs: Optional list of organism abbreviations to filter
 
     Returns:
-        List of (Feature, match_reason) tuples
+        List of (Feature, match_reason) tuples with evidence code in reason
     """
     results = []
 
@@ -495,7 +533,7 @@ def _query_by_go_terms(
         return results
 
     query = (
-        db.query(Feature, Go.goid, Go.go_term)
+        db.query(Feature, Go.goid, Go.go_term, GoAnnotation.go_evidence)
         .join(GoAnnotation, GoAnnotation.feature_no == Feature.feature_no)
         .join(Go, GoAnnotation.go_no == Go.go_no)
         .join(Feature.organism)
@@ -509,8 +547,10 @@ def _query_by_go_terms(
             func.upper(Organism.organism_abbrev).in_([o.upper() for o in organism_abbrevs])
         )
 
-    for feature, goid, go_term in query.all():
-        results.append((feature, f"GO: {go_term} (GO:{goid:07d})"))
+    for feature, goid, go_term, evidence_code in query.all():
+        # Include evidence code in the match reason
+        evidence_str = f" [{evidence_code}]" if evidence_code else ""
+        results.append((feature, f"GO: {go_term} (GO:{goid:07d}){evidence_str}"))
 
     return results
 
@@ -557,9 +597,13 @@ def _query_by_virulence_model(
     organism_abbrevs: Optional[list[str]] = None,
 ) -> list[tuple[Feature, str]]:
     """
-    Query features that have been tested in virulence/animal models.
-    This looks for phenotype annotations with experiment properties indicating
-    virulence model testing.
+    Query features that have virulence phenotype annotations.
+
+    Looks for phenotype annotations where the observable contains "virulence"
+    and the qualifier is NOT "Normal" (which would indicate no virulence defect).
+
+    Note: "mouse", "galleria" etc. are virulence MODEL types, not observables.
+    The observable is "virulence" and the model type is stored in experiment properties.
 
     Args:
         db: Database session
@@ -568,45 +612,22 @@ def _query_by_virulence_model(
     Returns:
         List of (Feature, match_reason) tuples
     """
-    # Look for phenotype annotations with experiment type containing "virulence"
-    # or observables like "virulence" or property values like "mouse model"
-    virulence_patterns = ["%virulence%", "%mouse%", "%animal model%", "%galleria%"]
-
     results = []
+    seen_features = set()  # Track to avoid duplicates
 
-    for pattern in virulence_patterns:
-        # Search in observables
-        query = (
-            db.query(Feature, Phenotype.observable)
-            .join(PhenoAnnotation, PhenoAnnotation.feature_no == Feature.feature_no)
-            .join(Phenotype, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
-            .join(Feature.organism)
-            .filter(func.lower(Feature.feature_type) == 'orf')
-            .filter(func.upper(Phenotype.observable).like(func.upper(pattern)))
-            .distinct()
-        )
-
-        if organism_abbrevs:
-            query = query.filter(
-                func.upper(Organism.organism_abbrev).in_([o.upper() for o in organism_abbrevs])
-            )
-
-        for feature, observable in query.all():
-            results.append((feature, f"virulence model: {observable}"))
-
-    # Also search in experiment properties
+    # Search for virulence observables with non-Normal qualifier
     query = (
-        db.query(Feature, ExptProperty.property_value)
+        db.query(Feature, Phenotype.observable)
         .join(PhenoAnnotation, PhenoAnnotation.feature_no == Feature.feature_no)
-        .join(ExptExptprop, ExptExptprop.experiment_no == PhenoAnnotation.experiment_no)
-        .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+        .join(Phenotype, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
         .join(Feature.organism)
         .filter(func.lower(Feature.feature_type) == 'orf')
+        .filter(func.upper(Phenotype.observable).like('%VIRULENCE%'))
+        # Exclude "Normal" qualifier - these indicate no virulence defect
         .filter(
             or_(
-                func.upper(ExptProperty.property_value).like('%VIRULENCE%'),
-                func.upper(ExptProperty.property_value).like('%MOUSE%'),
-                func.upper(ExptProperty.property_value).like('%GALLERIA%'),
+                Phenotype.qualifier.is_(None),
+                func.upper(Phenotype.qualifier) != 'NORMAL'
             )
         )
         .distinct()
@@ -617,8 +638,10 @@ def _query_by_virulence_model(
             func.upper(Organism.organism_abbrev).in_([o.upper() for o in organism_abbrevs])
         )
 
-    for feature, prop_value in query.all():
-        results.append((feature, f"virulence model: {prop_value[:50]}"))
+    for feature, observable in query.all():
+        if feature.feature_no not in seen_features:
+            seen_features.add(feature.feature_no)
+            results.append((feature, f"phenotype: {observable}"))
 
     return results
 

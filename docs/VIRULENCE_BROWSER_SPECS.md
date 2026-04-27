@@ -142,7 +142,12 @@ The confidence scoring system evaluates the **quality and strength of evidence**
 1. **Confidence Score** (0-20): Numeric score based on evidence weights
 2. **Confidence Tier** (High/Medium/Low): Human-readable classification
 3. **Evidence Tier** (1-4): Phenotype-based evidence quality ranking
-4. **Importance Level**: Combined assessment for prioritization
+
+**Important**: The confidence score reflects the strength of *virulence-specific evidence*, not overall clinical importance or how well-studied a gene is. Drug resistance genes may have lower confidence scores because drug resistance is considered indirect virulence evidence.
+
+### Normal Qualifier Filtering
+
+Phenotypes with a **"Normal" qualifier** are excluded from selection and scoring. A "Normal" qualifier indicates no phenotypic effect (e.g., "virulence: Normal" means no virulence defect was observed), so these should not count as positive evidence.
 
 ### Step 1: Evidence Tier Classification
 
@@ -151,11 +156,9 @@ The confidence scoring system evaluates the **quality and strength of evidence**
 | Tier | Name | Patterns | Score Contribution |
 |------|------|----------|-------------------|
 | **1** | Direct Virulence | `virulence`, `pathogenesis`, `host killing`, `infection`, `lethality`, `colonization` | +5 |
-| **2** | Host Interaction | `host cell`, `phagocytosis`, `macrophage`, `epithelial`, `endothelial`, `invasion`, `galleria`, `mouse`, `animal model` | +4 |
+| **2** | Host Interaction | `host cell`, `phagocytosis`, `macrophage`, `epithelial`, `endothelial`, `invasion` | +4 |
 | **3** | Stress Response | `oxidative stress`, `heat shock`, `antifungal`, `azole`, `echinocandin` | +2 |
 | **4** | Indirect | `resistance`, `susceptibility`, `sensitivity` | +1 |
-
-**Virulence model evidence** (tested in mouse/Galleria) is automatically classified as **Tier 1**.
 
 ### Step 2: Housekeeping Gene Detection
 
@@ -185,7 +188,7 @@ If gene has orthologs in **>=5 Candida species**, it's flagged as housekeeping (
 
 ```python
 EVIDENCE_WEIGHTS = {
-    "virulence_model": 5,       # Tested in mouse/Galleria
+    "virulence_model": 5,       # Virulence phenotype (non-normal qualifier)
     "tier1_phenotype": 4,       # Direct virulence phenotype
     "tier2_phenotype": 3,       # Host interaction phenotype
     "virulence_go": 3,          # Pathogenesis/host GO terms
@@ -194,16 +197,24 @@ EVIDENCE_WEIGHTS = {
     "keyword_match": 1,         # Headline keyword
     "housekeeping_penalty": -3, # Housekeeping gene penalty
 }
+
+# Manual GO evidence codes (weighted higher than IEA)
+MANUAL_GO_CODES = {'IDA', 'IMP', 'IGI', 'IPI', 'IEP', 'TAS', 'NAS', 'IC', 'EXP'}
 ```
 
 **Scoring Logic:**
 
 ```python
 for each match_reason:
-    if "virulence model:" -> score += 5
+    if "phenotype:" with "virulence" -> score += 5
     elif "phenotype:" and tier == 1 -> score += 4
     elif "phenotype:" and tier == 2 -> score += 3
-    elif "GO:" with host interaction/symbiont terms -> score += 3
+    elif "GO:" with host/symbiont/interaction/evasion terms:
+        if evidence_code in MANUAL_GO_CODES -> score += 4
+        else -> score += 3  # IEA
+    elif "GO:" (other terms):
+        if evidence_code in MANUAL_GO_CODES -> score += 2
+        else -> score += 1  # IEA
     elif "literature topic: disease" -> score += 2
     elif "gene pattern:" -> score += 1
     elif "headline:" -> score += 1
@@ -213,6 +224,8 @@ if is_housekeeping:
 
 return clamp(score, 0, 20)
 ```
+
+**GO Evidence Codes**: GO annotations now include the evidence code (e.g., `GO: adhesion to host (GO:0044406) [IDA]`). Manual evidence codes (IDA, IMP, IGI, etc.) receive higher weights than computational evidence (IEA).
 
 ### Step 4: Map Score to Confidence Tier
 
@@ -224,88 +237,64 @@ return clamp(score, 0, 20)
 | **5-9** | Medium | Moderate evidence with host interaction |
 | **0-4** | Low | Indirect or weak evidence |
 
-### Step 5: Calculate Importance Level
+### Step 5: Importance Level (Deprecated)
 
-`calculate_importance_level()` combines multiple factors for prioritization:
+**Note**: The importance level badges ("In vivo", "Multi-study", etc.) have been **removed from the UI**. These badges were found to be potentially misleading because:
 
-**Input Factors:**
-- Direct evidence count
-- Virulence model evidence (yes/no)
-- Paper count
-- Phenotype count
-- GO annotation count
-- Confidence score
+1. The distinction between "in vivo" and other evidence types was not clearly defined
+2. Computational labels may misrepresent the actual evidence quality
+3. Users can better assess importance by reviewing the evidence directly and sorting by confidence
 
-**Scoring:**
+Users should now:
+- Sort by confidence score to prioritize genes with stronger virulence evidence
+- Review the evidence panel to understand why each gene is included
+- Use category filters to find genes relevant to their research area (e.g., Drug Resistance)
 
-| Factor | Points |
-|--------|--------|
-| Has virulence model | +4 |
-| >=3 direct evidence | +3 |
-| >=1 direct evidence | +1 |
-| >=10 papers | +3 |
-| >=5 papers | +2 |
-| >=2 papers | +1 |
-| >=2 phenotypes + >=1 GO | +2 |
-| Confidence score >=15 | +2 |
-| Confidence score >=10 | +1 |
-
-**Importance Levels:**
-
-| Score | Level | Label Examples |
-|-------|-------|----------------|
-| **>=8** | High | "Core virulence factor", "Validated in vivo", "Well-characterized", "Strong evidence" |
-| **4-7** | Medium | "Multiple studies", "Direct evidence", "Moderate evidence" |
-| **0-3** | Low | "Phenotype support", "GO annotation", "Indirect evidence" |
+The `calculate_importance_level()` function still exists in the codebase but its output is no longer displayed.
 
 ### Example Calculations
 
 #### Example 1: ALS3 (Well-studied adhesin)
 ```
 Match reasons:
-- "virulence model: mouse systemic infection" -> +5
+- "phenotype: virulence" -> +5
 - "phenotype: adhesion" (tier 1) -> +4
-- "phenotype: biofilm formation" (tier 1) -> +4
-- "GO: interaction with host" -> +3
+- "GO: interaction with host (GO:0051701) [IDA]" -> +4 (manual evidence)
 - "gene pattern: ALS3" -> +1
 
-Raw score: 17
+Raw score: 14
 Housekeeping: No
-Final score: 17 -> High confidence
-
-Papers: 45
-Importance: 4 (virulence model) + 3 (direct>=3) + 3 (papers>=10) + 2 (phenotypes+GO) + 2 (score>=15) = 14 -> High
-Label: "Core virulence factor"
+Final score: 14 -> High confidence
 ```
 
 #### Example 2: ERG11 (Drug resistance gene)
 ```
 Match reasons:
-- "phenotype: azole resistance" (tier 3) -> +0
-- "GO: response to drug" -> +0 (not virulence GO)
+- "phenotype: azole resistance" (tier 4) -> +0
+- "GO: response to drug (GO:0042493) [IEA]" -> +1 (IEA, not virulence GO)
 - "gene pattern: ERG11" -> +1
 
-Raw score: 1
+Raw score: 2
 Housekeeping: No
-Final score: 1 -> Low confidence
+Final score: 2 -> Low confidence
 
-Papers: 30
-Importance: 0 + 0 + 3 (papers>=10) = 3 -> Low
-Label: "Indirect evidence"
+Note: ERG11 has a low confidence score because drug resistance is
+classified as indirect virulence evidence. This is by design - the
+confidence score reflects virulence evidence strength, not clinical
+importance. Users researching antifungal targets should filter by
+the "Drug Resistance" category.
 ```
 
 #### Example 3: ACT1 (Housekeeping gene)
 ```
 Match reasons:
-- "phenotype: virulence" (tier 1) -> +4
+- "phenotype: virulence" -> +5
 - "GO: cytoskeleton" -> +0
 
-Raw score: 4
+Raw score: 5
 Housekeeping: Yes (GO: actin cytoskeleton)
 Penalty: -3
-Final score: 1 -> Low confidence
-
-Label: "GO annotation"
+Final score: 2 -> Low confidence
 ```
 
 ### Data Flow Diagram
@@ -316,14 +305,17 @@ Label: "GO annotation"
          +---------------+---------------+
          v               v               v
    Phenotype         GO Terms      Gene Pattern
-   Evidence                         Headline
+   Evidence        (with evidence    Headline
+   (non-Normal       codes)         Literature
+    qualifier)           |               |
          |               |               |
          v               |               |
   _classify_phenotype_tier()             |
          |               |               |
          v               v               v
     Evidence Tier    Virulence GO?   Weight: +1
-       (1-4)         Weight: +3
+       (1-4)         Manual: +4
+                     IEA: +3
          |               |
          v               v
   +--------------------------------------+
@@ -335,13 +327,6 @@ Label: "GO annotation"
                     v
          get_confidence_tier()
               High/Medium/Low
-                    |
-                    v
-        calculate_importance_level()
-         + paper count + direct count
-                    |
-                    v
-         Importance Level + Label
 ```
 
 ### API Parameters for Filtering
@@ -650,14 +635,17 @@ The virulence factor browser classifies genes into categories based on GO terms,
 | Category | GO Terms | Description |
 |----------|----------|-------------|
 | **Adhesins** | `GO:0007155`, `GO:0044406` | cell adhesion, adhesion to host |
-| **Secreted Enzymes** | `GO:0008233`, `GO:0016298`, `GO:0008970` | protease, lipase, phospholipase |
+| **Secreted Enzymes** | `GO:0008233`, `GO:0004190`, `GO:0016298`, `GO:0008970` | peptidase activity, aspartic-type endopeptidase activity, lipase, phospholipase |
 | **Morphogenesis** | `GO:0001403` | invasive filamentous growth |
 | **Host Interaction** | `GO:0051701`, `GO:0044114`, `GO:0044409` | interaction with host, development of symbiont in host, symbiont entry into host |
 | **Biofilm Formation** | `GO:0044010`, `GO:0043709` | biofilm formation, biofilm matrix |
 | **Immune Evasion** | `GO:0042783`, `GO:0052553`, `GO:0030682` | symbiont-mediated evasion/perturbation of host immune response/defenses |
 | **Drug Resistance** | `GO:0042493`, `GO:0046677`, `GO:0071466` | response to drug, response to antibiotic, cellular response to xenobiotic stimulus |
 
-**Note**: `GO:0009405` (pathogenesis) was obsoleted by GO in 2021 and is no longer used.
+**Notes**:
+- `GO:0009405` (pathogenesis) was obsoleted by GO in 2021 and is no longer used.
+- `GO:0004190` (aspartic-type endopeptidase activity) was added to capture SAP family genes with MF annotations.
+- GO annotations now include evidence codes (e.g., `[IDA]`, `[IEA]`). Manual evidence codes are weighted higher in scoring.
 
 ---
 

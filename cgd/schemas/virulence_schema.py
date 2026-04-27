@@ -100,18 +100,17 @@ def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
     Split match reasons into direct and indirect evidence.
 
     Direct evidence includes:
-    - Virulence model evidence
     - Tier 1 & 2 phenotypes (Direct Virulence, Host Interaction)
     - Pathogenesis/host-related GO terms
 
     Indirect evidence includes:
     - Tier 3 & 4 phenotypes (Stress Response, Indirect)
-    - Headline matches
     - Literature topic matches
     - Non-virulence GO terms
 
-    Note: Gene pattern matches are excluded from display (redundant with gene name)
-    but are still used for categorization and scoring.
+    Excluded from display (redundant):
+    - Gene pattern matches (redundant with gene name)
+    - Headline matches (redundant with curator summary shown on left)
 
     Args:
         match_reasons: List of match reason strings
@@ -124,11 +123,6 @@ def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
 
     for reason in match_reasons:
         reason_lower = reason.lower()
-
-        # Virulence model is always direct
-        if reason_lower.startswith("virulence model:"):
-            direct.append(reason)
-            continue
 
         # Check phenotype evidence
         if reason_lower.startswith("phenotype:"):
@@ -159,8 +153,14 @@ def split_evidence(match_reasons: list[str]) -> tuple[list[str], list[str]]:
         if reason_lower.startswith("gene pattern:"):
             continue
 
-        # Everything else is indirect (headline, literature)
-        indirect.append(reason)
+        # Skip headline matches - redundant with curator summary shown on left
+        if reason_lower.startswith("headline:"):
+            continue
+
+        # Literature topic matches go to indirect
+        if reason_lower.startswith("literature topic:"):
+            indirect.append(reason)
+            continue
 
     return direct, indirect
 
@@ -1301,7 +1301,13 @@ VIRULENCE_CATEGORIES = {
         "description": "Secreted aspartyl proteases (SAPs), lipases, phospholipases",
         "rules": {
             "gene_patterns": ["SAP%", "LIP%", "PLC%", "PLB%"],
-            "go_terms": ["GO:0008233", "GO:0016298", "GO:0008970"],  # protease, lipase, phospholipase
+            # MF GO terms for secreted enzymes:
+            # GO:0008233 - peptidase activity (parent term)
+            # GO:0004190 - aspartic-type endopeptidase activity (SAPs)
+            # GO:0016298 - lipase activity
+            # GO:0008970 - phospholipase A1 activity
+            # GO:0004523 - RNA-DNA hybrid ribonuclease activity
+            "go_terms": ["GO:0008233", "GO:0004190", "GO:0016298", "GO:0008970"],
         }
     },
     "morphogenesis": {
