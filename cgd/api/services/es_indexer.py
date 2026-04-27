@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Generator, Optional
 
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, BadRequestError, NotFoundError
 from elasticsearch.helpers import bulk
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
@@ -54,21 +54,31 @@ ORTHOLOG_SOURCES = ['SGD', 'POMBASE', 'AspGD', 'CGD']
 
 
 def create_index(es: Elasticsearch) -> None:
-    """Create the Elasticsearch index with mappings."""
-    if es.indices.exists(index=INDEX_NAME):
-        logger.info(f"Index '{INDEX_NAME}' already exists, skipping creation")
-        return
+    """Create the Elasticsearch index with mappings.
 
-    es.indices.create(index=INDEX_NAME, body=INDEX_MAPPING)
-    logger.info(f"Created index '{INDEX_NAME}'")
+    Uses try/except instead of check-then-create to avoid race conditions
+    where another process creates the index between the check and create.
+    """
+    try:
+        es.indices.create(index=INDEX_NAME, body=INDEX_MAPPING)
+        logger.info(f"Created index '{INDEX_NAME}'")
+    except BadRequestError as e:
+        if 'resource_already_exists_exception' in str(e):
+            logger.info(f"Index '{INDEX_NAME}' already exists, skipping creation")
+        else:
+            raise
 
 
 def delete_index(es: Elasticsearch) -> None:
-    """Delete the Elasticsearch index if it exists."""
-    if es.indices.exists(index=INDEX_NAME):
+    """Delete the Elasticsearch index if it exists.
+
+    Uses try/except instead of check-then-delete to avoid race conditions
+    where another process deletes the index between the check and delete.
+    """
+    try:
         es.indices.delete(index=INDEX_NAME)
         logger.info(f"Deleted index '{INDEX_NAME}'")
-    else:
+    except NotFoundError:
         logger.info(f"Index '{INDEX_NAME}' does not exist, nothing to delete")
 
 
