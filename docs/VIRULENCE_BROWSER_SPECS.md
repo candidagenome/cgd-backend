@@ -6,10 +6,51 @@ This document provides detailed technical specifications for the key algorithms 
 
 ## Table of Contents
 
-1. [Gene Summary Generation](#1-gene-summary-generation)
-2. [Confidence Scoring System](#2-confidence-scoring-system)
-3. [Ortholog Mapping System](#3-ortholog-mapping-system)
-4. [Virulence Categories and GO Terms](#4-virulence-categories-and-go-terms)
+1. [Recent Updates](#recent-updates)
+2. [Gene Summary Generation](#1-gene-summary-generation)
+3. [Confidence Scoring System](#2-confidence-scoring-system)
+4. [Ortholog Mapping System](#3-ortholog-mapping-system)
+5. [Virulence Categories and GO Terms](#4-virulence-categories-and-go-terms)
+
+---
+
+## Recent Updates
+
+### 1. Manual vs Computational GO Annotation Weighting
+GO annotations now include evidence codes (e.g., `[IDA]`, `[IEA]`) and are weighted differently:
+- **Manual evidence** (IDA, IMP, IGI, etc.): +4 points for virulence GO, +2 for other GO
+- **Computational evidence** (IEA): +3 points for virulence GO, +1 for other GO
+
+### 2. Normal Qualifier Phenotype Filtering
+Phenotypes with "Normal" qualifier are now **excluded** from selection and scoring. A "Normal" qualifier indicates no phenotypic effect (e.g., "virulence: Normal" means no virulence defect), so these no longer count as positive evidence.
+
+### 3. Evidence Labeling Fix
+- Changed `KW virulence model: virulence` → `PHE virulence`
+- Virulence model evidence now correctly labeled as phenotype (PHE) instead of keyword (KW)
+
+### 4. Removed Redundant Evidence from Display
+- **Gene pattern matches**: Removed (redundant with gene name)
+- **Headline matches**: Removed (redundant with curator summary)
+- **Literature topics**: Still displayed with `LIT` label
+
+### 5. Removed Importance Badges (Option B)
+- Removed "In vivo", "Multi-study", "Core virulence factor" badges
+- Users now sort by confidence score and review evidence directly
+- Avoids potentially misleading computational labels
+
+### 6. Added Paper Count Filter
+New API parameters for filtering by publication count:
+- `min_paper_count`: Focus on well-studied genes
+- `max_paper_count`: Discover understudied candidates
+
+### 7. Simplified Evidence Type Filter
+- Removed KW (Keyword) filter from sidebar
+- Now only shows: **GO Annotation** and **PHE Phenotype**
+
+### 8. Drug Resistance Documentation
+- Updated help page to explain that drug resistance genes may have lower confidence scores
+- Confidence reflects virulence evidence strength, not clinical importance
+- Users should filter by "Drug Resistance" category for antifungal targets
 
 ---
 
