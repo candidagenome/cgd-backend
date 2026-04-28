@@ -154,7 +154,13 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {
                         "multi_match": {
                             "query": query,
-                            "fields": ["gene_name^3", "go_term^2", "observable^2"],
+                            "fields": [
+                                "gene_name^3",
+                                "go_term^2",
+                                "observable^2",
+                                "headline^2",
+                                "name_description",
+                            ],
                             "type": "phrase_prefix",
                         }
                     },
@@ -170,6 +176,8 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                 "dbxref_id": {},
                 "go_term": {},
                 "observable": {},
+                "headline": {},
+                "name_description": {},
             },
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
@@ -470,6 +478,9 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
         {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
         {"match": {"aliases": {"query": query, "boost": 8}}},
+        # Gene product/description fields
+        {"match": {"headline": {"query": query, "boost": 4}}},
+        {"match": {"name_description": {"query": query, "boost": 3}}},
 
         # GO term fields - search go_term only
         {"term": {"goid": {"value": query_upper, "boost": 20}}},
