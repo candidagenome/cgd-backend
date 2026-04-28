@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import os
 from typing import Optional, List, Dict, Tuple
+from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -514,6 +515,27 @@ MAX_GUIDES_FOR_OFFTARGET = 14
 # then expects A or B allele suffix
 CHROMOSOME_ALLELE_PATTERN = re.compile(r'^(.*chr[R\d]+)[AB](_.*)?$', re.IGNORECASE)
 
+# Diploid organisms where we expect allelic pairs (A/B chromosomes)
+DIPLOID_ORGANISMS = {
+    "C_albicans_SC5314",
+    "C_albicans_SC5314_A22",
+    "C_albicans_SC5314_A21",
+    "C_albicans_SC5314_A19",
+}
+
+
+def _get_chromosome_base(chromosome: str) -> Optional[str]:
+    """
+    Extract chromosome base name from BLAST chromosome name.
+
+    E.g., "Ca22chr1A_C_albicans_SC5314" -> "Ca22chr1"
+    Returns None if pattern doesn't match.
+    """
+    match = CHROMOSOME_ALLELE_PATTERN.match(chromosome)
+    if match:
+        return match.group(1).upper()
+    return None
+
 
 def _are_allelic_chromosomes(chr1: str, chr2: str) -> bool:
     """
@@ -989,10 +1011,102 @@ def _search_offtargets_blast(
         logger.error(f"Error in off-target search: {e}")
         return []
 
+    # For diploid organisms, exclude allelic pairs (A/B chromosome hits at same position)
+    # This handles the case where chromosome naming in DB doesn't match BLAST output
+    if any(org in organism_tag for org in DIPLOID_ORGANISMS):
+        offtargets = _exclude_allelic_pairs(offtargets)
+
     # Sort by mismatches (ascending), then by CFD score (descending - higher CFD = more likely to cut)
     offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
 
     return offtargets
+
+
+def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]:
+    """
+    Exclude allelic pairs from off-target list for diploid organisms.
+
+    For C. albicans, each guide will match both A and B alleles at the same position.
+    Both are "on-target" hits, not off-targets. This function identifies and removes
+    these allelic pairs.
+
+    Strategy:
+    - Group exact matches (0 mismatches) by chromosome base (e.g., "Ca22chr1")
+    - If we find hits on both A and B alleles at similar positions, exclude both
+    - Keep only one hit if there's no matching allelic partner (true off-target)
+    """
+    if not offtargets:
+        return offtargets
+
+    # Separate exact matches from hits with mismatches
+    exact_matches = [ot for ot in offtargets if ot.mismatches == 0]
+    other_hits = [ot for ot in offtargets if ot.mismatches > 0]
+
+    if not exact_matches:
+        return offtargets
+
+    # Group exact matches by chromosome base
+    by_chr_base: Dict[str, List[OffTargetHit]] = defaultdict(list)
+
+    for ot in exact_matches:
+        chr_base = _get_chromosome_base(ot.chromosome)
+        if chr_base:
+            by_chr_base[chr_base].append(ot)
+        else:
+            # Can't determine chromosome base, keep as potential off-target
+            other_hits.append(ot)
+
+    # For each chromosome base, check for allelic pairs
+    filtered_exact = []
+    for chr_base, hits in by_chr_base.items():
+        if len(hits) == 1:
+            # Only one hit on this chromosome - could be true off-target
+            # But for diploid genomes, a single exact match is likely
+            # the on-target (the other allele wasn't found for some reason)
+            # We'll exclude it if it's the only exact match overall
+            filtered_exact.append(hits[0])
+        elif len(hits) == 2:
+            # Two hits - check if they're at similar positions (allelic pair)
+            h1, h2 = hits
+            # Allelic pairs should be at very similar positions and same strand
+            if abs(h1.position - h2.position) < 100 and h1.strand == h2.strand:
+                # This is an allelic pair (A and B allele) - exclude both
+                logger.debug(
+                    f"Excluding allelic pair: {h1.chromosome}:{h1.position} "
+                    f"and {h2.chromosome}:{h2.position}"
+                )
+            else:
+                # Different positions - these are true off-targets
+                filtered_exact.extend(hits)
+        else:
+            # More than 2 hits on same chromosome base - unusual
+            # Try to find and exclude allelic pairs, keep the rest
+            # Group by position (within 100bp tolerance)
+            position_groups: Dict[int, List[OffTargetHit]] = defaultdict(list)
+            for h in hits:
+                # Round position to nearest 100 for grouping
+                pos_key = h.position // 100 * 100
+                position_groups[pos_key].append(h)
+
+            for pos_key, group in position_groups.items():
+                if len(group) == 2:
+                    # Potential allelic pair
+                    h1, h2 = group
+                    if h1.strand == h2.strand:
+                        logger.debug(
+                            f"Excluding allelic pair: {h1.chromosome}:{h1.position} "
+                            f"and {h2.chromosome}:{h2.position}"
+                        )
+                        continue
+                # Keep non-paired hits
+                filtered_exact.extend(group)
+
+    # If we have exactly 2 exact matches total and they form an allelic pair,
+    # both were excluded, which is correct (on-target + its allele)
+    # If we have 1 exact match, it might be a true off-target or the on-target
+    # We keep it for now and let the calling code decide
+
+    return filtered_exact + other_hits
 
 
 def _calculate_specificity_score(offtargets: List[OffTargetHit]) -> float:
