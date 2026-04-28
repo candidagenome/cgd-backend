@@ -536,7 +536,8 @@ def quick_search(
     Uses the same query logic as text search (via search_category) for consistent counts.
     """
     # Categories to search in quick search
-    quick_search_categories = ["genes", "go_terms", "phenotypes", "references", "orthologs"]
+    # Include "descriptions" to find genes by their headline/description text
+    quick_search_categories = ["genes", "descriptions", "go_terms", "phenotypes", "references", "orthologs"]
 
     try:
         results_by_category: dict[str, list[SearchResult]] = {}
@@ -719,6 +720,7 @@ def check_es_available(es: Elasticsearch) -> bool:
 # Mapping from API category names to ES document types
 CATEGORY_TO_ES_TYPE = {
     "genes": "gene",
+    "descriptions": "gene",  # Uses headline/name_description field
     "go_terms": "go_term",
     "phenotypes": "phenotype",
     "references": "reference",
@@ -1037,6 +1039,44 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
         }
 
 
+def _build_descriptions_query(query: str, size: int = 10000) -> dict:
+    """
+    Build ES query for searching genes by their headline/description.
+
+    This allows finding genes by their product description (e.g., enzyme names).
+    """
+    return {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"type": "gene"}},
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "fields": ["headline^2", "name_description"],
+                            "type": "phrase_prefix",
+                        }
+                    },
+                ],
+            }
+        },
+        "size": size,
+        "highlight": {
+            "fields": {
+                "headline": {},
+                "name_description": {},
+            },
+            "pre_tags": ["<mark>"],
+            "post_tags": ["</mark>"],
+        },
+        "aggs": {
+            "by_organism": {
+                "terms": {"field": "organism", "size": 20}
+            }
+        },
+    }
+
+
 def search_category(
     es: Elasticsearch,
     query: str,
@@ -1055,6 +1095,9 @@ def search_category(
     # Use restrictive query for genes and orthologs (match quick search behavior)
     if category in ("genes", "orthologs"):
         es_query = _build_restrictive_gene_query(query, es_type)
+    elif category == "descriptions":
+        # Search genes by their headline/description text
+        es_query = _build_descriptions_query(query)
     else:
         es_query = _build_category_query(query, es_type)
 
@@ -1071,13 +1114,13 @@ def search_category(
         if result:
             results.append(result)
 
-    # Sort genes and orthologs by organism priority
-    if category in ("genes", "orthologs"):
+    # Sort genes, descriptions, and orthologs by organism priority
+    if category in ("genes", "descriptions", "orthologs"):
         results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
 
     # Get organism counts from aggregations
     organism_counts: Optional[dict[str, int]] = None
-    if category in ("genes", "orthologs"):
+    if category in ("genes", "descriptions", "orthologs"):
         org_buckets = response.get("aggregations", {}).get("by_organism", {}).get("buckets", [])
         if org_buckets:
             organism_counts = {
