@@ -1043,6 +1043,10 @@ def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]
     exact_matches = [ot for ot in offtargets if ot.mismatches == 0]
     other_hits = [ot for ot in offtargets if ot.mismatches > 0]
 
+    logger.info(f"_exclude_allelic_pairs: {len(exact_matches)} exact matches, {len(other_hits)} other hits")
+    for ot in exact_matches:
+        logger.info(f"  Exact match: {ot.chromosome}:{ot.position} ({ot.strand})")
+
     if not exact_matches:
         return offtargets
 
@@ -1051,6 +1055,7 @@ def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]
 
     for ot in exact_matches:
         chr_base = _get_chromosome_base(ot.chromosome)
+        logger.info(f"  {ot.chromosome} -> base: {chr_base}")
         if chr_base:
             by_chr_base[chr_base].append(ot)
         else:
@@ -1107,7 +1112,9 @@ def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]
     # If we have 1 exact match, it might be a true off-target or the on-target
     # We keep it for now and let the calling code decide
 
-    return filtered_exact + other_hits
+    result = filtered_exact + other_hits
+    logger.info(f"  After filtering: {len(result)} off-targets remain")
+    return result
 
 
 def _calculate_specificity_score(offtargets: List[OffTargetHit]) -> float:
