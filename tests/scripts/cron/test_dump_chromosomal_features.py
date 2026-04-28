@@ -58,14 +58,21 @@ class TestGetAllFeatures:
 
     def test_returns_features(self, mock_db_session):
         """Test returning features."""
-        mock_db_session.execute.return_value.fetchall.return_value = [
+        # The function runs three queries: main features, B-haplotype alleles, and features without locations
+        mock_result1 = MagicMock()
+        mock_result1.fetchall.return_value = [
             (1, "orf19.1", "ACT1", "ORF", "CGDID:CAL0001", "Actin",
              datetime(2020, 1, 1), 100, 200, "+", "ChrA"),
             (2, "orf19.2", None, "ORF", "CGDID:CAL0002", None,
              datetime(2020, 1, 2), 300, 400, "-", "ChrA"),
         ]
+        mock_result2 = MagicMock()
+        mock_result2.fetchall.return_value = []  # No B-haplotype alleles
+        mock_result3 = MagicMock()
+        mock_result3.fetchall.return_value = []  # No features without locations
+        mock_db_session.execute.side_effect = [mock_result1, mock_result2, mock_result3]
 
-        result = get_all_features(mock_db_session, "C_albicans_SC5314", "Assembly22")
+        result = get_all_features(mock_db_session, 1, "Assembly22")
 
         assert len(result) == 2
         assert result[0]["feature_name"] == "orf19.1"
@@ -238,13 +245,11 @@ class TestArchiveOldFile:
 class TestMainFunction:
     """Tests for the main function."""
 
+    @patch('cron.dump_chromosomal_features.shutil.copy2')
     @patch('cron.dump_chromosomal_features.SessionLocal')
-    @patch('cron.dump_chromosomal_features.HTML_ROOT_DIR')
-    def test_main_success(self, mock_html_dir, mock_session_local, temp_dir):
+    def test_main_success(self, mock_session_local, mock_copy2, temp_dir):
         """Test main with successful execution."""
         from cron.dump_chromosomal_features import main
-
-        mock_html_dir.__truediv__ = lambda self, x: temp_dir / x
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -259,9 +264,11 @@ class TestMainFunction:
                 "seq_source": "Assembly22",
             }
 
-            with patch('cron.dump_chromosomal_features.write_chromosomal_features'):
-                with patch.object(sys, 'argv', ['prog', 'C_albicans_SC5314', '--output-dir', str(temp_dir), '--no-archive']):
-                    result = main()
+            with patch('cron.dump_chromosomal_features.get_genome_version', return_value="A22"):
+                with patch('cron.dump_chromosomal_features.write_chromosomal_features'):
+                    with patch('cron.dump_chromosomal_features.send_slack_message'):
+                        with patch.object(sys, 'argv', ['prog', 'C_albicans_SC5314', '--output-dir', str(temp_dir), '--no-archive', '--skip-validation']):
+                            result = main()
 
         assert result == 0
 
@@ -310,11 +317,18 @@ class TestEdgeCases:
 
     def test_feature_with_all_none_values(self, mock_db_session):
         """Test handling feature with all None values."""
-        mock_db_session.execute.return_value.fetchall.return_value = [
+        # The function runs three queries: main features, B-haplotype alleles, and features without locations
+        mock_result1 = MagicMock()
+        mock_result1.fetchall.return_value = [
             (1, None, None, None, None, None, None, None, None, None, None),
         ]
+        mock_result2 = MagicMock()
+        mock_result2.fetchall.return_value = []  # No B-haplotype alleles
+        mock_result3 = MagicMock()
+        mock_result3.fetchall.return_value = []  # No features without locations
+        mock_db_session.execute.side_effect = [mock_result1, mock_result2, mock_result3]
 
-        result = get_all_features(mock_db_session, "C_albicans_SC5314", "Assembly22")
+        result = get_all_features(mock_db_session, 1, "Assembly22")
 
         assert len(result) == 1
         assert result[0]["feature_name"] is None

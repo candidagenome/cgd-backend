@@ -132,16 +132,16 @@ class TestCheckLocusVsAliasNames:
     def test_with_conflicts(self, mock_db_session):
         """Test with locus/alias conflicts."""
         checker = DataChecker(mock_db_session)
+        # Returns: feature_no, gene_name, alias_no, alias_name
         mock_db_session.execute.return_value = iter([
-            ("GENE1", "ACT1", "GENE2"),
-            ("GENE3", "TUB1", "GENE4"),
+            (1, "ACT1", 100, "ACT1"),
+            (2, "TUB1", 101, "TUB1"),
         ])
 
         count = checker.check_locus_vs_alias_names("SC5314", 1)
 
         assert count == 2
         assert len(checker.issues) == 2
-        assert "GENE1" in checker.issues[0]["message"]
         assert "ACT1" in checker.issues[0]["message"]
 
 
@@ -187,16 +187,18 @@ class TestCheckHeadlineDescriptions:
     def test_with_multiple_refs(self, mock_db_session):
         """Test features with multiple headline refs."""
         checker = DataChecker(mock_db_session)
+        # Returns: primary_key (feature_no), feature_name, headline
         mock_db_session.execute.return_value = iter([
-            ("GENE1", 3),
-            ("GENE2", 2),
+            (1, "orf19.1", "Some headline"),
+            (2, "orf19.2", "Another headline"),
         ])
 
         count = checker.check_headline_descriptions("SC5314", 1)
 
         assert count == 2
         assert "Headline Refs" in checker.issues[0]["category"]
-        assert "3 references" in checker.issues[0]["message"]
+        assert "orf19.1" in checker.issues[0]["message"]
+        assert "auto-generated headline" in checker.issues[0]["message"]
 
 
 class TestGetAllStrains:
@@ -205,22 +207,38 @@ class TestGetAllStrains:
     def test_returns_strains(self, mock_db_session):
         """Test returning strain list."""
         checker = DataChecker(mock_db_session)
-        mock_db_session.execute.return_value = iter([
-            (1, "SC5314"),
-            (2, "WO-1"),
-            (3, "CD36"),
-        ])
+        # The implementation queries each strain individually with fetchone()
+        # Mock to return results for first 3 strains, None for others
+        strain_data = {
+            "C_albicans_SC5314": (1, "C_albicans_SC5314"),
+            "C_dubliniensis_CD36": (2, "C_dubliniensis_CD36"),
+            "C_glabrata_CBS138": (3, "C_glabrata_CBS138"),
+        }
+        call_count = [0]
+        def mock_execute(query, params):
+            result = MagicMock()
+            abbrev = params.get("abbrev", "")
+            if abbrev in strain_data:
+                result.fetchone.return_value = strain_data[abbrev]
+            else:
+                result.fetchone.return_value = None
+            return result
+        mock_db_session.execute.side_effect = mock_execute
 
         strains = checker.get_all_strains()
 
         assert len(strains) == 3
-        assert strains[0] == {"organism_no": 1, "organism_abbrev": "SC5314"}
-        assert strains[1] == {"organism_no": 2, "organism_abbrev": "WO-1"}
+        assert strains[0] == {"organism_no": 1, "organism_abbrev": "C_albicans_SC5314"}
 
     def test_empty_strains(self, mock_db_session):
-        """Test with no strains."""
+        """Test with no strains found."""
         checker = DataChecker(mock_db_session)
-        mock_db_session.execute.return_value = iter([])
+        # Return None for all fetchone calls
+        def mock_execute(query, params):
+            result = MagicMock()
+            result.fetchone.return_value = None
+            return result
+        mock_db_session.execute.side_effect = mock_execute
 
         strains = checker.get_all_strains()
 
@@ -294,9 +312,10 @@ class TestSendReportEmail:
 
         mock_logger.info.assert_called_with("No issues to report")
 
+    @patch('cron.check_data.smtplib.SMTP')
     @patch('cron.check_data.CURATOR_EMAIL', 'test@example.com')
     @patch('cron.check_data.logger')
-    def test_with_issues(self, mock_logger):
+    def test_with_issues(self, mock_logger, mock_smtp):
         """Test with issues to report."""
         issues = [
             {"category": "Cat1", "message": "Msg1"},
@@ -306,12 +325,14 @@ class TestSendReportEmail:
 
         send_report_email(issues)
 
-        # Should log that it would send report
+        # Should log that it sent the report
         mock_logger.info.assert_called()
+        mock_smtp.return_value.__enter__.return_value.send_message.assert_called_once()
 
+    @patch('cron.check_data.smtplib.SMTP')
     @patch('cron.check_data.CURATOR_EMAIL', 'curator@cgd.org')
     @patch('cron.check_data.logger')
-    def test_groups_by_category(self, mock_logger):
+    def test_groups_by_category(self, mock_logger, mock_smtp):
         """Test that issues are grouped by category."""
         issues = [
             {"category": "Duplicates", "message": "Dup 1"},
