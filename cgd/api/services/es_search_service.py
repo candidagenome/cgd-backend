@@ -993,6 +993,7 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
         # For orthologs, search by both CGD gene name and ortholog name
         # This finds all orthologs of a gene (e.g., HOG1 finds all 4 Candida orthologs)
         # Filter to C. albicans as reference and CGOB only (no SGD best hits)
+        # Use wildcard instead of match to avoid partial word matches (e.g., "3" matching POX1-3)
         return {
             "query": {
                 "bool": {
@@ -1005,11 +1006,11 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                         # Match CGD gene name (finds all orthologs of the C. albicans gene)
                         {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 15}}},
                         {"prefix": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
-                        {"match": {"cgd_gene_name": {"query": query, "boost": 8}}},
+                        {"wildcard": {"cgd_gene_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
                         # Match ortholog name
                         {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 15}}},
                         {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-                        {"match": {"ortholog_name": {"query": query, "boost": 8}}},
+                        {"wildcard": {"ortholog_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
                     ],
                     "minimum_should_match": 1,
                 }
