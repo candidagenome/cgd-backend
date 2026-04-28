@@ -602,6 +602,10 @@ def get_autocomplete_suggestions(
 
     seen_texts = set()
 
+    # First pass: collect gene data and track which names appear in multiple organisms
+    gene_data: list[dict] = []
+    gene_organisms: dict[str, set] = {}  # gene_name -> set of organisms
+
     for hit in response["hits"]["hits"]:
         source = hit["_source"]
         highlights = hit.get("highlight", {})
@@ -609,6 +613,7 @@ def get_autocomplete_suggestions(
 
         if doc_type == "gene":
             display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
+            organism = source.get("organism")
             if display_name and display_name not in seen_texts:
                 seen_texts.add(display_name)
                 headline = source.get("headline")
@@ -618,14 +623,27 @@ def get_autocomplete_suggestions(
                 if not highlighted_text:
                     highlighted_text = _highlight_text(display_name, query)
 
-                genes.append(AutocompleteSuggestion(
-                    text=display_name,
-                    category="gene",
-                    link=f"/locus/{display_name}",  # Use gene_name for link, not feature_name
-                    description=description,
-                    highlighted_text=highlighted_text,
-                    highlighted_description=_highlight_text(description, query) if description else None,
-                ))
+                # Track organisms for this gene name
+                if display_name not in gene_organisms:
+                    gene_organisms[display_name] = set()
+                if organism:
+                    gene_organisms[display_name].add(organism)
+
+                # Use highlighted description from ES or manual highlight
+                highlighted_desc = _extract_highlight(highlights, "headline", None)
+                if not highlighted_desc:
+                    highlighted_desc = _extract_highlight(highlights, "name_description", None)
+                if not highlighted_desc and description:
+                    highlighted_desc = _highlight_text(description, query)
+
+                gene_data.append({
+                    "text": display_name,
+                    "link": f"/locus/{display_name}",
+                    "description": description,
+                    "organism": organism,
+                    "highlighted_text": highlighted_text,
+                    "highlighted_description": highlighted_desc,
+                })
 
         elif doc_type == "go_term":
             go_term = source.get("go_term") or source.get("name")
@@ -688,8 +706,23 @@ def get_autocomplete_suggestions(
                     highlighted_description=_highlight_text(description, query) if description else None,
                 ))
 
+    # Second pass: create gene suggestions, only show organism if unique to one
+    for data in gene_data:
+        gene_name = data["text"]
+        # Only show organism if this gene name appears in exactly one organism
+        show_organism = len(gene_organisms.get(gene_name, set())) == 1
+        genes.append(AutocompleteSuggestion(
+            text=gene_name,
+            category="gene",
+            link=data["link"],
+            description=data["description"],
+            organism=data["organism"] if show_organism else None,
+            highlighted_text=data["highlighted_text"],
+            highlighted_description=data["highlighted_description"],
+        ))
+
     # Sort genes by organism priority
-    genes.sort(key=lambda s: _get_organism_priority(None))  # TODO: track organism in suggestion
+    genes.sort(key=lambda s: _get_organism_priority(s.organism))
 
     # Combine suggestions with priority limits
     suggestions: list[AutocompleteSuggestion] = []

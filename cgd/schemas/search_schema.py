@@ -97,6 +97,7 @@ class AutocompleteSuggestion(BaseModel):
     category: str  # "gene", "go_term", "phenotype", "reference"
     link: str  # URL to navigate to
     description: Optional[str] = None  # Optional additional context
+    organism: Optional[str] = None  # Organism name (only for genes unique to one organism)
     # Highlighted versions with <mark> tags around matching text
     highlighted_text: Optional[str] = None
     highlighted_description: Optional[str] = None
