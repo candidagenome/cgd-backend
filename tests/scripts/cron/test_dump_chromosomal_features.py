@@ -272,8 +272,9 @@ class TestMainFunction:
 
         assert result == 0
 
+    @patch('cron.dump_chromosomal_features.send_slack_message')
     @patch('cron.dump_chromosomal_features.SessionLocal')
-    def test_main_strain_not_found(self, mock_session_local):
+    def test_main_strain_not_found(self, mock_session_local, mock_slack):
         """Test main when strain not found."""
         from cron.dump_chromosomal_features import main
 
@@ -289,8 +290,9 @@ class TestMainFunction:
 
         assert result == 1
 
+    @patch('cron.dump_chromosomal_features.send_slack_message')
     @patch('cron.dump_chromosomal_features.SessionLocal')
-    def test_main_no_seq_source(self, mock_session_local):
+    def test_main_no_seq_source(self, mock_session_local, mock_slack):
         """Test main when no seq_source found."""
         from cron.dump_chromosomal_features import main
 
