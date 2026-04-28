@@ -1031,7 +1031,8 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
             },
         }
     else:
-        # For genes, search by gene name
+        # For genes, search by gene name only (not description)
+        # Use restrictive matching to avoid partial word matches
         return {
             "query": {
                 "bool": {
@@ -1047,8 +1048,8 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                         # Prefix match on gene names
                         {"prefix": {"gene_name.keyword": {"value": query_upper, "boost": 10}}},
                         {"prefix": {"feature_name": {"value": query_upper, "boost": 10}}},
-                        # Search in aliases
-                        {"match": {"aliases": {"query": query, "boost": 8}}},
+                        # Search in aliases - use wildcard to match exact alias, not tokenized words
+                        {"wildcard": {"aliases": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
                     ],
                     "minimum_should_match": 1,
                 }
