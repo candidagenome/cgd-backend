@@ -10,6 +10,7 @@ Tests cover:
 """
 import pytest
 from unittest.mock import MagicMock, patch, call
+from elasticsearch import BadRequestError, NotFoundError
 
 from cgd.api.services.es_indexer import (
     create_index,
@@ -235,12 +236,18 @@ class TestCreateIndex:
         mock_es.indices.create.assert_called_once()
 
     def test_skips_creation_when_exists(self, mock_es):
-        """Should skip creation when index exists."""
-        mock_es.indices.exists.return_value = True
+        """Should handle already-exists gracefully when index exists."""
+        # Simulate the index already existing by raising BadRequestError
+        mock_es.indices.create.side_effect = BadRequestError(
+            message="resource_already_exists_exception",
+            meta=MagicMock(),
+            body={}
+        )
 
+        # Should not raise - exception is caught and logged
         create_index(mock_es)
 
-        mock_es.indices.create.assert_not_called()
+        mock_es.indices.create.assert_called_once()
 
 
 class TestDeleteIndex:
@@ -255,12 +262,18 @@ class TestDeleteIndex:
         mock_es.indices.delete.assert_called_once_with(index=INDEX_NAME)
 
     def test_skips_deletion_when_not_exists(self, mock_es):
-        """Should skip deletion when index doesn't exist."""
-        mock_es.indices.exists.return_value = False
+        """Should handle not-found gracefully when index doesn't exist."""
+        # Simulate the index not existing by raising NotFoundError
+        mock_es.indices.delete.side_effect = NotFoundError(
+            message="index_not_found_exception",
+            meta=MagicMock(),
+            body={}
+        )
 
+        # Should not raise - exception is caught and logged
         delete_index(mock_es)
 
-        mock_es.indices.delete.assert_not_called()
+        mock_es.indices.delete.assert_called_once()
 
 
 class TestGenerateGeneDocs:

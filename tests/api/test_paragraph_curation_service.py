@@ -187,10 +187,8 @@ class TestGetFeatureByName:
 
     def test_returns_feature_by_gene_name(self, mock_db, sample_features):
         """Should return feature when found by gene_name."""
-        mock_db.query.side_effect = [
-            MockQuery([]),  # Not found by feature_name
-            MockQuery([sample_features[0]]),  # Found by gene_name
-        ]
+        # Implementation uses single query with OR for feature_name and gene_name
+        mock_db.query.return_value = MockQuery([sample_features[0]])
 
         service = ParagraphCurationService(mock_db)
         result = service.get_feature_by_name("ALS1")
