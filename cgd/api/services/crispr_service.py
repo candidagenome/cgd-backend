@@ -794,6 +794,7 @@ def _search_offtargets_blast(
     organism_tag: str,
     max_mismatches: int = 3,
     exclude_position: Optional[Tuple[str, int, str]] = None,
+    guide_cds_position: Optional[int] = None,
     warnings: Optional[List[str]] = None,
 ) -> List[OffTargetHit]:
     """
@@ -808,6 +809,7 @@ def _search_offtargets_blast(
         organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
         max_mismatches: Maximum allowed mismatches (0-3)
         exclude_position: (chromosome, position, strand) to exclude (the on-target site)
+        guide_cds_position: Position of guide within CDS (1-based) for on-target exclusion
         warnings: Optional list to append warning messages to
 
     Returns:
@@ -942,9 +944,19 @@ def _search_offtargets_blast(
                 # Skip if this is the on-target position or its allelic variant
                 # C. albicans is diploid, so guides will match both A and B alleles
                 #
-                # For diploid organisms, we collect all exact matches and handle them
-                # in _exclude_allelic_pairs() to properly identify A/B allele pairs.
-                # For non-diploid organisms, we exclude inline.
+                # Strategy 1: Use CDS position matching
+                # If BLAST hit position matches the guide's position within the CDS,
+                # it's very likely the on-target (or allelic copy at same position)
+                if guide_cds_position and mm_count == 0:
+                    # Allow small tolerance for position matching (e.g., +/- 5bp)
+                    if abs(start - guide_cds_position) <= 5:
+                        logger.debug(
+                            f"Excluding on-target by CDS position: {chromosome}:{start} "
+                            f"(guide at CDS pos {guide_cds_position})"
+                        )
+                        continue
+
+                # Strategy 2: For diploid organisms, collect exact matches for allelic pairing
                 is_diploid = any(org in organism_tag for org in DIPLOID_ORGANISMS)
 
                 if exclude_position and not (mm_count == 0 and is_diploid):
@@ -1379,6 +1391,7 @@ def design_guides(
                 organism_tag=request.organism,
                 max_mismatches=request.max_offtarget_mismatches,
                 exclude_position=exclude_pos,
+                guide_cds_position=guide.position,  # Position within CDS for on-target detection
                 warnings=offtarget_warnings,
             )
             if offtarget_warnings:
