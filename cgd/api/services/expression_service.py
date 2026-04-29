@@ -47,6 +47,7 @@ HTS_BASE_PATHS = {
 # Study configurations with metadata
 # path_style: "old" = sorted_hits_bam2wig/sorted_hits.bigwig
 #             "new" = {SRR_ID}_sorted_hits.bigwig
+#             "lohse" = {cond}_bam2wig/{cond}.bigwig
 EXPRESSION_STUDIES = {
     "C_albicans_SC5314": {
         "Bruno_2010": {
@@ -133,6 +134,34 @@ EXPRESSION_STUDIES = {
                 "SRR25396039": {"label": "Spider 37°C (B)", "bucket": "basic_biology"},
             },
         },
+        "Lohse_2016": {
+            "category": "Cell Type Switching",
+            "pmid": "27280690",
+            "path_style": "lohse",
+            "control": "wt_con",
+            "conditions": {
+                "wt_con": {"label": "White cells (control)", "bucket": "control"},
+                "wt_gfp": {"label": "White cells (GFP)", "bucket": "control"},
+                "op_con": {"label": "Opaque cells (control)", "bucket": "basic_biology"},
+                "op_gfp": {"label": "Opaque cells (GFP)", "bucket": "basic_biology"},
+            },
+        },
+        "Zhang_2022": {
+            "category": "DNA Damage Response",
+            "pmid": "35886903",
+            "path_style": "new",
+            "control": "SRR18188695",
+            "conditions": {
+                # Control (untreated) - 3 replicates
+                "SRR18188695": {"label": "Control (rep 1)", "bucket": "control"},
+                "SRR18188696": {"label": "Control (rep 2)", "bucket": "control"},
+                "SRR18188697": {"label": "Control (rep 3)", "bucket": "control"},
+                # MMS treated - 3 replicates
+                "SRR18188698": {"label": "MMS treated (rep 1)", "bucket": "stress"},
+                "SRR18188699": {"label": "MMS treated (rep 2)", "bucket": "stress"},
+                "SRR18188700": {"label": "MMS treated (rep 3)", "bucket": "stress"},
+            },
+        },
     },
 }
 
@@ -212,6 +241,9 @@ def _get_bigwig_path(
     """Construct path to bigwig file based on path style."""
     if study_info["path_style"] == "old":
         return base_path / study / haplotype / condition / "sorted_hits_bam2wig" / "sorted_hits.bigwig"
+    elif study_info["path_style"] == "lohse":
+        # Lohse_2016 style: {cond}_bam2wig/{cond}.bigwig
+        return base_path / study / haplotype / condition / f"{condition}_bam2wig" / f"{condition}.bigwig"
     else:  # new style
         return base_path / study / haplotype / condition / f"{condition}_sorted_hits.bigwig"
 
