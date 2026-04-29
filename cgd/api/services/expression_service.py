@@ -146,7 +146,7 @@ EXPRESSION_STUDIES = {
                 "op_gfp": {"label": "Opaque cells (GFP)", "bucket": "basic_biology"},
             },
         },
-        "Zhang_2022": {
+        "Zhang_2024": {
             "category": "DNA Damage Response",
             "pmid": "35886903",
             "path_style": "new",
