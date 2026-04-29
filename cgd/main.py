@@ -41,6 +41,7 @@ from cgd.api.routers.genome_snapshot_router import router as genome_snapshot_rou
 from cgd.api.routers.genome_synteny_router import router as genome_synteny_router
 from cgd.api.routers.virulence_router import router as virulence_router
 from cgd.api.routers.crispr_router import router as crispr_router
+from cgd.api.routers.expression_router import router as expression_router
 
 # Import curation routers (require authentication)
 from cgd.api.routers.curation import (
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(genome_synteny_router)
     app.include_router(virulence_router)
     app.include_router(crispr_router)
+    app.include_router(expression_router)
 
     # Curation routers (require authentication)
     app.include_router(todo_list_router)
