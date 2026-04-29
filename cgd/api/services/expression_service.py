@@ -234,6 +234,10 @@ def _get_expression_value(
         if bw is None:
             return None
 
+        # Handle minus strand genes where start > end
+        if start > end:
+            start, end = end, start
+
         # pyBigWig uses 0-based coordinates
         stats = bw.stats(chromosome, start - 1, end, type="mean")
         bw.close()
