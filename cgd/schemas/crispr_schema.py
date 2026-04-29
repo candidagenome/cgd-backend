@@ -117,6 +117,14 @@ class OffTargetHit(BaseModel):
     gene_region: Optional[str] = Field(None, description="exon, intron, intergenic, promoter")
     cfd_score: float = Field(description="CFD off-target score (0-1, lower = worse off-target)")
 
+    # Paralog/ortholog relationship to target gene
+    is_paralog: bool = Field(False, description="Whether hit gene is a paralog of target")
+    is_ortholog: bool = Field(False, description="Whether hit gene is an ortholog of target")
+    homology_relationship: Optional[str] = Field(
+        None,
+        description="Relationship type (e.g., 'paralog', 'ortholog') if related to target"
+    )
+
 
 class HomologyArms(BaseModel):
     """Homology arms for HDR."""
@@ -160,6 +168,12 @@ class GuideResult(BaseModel):
     offtarget_1mm: int = Field(0, description="Off-targets with 1 mismatch")
     offtarget_2mm: int = Field(0, description="Off-targets with 2 mismatches")
     offtarget_3mm: int = Field(0, description="Off-targets with 3 mismatches")
+    offtarget_in_paralogs: int = Field(0, description="Off-targets hitting paralog genes")
+    offtarget_in_orthologs: int = Field(0, description="Off-targets hitting ortholog genes")
+    has_related_gene_offtargets: bool = Field(
+        False,
+        description="True if any off-targets hit paralogs/orthologs of target gene"
+    )
     offtargets: List[OffTargetHit] = Field(
         default_factory=list,
         description="Top off-target hits (limited for performance)"

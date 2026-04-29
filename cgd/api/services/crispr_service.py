@@ -18,7 +18,10 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
 from cgd.core.settings import settings
-from cgd.models.models import Feature, Seq, FeatLocation, Organism, Phenotype, PhenoAnnotation
+from cgd.models.models import (
+    Feature, Seq, FeatLocation, Organism, Phenotype, PhenoAnnotation,
+    HomologyGroup, FeatHomology
+)
 from cgd.api.services.virulence_service import (
     _is_housekeeping_gene,
     _get_ortholog_count,
@@ -329,11 +332,11 @@ def _get_gene_info(
     db: Session,
     gene_name: str,
     organism_tag: str
-) -> Optional[Tuple[GeneInfo, str]]:
+) -> Optional[Tuple[GeneInfo, str, Feature]]:
     """
     Get gene information and coding sequence from database.
 
-    Returns (GeneInfo, sequence) tuple or None if not found.
+    Returns (GeneInfo, sequence, feature) tuple or None if not found.
     """
     query_upper = gene_name.strip().upper()
 
@@ -522,7 +525,7 @@ def _get_gene_info(
         virulence_score=virulence_score,
     )
 
-    return gene_info, seq_record.residues.upper()
+    return gene_info, seq_record.residues.upper(), feature
 
 
 def _get_genomic_context(
@@ -713,6 +716,68 @@ def _get_virulence_summary(
     except Exception as e:
         logger.warning(f"Error getting virulence summary for feature {feature.feature_no}: {e}")
         return [], None
+
+
+def _get_related_genes(
+    db: Session,
+    feature: Feature
+) -> Dict[str, str]:
+    """
+    Get paralogs and orthologs of a gene.
+
+    Args:
+        db: Database session
+        feature: The target gene feature
+
+    Returns:
+        Dictionary mapping gene_name (uppercase) -> relationship type ('paralog' or 'ortholog')
+    """
+    related_genes = {}
+
+    try:
+        # Find all homology groups this feature belongs to
+        homology_memberships = (
+            db.query(FeatHomology.homology_group_no, HomologyGroup.homology_group_type)
+            .join(HomologyGroup, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+            .filter(FeatHomology.feature_no == feature.feature_no)
+            .all()
+        )
+
+        if not homology_memberships:
+            return related_genes
+
+        # Get all features in these homology groups (excluding the target gene)
+        for hg_no, hg_type in homology_memberships:
+            related_features = (
+                db.query(Feature.gene_name, Feature.feature_name)
+                .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+                .filter(
+                    FeatHomology.homology_group_no == hg_no,
+                    Feature.feature_no != feature.feature_no
+                )
+                .all()
+            )
+
+            # Map gene names to relationship type
+            relationship = hg_type.lower() if hg_type else 'homolog'
+            for gene_name, feature_name in related_features:
+                # Use gene_name if available, otherwise feature_name
+                name = (gene_name or feature_name or '').upper()
+                if name:
+                    # Only store if not already present, or if current is more specific
+                    if name not in related_genes:
+                        related_genes[name] = relationship
+
+        logger.debug(
+            f"Found {len(related_genes)} related genes for {feature.gene_name or feature.feature_name}: "
+            f"paralogs={sum(1 for r in related_genes.values() if r == 'paralog')}, "
+            f"orthologs={sum(1 for r in related_genes.values() if r == 'ortholog')}"
+        )
+
+    except Exception as e:
+        logger.warning(f"Error getting related genes for feature {feature.feature_no}: {e}")
+
+    return related_genes
 
 
 # ============================================================================
@@ -1110,6 +1175,7 @@ def _search_offtargets_blast(
     exclude_position: Optional[Tuple[str, int, str]] = None,
     guide_cds_position: Optional[int] = None,
     warnings: Optional[List[str]] = None,
+    related_genes: Optional[Dict[str, str]] = None,
 ) -> List[OffTargetHit]:
     """
     Search for off-targets using BLAST.
@@ -1125,6 +1191,8 @@ def _search_offtargets_blast(
         exclude_position: (chromosome, position, strand) to exclude (the on-target site)
         guide_cds_position: Position of guide within CDS (1-based) for on-target exclusion
         warnings: Optional list to append warning messages to
+        related_genes: Dict mapping gene_name -> relationship ('paralog'/'ortholog')
+            for flagging off-targets in related genes
 
     Returns:
         List of OffTargetHit objects sorted by mismatches (ascending)
@@ -1313,6 +1381,20 @@ def _search_offtargets_blast(
                     db, chromosome, start, strand, organism_tag
                 )
 
+                # Check if hit is in a related gene (paralog/ortholog)
+                is_paralog = False
+                is_ortholog = False
+                homology_relationship = None
+                if gene_name and related_genes:
+                    gene_name_upper = gene_name.upper()
+                    if gene_name_upper in related_genes:
+                        relationship = related_genes[gene_name_upper]
+                        homology_relationship = relationship
+                        if relationship == 'paralog':
+                            is_paralog = True
+                        elif relationship == 'ortholog':
+                            is_ortholog = True
+
                 offtargets.append(OffTargetHit(
                     chromosome=chromosome,
                     position=start,
@@ -1323,6 +1405,9 @@ def _search_offtargets_blast(
                     gene_name=gene_name,
                     gene_region=gene_region,
                     cfd_score=cfd,
+                    is_paralog=is_paralog,
+                    is_ortholog=is_ortholog,
+                    homology_relationship=homology_relationship,
                 ))
 
     except subprocess.TimeoutExpired:
@@ -1533,6 +1618,8 @@ def design_guides(
     # Get target sequence
     gene_info = None
     target_sequence = None
+    target_feature = None  # For paralog/ortholog lookup
+    related_genes = {}  # Dict mapping gene_name -> relationship type
 
     if request.gene_name:
         # Look up gene in database
@@ -1545,7 +1632,11 @@ def design_guides(
                 pam=request.pam.value,
                 guide_length=request.guide_length,
             )
-        gene_info, target_sequence = result
+        gene_info, target_sequence, target_feature = result
+
+        # Get related genes (paralogs/orthologs) for off-target flagging
+        if target_feature:
+            related_genes = _get_related_genes(db, target_feature)
     else:
         # Use provided sequence
         target_sequence = request.sequence.upper()
@@ -1711,6 +1802,7 @@ def design_guides(
                 exclude_position=exclude_pos,
                 guide_cds_position=guide.position,  # Position within CDS for on-target detection
                 warnings=offtarget_warnings,
+                related_genes=related_genes,  # For flagging paralog/ortholog hits
             )
             if offtarget_warnings:
                 warnings.extend(offtarget_warnings)
@@ -1722,6 +1814,13 @@ def design_guides(
             guide.offtarget_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
             guide.offtarget_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
             guide.offtarget_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+
+            # Count off-targets in paralogs and orthologs
+            guide.offtarget_in_paralogs = sum(1 for ot in offtargets if ot.is_paralog)
+            guide.offtarget_in_orthologs = sum(1 for ot in offtargets if ot.is_ortholog)
+            guide.has_related_gene_offtargets = (
+                guide.offtarget_in_paralogs > 0 or guide.offtarget_in_orthologs > 0
+            )
 
             # Recalculate specificity score based on actual off-targets
             guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
