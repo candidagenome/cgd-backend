@@ -146,6 +146,7 @@ class GuideResult(BaseModel):
     genomic_start: Optional[int] = Field(None, description="Genomic coordinate start")
     genomic_end: Optional[int] = Field(None, description="Genomic coordinate end")
     chromosome: Optional[str] = Field(None, description="Chromosome name")
+    jbrowse_url: Optional[str] = Field(None, description="Link to JBrowse view of guide location")
 
     # Scoring
     gc_content: float = Field(description="GC content (0-100%)")

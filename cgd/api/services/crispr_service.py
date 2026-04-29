@@ -13,7 +13,8 @@ import tempfile
 import os
 from typing import Optional, List, Dict, Tuple
 from collections import defaultdict
-from sqlalchemy.orm import Session
+from urllib.parse import quote
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
 from cgd.core.settings import settings
@@ -249,6 +250,72 @@ def _generate_cloning_primers(
     )
 
 
+def _generate_jbrowse_url(
+    organism_tag: str,
+    chromosome: str,
+    start: int,
+    end: int,
+    flank: int = 500,
+) -> Optional[str]:
+    """
+    Generate JBrowse2 URL for viewing a genomic region.
+
+    Args:
+        organism_tag: Organism identifier (e.g., "C_albicans_SC5314_A22")
+        chromosome: Chromosome/contig name
+        start: Start coordinate
+        end: End coordinate
+        flank: Flanking region to include (default 500bp)
+
+    Returns:
+        JBrowse2 URL or None if not possible
+    """
+    if not chromosome or not start or not end:
+        return None
+
+    # JBrowse2 only has certain assemblies/chromosomes available
+    # For C. albicans, only A22 (Ca22*) chromosomes are in JBrowse
+    # Skip if chromosome doesn't match JBrowse-available format
+    if "albicans" in organism_tag.lower():
+        if not chromosome.startswith("Ca22"):
+            return None
+
+    # Map organism tag to JBrowse assembly name
+    # Strip assembly suffix (e.g., _A22) for JBrowse2
+    assembly = re.sub(r"_A\d+$", "", organism_tag)
+
+    # Get the correct gene features track name for this assembly
+    # C. albicans uses "TranscribedFeatures", others use "{assembly}_features.sorted.gff"
+    if "albicans" in organism_tag.lower():
+        tracks = "TranscribedFeatures"
+    else:
+        tracks = f"{assembly}_features.sorted.gff"
+
+    # Calculate coordinates with flanking
+    low = max(1, min(start, end) - flank)
+    high = max(start, end) + flank
+
+    # URL-encode the location
+    loc_encoded = quote(f"{chromosome}:{low}..{high}", safe='')
+
+    url = f"{settings.jbrowse_base_url}?assembly={assembly}&loc={loc_encoded}&tracks={tracks}"
+    return url
+
+
+def _generate_guide_jbrowse_url(
+    organism_tag: str,
+    chromosome: str,
+    guide_start: int,
+    guide_end: int,
+) -> Optional[str]:
+    """
+    Generate JBrowse2 URL for viewing a specific guide location.
+
+    Uses a smaller flanking region (100bp) to zoom in on the guide.
+    """
+    return _generate_jbrowse_url(organism_tag, chromosome, guide_start, guide_end, flank=100)
+
+
 # ============================================================================
 # Database Functions
 # ============================================================================
@@ -268,19 +335,54 @@ def _get_gene_info(
     # Map organism tag to organism_abbrev (strip assembly suffix)
     org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
 
-    # Build query with organism filter
-    def build_query(filter_expr):
+    # Determine target chromosome prefix based on organism/assembly
+    # For C_albicans_SC5314_A22, prefer Ca22 chromosomes
+    chr_prefix = None
+    if "_A22" in organism_tag and "albicans" in organism_tag.lower():
+        chr_prefix = "Ca22%"
+
+    # Build base query with organism filter
+    def build_base_query(filter_expr):
         query = db.query(Feature).filter(filter_expr)
         query = query.join(Organism, Feature.organism_no == Organism.organism_no)
         query = query.filter(Organism.organism_abbrev == org_abbrev)
         return query
 
-    # Try gene_name, then feature_name, then dbxref_id
-    feature = build_query(func.upper(Feature.gene_name) == query_upper).first()
+    # If we have a chromosome prefix, try to find a feature with location on that chromosome
+    feature = None
+    if chr_prefix:
+        # Alias for the chromosome feature to avoid conflicts
+        ChromFeature = aliased(Feature)
+        for filter_expr in [
+            func.upper(Feature.gene_name) == query_upper,
+            func.upper(Feature.feature_name) == query_upper,
+            func.upper(Feature.dbxref_id) == query_upper,
+        ]:
+            feature = (
+                db.query(Feature)
+                .join(Organism, Feature.organism_no == Organism.organism_no)
+                .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+                .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+                .join(ChromFeature, Seq.feature_no == ChromFeature.feature_no)
+                .filter(
+                    filter_expr,
+                    Organism.organism_abbrev == org_abbrev,
+                    FeatLocation.is_loc_current == "Y",
+                    ChromFeature.feature_name.like(chr_prefix),
+                    ChromFeature.feature_type == "chromosome"
+                )
+                .first()
+            )
+            if feature:
+                break
+
+    # Fall back to standard query if no Ca22 feature found
     if not feature:
-        feature = build_query(func.upper(Feature.feature_name) == query_upper).first()
+        feature = build_base_query(func.upper(Feature.gene_name) == query_upper).first()
     if not feature:
-        feature = build_query(func.upper(Feature.dbxref_id) == query_upper).first()
+        feature = build_base_query(func.upper(Feature.feature_name) == query_upper).first()
+    if not feature:
+        feature = build_base_query(func.upper(Feature.dbxref_id) == query_upper).first()
 
     if not feature:
         return None
@@ -311,15 +413,31 @@ def _get_gene_info(
     if not seq_record:
         return None
 
-    # Get location info
+    # Get location info - prefer locations on Ca22 chromosomes for JBrowse compatibility
+    # First try to find a location on a Ca22 chromosome
     location = (
         db.query(FeatLocation)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(Feature, Seq.feature_no == Feature.feature_no)
         .filter(
             FeatLocation.feature_no == feature.feature_no,
-            FeatLocation.is_loc_current == "Y"
+            FeatLocation.is_loc_current == "Y",
+            Feature.feature_name.like("Ca22%"),
+            Feature.feature_type == "chromosome"
         )
         .first()
     )
+
+    # Fall back to any current location if no Ca22 chromosome location found
+    if not location:
+        location = (
+            db.query(FeatLocation)
+            .filter(
+                FeatLocation.feature_no == feature.feature_no,
+                FeatLocation.is_loc_current == "Y"
+            )
+            .first()
+        )
 
     # Get chromosome name if location exists
     chromosome = None
@@ -331,6 +449,16 @@ def _get_gene_info(
             ).first()
             if root_feature:
                 chromosome = root_feature.feature_name
+
+    # Generate JBrowse URL for the gene
+    jbrowse_url = None
+    if chromosome and location:
+        jbrowse_url = _generate_jbrowse_url(
+            organism_tag,
+            chromosome,
+            location.start_coord,
+            location.stop_coord,
+        )
 
     # Build gene info
     gene_info = GeneInfo(
@@ -345,6 +473,7 @@ def _get_gene_info(
         strand="+" if location and location.strand == "W" else "-" if location else None,
         sequence_length=len(seq_record.residues),
         cgd_url=f"/locus/{feature.feature_name}",
+        jbrowse_url=jbrowse_url,
     )
 
     return gene_info, seq_record.residues.upper()
@@ -1148,13 +1277,21 @@ def _calculate_specificity_score(offtargets: List[OffTargetHit]) -> float:
 
 def get_crispr_config() -> CrisprConfigResponse:
     """Get CRISPR tool configuration options."""
-    from cgd.core.blast_config import get_all_blast_organisms
+    # Curated list of organisms supported for CRISPR guide design
+    # Each tuple: (tag, display_name)
+    CRISPR_ORGANISMS = [
+        ("C_albicans_SC5314_A22", "Candida albicans SC5314 (Assembly 22)"),
+        ("C_albicans_SC5314_A21", "Candida albicans SC5314 (Assembly 21)"),
+        ("C_albicans_SC5314_A19", "Candida albicans SC5314 (Assembly 19)"),
+        ("C_dubliniensis_CD36", "Candida dubliniensis CD36"),
+        ("C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
+        ("C_auris_B8441", "Candida auris B8441"),
+        ("C_glabrata_CBS138", "Candida glabrata CBS138"),
+    ]
 
-    # Get organisms from BLAST config
-    organisms_config = get_all_blast_organisms(settings.blast_clade_conf)
     organisms = [
-        {"tag": tag, "name": config.get("full_name", tag)}
-        for tag, config in organisms_config.items()
+        {"tag": tag, "name": name}
+        for tag, name in CRISPR_ORGANISMS
     ]
 
     # PAM options
@@ -1349,6 +1486,9 @@ def design_guides(
             restriction_sites=restriction_sites,
             primers=primers,
             homology_arms=None,  # TODO: Implement if requested
+            jbrowse_url=_generate_guide_jbrowse_url(
+                request.organism, chromosome, genomic_start, genomic_end
+            ),
         ))
 
     # Sort by combined score (descending) for initial ranking
