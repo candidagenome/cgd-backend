@@ -1869,7 +1869,12 @@ def get_gene_sequence(
 
     Convenience function for the /gene/{name} endpoint.
     """
-    return _get_gene_info(db, gene_name, organism)
+    result = _get_gene_info(db, gene_name, organism)
+    if result is None:
+        return None
+    # Return only gene_info and sequence (not the feature object)
+    gene_info, sequence, _feature = result
+    return gene_info, sequence
 
 
 def generate_download(
