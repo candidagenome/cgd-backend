@@ -163,6 +163,45 @@ def _get_organism_from_tag(organism_tag: str) -> str:
     return tag_mapping.get(organism_tag, organism_tag)
 
 
+def _map_chromosome_to_ca22(chromosome: str) -> Optional[str]:
+    """
+    Map chromosome names from Ca21/Ca20/other formats to Ca22 format for bigwig files.
+
+    Bigwig files use Ca22 assembly chromosome names like:
+    - Ca22chr1A_C_albicans_SC5314
+    - Ca22chr2A_C_albicans_SC5314
+
+    Database may have:
+    - Ca21chr2_C_albicans_SC5314
+    - Ca20chr2
+    - Contig19-10076
+    """
+    import re
+
+    # Already Ca22 format
+    if chromosome.startswith("Ca22chr"):
+        return chromosome
+
+    # Map Ca21 format: Ca21chr2_C_albicans_SC5314 -> Ca22chr2A_C_albicans_SC5314
+    match = re.match(r"Ca21chr(\d+)(_C_albicans_SC5314)?", chromosome)
+    if match:
+        chr_num = match.group(1)
+        return f"Ca22chr{chr_num}A_C_albicans_SC5314"
+
+    # Map Ca20 format: Ca20chr2 -> Ca22chr2A_C_albicans_SC5314
+    match = re.match(r"Ca20chr(\d+)", chromosome)
+    if match:
+        chr_num = match.group(1)
+        return f"Ca22chr{chr_num}A_C_albicans_SC5314"
+
+    # Map chrR format (ribosomal)
+    if "chrR" in chromosome:
+        return "Ca22chrRA_C_albicans_SC5314"
+
+    # Cannot map contig or other formats
+    return None
+
+
 def _get_bigwig_path(
     base_path: Path,
     study: str,
@@ -215,6 +254,9 @@ def _get_gene_location(
     """
     Get gene location info from database.
     Returns: (gene_name, feature_name, chromosome, start, end, description) or None
+
+    For C. albicans, we prioritize Ca21/Ca22 locations over contigs because
+    the bigwig files use Ca22 assembly coordinates.
     """
     # Find the feature by gene name or feature name
     feature = (
@@ -228,54 +270,72 @@ def _get_gene_location(
     if not feature:
         return None
 
-    # Get location on Ca22 chromosome (HapA) for C. albicans
-    location = (
+    # Get all current locations for this feature
+    locations = (
         db.query(FeatLocation)
-        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
-        .join(Feature, Seq.feature_no == Feature.feature_no)
         .filter(
             FeatLocation.feature_no == feature.feature_no,
-            FeatLocation.is_loc_current == "Y",
-            Feature.feature_name.like("Ca22%"),
-            Feature.feature_type == "chromosome"
+            FeatLocation.is_loc_current == "Y"
         )
-        .first()
+        .all()
     )
 
-    # Fall back to any current location
-    if not location:
-        location = (
-            db.query(FeatLocation)
-            .filter(
-                FeatLocation.feature_no == feature.feature_no,
-                FeatLocation.is_loc_current == "Y"
-            )
-            .first()
-        )
-
-    if not location:
+    if not locations:
         return None
 
-    # Get chromosome name
-    chromosome = None
-    if location.root_seq_no:
-        root_seq = db.query(Seq).filter(Seq.seq_no == location.root_seq_no).first()
-        if root_seq:
-            root_feature = db.query(Feature).filter(
-                Feature.feature_no == root_seq.feature_no
-            ).first()
-            if root_feature:
-                chromosome = root_feature.feature_name
+    # Find the best location (prioritize Ca22 > Ca21 > Ca20 > others)
+    best_location = None
+    best_chromosome = None
+    best_priority = -1
 
-    if not chromosome:
+    for loc in locations:
+        if not loc.root_seq_no:
+            continue
+
+        root_seq = db.query(Seq).filter(Seq.seq_no == loc.root_seq_no).first()
+        if not root_seq:
+            continue
+
+        root_feature = db.query(Feature).filter(
+            Feature.feature_no == root_seq.feature_no
+        ).first()
+        if not root_feature:
+            continue
+
+        chr_name = root_feature.feature_name
+
+        # Determine priority
+        priority = 0
+        if chr_name.startswith("Ca22chr"):
+            priority = 4
+        elif chr_name.startswith("Ca21chr"):
+            priority = 3
+        elif chr_name.startswith("Ca20chr"):
+            priority = 2
+        elif "chr" in chr_name.lower():
+            priority = 1
+
+        if priority > best_priority:
+            best_priority = priority
+            best_location = loc
+            best_chromosome = chr_name
+
+    if not best_location or not best_chromosome:
         return None
+
+    # Map chromosome name to Ca22 format for bigwig files
+    ca22_chromosome = _map_chromosome_to_ca22(best_chromosome)
+    if not ca22_chromosome:
+        # If we can't map to Ca22, still return the location but with original name
+        # The bigwig query will fail but we'll show a warning
+        ca22_chromosome = best_chromosome
 
     return (
         feature.gene_name or feature.feature_name,
         feature.feature_name,
-        chromosome,
-        location.start_coord,
-        location.stop_coord,
+        ca22_chromosome,
+        best_location.start_coord,
+        best_location.stop_coord,
         feature.headline
     )
 
