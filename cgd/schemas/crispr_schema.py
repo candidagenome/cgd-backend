@@ -194,6 +194,35 @@ class GeneInfo(BaseModel):
     cgd_url: Optional[str] = Field(None, description="Link to CGD locus page")
     jbrowse_url: Optional[str] = Field(None, description="Link to JBrowse view")
 
+    # Phenotype summary
+    phenotype_count: int = Field(0, description="Number of phenotype annotations")
+    phenotype_observables: List[str] = Field(
+        default_factory=list,
+        description="Top phenotype observables (up to 5)"
+    )
+    has_virulence_phenotype: bool = Field(
+        False,
+        description="Whether gene has virulence-related phenotypes"
+    )
+
+    # Essentiality indicators
+    is_essential: bool = Field(False, description="Whether gene is essential/housekeeping")
+    essential_reason: Optional[str] = Field(
+        None,
+        description="Reason for essential classification (GO term or ortholog conservation)"
+    )
+    ortholog_count: int = Field(0, description="Number of Candida species with orthologs")
+
+    # Virulence summary
+    virulence_categories: List[str] = Field(
+        default_factory=list,
+        description="Matched virulence categories (e.g., Adhesins, Biofilm)"
+    )
+    virulence_score: Optional[int] = Field(
+        None,
+        description="Virulence confidence score (0-20)"
+    )
+
 
 class CrisprDesignResponse(BaseModel):
     """Response for CRISPR guide design."""

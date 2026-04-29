@@ -18,7 +18,12 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 
 from cgd.core.settings import settings
-from cgd.models.models import Feature, Seq, FeatLocation, Organism
+from cgd.models.models import Feature, Seq, FeatLocation, Organism, Phenotype, PhenoAnnotation
+from cgd.api.services.virulence_service import (
+    _is_housekeeping_gene,
+    _get_ortholog_count,
+)
+from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
 from cgd.schemas.crispr_schema import (
     PAMType,
     TargetRegion,
@@ -460,6 +465,38 @@ def _get_gene_info(
             location.stop_coord,
         )
 
+    # Get CGD data integration (phenotypes, essentiality, virulence)
+    # Wrap in try/except for graceful degradation - these are optional enrichments
+    phenotype_count = 0
+    phenotype_observables = []
+    has_virulence_phenotype = False
+    is_essential = False
+    essential_reason = None
+    ortholog_count = 0
+    virulence_categories = []
+    virulence_score = None
+
+    try:
+        phenotype_count, phenotype_observables, has_virulence_phenotype = (
+            _get_phenotype_summary(db, feature.feature_no)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to get phenotype summary: {e}")
+
+    try:
+        is_essential, essential_reason, ortholog_count = (
+            _get_essentiality_info(db, feature)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to get essentiality info: {e}")
+
+    try:
+        virulence_categories, virulence_score = (
+            _get_virulence_summary(db, feature)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to get virulence summary: {e}")
+
     # Build gene info
     gene_info = GeneInfo(
         gene_name=feature.gene_name,
@@ -474,6 +511,15 @@ def _get_gene_info(
         sequence_length=len(seq_record.residues),
         cgd_url=f"/locus/{feature.feature_name}",
         jbrowse_url=jbrowse_url,
+        # CGD data integration fields
+        phenotype_count=phenotype_count,
+        phenotype_observables=phenotype_observables,
+        has_virulence_phenotype=has_virulence_phenotype,
+        is_essential=is_essential,
+        essential_reason=essential_reason,
+        ortholog_count=ortholog_count,
+        virulence_categories=virulence_categories,
+        virulence_score=virulence_score,
     )
 
     return gene_info, seq_record.residues.upper()
@@ -528,6 +574,145 @@ def _get_genomic_context(
         upstream_seq = _reverse_complement(chrom_seq[end:end + upstream])
 
     return upstream_seq, target_seq, downstream_seq
+
+
+# ============================================================================
+# CGD Data Integration Helper Functions
+# ============================================================================
+
+def _get_phenotype_summary(
+    db: Session,
+    feature_no: int
+) -> Tuple[int, List[str], bool]:
+    """
+    Get phenotype summary for a gene.
+
+    Args:
+        db: Database session
+        feature_no: Feature number to query
+
+    Returns:
+        Tuple of (phenotype_count, top_observables, has_virulence_phenotype)
+    """
+    try:
+        # Query phenotype annotations grouped by observable
+        pheno_query = (
+            db.query(
+                Phenotype.observable,
+                func.count(PhenoAnnotation.pheno_annotation_no).label('count')
+            )
+            .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+            .filter(PhenoAnnotation.feature_no == feature_no)
+            .group_by(Phenotype.observable)
+            .order_by(func.count(PhenoAnnotation.pheno_annotation_no).desc())
+            .all()
+        )
+
+        if not pheno_query:
+            return 0, [], False
+
+        # Total count of phenotype annotations
+        total_count = sum(count for _, count in pheno_query)
+
+        # Top 5 observables
+        top_observables = [observable for observable, _ in pheno_query[:5]]
+
+        # Check for virulence-related phenotypes
+        virulence_patterns = ['virulence', 'pathogen', 'host', 'infection', 'colonization']
+        has_virulence = any(
+            any(pattern in obs.lower() for pattern in virulence_patterns)
+            for obs, _ in pheno_query
+        )
+
+        return total_count, top_observables, has_virulence
+
+    except Exception as e:
+        logger.warning(f"Error getting phenotype summary for feature {feature_no}: {e}")
+        return 0, [], False
+
+
+def _get_essentiality_info(
+    db: Session,
+    feature: Feature
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Get essentiality information for a gene.
+
+    Reuses logic from virulence_service for housekeeping gene detection.
+
+    Args:
+        db: Database session
+        feature: Feature object to check
+
+    Returns:
+        Tuple of (is_essential, essential_reason, ortholog_count)
+    """
+    try:
+        # Use existing housekeeping gene detection from virulence_service
+        is_housekeeping, reason = _is_housekeeping_gene(db, feature)
+        ortholog_count = _get_ortholog_count(db, feature)
+
+        return is_housekeeping, reason, ortholog_count
+
+    except Exception as e:
+        logger.warning(f"Error getting essentiality info for feature {feature.feature_no}: {e}")
+        return False, None, 0
+
+
+def _get_virulence_summary(
+    db: Session,
+    feature: Feature
+) -> Tuple[List[str], Optional[int]]:
+    """
+    Get virulence category summary for a gene.
+
+    Args:
+        db: Database session
+        feature: Feature object to check
+
+    Returns:
+        Tuple of (virulence_categories, virulence_score)
+    """
+    try:
+        matched_categories = set()
+
+        # Check each virulence category to see if this gene matches
+        for cat_key, cat_config in VIRULENCE_CATEGORIES.items():
+            rules = cat_config.get("rules", {})
+
+            # Check gene patterns
+            if "gene_patterns" in rules and feature.gene_name:
+                for pattern in rules["gene_patterns"]:
+                    sql_pattern = pattern.replace("%", "")
+                    if feature.gene_name.upper().startswith(sql_pattern.upper()):
+                        matched_categories.add(cat_config["name"])
+                        break
+
+            # Check phenotype observables
+            if "phenotype_observables" in rules:
+                pheno_matches = (
+                    db.query(Phenotype.observable)
+                    .join(PhenoAnnotation, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+                    .filter(PhenoAnnotation.feature_no == feature.feature_no)
+                    .distinct()
+                    .all()
+                )
+                for (observable,) in pheno_matches:
+                    for obs_pattern in rules["phenotype_observables"]:
+                        regex_pattern = obs_pattern.replace("%", ".*")
+                        if re.search(regex_pattern, observable, re.IGNORECASE):
+                            matched_categories.add(cat_config["name"])
+                            break
+
+        # Calculate a simple virulence score based on number of categories matched
+        # Each category match adds 3 points, with a max of 20
+        virulence_score = min(len(matched_categories) * 3, 20) if matched_categories else None
+
+        return sorted(matched_categories), virulence_score
+
+    except Exception as e:
+        logger.warning(f"Error getting virulence summary for feature {feature.feature_no}: {e}")
+        return [], None
 
 
 # ============================================================================
