@@ -162,6 +162,38 @@ EXPRESSION_STUDIES = {
                 "SRR18188700": {"label": "MMS treated (rep 3)", "bucket": "stress"},
             },
         },
+        "Rai_2024": {
+            "category": "Biofilm/Gene Regulation",
+            "pmid": "38905306",
+            "path_style": "new",
+            "control": "ERR8278349",
+            "conditions": {
+                # SN152 wild-type (control strain)
+                "ERR8278349": {"label": "WT SN152 (rep 1)", "bucket": "control"},
+                "ERR8278350": {"label": "WT SN152 (rep 2)", "bucket": "control"},
+                "ERR8278351": {"label": "WT SN152 (rep 3)", "bucket": "control"},
+                # CEC4665 wild-type
+                "ERR8278346": {"label": "WT CEC4665 (rep 1)", "bucket": "control"},
+                "ERR8278347": {"label": "WT CEC4665 (rep 2)", "bucket": "control"},
+                "ERR8278348": {"label": "WT CEC4665 (rep 3)", "bucket": "control"},
+                # ZCF15 overexpression (TetO-ZCF15)
+                "ERR8278352": {"label": "ZCF15-OE (rep 1)", "bucket": "basic_biology"},
+                "ERR8278353": {"label": "ZCF15-OE (rep 2)", "bucket": "basic_biology"},
+                "ERR8278354": {"label": "ZCF15-OE (rep 3)", "bucket": "basic_biology"},
+                # ZCF26 overexpression (TetO-ZCF26)
+                "ERR8278355": {"label": "ZCF26-OE (rep 1)", "bucket": "basic_biology"},
+                "ERR8278356": {"label": "ZCF26-OE (rep 2)", "bucket": "basic_biology"},
+                "ERR8278357": {"label": "ZCF26-OE (rep 3)", "bucket": "basic_biology"},
+                # ZCF15 deletion
+                "ERR8278358": {"label": "zcf15Δ (rep 1)", "bucket": "basic_biology"},
+                "ERR8278359": {"label": "zcf15Δ (rep 2)", "bucket": "basic_biology"},
+                "ERR8278360": {"label": "zcf15Δ (rep 3)", "bucket": "basic_biology"},
+                # ZCF26 deletion
+                "ERR8278361": {"label": "zcf26Δ (rep 1)", "bucket": "basic_biology"},
+                "ERR8278362": {"label": "zcf26Δ (rep 2)", "bucket": "basic_biology"},
+                "ERR8278363": {"label": "zcf26Δ (rep 3)", "bucket": "basic_biology"},
+            },
+        },
     },
 }
 
