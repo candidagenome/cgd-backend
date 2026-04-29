@@ -507,13 +507,12 @@ def _filter_target_region(
 # Limit number of guides for off-target search (performance)
 MAX_GUIDES_FOR_OFFTARGET = 14
 
-# Pattern to extract chromosome base name (without A/B allele suffix)
-# Matches patterns like:
-#   "Ca22chr1A_C_albicans_SC5314" -> "Ca22chr1"
-#   "Ca22chrRA_C_albicans_SC5314" -> "Ca22chrR"
-# The pattern captures everything up to and including the chromosome ID (number or R),
-# then expects A or B allele suffix
+# Pattern to extract chromosome/ORF base name (without A/B allele suffix)
+# Matches two naming conventions:
+#   1. Chromosome names: "Ca22chr1A_C_albicans_SC5314" -> "Ca22chr1"
+#   2. ORF names: "C1_06980C_A" -> "C1_06980C" (allele suffix is _A or _B)
 CHROMOSOME_ALLELE_PATTERN = re.compile(r'^(.*chr[R\d]+)[AB](_.*)?$', re.IGNORECASE)
+ORF_ALLELE_PATTERN = re.compile(r'^(.+)_([AB])$', re.IGNORECASE)
 
 # Diploid organisms where we expect allelic pairs (A/B chromosomes)
 DIPLOID_ORGANISMS = {
@@ -526,54 +525,49 @@ DIPLOID_ORGANISMS = {
 
 def _get_chromosome_base(chromosome: str) -> Optional[str]:
     """
-    Extract chromosome base name from BLAST chromosome name.
+    Extract chromosome/ORF base name from BLAST sequence name.
 
-    E.g., "Ca22chr1A_C_albicans_SC5314" -> "Ca22chr1"
-    Returns None if pattern doesn't match.
+    Handles two naming conventions:
+    - Chromosome: "Ca22chr1A_C_albicans_SC5314" -> "CA22CHR1"
+    - ORF: "C1_06980C_A" -> "C1_06980C"
+
+    Returns None if neither pattern matches.
     """
+    # Try chromosome pattern first
     match = CHROMOSOME_ALLELE_PATTERN.match(chromosome)
     if match:
         return match.group(1).upper()
+
+    # Try ORF pattern (ends with _A or _B)
+    match = ORF_ALLELE_PATTERN.match(chromosome)
+    if match:
+        return match.group(1).upper()
+
     return None
 
 
 def _are_allelic_chromosomes(chr1: str, chr2: str) -> bool:
     """
-    Check if two chromosome names are allelic variants (A vs B allele).
+    Check if two chromosome/ORF names are allelic variants (A vs B allele).
 
-    C. albicans has diploid chromosomes named like:
-    - Ca22chr1A_C_albicans_SC5314
-    - Ca22chr1B_C_albicans_SC5314
+    C. albicans has diploid chromosomes/ORFs named like:
+    - Chromosomes: Ca22chr1A_C_albicans_SC5314 vs Ca22chr1B_C_albicans_SC5314
+    - ORFs: C1_06980C_A vs C1_06980C_B
 
     These represent the same genomic region on different alleles.
     """
     if chr1 == chr2:
         return True
 
-    # Extract base chromosome name (without A/B suffix)
-    match1 = CHROMOSOME_ALLELE_PATTERN.match(chr1)
-    match2 = CHROMOSOME_ALLELE_PATTERN.match(chr2)
+    # Use _get_chromosome_base which handles both chromosome and ORF patterns
+    base1 = _get_chromosome_base(chr1)
+    base2 = _get_chromosome_base(chr2)
 
-    if match1 and match2:
-        base1 = match1.group(1).upper()
-        base2 = match2.group(1).upper()
+    if base1 and base2:
         is_allelic = base1 == base2
         if is_allelic:
-            logger.debug(f"Chromosomes are allelic: {chr1} <-> {chr2} (base: {base1})")
+            logger.debug(f"Sequences are allelic: {chr1} <-> {chr2} (base: {base1})")
         return is_allelic
-
-    # Fallback: check if names differ only in A/B before underscore
-    # This handles edge cases the regex might miss
-    parts1 = chr1.split('_')
-    parts2 = chr2.split('_')
-    if parts1 and parts2:
-        prefix1 = parts1[0]
-        prefix2 = parts2[0]
-        # Check if they differ only in last character (A vs B)
-        if len(prefix1) == len(prefix2) and len(prefix1) > 1:
-            if prefix1[:-1] == prefix2[:-1] and prefix1[-1] in 'AB' and prefix2[-1] in 'AB':
-                logger.debug(f"Chromosomes are allelic (fallback): {chr1} <-> {chr2}")
-                return True
 
     return False
 
