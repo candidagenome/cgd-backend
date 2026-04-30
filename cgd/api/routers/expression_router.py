@@ -16,7 +16,7 @@ from cgd.schemas.expression_schema import (
     ExpressionConfigResponse,
 )
 
-router = APIRouter(prefix="/expression", tags=["Expression"])
+router = APIRouter(prefix="/api/expression", tags=["Expression"])
 
 
 @router.get(
