@@ -5,6 +5,7 @@ Reads RNA-seq bigwig files and calculates fold changes for gene expression analy
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -1423,6 +1424,35 @@ except ImportError:
 # This is a simple dict cache that persists for the lifetime of the process
 _expression_profile_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
 
+# Directory for pre-computed cache files
+EXPRESSION_CACHE_DIR = Path("/data/cache/expression")
+
+
+def _load_expression_cache_from_file(organism_key: str) -> Optional[Dict[str, Dict[str, float]]]:
+    """
+    Load pre-computed expression profiles from cache file.
+
+    Cache files are built by scripts/build_expression_cache.py
+
+    Returns:
+        Dict mapping feature_name to expression profile, or None if not found
+    """
+    cache_file = EXPRESSION_CACHE_DIR / f"expression_profiles_{organism_key}.json"
+
+    if not cache_file.exists():
+        logger.info(f"Cache file not found: {cache_file}")
+        return None
+
+    try:
+        logger.info(f"Loading expression cache from {cache_file}")
+        with open(cache_file, 'r') as f:
+            profiles = json.load(f)
+        logger.info(f"Loaded {len(profiles)} gene profiles from cache")
+        return profiles
+    except Exception as e:
+        logger.error(f"Error loading cache file {cache_file}: {e}")
+        return None
+
 
 def _get_all_condition_ids(organism_key: str) -> List[str]:
     """Get all condition IDs (excluding controls) for an organism, sorted for consistency."""
@@ -1495,15 +1525,30 @@ def _build_all_expression_profiles(
     Build expression profiles for all genes in an organism.
 
     Returns dict mapping feature_name to expression profile.
-    Uses caching to avoid recomputing.
+
+    Loading order:
+    1. In-memory cache (fastest, for repeated queries)
+    2. Pre-computed cache file (fast, built by build_expression_cache.py)
+    3. Real-time computation (slow, fallback only)
     """
     global _expression_profile_cache
 
-    # Return cached if available
+    # 1. Return from in-memory cache if available
     if organism_key in _expression_profile_cache:
         return _expression_profile_cache[organism_key]
 
-    logger.info(f"Building expression profiles for {organism_key} (this may take a while)")
+    # 2. Try to load from pre-computed cache file
+    cached_profiles = _load_expression_cache_from_file(organism_key)
+    if cached_profiles:
+        _expression_profile_cache[organism_key] = cached_profiles
+        return cached_profiles
+
+    # 3. Fall back to real-time computation (slow)
+    logger.warning(
+        f"No cache file found for {organism_key}. "
+        f"Building profiles in real-time (this will be slow). "
+        f"Run scripts/build_expression_cache.py to pre-compute."
+    )
 
     # Get base path for HTS data
     base_path = HTS_BASE_PATHS.get(organism_key)
