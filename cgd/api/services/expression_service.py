@@ -10,13 +10,16 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
 
-from cgd.models.models import Feature, Seq, FeatLocation
+from cgd.models.models import Feature, Seq, FeatLocation, Organism
 from cgd.schemas.expression_schema import (
     GeneExpressionResponse,
     ExpressionStudy,
     ExpressionCondition,
     ExpressionConfigResponse,
+    ExpressionDetailsResponse,
+    ExpressionDetailsForOrganism,
 )
 
 logger = logging.getLogger(__name__)
@@ -569,3 +572,262 @@ def get_expression_config() -> ExpressionConfigResponse:
         studies=studies,
         buckets=buckets
     )
+
+
+# ============================================================================
+# Multi-organism Expression Details (follows locus endpoint pattern)
+# ============================================================================
+
+# Mapping from database organism names to HTS directory keys
+ORGANISM_TO_HTS_KEY = {
+    "Candida albicans SC5314": "C_albicans_SC5314",
+    "Candida auris B8441": "C_auris_B8441",
+    "Candida glabrata CBS138": "C_glabrata_CBS138",
+    "Candida dubliniensis CD36": "C_dubliniensis_CD36",
+    "Candida parapsilosis CDC317": "C_parapsilosis_CDC317",
+}
+
+
+def _get_expression_for_organism(
+    db: Session,
+    feature: Feature,
+    organism_name: str
+) -> Optional[ExpressionDetailsForOrganism]:
+    """
+    Get expression data for a specific feature/organism.
+
+    Returns ExpressionDetailsForOrganism or None if no data available.
+    """
+    if not PYBIGWIG_AVAILABLE:
+        return None
+
+    # Map organism name to HTS directory key
+    hts_key = ORGANISM_TO_HTS_KEY.get(organism_name)
+    if not hts_key:
+        return None
+
+    # Check if we have studies configured for this organism
+    studies_config = EXPRESSION_STUDIES.get(hts_key, {})
+    if not studies_config:
+        return None
+
+    # Get base path for HTS data
+    base_path = HTS_BASE_PATHS.get(hts_key)
+    if not base_path or not base_path.exists():
+        return None
+
+    # Get gene location for this feature
+    location_info = _get_gene_location_for_feature(db, feature)
+    if not location_info:
+        return None
+
+    chromosome, start, end = location_info
+
+    # Process each study
+    studies: List[ExpressionStudy] = []
+    all_fold_changes: List[float] = []
+    total_conditions = 0
+    warnings: List[str] = []
+
+    for study_id, study_info in studies_config.items():
+        control_id = study_info["control"]
+        control_path = _get_bigwig_path(base_path, study_id, control_id, study_info)
+
+        # Get control expression value
+        control_value = _get_expression_value(control_path, chromosome, start, end)
+        if control_value is None or control_value <= 0:
+            warnings.append(f"Could not read control data for {study_id}")
+            continue
+
+        # Process conditions
+        conditions: List[ExpressionCondition] = []
+
+        for cond_id, cond_info in study_info["conditions"].items():
+            if cond_id == control_id:
+                continue
+
+            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
+            cond_value = _get_expression_value(cond_path, chromosome, start, end)
+
+            if cond_value is None:
+                continue
+
+            fold_change = cond_value / control_value if control_value > 0 else 0
+            fold_change = round(fold_change, 3)
+
+            conditions.append(ExpressionCondition(
+                condition_id=cond_id,
+                label=cond_info["label"],
+                value=round(cond_value, 2),
+                fold_change=fold_change,
+                bucket=cond_info["bucket"]
+            ))
+
+            all_fold_changes.append(fold_change)
+            total_conditions += 1
+
+        # Sort conditions by fold change (descending)
+        conditions.sort(key=lambda x: x.fold_change, reverse=True)
+
+        if conditions:
+            studies.append(ExpressionStudy(
+                study_id=study_id,
+                category=study_info["category"],
+                pmid=study_info.get("pmid"),
+                control_id=control_id,
+                control_value=round(control_value, 2),
+                conditions=conditions
+            ))
+
+    # Only return data if we have studies
+    if not studies:
+        return None
+
+    # Calculate summary statistics
+    max_up = max(all_fold_changes) if all_fold_changes else None
+    max_down = min(all_fold_changes) if all_fold_changes else None
+
+    return ExpressionDetailsForOrganism(
+        gene_name=feature.gene_name or feature.feature_name,
+        feature_name=feature.feature_name,
+        description=feature.headline,
+        chromosome=chromosome,
+        start=start,
+        end=end,
+        studies=studies,
+        total_conditions=total_conditions,
+        max_upregulation=max_up,
+        max_downregulation=max_down,
+        warnings=warnings
+    )
+
+
+def _get_gene_location_for_feature(
+    db: Session,
+    feature: Feature
+) -> Optional[Tuple[str, int, int]]:
+    """
+    Get gene location info for a specific feature.
+    Returns: (chromosome, start, end) or None
+    """
+    # Get all current locations for this feature
+    locations = (
+        db.query(FeatLocation)
+        .filter(
+            FeatLocation.feature_no == feature.feature_no,
+            FeatLocation.is_loc_current == "Y"
+        )
+        .all()
+    )
+
+    if not locations:
+        return None
+
+    # Find the best location (prioritize Ca22 > Ca21 > Ca20 > others)
+    best_location = None
+    best_chromosome = None
+    best_priority = -1
+
+    for loc in locations:
+        if not loc.root_seq_no:
+            continue
+
+        root_seq = db.query(Seq).filter(Seq.seq_no == loc.root_seq_no).first()
+        if not root_seq:
+            continue
+
+        root_feature = db.query(Feature).filter(
+            Feature.feature_no == root_seq.feature_no
+        ).first()
+        if not root_feature:
+            continue
+
+        chr_name = root_feature.feature_name
+
+        # Determine priority
+        priority = 0
+        if chr_name.startswith("Ca22chr"):
+            priority = 4
+        elif chr_name.startswith("Ca21chr"):
+            priority = 3
+        elif chr_name.startswith("Ca20chr"):
+            priority = 2
+        elif "chr" in chr_name.lower():
+            priority = 1
+
+        if priority > best_priority:
+            best_priority = priority
+            best_location = loc
+            best_chromosome = chr_name
+
+    if not best_location or not best_chromosome:
+        return None
+
+    # Map chromosome name to Ca22 format for bigwig files
+    ca22_chromosome = _map_chromosome_to_ca22(best_chromosome)
+    if not ca22_chromosome:
+        ca22_chromosome = best_chromosome
+
+    return (ca22_chromosome, best_location.start_coord, best_location.stop_coord)
+
+
+def get_expression_details_by_organism(
+    db: Session,
+    name: str
+) -> ExpressionDetailsResponse:
+    """
+    Get expression data for a gene, grouped by organism.
+
+    This follows the same pattern as other locus endpoints
+    (go_details, phenotype_details, etc.)
+
+    Args:
+        db: Database session
+        name: Gene name, feature name, or dbxref_id
+
+    Returns:
+        ExpressionDetailsResponse with data keyed by organism name
+    """
+    n = name.strip()
+
+    # Find features matching the name (case-insensitive)
+    features = (
+        db.query(Feature)
+        .join(Seq, Seq.feature_no == Feature.feature_no)
+        .join(Organism, Organism.organism_no == Feature.organism_no)
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .filter(Seq.is_seq_current == 'Y')
+        .all()
+    )
+
+    if not features:
+        return ExpressionDetailsResponse(results={})
+
+    # Group by organism and get expression data
+    results: dict[str, ExpressionDetailsForOrganism] = {}
+    seen_organisms: set[str] = set()
+
+    for feature in features:
+        # Get organism name
+        organism = feature.organism
+        if not organism:
+            continue
+
+        organism_name = organism.display_name
+        if organism_name in seen_organisms:
+            continue
+        seen_organisms.add(organism_name)
+
+        # Get expression data for this feature/organism
+        expr_data = _get_expression_for_organism(db, feature, organism_name)
+        if expr_data:
+            results[organism_name] = expr_data
+
+    return ExpressionDetailsResponse(results=results)

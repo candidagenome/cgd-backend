@@ -62,3 +62,35 @@ class ExpressionConfigResponse(BaseModel):
     organisms: List[dict] = Field(description="Available organisms")
     studies: List[dict] = Field(description="Available studies with metadata")
     buckets: List[dict] = Field(description="Condition bucket categories")
+
+
+class ExpressionDetailsForOrganism(BaseModel):
+    """Expression data for a single organism (follows locus endpoint pattern)."""
+    gene_name: Optional[str] = Field(None, description="Gene name")
+    feature_name: Optional[str] = Field(None, description="Systematic feature name")
+    description: Optional[str] = Field(None, description="Gene description")
+    chromosome: Optional[str] = Field(None, description="Chromosome")
+    start: Optional[int] = Field(None, description="Start coordinate")
+    end: Optional[int] = Field(None, description="End coordinate")
+
+    # Expression data by study
+    studies: List[ExpressionStudy] = Field(
+        default_factory=list,
+        description="Expression data organized by study"
+    )
+
+    # Summary statistics
+    total_conditions: int = Field(0, description="Total number of conditions analyzed")
+    max_upregulation: Optional[float] = Field(None, description="Maximum fold change (upregulation)")
+    max_downregulation: Optional[float] = Field(None, description="Minimum fold change (downregulation)")
+
+    # Warnings
+    warnings: List[str] = Field(default_factory=list, description="Any warnings")
+
+
+class ExpressionDetailsResponse(BaseModel):
+    """Response for expression_details endpoint (follows locus endpoint pattern)."""
+    results: dict[str, ExpressionDetailsForOrganism] = Field(
+        default_factory=dict,
+        description="Expression data keyed by organism name"
+    )
