@@ -48,9 +48,10 @@ HTS_BASE_PATHS = {
 }
 
 # Study configurations with metadata
-# path_style: "old" = sorted_hits_bam2wig/sorted_hits.bigwig
-#             "new" = {SRR_ID}_sorted_hits.bigwig
-#             "lohse" = {cond}_bam2wig/{cond}.bigwig
+# path_style: "old" = {study}/HapA/{cond}/sorted_hits_bam2wig/sorted_hits.bigwig (C. albicans old)
+#             "new" = {study}/HapA/{cond}/{cond}_sorted_hits.bigwig (C. albicans new)
+#             "lohse" = {study}/HapA/{cond}/{cond}_bam2wig/{cond}.bigwig (C. albicans Lohse)
+#             "direct" = {study}/{cond}/{cond}_sorted_hits.bigwig (non-haplotype organisms)
 EXPRESSION_STUDIES = {
     "C_albicans_SC5314": {
         "Bruno_2010": {
@@ -198,6 +199,88 @@ EXPRESSION_STUDIES = {
             },
         },
     },
+    "C_auris_B8441": {
+        "Shivarathri_2022": {
+            "category": "Antifungal Response",
+            "pmid": "35652307",
+            "path_style": "direct",
+            "control": "SRR17259761",
+            "conditions": {
+                # Amphotericin B Sensitive (control)
+                "SRR17259761": {"label": "AmpB Sensitive (rep 1)", "bucket": "control"},
+                "SRR17259762": {"label": "AmpB Sensitive (rep 2)", "bucket": "control"},
+                "SRR17259763": {"label": "AmpB Sensitive (rep 3)", "bucket": "control"},
+                "SRR17259764": {"label": "AmpB Sensitive (rep 4)", "bucket": "control"},
+                "SRR17259765": {"label": "AmpB Sensitive (rep 5)", "bucket": "control"},
+                "SRR17259766": {"label": "AmpB Sensitive (rep 6)", "bucket": "control"},
+                # Amphotericin B Resistant
+                "SRR17259767": {"label": "AmpB Resistant (rep 1)", "bucket": "kill_candida"},
+                "SRR17259768": {"label": "AmpB Resistant (rep 2)", "bucket": "kill_candida"},
+                "SRR17259769": {"label": "AmpB Resistant (rep 3)", "bucket": "kill_candida"},
+                "SRR17259770": {"label": "AmpB Resistant (rep 4)", "bucket": "kill_candida"},
+                "SRR17259771": {"label": "AmpB Resistant (rep 5)", "bucket": "kill_candida"},
+                "SRR17259772": {"label": "AmpB Resistant (rep 6)", "bucket": "kill_candida"},
+            },
+        },
+        "Jakab_2021": {
+            "category": "Stress Response",
+            "pmid": "31399405",
+            "path_style": "direct",
+            "control": "SRR10006214",
+            "conditions": {
+                # Control (no farnesol)
+                "SRR10006214": {"label": "Control (rep 1)", "bucket": "control"},
+                "SRR10006215": {"label": "Control (rep 2)", "bucket": "control"},
+                "SRR10006216": {"label": "Control (rep 3)", "bucket": "control"},
+                # Farnesol treated
+                "SRR10006217": {"label": "Farnesol (rep 1)", "bucket": "stress"},
+                "SRR10006218": {"label": "Farnesol (rep 2)", "bucket": "stress"},
+                "SRR10006219": {"label": "Farnesol (rep 3)", "bucket": "stress"},
+            },
+        },
+    },
+    "C_glabrata_CBS138": {
+        "Linde_2015": {
+            "category": "Stress Response",
+            "pmid": "25586221",
+            "path_style": "direct",
+            "control": "SRR1582640",
+            "conditions": {
+                # YPD control
+                "SRR1582640": {"label": "YPD Control (rep 1)", "bucket": "control"},
+                "SRR1582641": {"label": "YPD Control (rep 2)", "bucket": "control"},
+                # pH 4 (acidic)
+                "SRR1582643": {"label": "pH 4 (rep 1)", "bucket": "stress"},
+                "SRR1582644": {"label": "pH 4 (rep 2)", "bucket": "stress"},
+                # pH 8 (alkaline)
+                "SRR1582646": {"label": "pH 8 (rep 1)", "bucket": "stress"},
+                "SRR1582647": {"label": "pH 8 (rep 2)", "bucket": "stress"},
+                # Nitrosative stress
+                "SRR1582648": {"label": "Nitrosative (rep 1)", "bucket": "stress"},
+                "SRR1582649": {"label": "Nitrosative (rep 2)", "bucket": "stress"},
+                # Oxidative stress
+                "SRR1582650": {"label": "Oxidative (rep 1)", "bucket": "stress"},
+                "SRR1582651": {"label": "Oxidative (rep 2)", "bucket": "stress"},
+            },
+        },
+    },
+    "C_dubliniensis_CD36": {
+        "Grumaz_2013": {
+            "category": "Morphology",
+            "pmid": "23547856",
+            "path_style": "direct",
+            "control": "SRR604750",
+            "conditions": {
+                # Yeast form (control)
+                "SRR604750": {"label": "Yeast 30°C (rep 1)", "bucket": "control"},
+                "SRR604752": {"label": "Yeast 30°C (rep 2)", "bucket": "control"},
+                "SRR604753": {"label": "Yeast 30°C (rep 3)", "bucket": "control"},
+                # Hyphal induction
+                "SRR771365": {"label": "Hyphae 37°C (rep 1)", "bucket": "basic_biology"},
+                "SRR771366": {"label": "Hyphae 37°C (rep 2)", "bucket": "basic_biology"},
+            },
+        },
+    },
 }
 
 # Bucket category labels
@@ -227,43 +310,99 @@ def _get_organism_from_tag(organism_tag: str) -> str:
     return tag_mapping.get(organism_tag, organism_tag)
 
 
-def _map_chromosome_to_ca22(chromosome: str) -> Optional[str]:
+def _map_chromosome_for_bigwig(chromosome: str, hts_key: str) -> Optional[str]:
     """
-    Map chromosome names from Ca21/Ca20/other formats to Ca22 format for bigwig files.
+    Map chromosome names from database format to bigwig format.
 
-    Bigwig files use Ca22 assembly chromosome names like:
-    - Ca22chr1A_C_albicans_SC5314
-    - Ca22chr2A_C_albicans_SC5314
+    Each organism has different chromosome naming conventions:
+    - C. albicans: Ca22chr1A_C_albicans_SC5314
+    - C. auris: Chr1_C_auris_B8441
+    - C. glabrata: ChrA_C_glabrata_CBS138
+    - C. dubliniensis: Chr1_C_dubliniensis_CD36
+    - C. parapsilosis: Chr1_C_parapsilosis_CDC317
 
-    Database may have:
-    - Ca21chr2_C_albicans_SC5314
-    - Ca20chr2
-    - Contig19-10076
+    Database may have various formats that need to be mapped.
     """
     import re
 
-    # Already Ca22 format
-    if chromosome.startswith("Ca22chr"):
-        return chromosome
+    # Handle C. albicans specifically (has Ca20/Ca21/Ca22 assemblies)
+    if hts_key == "C_albicans_SC5314":
+        # Already Ca22 format
+        if chromosome.startswith("Ca22chr"):
+            return chromosome
 
-    # Map Ca21 format: Ca21chr2_C_albicans_SC5314 -> Ca22chr2A_C_albicans_SC5314
-    match = re.match(r"Ca21chr(\d+)(_C_albicans_SC5314)?", chromosome)
-    if match:
-        chr_num = match.group(1)
-        return f"Ca22chr{chr_num}A_C_albicans_SC5314"
+        # Map Ca21 format: Ca21chr2_C_albicans_SC5314 -> Ca22chr2A_C_albicans_SC5314
+        match = re.match(r"Ca21chr(\d+|R)(_C_albicans_SC5314)?", chromosome)
+        if match:
+            chr_id = match.group(1)
+            return f"Ca22chr{chr_id}A_C_albicans_SC5314"
 
-    # Map Ca20 format: Ca20chr2 -> Ca22chr2A_C_albicans_SC5314
-    match = re.match(r"Ca20chr(\d+)", chromosome)
-    if match:
-        chr_num = match.group(1)
-        return f"Ca22chr{chr_num}A_C_albicans_SC5314"
+        # Map Ca20 format: Ca20chr2 -> Ca22chr2A_C_albicans_SC5314
+        match = re.match(r"Ca20chr(\d+|R)", chromosome)
+        if match:
+            chr_id = match.group(1)
+            return f"Ca22chr{chr_id}A_C_albicans_SC5314"
 
-    # Map chrR format (ribosomal)
-    if "chrR" in chromosome:
-        return "Ca22chrRA_C_albicans_SC5314"
+        # Map chrR format (ribosomal)
+        if "chrR" in chromosome:
+            return "Ca22chrRA_C_albicans_SC5314"
 
-    # Cannot map contig or other formats
-    return None
+        return None
+
+    # Handle C. auris
+    if hts_key == "C_auris_B8441":
+        # Already correct format
+        if chromosome.startswith("Chr") and "_C_auris_B8441" in chromosome:
+            return chromosome
+        # Map simple format: Chr1 -> Chr1_C_auris_B8441
+        match = re.match(r"Chr(\d+)", chromosome)
+        if match:
+            return f"Chr{match.group(1)}_C_auris_B8441"
+        return chromosome if "Chr" in chromosome else None
+
+    # Handle C. glabrata
+    if hts_key == "C_glabrata_CBS138":
+        # Already correct format
+        if chromosome.startswith("Chr") and "_C_glabrata_CBS138" in chromosome:
+            return chromosome
+        # Map simple format: ChrA -> ChrA_C_glabrata_CBS138
+        match = re.match(r"Chr([A-Z])", chromosome)
+        if match:
+            return f"Chr{match.group(1)}_C_glabrata_CBS138"
+        return chromosome if "Chr" in chromosome else None
+
+    # Handle C. dubliniensis
+    if hts_key == "C_dubliniensis_CD36":
+        # Already correct format
+        if chromosome.startswith("Chr") and "_C_dubliniensis_CD36" in chromosome:
+            return chromosome
+        # Map simple format: Chr1 -> Chr1_C_dubliniensis_CD36
+        match = re.match(r"Chr(\d+|R)", chromosome)
+        if match:
+            return f"Chr{match.group(1)}_C_dubliniensis_CD36"
+        return chromosome if "Chr" in chromosome else None
+
+    # Handle C. parapsilosis
+    if hts_key == "C_parapsilosis_CDC317":
+        # Already correct format
+        if chromosome.startswith("Chr") and "_C_parapsilosis_CDC317" in chromosome:
+            return chromosome
+        # Map simple format
+        match = re.match(r"Chr(\d+)", chromosome)
+        if match:
+            return f"Chr{match.group(1)}_C_parapsilosis_CDC317"
+        return chromosome if "Chr" in chromosome else None
+
+    # Unknown organism - return as-is
+    return chromosome
+
+
+def _map_chromosome_to_ca22(chromosome: str) -> Optional[str]:
+    """
+    Legacy function for C. albicans only.
+    Kept for backward compatibility with existing code.
+    """
+    return _map_chromosome_for_bigwig(chromosome, "C_albicans_SC5314")
 
 
 def _get_bigwig_path(
@@ -275,11 +414,16 @@ def _get_bigwig_path(
 ) -> Path:
     """Construct path to bigwig file based on path style."""
     if study_info["path_style"] == "old":
+        # C. albicans old style: {study}/HapA/{cond}/sorted_hits_bam2wig/sorted_hits.bigwig
         return base_path / study / haplotype / condition / "sorted_hits_bam2wig" / "sorted_hits.bigwig"
     elif study_info["path_style"] == "lohse":
-        # Lohse_2016 style: {cond}_bam2wig/{cond}.bigwig
+        # Lohse_2016 style: {study}/HapA/{cond}/{cond}_bam2wig/{cond}.bigwig
         return base_path / study / haplotype / condition / f"{condition}_bam2wig" / f"{condition}.bigwig"
-    else:  # new style
+    elif study_info["path_style"] == "direct":
+        # Non-haplotype organisms: {study}/{cond}/{cond}_sorted_hits.bigwig
+        return base_path / study / condition / f"{condition}_sorted_hits.bigwig"
+    else:  # new style (C. albicans)
+        # C. albicans new style: {study}/HapA/{cond}/{cond}_sorted_hits.bigwig
         return base_path / study / haplotype / condition / f"{condition}_sorted_hits.bigwig"
 
 
@@ -616,8 +760,8 @@ def _get_expression_for_organism(
     if not base_path or not base_path.exists():
         return None
 
-    # Get gene location for this feature
-    location_info = _get_gene_location_for_feature(db, feature)
+    # Get gene location for this feature (pass hts_key for chromosome mapping)
+    location_info = _get_gene_location_for_feature(db, feature, hts_key)
     if not location_info:
         return None
 
@@ -704,11 +848,17 @@ def _get_expression_for_organism(
 
 def _get_gene_location_for_feature(
     db: Session,
-    feature: Feature
+    feature: Feature,
+    hts_key: str = "C_albicans_SC5314"
 ) -> Optional[Tuple[str, int, int]]:
     """
     Get gene location info for a specific feature.
     Returns: (chromosome, start, end) or None
+
+    Args:
+        db: Database session
+        feature: The feature to get location for
+        hts_key: HTS directory key for chromosome mapping (e.g., "C_albicans_SC5314")
     """
     # Get all current locations for this feature
     locations = (
@@ -723,7 +873,7 @@ def _get_gene_location_for_feature(
     if not locations:
         return None
 
-    # Find the best location (prioritize Ca22 > Ca21 > Ca20 > others)
+    # Find the best location (prioritize newer assemblies)
     best_location = None
     best_chromosome = None
     best_priority = -1
@@ -744,16 +894,23 @@ def _get_gene_location_for_feature(
 
         chr_name = root_feature.feature_name
 
-        # Determine priority
+        # Determine priority (C. albicans has specific assembly versions)
         priority = 0
-        if chr_name.startswith("Ca22chr"):
-            priority = 4
-        elif chr_name.startswith("Ca21chr"):
-            priority = 3
-        elif chr_name.startswith("Ca20chr"):
-            priority = 2
-        elif "chr" in chr_name.lower():
-            priority = 1
+        if hts_key == "C_albicans_SC5314":
+            if chr_name.startswith("Ca22chr"):
+                priority = 4
+            elif chr_name.startswith("Ca21chr"):
+                priority = 3
+            elif chr_name.startswith("Ca20chr"):
+                priority = 2
+            elif "chr" in chr_name.lower():
+                priority = 1
+        else:
+            # For other organisms, prefer chromosome over contig
+            if chr_name.startswith("Chr"):
+                priority = 2
+            elif "chr" in chr_name.lower():
+                priority = 1
 
         if priority > best_priority:
             best_priority = priority
@@ -763,12 +920,12 @@ def _get_gene_location_for_feature(
     if not best_location or not best_chromosome:
         return None
 
-    # Map chromosome name to Ca22 format for bigwig files
-    ca22_chromosome = _map_chromosome_to_ca22(best_chromosome)
-    if not ca22_chromosome:
-        ca22_chromosome = best_chromosome
+    # Map chromosome name to bigwig format for this organism
+    mapped_chromosome = _map_chromosome_for_bigwig(best_chromosome, hts_key)
+    if not mapped_chromosome:
+        mapped_chromosome = best_chromosome
 
-    return (ca22_chromosome, best_location.start_coord, best_location.stop_coord)
+    return (mapped_chromosome, best_location.start_coord, best_location.stop_coord)
 
 
 def get_expression_details_by_organism(
