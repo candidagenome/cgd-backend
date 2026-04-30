@@ -10,10 +10,12 @@ from cgd.db.deps import get_db
 from cgd.api.services.expression_service import (
     get_gene_expression,
     get_expression_config,
+    get_similar_expression_genes,
 )
 from cgd.schemas.expression_schema import (
     GeneExpressionResponse,
     ExpressionConfigResponse,
+    SimilarGenesResponse,
 )
 
 router = APIRouter(prefix="/api/expression", tags=["Expression"])
@@ -44,6 +46,56 @@ def get_expression(
 ) -> GeneExpressionResponse:
     """Get expression data for a gene."""
     return get_gene_expression(db, gene_name, organism)
+
+
+@router.get(
+    "/gene/{gene_name}/similar",
+    response_model=SimilarGenesResponse,
+    summary="Find genes with similar expression profiles",
+    description="""
+    Finds genes with correlated expression profiles to the query gene.
+
+    Uses RNA-seq fold change data across all experimental conditions to compute
+    similarity. Genes with similar expression patterns often share biological
+    functions or are co-regulated.
+
+    **Similarity metrics:**
+    - **pearson** (default): Pearson correlation coefficient
+    - **spearman**: Spearman rank correlation (more robust to outliers)
+    - **cosine**: Cosine similarity
+
+    **Performance notes:**
+    - First query for an organism may take 20-30 seconds (building profiles)
+    - Subsequent queries use cached data and complete in <2 seconds
+    """
+)
+def get_similar_genes(
+    gene_name: str,
+    organism: str = Query(
+        "C_albicans_SC5314_A22",
+        description="Organism/genome assembly to search"
+    ),
+    limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Maximum number of similar genes to return"
+    ),
+    metric: str = Query(
+        "pearson",
+        description="Similarity metric: pearson, spearman, or cosine"
+    ),
+    min_conditions: int = Query(
+        5,
+        ge=1,
+        description="Minimum shared conditions required for comparison"
+    ),
+    db: Session = Depends(get_db)
+) -> SimilarGenesResponse:
+    """Find genes with similar expression profiles to the query gene."""
+    return get_similar_expression_genes(
+        db, gene_name, organism, limit, metric, min_conditions
+    )
 
 
 @router.get(

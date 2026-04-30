@@ -20,6 +20,8 @@ from cgd.schemas.expression_schema import (
     ExpressionConfigResponse,
     ExpressionDetailsResponse,
     ExpressionDetailsForOrganism,
+    SimilarGene,
+    SimilarGenesResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -1402,3 +1404,355 @@ def get_expression_details_by_organism(
             results[organism_name] = expr_data
 
     return ExpressionDetailsResponse(results=results)
+
+
+# ============================================================================
+# Similar Expression Genes
+# ============================================================================
+
+# Try to import scipy for correlation computation
+try:
+    from scipy.stats import pearsonr, spearmanr
+    from scipy.spatial.distance import cosine as cosine_distance
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    logger.warning("scipy not installed - similar genes analysis will be unavailable")
+
+# Expression profile cache: {organism: {feature_name: {condition_id: fold_change}}}
+# This is a simple dict cache that persists for the lifetime of the process
+_expression_profile_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
+
+
+def _get_all_condition_ids(organism_key: str) -> List[str]:
+    """Get all condition IDs (excluding controls) for an organism, sorted for consistency."""
+    studies_config = EXPRESSION_STUDIES.get(organism_key, {})
+    condition_ids = []
+
+    for study_id, study_info in studies_config.items():
+        control_id = study_info["control"]
+        for cond_id in study_info["conditions"]:
+            if cond_id != control_id:
+                # Use study_id + cond_id as unique key
+                condition_ids.append(f"{study_id}:{cond_id}")
+
+    return sorted(condition_ids)
+
+
+def _build_expression_profile(
+    db: Session,
+    feature: Feature,
+    organism_key: str,
+    base_path: Path,
+    studies_config: dict,
+    hts_key: str
+) -> Optional[Dict[str, float]]:
+    """
+    Build expression profile (fold changes) for a single gene across all conditions.
+
+    Returns a dict mapping condition_id to fold_change, or None if location not found.
+    """
+    # Get gene location
+    location_info = _get_gene_location_for_feature(db, feature, hts_key)
+    if not location_info:
+        return None
+
+    chromosome, start, end = location_info
+    profile: Dict[str, float] = {}
+
+    for study_id, study_info in studies_config.items():
+        control_id = study_info["control"]
+        control_path = _get_bigwig_path(base_path, study_id, control_id, study_info)
+
+        # Get control expression value
+        control_value = _get_expression_value(control_path, chromosome, start, end)
+        if control_value is None or control_value <= 0:
+            continue
+
+        # Process conditions
+        for cond_id, cond_info in study_info["conditions"].items():
+            if cond_id == control_id:
+                continue
+
+            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
+            cond_value = _get_expression_value(cond_path, chromosome, start, end)
+
+            if cond_value is None:
+                continue
+
+            fold_change = cond_value / control_value
+            condition_key = f"{study_id}:{cond_id}"
+            profile[condition_key] = fold_change
+
+    return profile if profile else None
+
+
+def _build_all_expression_profiles(
+    db: Session,
+    organism_key: str
+) -> Dict[str, Dict[str, float]]:
+    """
+    Build expression profiles for all genes in an organism.
+
+    Returns dict mapping feature_name to expression profile.
+    Uses caching to avoid recomputing.
+    """
+    global _expression_profile_cache
+
+    # Return cached if available
+    if organism_key in _expression_profile_cache:
+        return _expression_profile_cache[organism_key]
+
+    logger.info(f"Building expression profiles for {organism_key} (this may take a while)")
+
+    # Get base path for HTS data
+    base_path = HTS_BASE_PATHS.get(organism_key)
+    if not base_path or not base_path.exists():
+        return {}
+
+    studies_config = EXPRESSION_STUDIES.get(organism_key, {})
+    if not studies_config:
+        return {}
+
+    # Map to HTS key for chromosome mapping
+    hts_key = organism_key
+
+    # Get organism name for querying
+    organism_name_map = {v: k for k, v in ORGANISM_TO_HTS_KEY.items()}
+    organism_name = organism_name_map.get(organism_key)
+    if not organism_name:
+        return {}
+
+    # Get all ORF features for this organism
+    organism_obj = db.query(Organism).filter(
+        Organism.organism_name == organism_name
+    ).first()
+    if not organism_obj:
+        return {}
+
+    # Query all ORF features with locations
+    features = (
+        db.query(Feature)
+        .filter(
+            Feature.organism_no == organism_obj.organism_no,
+            Feature.feature_type == 'ORF'
+        )
+        .all()
+    )
+
+    logger.info(f"Processing {len(features)} ORF features for {organism_key}")
+
+    # Build profiles for all features
+    profiles: Dict[str, Dict[str, float]] = {}
+    processed = 0
+
+    for feature in features:
+        profile = _build_expression_profile(
+            db, feature, organism_key, base_path, studies_config, hts_key
+        )
+        if profile:
+            profiles[feature.feature_name] = profile
+            processed += 1
+
+        if processed % 500 == 0:
+            logger.info(f"Processed {processed} genes for {organism_key}")
+
+    logger.info(f"Built profiles for {len(profiles)} genes in {organism_key}")
+
+    # Cache the results
+    _expression_profile_cache[organism_key] = profiles
+
+    return profiles
+
+
+def _compute_correlation(
+    profile1: Dict[str, float],
+    profile2: Dict[str, float],
+    metric: str = "pearson",
+    min_conditions: int = 5
+) -> Optional[Tuple[float, Optional[float], int]]:
+    """
+    Compute correlation between two expression profiles.
+
+    Args:
+        profile1: First expression profile
+        profile2: Second expression profile
+        metric: 'pearson', 'spearman', or 'cosine'
+        min_conditions: Minimum shared conditions required
+
+    Returns:
+        (correlation, p_value, shared_conditions) or None if insufficient data
+    """
+    if not SCIPY_AVAILABLE:
+        return None
+
+    # Find shared conditions
+    shared_keys = set(profile1.keys()) & set(profile2.keys())
+    if len(shared_keys) < min_conditions:
+        return None
+
+    # Extract values for shared conditions (sorted for consistency)
+    sorted_keys = sorted(shared_keys)
+    values1 = [profile1[k] for k in sorted_keys]
+    values2 = [profile2[k] for k in sorted_keys]
+
+    try:
+        if metric == "pearson":
+            corr, p_value = pearsonr(values1, values2)
+        elif metric == "spearman":
+            corr, p_value = spearmanr(values1, values2)
+        elif metric == "cosine":
+            # Cosine similarity = 1 - cosine distance
+            corr = 1.0 - cosine_distance(values1, values2)
+            p_value = None  # No p-value for cosine similarity
+        else:
+            return None
+
+        return (corr, p_value, len(shared_keys))
+    except Exception as e:
+        logger.debug(f"Correlation computation failed: {e}")
+        return None
+
+
+def get_similar_expression_genes(
+    db: Session,
+    gene_name: str,
+    organism: str = "C_albicans_SC5314_A22",
+    limit: int = 20,
+    metric: str = "pearson",
+    min_conditions: int = 5
+) -> SimilarGenesResponse:
+    """
+    Find genes with similar expression profiles to the query gene.
+
+    Args:
+        db: Database session
+        gene_name: Query gene name or systematic name
+        organism: Organism tag
+        limit: Maximum number of results (1-100)
+        metric: Similarity metric ('pearson', 'spearman', 'cosine')
+        min_conditions: Minimum shared conditions required
+
+    Returns:
+        SimilarGenesResponse with ranked list of similar genes
+    """
+    import time
+    start_time = time.time()
+
+    # Validate inputs
+    if not PYBIGWIG_AVAILABLE:
+        return SimilarGenesResponse(
+            success=False,
+            error="Expression analysis unavailable: pyBigWig not installed"
+        )
+
+    if not SCIPY_AVAILABLE:
+        return SimilarGenesResponse(
+            success=False,
+            error="Similar genes analysis unavailable: scipy not installed"
+        )
+
+    if metric not in ("pearson", "spearman", "cosine"):
+        return SimilarGenesResponse(
+            success=False,
+            error=f"Invalid metric: {metric}. Use 'pearson', 'spearman', or 'cosine'"
+        )
+
+    limit = max(1, min(100, limit))
+    min_conditions = max(1, min_conditions)
+
+    # Get organism directory key
+    organism_key = _get_organism_from_tag(organism)
+
+    # Check if studies exist for this organism
+    if organism_key not in EXPRESSION_STUDIES:
+        return SimilarGenesResponse(
+            success=False,
+            error=f"No expression studies configured for organism: {organism}"
+        )
+
+    # Find the query gene feature
+    query_feature = (
+        db.query(Feature)
+        .filter(
+            (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name)
+        )
+        .first()
+    )
+
+    if not query_feature:
+        return SimilarGenesResponse(
+            success=False,
+            error=f"Gene '{gene_name}' not found"
+        )
+
+    # Build all expression profiles (uses cache)
+    all_profiles = _build_all_expression_profiles(db, organism_key)
+    if not all_profiles:
+        return SimilarGenesResponse(
+            success=False,
+            error=f"Could not build expression profiles for {organism}"
+        )
+
+    # Get query gene's profile
+    query_profile = all_profiles.get(query_feature.feature_name)
+    if not query_profile:
+        return SimilarGenesResponse(
+            success=False,
+            error=f"No expression data available for '{gene_name}'"
+        )
+
+    # Compare against all other genes
+    correlations: List[Tuple[str, float, Optional[float], int]] = []
+
+    for feature_name, profile in all_profiles.items():
+        if feature_name == query_feature.feature_name:
+            continue
+
+        result = _compute_correlation(query_profile, profile, metric, min_conditions)
+        if result:
+            corr, p_value, shared = result
+            correlations.append((feature_name, corr, p_value, shared))
+
+    # Sort by correlation (descending for pearson/spearman, ascending distance for cosine)
+    correlations.sort(key=lambda x: x[1], reverse=True)
+
+    # Take top N
+    top_correlations = correlations[:limit]
+
+    # Fetch feature details for top results
+    similar_genes: List[SimilarGene] = []
+    feature_names = [c[0] for c in top_correlations]
+
+    if feature_names:
+        features_map = {
+            f.feature_name: f
+            for f in db.query(Feature).filter(
+                Feature.feature_name.in_(feature_names)
+            ).all()
+        }
+
+        for feature_name, corr, p_value, shared in top_correlations:
+            feature = features_map.get(feature_name)
+            similar_genes.append(SimilarGene(
+                gene_name=feature.gene_name if feature else None,
+                feature_name=feature_name,
+                description=feature.headline if feature else None,
+                correlation=round(corr, 4),
+                p_value=round(p_value, 6) if p_value is not None else None,
+                shared_conditions=shared
+            ))
+
+    computation_time = (time.time() - start_time) * 1000
+
+    return SimilarGenesResponse(
+        success=True,
+        query_gene=query_feature.gene_name or query_feature.feature_name,
+        query_feature_name=query_feature.feature_name,
+        organism=organism,
+        metric=metric,
+        similar_genes=similar_genes,
+        total_genes_compared=len(correlations),
+        conditions_used=len(query_profile),
+        computation_time_ms=round(computation_time, 2)
+    )

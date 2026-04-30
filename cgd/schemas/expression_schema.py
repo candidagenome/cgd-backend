@@ -94,3 +94,40 @@ class ExpressionDetailsResponse(BaseModel):
         default_factory=dict,
         description="Expression data keyed by organism name"
     )
+
+
+# ============================================================================
+# Similar Expression Genes
+# ============================================================================
+
+class SimilarGene(BaseModel):
+    """A gene with similar expression profile to the query gene."""
+    gene_name: Optional[str] = Field(None, description="Standard gene name")
+    feature_name: str = Field(description="Systematic name (e.g., orf19.1234)")
+    description: Optional[str] = Field(None, description="Gene headline/description")
+    correlation: float = Field(description="Similarity score (-1 to 1)")
+    p_value: Optional[float] = Field(None, description="Statistical significance")
+    shared_conditions: int = Field(description="Number of conditions used in comparison")
+
+
+class SimilarGenesResponse(BaseModel):
+    """Response for similar expression genes endpoint."""
+    success: bool = Field(description="Whether the request succeeded")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+    # Query gene info
+    query_gene: Optional[str] = Field(None, description="Query gene name")
+    query_feature_name: Optional[str] = Field(None, description="Query systematic name")
+    organism: Optional[str] = Field(None, description="Organism searched")
+    metric: Optional[str] = Field(None, description="Similarity metric used")
+
+    # Results
+    similar_genes: List[SimilarGene] = Field(
+        default_factory=list,
+        description="List of genes with similar expression profiles"
+    )
+
+    # Statistics
+    total_genes_compared: int = Field(0, description="Total number of genes compared")
+    conditions_used: int = Field(0, description="Number of conditions in expression profiles")
+    computation_time_ms: float = Field(0.0, description="Time taken to compute results in ms")
