@@ -820,7 +820,7 @@ def get_expression_details_by_organism(
         if not organism:
             continue
 
-        organism_name = organism.display_name
+        organism_name = organism.organism_name
         if organism_name in seen_organisms:
             continue
         seen_organisms.add(organism_name)
