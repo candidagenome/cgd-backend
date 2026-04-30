@@ -238,6 +238,188 @@ EXPRESSION_STUDIES = {
                 "SRR10006219": {"label": "Farnesol (rep 3)", "bucket": "stress"},
             },
         },
+        "Balla_2023": {
+            "category": "Stress Response",
+            "pmid": "37532970",
+            "path_style": "direct",
+            "control": "R1_control",
+            "conditions": {
+                # Control
+                "R1_control": {"label": "Control (rep 1)", "bucket": "control"},
+                "R2_control": {"label": "Control (rep 2)", "bucket": "control"},
+                "R3_control": {"label": "Control (rep 3)", "bucket": "control"},
+                # Tyrosol treated
+                "R1_expt": {"label": "Tyrosol (rep 1)", "bucket": "stress"},
+                "R2_expt": {"label": "Tyrosol (rep 2)", "bucket": "stress"},
+                "R3_expt": {"label": "Tyrosol (rep 3)", "bucket": "stress"},
+            },
+        },
+        "Biermann_2022": {
+            "category": "Stress Response",
+            "pmid": "35473297",
+            "path_style": "direct",
+            "control": "B11221_WT_control_R1",
+            "conditions": {
+                # B11221 WT Control
+                "B11221_WT_control_R1": {"label": "B11221 WT Control (rep 1)", "bucket": "control"},
+                "B11221_WT_control_R2": {"label": "B11221 WT Control (rep 2)", "bucket": "control"},
+                "B11221_WT_control_R3": {"label": "B11221 WT Control (rep 3)", "bucket": "control"},
+                # B11221 WT Methylglyoxal
+                "B11221_WT_MG_R1": {"label": "B11221 WT Methylglyoxal (rep 1)", "bucket": "stress"},
+                "B11221_WT_MG_R2": {"label": "B11221 WT Methylglyoxal (rep 2)", "bucket": "stress"},
+                "B11221_WT_MG_R3": {"label": "B11221 WT Methylglyoxal (rep 3)", "bucket": "stress"},
+                # B11221 WT Benomyl
+                "B11221_WT_BEN_R1": {"label": "B11221 WT Benomyl (rep 1)", "bucket": "stress"},
+                "B11221_WT_BEN_R2": {"label": "B11221 WT Benomyl (rep 2)", "bucket": "stress"},
+                "B11221_WT_BEN_R3": {"label": "B11221 WT Benomyl (rep 3)", "bucket": "stress"},
+                # B11221 mrr1a Control
+                "B11221_mrr1a_control_R1": {"label": "B11221 mrr1aΔ Control (rep 1)", "bucket": "basic_biology"},
+                "B11221_mrr1a_control_R2": {"label": "B11221 mrr1aΔ Control (rep 2)", "bucket": "basic_biology"},
+                "B11221_mrr1a_control_R3": {"label": "B11221 mrr1aΔ Control (rep 3)", "bucket": "basic_biology"},
+                # B11221 mrr1a Methylglyoxal
+                "B11221_mrr1a_MG_R1": {"label": "B11221 mrr1aΔ Methylglyoxal (rep 1)", "bucket": "stress"},
+                "B11221_mrr1a_MG_R2": {"label": "B11221 mrr1aΔ Methylglyoxal (rep 2)", "bucket": "stress"},
+                "B11221_mrr1a_MG_R3": {"label": "B11221 mrr1aΔ Methylglyoxal (rep 3)", "bucket": "stress"},
+                # B11221 mrr1a Benomyl
+                "B11221_mrr1a_BEN_R1": {"label": "B11221 mrr1aΔ Benomyl (rep 1)", "bucket": "stress"},
+                "B11221_mrr1a_BEN_R2": {"label": "B11221 mrr1aΔ Benomyl (rep 2)", "bucket": "stress"},
+                "B11221_mrr1a_BEN_R3": {"label": "B11221 mrr1aΔ Benomyl (rep 3)", "bucket": "stress"},
+                # AR0390 Control
+                "AR0390_control_R1": {"label": "AR0390 Control (rep 1)", "bucket": "control"},
+                "AR0390_control_R2": {"label": "AR0390 Control (rep 2)", "bucket": "control"},
+                "AR0390_control_R3": {"label": "AR0390 Control (rep 3)", "bucket": "control"},
+                # AR0390 Methylglyoxal
+                "AR0390_MG_R1": {"label": "AR0390 Methylglyoxal (rep 1)", "bucket": "stress"},
+                "AR0390_MG_R2": {"label": "AR0390 Methylglyoxal (rep 2)", "bucket": "stress"},
+                "AR0390_MG_R3": {"label": "AR0390 Methylglyoxal (rep 3)", "bucket": "stress"},
+            },
+        },
+        "Chow_2023": {
+            "category": "Gene Regulation",
+            "pmid": "38014938",
+            "path_style": "direct",
+            "control": "CBS10913_R1",
+            "conditions": {
+                # CBS10913 WT Control
+                "CBS10913_R1": {"label": "CBS10913 WT (rep 1)", "bucket": "control"},
+                "CBS10913_R2": {"label": "CBS10913 WT (rep 2)", "bucket": "control"},
+                "CBS10913_R3": {"label": "CBS10913 WT (rep 3)", "bucket": "control"},
+                # CBS10913 mub1 deletion
+                "CBS10913_mub1_R1": {"label": "mub1Δ (rep 1)", "bucket": "basic_biology"},
+                "CBS10913_mub1_R2": {"label": "mub1Δ (rep 2)", "bucket": "basic_biology"},
+                "CBS10913_mub1_R3": {"label": "mub1Δ (rep 3)", "bucket": "basic_biology"},
+                # CBS10913 ubr2 deletion
+                "CBS10913_ubr2_R1": {"label": "ubr2Δ (rep 1)", "bucket": "basic_biology"},
+                "CBS10913_ubr2_R2": {"label": "ubr2Δ (rep 2)", "bucket": "basic_biology"},
+                "CBS10913_ubr2_R3": {"label": "ubr2Δ (rep 3)", "bucket": "basic_biology"},
+            },
+        },
+        "Jenull_2021": {
+            "category": "Strain Comparison",
+            "pmid": "33937102",
+            "path_style": "direct",
+            "control": "CBS10913_R1",
+            "conditions": {
+                # CBS10913
+                "CBS10913_R1": {"label": "CBS10913 (rep 1)", "bucket": "control"},
+                "CBS10913_R2": {"label": "CBS10913 (rep 2)", "bucket": "control"},
+                "CBS10913_R3": {"label": "CBS10913 (rep 3)", "bucket": "control"},
+                # 470140
+                "470140_R1": {"label": "470140 (rep 1)", "bucket": "basic_biology"},
+                "470140_R2": {"label": "470140 (rep 2)", "bucket": "basic_biology"},
+                "470140_R3": {"label": "470140 (rep 3)", "bucket": "basic_biology"},
+                # 470147
+                "470147_R1": {"label": "470147 (rep 1)", "bucket": "basic_biology"},
+                "470147_R2": {"label": "470147 (rep 2)", "bucket": "basic_biology"},
+                "470147_R3": {"label": "470147 (rep 3)", "bucket": "basic_biology"},
+                # 470154
+                "470154_R1": {"label": "470154 (rep 1)", "bucket": "basic_biology"},
+                "470154_R2": {"label": "470154 (rep 2)", "bucket": "basic_biology"},
+                "470154_R3": {"label": "470154 (rep 3)", "bucket": "basic_biology"},
+            },
+        },
+        "Pelletier_2024": {
+            "category": "Morphology/Media",
+            "pmid": "38466738",
+            "path_style": "direct",
+            "control": "UACa11_control_rep1_1",
+            "conditions": {
+                # UACa11 Control (RPMI-1640)
+                "UACa11_control_rep1_1": {"label": "UACa11 Control (rep 1.1)", "bucket": "control"},
+                "UACa11_control_rep1_2": {"label": "UACa11 Control (rep 1.2)", "bucket": "control"},
+                "UACa11_control_rep1_3": {"label": "UACa11 Control (rep 1.3)", "bucket": "control"},
+                "UACa11_control_rep1_4": {"label": "UACa11 Control (rep 1.4)", "bucket": "control"},
+                "UACa11_control_rep2_1": {"label": "UACa11 Control (rep 2.1)", "bucket": "control"},
+                "UACa11_control_rep2_2": {"label": "UACa11 Control (rep 2.2)", "bucket": "control"},
+                "UACa11_control_rep2_3": {"label": "UACa11 Control (rep 2.3)", "bucket": "control"},
+                "UACa11_control_rep2_4": {"label": "UACa11 Control (rep 2.4)", "bucket": "control"},
+                "UACa11_control_rep3_1": {"label": "UACa11 Control (rep 3.1)", "bucket": "control"},
+                "UACa11_control_rep3_2": {"label": "UACa11 Control (rep 3.2)", "bucket": "control"},
+                "UACa11_control_rep3_3": {"label": "UACa11 Control (rep 3.3)", "bucket": "control"},
+                "UACa11_control_rep3_4": {"label": "UACa11 Control (rep 3.4)", "bucket": "control"},
+                # UACa11 Sabouraud's dextrose
+                "UACa11_Sabouraud's_dextrose_rep1_1": {"label": "UACa11 Sabouraud (rep 1.1)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep1_2": {"label": "UACa11 Sabouraud (rep 1.2)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep1_3": {"label": "UACa11 Sabouraud (rep 1.3)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep1_4": {"label": "UACa11 Sabouraud (rep 1.4)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep2_1": {"label": "UACa11 Sabouraud (rep 2.1)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep2_2": {"label": "UACa11 Sabouraud (rep 2.2)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep2_3": {"label": "UACa11 Sabouraud (rep 2.3)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep2_4": {"label": "UACa11 Sabouraud (rep 2.4)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep3_1": {"label": "UACa11 Sabouraud (rep 3.1)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep3_2": {"label": "UACa11 Sabouraud (rep 3.2)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep3_3": {"label": "UACa11 Sabouraud (rep 3.3)", "bucket": "basic_biology"},
+                "UACa11_Sabouraud's_dextrose_rep3_4": {"label": "UACa11 Sabouraud (rep 3.4)", "bucket": "basic_biology"},
+                # UACa20 Control (RPMI-1640)
+                "UACa20_control_rep1_1": {"label": "UACa20 Control (rep 1.1)", "bucket": "control"},
+                "UACa20_control_rep1_2": {"label": "UACa20 Control (rep 1.2)", "bucket": "control"},
+                "UACa20_control_rep1_3": {"label": "UACa20 Control (rep 1.3)", "bucket": "control"},
+                "UACa20_control_rep1_4": {"label": "UACa20 Control (rep 1.4)", "bucket": "control"},
+                "UACa20_control_rep2_1": {"label": "UACa20 Control (rep 2.1)", "bucket": "control"},
+                "UACa20_control_rep2_2": {"label": "UACa20 Control (rep 2.2)", "bucket": "control"},
+                "UACa20_control_rep2_3": {"label": "UACa20 Control (rep 2.3)", "bucket": "control"},
+                "UACa20_control_rep2_4": {"label": "UACa20 Control (rep 2.4)", "bucket": "control"},
+                "UACa20_control_rep3_1": {"label": "UACa20 Control (rep 3.1)", "bucket": "control"},
+                "UACa20_control_rep3_2": {"label": "UACa20 Control (rep 3.2)", "bucket": "control"},
+                "UACa20_control_rep3_3": {"label": "UACa20 Control (rep 3.3)", "bucket": "control"},
+                "UACa20_control_rep3_4": {"label": "UACa20 Control (rep 3.4)", "bucket": "control"},
+                # UACa20 Sabouraud's dextrose
+                "UACa20_Sabouraud's_dextrose_rep1_1": {"label": "UACa20 Sabouraud (rep 1.1)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep1_2": {"label": "UACa20 Sabouraud (rep 1.2)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep1_3": {"label": "UACa20 Sabouraud (rep 1.3)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep1_4": {"label": "UACa20 Sabouraud (rep 1.4)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep2_1": {"label": "UACa20 Sabouraud (rep 2.1)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep2_2": {"label": "UACa20 Sabouraud (rep 2.2)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep2_3": {"label": "UACa20 Sabouraud (rep 2.3)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep2_4": {"label": "UACa20 Sabouraud (rep 2.4)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep3_1": {"label": "UACa20 Sabouraud (rep 3.1)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep3_2": {"label": "UACa20 Sabouraud (rep 3.2)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep3_3": {"label": "UACa20 Sabouraud (rep 3.3)", "bucket": "basic_biology"},
+                "UACa20_Sabouraud's_dextrose_rep3_4": {"label": "UACa20 Sabouraud (rep 3.4)", "bucket": "basic_biology"},
+            },
+        },
+        "Simm_2022": {
+            "category": "Antifungal Response",
+            "pmid": "35412372",
+            "path_style": "direct",
+            "control": "PP_R1a_control",
+            "conditions": {
+                # Control
+                "PP_R1a_control": {"label": "Control (rep 1a)", "bucket": "control"},
+                "PP_R1b_control": {"label": "Control (rep 1b)", "bucket": "control"},
+                "PP_R2a_control": {"label": "Control (rep 2a)", "bucket": "control"},
+                "PP_R2b_control": {"label": "Control (rep 2b)", "bucket": "control"},
+                "PP_R3a_control": {"label": "Control (rep 3a)", "bucket": "control"},
+                "PP_R3b_control": {"label": "Control (rep 3b)", "bucket": "control"},
+                # Pyrvinium pamoate
+                "PP_R1a_expt": {"label": "Pyrvinium pamoate (rep 1a)", "bucket": "kill_candida"},
+                "PP_R1b_expt": {"label": "Pyrvinium pamoate (rep 1b)", "bucket": "kill_candida"},
+                "PP_R2a_expt": {"label": "Pyrvinium pamoate (rep 2a)", "bucket": "kill_candida"},
+                "PP_R2b_expt": {"label": "Pyrvinium pamoate (rep 2b)", "bucket": "kill_candida"},
+                "PP_R3a_expt": {"label": "Pyrvinium pamoate (rep 3a)", "bucket": "kill_candida"},
+                "PP_R3b_expt": {"label": "Pyrvinium pamoate (rep 3b)", "bucket": "kill_candida"},
+            },
+        },
     },
     "C_glabrata_CBS138": {
         "Linde_2015": {
@@ -263,6 +445,94 @@ EXPRESSION_STUDIES = {
                 "SRR1582651": {"label": "Oxidative (rep 2)", "bucket": "stress"},
             },
         },
+        "Bhakt_2022": {
+            "category": "Antifungal Response",
+            "pmid": "36108742",
+            "path_style": "direct",
+            "control": "WT_control_rep1",
+            "conditions": {
+                # WT Control
+                "WT_control_rep1": {"label": "WT Control (rep 1)", "bucket": "control"},
+                "WT_control_rep2": {"label": "WT Control (rep 2)", "bucket": "control"},
+                # WT Caspofungin
+                "WT_casp_rep1": {"label": "WT Caspofungin (rep 1)", "bucket": "kill_candida"},
+                "WT_casp_rep2": {"label": "WT Caspofungin (rep 2)", "bucket": "kill_candida"},
+                # set4 Control
+                "set4_control_rep2": {"label": "set4Δ Control (rep 2)", "bucket": "basic_biology"},
+                # set4 Caspofungin
+                "set4_casp_rep1": {"label": "set4Δ Caspofungin (rep 1)", "bucket": "kill_candida"},
+                "set4_casp_rep2": {"label": "set4Δ Caspofungin (rep 2)", "bucket": "kill_candida"},
+            },
+        },
+        "Kumar_2024": {
+            "category": "Immune Response",
+            "pmid": "38632999",
+            "path_style": "direct",
+            "control": "WT_RPMI_2h_rep1",
+            "conditions": {
+                # WT RPMI (control)
+                "WT_RPMI_2h_rep1": {"label": "WT RPMI 2h (rep 1)", "bucket": "control"},
+                "WT_RPMI_2h_rep2": {"label": "WT RPMI 2h (rep 2)", "bucket": "control"},
+                # WT Macrophage 2h
+                "WT_macrophage_2h_rep1": {"label": "WT Macrophage 2h (rep 1)", "bucket": "kill_candida"},
+                "WT_macrophage_2h_rep2": {"label": "WT Macrophage 2h (rep 2)", "bucket": "kill_candida"},
+                # WT Macrophage 10h
+                "WT_macrophage_10h_rep2": {"label": "WT Macrophage 10h (rep 2)", "bucket": "kill_candida"},
+                # snf2 RPMI 2h
+                "snf2_RPMI_2h_rep1": {"label": "snf2Δ RPMI 2h (rep 1)", "bucket": "basic_biology"},
+                "snf2_RPMI_2h_rep2": {"label": "snf2Δ RPMI 2h (rep 2)", "bucket": "basic_biology"},
+                # snf2 RPMI 10h
+                "snf2_RPMI_10h_rep1": {"label": "snf2Δ RPMI 10h (rep 1)", "bucket": "basic_biology"},
+                "snf2_RPMI_10h_rep2": {"label": "snf2Δ RPMI 10h (rep 2)", "bucket": "basic_biology"},
+                # snf2 Macrophage 2h
+                "snf2_macrophage_2h_rep1": {"label": "snf2Δ Macrophage 2h (rep 1)", "bucket": "kill_candida"},
+                "snf2_macrophage_2h_rep2": {"label": "snf2Δ Macrophage 2h (rep 2)", "bucket": "kill_candida"},
+                # snf2 Macrophage 10h
+                "snf2_macrophage_10h_rep1": {"label": "snf2Δ Macrophage 10h (rep 1)", "bucket": "kill_candida"},
+                "snf2_macrophage_10h_rep2": {"label": "snf2Δ Macrophage 10h (rep 2)", "bucket": "kill_candida"},
+            },
+        },
+        "Ni_2023": {
+            "category": "DNA Damage Response",
+            "pmid": "37891489",
+            "path_style": "direct",
+            "control": "WT_untreated_rep1",
+            "conditions": {
+                # WT Untreated
+                "WT_untreated_rep1": {"label": "WT Untreated (rep 1)", "bucket": "control"},
+                "WT_untreated_rep2": {"label": "WT Untreated (rep 2)", "bucket": "control"},
+                "WT_untreated_rep3": {"label": "WT Untreated (rep 3)", "bucket": "control"},
+                # WT MMS
+                "WT_MMS_rep1": {"label": "WT MMS (rep 1)", "bucket": "stress"},
+                "WT_MMS_rep2": {"label": "WT MMS (rep 2)", "bucket": "stress"},
+                "WT_MMS_rep3": {"label": "WT MMS (rep 3)", "bucket": "stress"},
+                # ckb1 MMS
+                "ckb1_MMS_rep1": {"label": "ckb1Δ MMS (rep 1)", "bucket": "stress"},
+                "ckb1_MMS_rep2": {"label": "ckb1Δ MMS (rep 2)", "bucket": "stress"},
+                # ckb2 Untreated
+                "ckb2_untreated_rep2": {"label": "ckb2Δ Untreated (rep 2)", "bucket": "basic_biology"},
+                # ckb2 MMS
+                "ckb2_MMS_rep1": {"label": "ckb2Δ MMS (rep 1)", "bucket": "stress"},
+                "ckb2_MMS_rep2": {"label": "ckb2Δ MMS (rep 2)", "bucket": "stress"},
+                "ckb2_MMS_rep3": {"label": "ckb2Δ MMS (rep 3)", "bucket": "stress"},
+            },
+        },
+        "Vu_2021": {
+            "category": "Gene Regulation",
+            "pmid": "34591857",
+            "path_style": "direct",
+            "control": "WT_rep1",
+            "conditions": {
+                # WT Control
+                "WT_rep1": {"label": "WT (rep 1)", "bucket": "control"},
+                "WT_rep2": {"label": "WT (rep 2)", "bucket": "control"},
+                "WT_rep3": {"label": "WT (rep 3)", "bucket": "control"},
+                # upc2a mutant
+                "upc2a_rep1": {"label": "upc2aΔ (rep 1)", "bucket": "basic_biology"},
+                "upc2a_rep2": {"label": "upc2aΔ (rep 2)", "bucket": "basic_biology"},
+                "upc2a_rep3": {"label": "upc2aΔ (rep 3)", "bucket": "basic_biology"},
+            },
+        },
     },
     "C_dubliniensis_CD36": {
         "Grumaz_2013": {
@@ -278,6 +548,26 @@ EXPRESSION_STUDIES = {
                 # Hyphal induction
                 "SRR771365": {"label": "Hyphae 37°C (rep 1)", "bucket": "basic_biology"},
                 "SRR771366": {"label": "Hyphae 37°C (rep 2)", "bucket": "basic_biology"},
+            },
+        },
+        "Singh_Babakh_2021": {
+            "category": "Gene Regulation",
+            "pmid": "33723044",
+            "path_style": "direct",
+            "control": "EMPTY_A",
+            "conditions": {
+                # Empty vector control
+                "EMPTY_A": {"label": "Empty vector (rep A)", "bucket": "control"},
+                "EMPTY_B": {"label": "Empty vector (rep B)", "bucket": "control"},
+                # TYE7 overexpression
+                "TYE7OE_A": {"label": "TYE7-OE (rep A)", "bucket": "basic_biology"},
+                "TYE7OE_B": {"label": "TYE7-OE (rep B)", "bucket": "basic_biology"},
+                # GAL4 overexpression
+                "GAL4OE_A": {"label": "GAL4-OE (rep A)", "bucket": "basic_biology"},
+                "GAL4OE_B": {"label": "GAL4-OE (rep B)", "bucket": "basic_biology"},
+                # GLK1 overexpression
+                "GLK1OE_A": {"label": "GLK1-OE (rep A)", "bucket": "basic_biology"},
+                "GLK1OE_B": {"label": "GLK1-OE (rep B)", "bucket": "basic_biology"},
             },
         },
     },
@@ -312,6 +602,64 @@ EXPRESSION_STUDIES = {
                 "ume6_1": {"label": "ume6Δ (rep 1)", "bucket": "basic_biology"},
                 "ume6_2": {"label": "ume6Δ (rep 2)", "bucket": "basic_biology"},
                 "ume6_3": {"label": "ume6Δ (rep 3)", "bucket": "basic_biology"},
+            },
+        },
+        "Connolly_2013": {
+            "category": "Colony Morphology",
+            "pmid": "23895281",
+            "path_style": "old_direct",
+            "control": "WT_control_1",
+            "conditions": {
+                # WT Control
+                "WT_control_1": {"label": "WT Control (rep 1)", "bucket": "control"},
+                "WT_control_2": {"label": "WT Control (rep 2)", "bucket": "control"},
+                "WT_control_3": {"label": "WT Control (rep 3)", "bucket": "control"},
+                # efg1 smooth colony
+                "efg1_smooth_1": {"label": "efg1Δ Smooth (rep 1)", "bucket": "basic_biology"},
+                "efg1_smooth_2": {"label": "efg1Δ Smooth (rep 2)", "bucket": "basic_biology"},
+                # efg1 concentric colony
+                "efg1_concentric_1": {"label": "efg1Δ Concentric (rep 1)", "bucket": "basic_biology"},
+                "efg1_concentric_2": {"label": "efg1Δ Concentric (rep 2)", "bucket": "basic_biology"},
+                "efg1_concentric_3": {"label": "efg1Δ Concentric (rep 3)", "bucket": "basic_biology"},
+            },
+        },
+        "Guida_2011": {
+            "category": "Morphology/Media",
+            "pmid": "22192698",
+            "path_style": "old_direct",
+            "control": "WT_YPD_1_1",
+            "conditions": {
+                # WT YPD Control
+                "WT_YPD_1_1": {"label": "WT YPD (rep 1.1)", "bucket": "control"},
+                "WT_YPD_1_2": {"label": "WT YPD (rep 1.2)", "bucket": "control"},
+                "WT_YPD_1_3": {"label": "WT YPD (rep 1.3)", "bucket": "control"},
+                "WT_YPD_1_4": {"label": "WT YPD (rep 1.4)", "bucket": "control"},
+                "WT_YPD_2_1": {"label": "WT YPD (rep 2.1)", "bucket": "control"},
+                "WT_YPD_2_2": {"label": "WT YPD (rep 2.2)", "bucket": "control"},
+                "WT_YPD_2_3": {"label": "WT YPD (rep 2.3)", "bucket": "control"},
+                "WT_YPD_3_1": {"label": "WT YPD (rep 3.1)", "bucket": "control"},
+                "WT_YPD_4_1": {"label": "WT YPD (rep 4.1)", "bucket": "control"},
+                "WT_YPD_5_1": {"label": "WT YPD (rep 5.1)", "bucket": "control"},
+                "WT_YPD_6_1": {"label": "WT YPD (rep 6.1)", "bucket": "control"},
+                "WT_YPD_7_1": {"label": "WT YPD (rep 7.1)", "bucket": "control"},
+                # WT BMW medium
+                "WT_BMW_1_1": {"label": "WT BMW (rep 1.1)", "bucket": "basic_biology"},
+                "WT_BMW_1_2": {"label": "WT BMW (rep 1.2)", "bucket": "basic_biology"},
+                "WT_BMW_1_3": {"label": "WT BMW (rep 1.3)", "bucket": "basic_biology"},
+                "WT_BMW_2_1": {"label": "WT BMW (rep 2.1)", "bucket": "basic_biology"},
+                "WT_BMW_2_2": {"label": "WT BMW (rep 2.2)", "bucket": "basic_biology"},
+                "WT_BMW_3_1": {"label": "WT BMW (rep 3.1)", "bucket": "basic_biology"},
+                "WT_BMW_4_1": {"label": "WT BMW (rep 4.1)", "bucket": "basic_biology"},
+                # WT media mix
+                "WT_mediamix_1_1": {"label": "WT Media mix (rep 1.1)", "bucket": "basic_biology"},
+                # WT YPD hypoxia
+                "WT_YPD_hypoxia_1_1": {"label": "WT YPD Hypoxia (rep 1.1)", "bucket": "stress"},
+                "WT_YPD_hypoxia_2_1": {"label": "WT YPD Hypoxia (rep 2.1)", "bucket": "stress"},
+                "WT_YPD_hypoxia_3_1": {"label": "WT YPD Hypoxia (rep 3.1)", "bucket": "stress"},
+                "WT_YPD_hypoxia_4_1": {"label": "WT YPD Hypoxia (rep 4.1)", "bucket": "stress"},
+                # upc2 YPD hypoxia
+                "upc2_YPD_hypoxia_1_1": {"label": "upc2Δ YPD Hypoxia (rep 1.1)", "bucket": "stress"},
+                "upc2_YPD_hypoxia_2_1": {"label": "upc2Δ YPD Hypoxia (rep 2.1)", "bucket": "stress"},
             },
         },
     },
