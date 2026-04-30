@@ -281,6 +281,40 @@ EXPRESSION_STUDIES = {
             },
         },
     },
+    "C_parapsilosis_CDC317": {
+        "Holland_2014": {
+            "category": "Biofilm/Transcription Factors",
+            "pmid": "24586159",
+            "path_style": "old_direct",  # old style without HapA subdirectory
+            "control": "wt_plnk_1",
+            "conditions": {
+                # Wild-type planktonic (control)
+                "wt_plnk_1": {"label": "WT Planktonic (rep 1)", "bucket": "control"},
+                "wt_plnk_2": {"label": "WT Planktonic (rep 2)", "bucket": "control"},
+                "wt_plnk_3": {"label": "WT Planktonic (rep 3)", "bucket": "control"},
+                # Wild-type biofilm
+                "wt_film_1": {"label": "WT Biofilm (rep 1)", "bucket": "basic_biology"},
+                "wt_film_2": {"label": "WT Biofilm (rep 2)", "bucket": "basic_biology"},
+                "wt_film_3": {"label": "WT Biofilm (rep 3)", "bucket": "basic_biology"},
+                # Transcription factor mutants
+                "ace2_1": {"label": "ace2Δ (rep 1)", "bucket": "basic_biology"},
+                "ace2_2": {"label": "ace2Δ (rep 2)", "bucket": "basic_biology"},
+                "ace2_3": {"label": "ace2Δ (rep 3)", "bucket": "basic_biology"},
+                "cph2_1": {"label": "cph2Δ (rep 1)", "bucket": "basic_biology"},
+                "cph2_2": {"label": "cph2Δ (rep 2)", "bucket": "basic_biology"},
+                "cph2_3": {"label": "cph2Δ (rep 3)", "bucket": "basic_biology"},
+                "efg1_1": {"label": "efg1Δ (rep 1)", "bucket": "basic_biology"},
+                "efg1_2": {"label": "efg1Δ (rep 2)", "bucket": "basic_biology"},
+                "efg1_3": {"label": "efg1Δ (rep 3)", "bucket": "basic_biology"},
+                "czf1_1": {"label": "czf1Δ (rep 1)", "bucket": "basic_biology"},
+                "czf1_2": {"label": "czf1Δ (rep 2)", "bucket": "basic_biology"},
+                "czf1_3": {"label": "czf1Δ (rep 3)", "bucket": "basic_biology"},
+                "ume6_1": {"label": "ume6Δ (rep 1)", "bucket": "basic_biology"},
+                "ume6_2": {"label": "ume6Δ (rep 2)", "bucket": "basic_biology"},
+                "ume6_3": {"label": "ume6Δ (rep 3)", "bucket": "basic_biology"},
+            },
+        },
+    },
 }
 
 # Bucket category labels
@@ -382,16 +416,19 @@ def _map_chromosome_for_bigwig(chromosome: str, hts_key: str) -> Optional[str]:
             return f"Chr{match.group(1)}_C_dubliniensis_CD36"
         return chromosome if "Chr" in chromosome else None
 
-    # Handle C. parapsilosis
+    # Handle C. parapsilosis (uses Contig names, not Chr)
     if hts_key == "C_parapsilosis_CDC317":
-        # Already correct format
-        if chromosome.startswith("Chr") and "_C_parapsilosis_CDC317" in chromosome:
+        # Already correct format with suffix
+        if "_C_parapsilosis_CDC317" in chromosome:
             return chromosome
-        # Map simple format
-        match = re.match(r"Chr(\d+)", chromosome)
+        # Map contig format: Contig005504 -> Contig005504_C_parapsilosis_CDC317
+        match = re.match(r"(Contig\d+)", chromosome)
         if match:
-            return f"Chr{match.group(1)}_C_parapsilosis_CDC317"
-        return chromosome if "Chr" in chromosome else None
+            return f"{match.group(1)}_C_parapsilosis_CDC317"
+        # Return as-is if it's a contig
+        if chromosome.startswith("Contig"):
+            return f"{chromosome}_C_parapsilosis_CDC317"
+        return None
 
     # Unknown organism - return as-is
     return chromosome
@@ -416,6 +453,9 @@ def _get_bigwig_path(
     if study_info["path_style"] == "old":
         # C. albicans old style: {study}/HapA/{cond}/sorted_hits_bam2wig/sorted_hits.bigwig
         return base_path / study / haplotype / condition / "sorted_hits_bam2wig" / "sorted_hits.bigwig"
+    elif study_info["path_style"] == "old_direct":
+        # Old style without haplotype: {study}/{cond}/sorted_hits_bam2wig/sorted_hits.bigwig
+        return base_path / study / condition / "sorted_hits_bam2wig" / "sorted_hits.bigwig"
     elif study_info["path_style"] == "lohse":
         # Lohse_2016 style: {study}/HapA/{cond}/{cond}_bam2wig/{cond}.bigwig
         return base_path / study / haplotype / condition / f"{condition}_bam2wig" / f"{condition}.bigwig"
@@ -904,6 +944,12 @@ def _get_gene_location_for_feature(
             elif chr_name.startswith("Ca20chr"):
                 priority = 2
             elif "chr" in chr_name.lower():
+                priority = 1
+        elif hts_key == "C_parapsilosis_CDC317":
+            # C. parapsilosis uses Contig names
+            if chr_name.startswith("Contig"):
+                priority = 2
+            elif "contig" in chr_name.lower():
                 priority = 1
         else:
             # For other organisms, prefer chromosome over contig
