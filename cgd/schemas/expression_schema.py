@@ -131,3 +131,41 @@ class SimilarGenesResponse(BaseModel):
     total_genes_compared: int = Field(0, description="Total number of genes compared")
     conditions_used: int = Field(0, description="Number of conditions in expression profiles")
     computation_time_ms: float = Field(0.0, description="Time taken to compute results in ms")
+
+
+# ============================================================================
+# Batch Expression Data (for multi-gene heatmap)
+# ============================================================================
+
+class BatchGeneExpression(BaseModel):
+    """Expression data for a single gene in batch response."""
+    gene_name: str = Field(description="Gene name or feature name queried")
+    data: Optional[ExpressionDetailsForOrganism] = Field(
+        None, description="Expression data for this gene"
+    )
+    error: Optional[str] = Field(None, description="Error message if data unavailable")
+
+
+class BatchExpressionRequest(BaseModel):
+    """Request for batch expression data."""
+    gene_names: List[str] = Field(
+        description="List of gene names to fetch (max 50)",
+        min_length=1,
+        max_length=50
+    )
+    organism: str = Field(
+        default="Candida albicans SC5314",
+        description="Organism display name"
+    )
+
+
+class BatchExpressionResponse(BaseModel):
+    """Response for batch expression data."""
+    success: bool = Field(description="Whether the request succeeded")
+    results: List[BatchGeneExpression] = Field(
+        default_factory=list,
+        description="Expression data for each gene"
+    )
+    genes_found: int = Field(0, description="Number of genes with data")
+    genes_missing: int = Field(0, description="Number of genes without data")
+    computation_time_ms: float = Field(0.0, description="Time taken in ms")

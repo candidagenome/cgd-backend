@@ -23,6 +23,8 @@ from cgd.schemas.expression_schema import (
     ExpressionDetailsForOrganism,
     SimilarGene,
     SimilarGenesResponse,
+    BatchGeneExpression,
+    BatchExpressionResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -1802,5 +1804,119 @@ def get_similar_expression_genes(
         similar_genes=similar_genes,
         total_genes_compared=len(correlations),
         conditions_used=len(query_profile),
+        computation_time_ms=round(computation_time, 2)
+    )
+
+
+# ============================================================================
+# Batch Expression Data (for multi-gene heatmap)
+# ============================================================================
+
+def get_batch_expression_data(
+    db: Session,
+    gene_names: List[str],
+    organism: str = "Candida albicans SC5314"
+) -> BatchExpressionResponse:
+    """
+    Get expression data for multiple genes in a single request.
+
+    This is optimized for the co-expression heatmap which needs expression
+    data for the query gene plus similar genes. Uses the pre-computed
+    expression profile cache for fast response times.
+
+    Args:
+        db: Database session
+        gene_names: List of gene names to fetch
+        organism: Organism display name (e.g., "Candida albicans SC5314")
+
+    Returns:
+        BatchExpressionResponse with expression data for each gene
+    """
+    import time
+    start_time = time.time()
+
+    # Map organism display name to HTS key
+    hts_key = ORGANISM_TO_HTS_KEY.get(organism)
+    if not hts_key:
+        return BatchExpressionResponse(
+            success=False,
+            results=[],
+            genes_found=0,
+            genes_missing=len(gene_names),
+            computation_time_ms=0
+        )
+
+    # Get studies config for this organism
+    studies_config = EXPRESSION_STUDIES.get(hts_key, {})
+    if not studies_config:
+        return BatchExpressionResponse(
+            success=False,
+            results=[],
+            genes_found=0,
+            genes_missing=len(gene_names),
+            computation_time_ms=0
+        )
+
+    # Get base path for HTS data
+    base_path = HTS_BASE_PATHS.get(hts_key)
+    if not base_path or not base_path.exists():
+        return BatchExpressionResponse(
+            success=False,
+            results=[],
+            genes_found=0,
+            genes_missing=len(gene_names),
+            computation_time_ms=0
+        )
+
+    results: List[BatchGeneExpression] = []
+    genes_found = 0
+    genes_missing = 0
+
+    # Process each gene
+    for gene_name in gene_names:
+        # Find the feature
+        feature = (
+            db.query(Feature)
+            .filter(
+                (func.upper(Feature.gene_name) == func.upper(gene_name)) |
+                (func.upper(Feature.feature_name) == func.upper(gene_name))
+            )
+            .first()
+        )
+
+        if not feature:
+            results.append(BatchGeneExpression(
+                gene_name=gene_name,
+                data=None,
+                error="Gene not found"
+            ))
+            genes_missing += 1
+            continue
+
+        # Get expression data for this feature
+        expr_data = _get_expression_for_organism(db, feature, organism)
+
+        if expr_data:
+            results.append(BatchGeneExpression(
+                gene_name=gene_name,
+                data=expr_data,
+                error=None
+            ))
+            genes_found += 1
+        else:
+            results.append(BatchGeneExpression(
+                gene_name=gene_name,
+                data=None,
+                error="No expression data for organism"
+            ))
+            genes_missing += 1
+
+    computation_time = (time.time() - start_time) * 1000
+
+    return BatchExpressionResponse(
+        success=True,
+        results=results,
+        genes_found=genes_found,
+        genes_missing=genes_missing,
         computation_time_ms=round(computation_time, 2)
     )

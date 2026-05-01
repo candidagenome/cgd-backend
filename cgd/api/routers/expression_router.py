@@ -11,11 +11,14 @@ from cgd.api.services.expression_service import (
     get_gene_expression,
     get_expression_config,
     get_similar_expression_genes,
+    get_batch_expression_data,
 )
 from cgd.schemas.expression_schema import (
     GeneExpressionResponse,
     ExpressionConfigResponse,
     SimilarGenesResponse,
+    BatchExpressionRequest,
+    BatchExpressionResponse,
 )
 
 router = APIRouter(prefix="/api/expression", tags=["Expression"])
@@ -107,3 +110,27 @@ def get_similar_genes(
 def get_config() -> ExpressionConfigResponse:
     """Get available expression datasets."""
     return get_expression_config()
+
+
+@router.post(
+    "/batch",
+    response_model=BatchExpressionResponse,
+    summary="Get expression data for multiple genes",
+    description="""
+    Returns expression data for multiple genes in a single request.
+
+    This endpoint is optimized for the co-expression heatmap which needs
+    expression data for multiple genes (query gene + similar genes).
+    Much faster than making separate requests for each gene.
+
+    **Request body:**
+    - gene_names: List of gene names (max 50)
+    - organism: Organism display name (e.g., "Candida albicans SC5314")
+    """
+)
+def get_batch_expression(
+    request: BatchExpressionRequest,
+    db: Session = Depends(get_db)
+) -> BatchExpressionResponse:
+    """Get expression data for multiple genes in batch."""
+    return get_batch_expression_data(db, request.gene_names, request.organism)
