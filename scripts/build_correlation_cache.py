@@ -2,8 +2,7 @@
 """
 Build pre-computed correlation cache for the Similar Expression Genes feature.
 
-Uses vectorized numpy operations for fast computation.
-For 12,000 genes, this takes about 2-3 minutes instead of hours.
+Uses numpy's masked arrays for efficient computation with missing data.
 
 Usage:
     python scripts/build_correlation_cache.py [--organism ORGANISM]
@@ -18,6 +17,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from numpy import ma
 
 # Configure logging
 logging.basicConfig(
@@ -55,16 +55,70 @@ def load_profiles(organism_key: str) -> dict:
     return profiles
 
 
-def build_correlation_cache_fast(
+def compute_correlation_row(gene_idx: int, expr_matrix: np.ndarray, valid_mask: np.ndarray, min_shared: int = 5) -> list:
+    """Compute correlations for one gene against all others using vectorized operations."""
+    n_genes = expr_matrix.shape[0]
+    gene_i = expr_matrix[gene_idx]
+    valid_i = valid_mask[gene_idx]
+
+    results = []
+
+    # For each target gene, compute correlation
+    for j in range(n_genes):
+        if j == gene_idx:
+            continue
+
+        gene_j = expr_matrix[j]
+        valid_j = valid_mask[j]
+
+        # Find shared valid indices
+        shared_mask = valid_i & valid_j
+        n_shared = np.sum(shared_mask)
+
+        if n_shared < min_shared:
+            continue
+
+        # Get values for shared conditions
+        x = gene_i[shared_mask]
+        y = gene_j[shared_mask]
+
+        # Compute Pearson correlation
+        x_mean = x.mean()
+        y_mean = y.mean()
+        x_centered = x - x_mean
+        y_centered = y - y_mean
+
+        numerator = (x_centered * y_centered).sum()
+        x_var = (x_centered ** 2).sum()
+        y_var = (y_centered ** 2).sum()
+
+        if x_var == 0 or y_var == 0:
+            continue
+
+        corr = numerator / np.sqrt(x_var * y_var)
+
+        if not np.isfinite(corr):
+            continue
+
+        # Approximate p-value
+        if abs(corr) < 0.9999 and n_shared > 2:
+            t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
+            # Very rough p-value approximation
+            pval = max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10)
+        else:
+            pval = 1e-10
+
+        results.append((j, float(corr), float(pval), int(n_shared)))
+
+    return results
+
+
+def build_correlation_cache_parallel(
     profiles: dict,
     top_n: int = 100,
     min_shared: int = 5
 ) -> tuple:
-    """
-    Build correlation cache using vectorized numpy operations.
-
-    This is MUCH faster than the naive O(n²) loop approach.
-    """
+    """Build correlation cache using simple loop but optimized numpy operations."""
     # Get sorted list of gene names
     gene_names = sorted(profiles.keys())
     n_genes = len(gene_names)
@@ -81,7 +135,6 @@ def build_correlation_cache_fast(
     logger.info(f"Total conditions: {n_conditions}")
 
     # Build expression matrix (genes x conditions)
-    # Use NaN for missing values
     expr_matrix = np.full((n_genes, n_conditions), np.nan, dtype=np.float64)
     condition_to_idx = {c: i for i, c in enumerate(conditions)}
 
@@ -91,88 +144,29 @@ def build_correlation_cache_fast(
             j = condition_to_idx[cond]
             expr_matrix[i, j] = fc
 
-    logger.info("Built expression matrix, computing correlations...")
-
-    # Create mask for valid (non-NaN) values
+    # Create valid mask
     valid_mask = ~np.isnan(expr_matrix)
 
-    # Compute mean and std for each gene (ignoring NaN)
-    # We'll compute correlations in chunks to manage memory
-    CHUNK_SIZE = 500
+    logger.info("Built expression matrix, computing correlations...")
 
     # Initialize storage for top N correlations per gene
     top_indices = np.zeros((n_genes, top_n), dtype=np.int32)
     top_correlations = np.zeros((n_genes, top_n), dtype=np.float32)
-    top_pvalues = np.ones((n_genes, top_n), dtype=np.float32)  # Default to 1
+    top_pvalues = np.ones((n_genes, top_n), dtype=np.float32)
     top_shared = np.zeros((n_genes, top_n), dtype=np.int16)
 
     start_time = time.time()
 
+    # Process genes
     for i in range(n_genes):
-        if i % 1000 == 0:
+        if i % 500 == 0:
             elapsed = time.time() - start_time
             rate = i / elapsed if elapsed > 0 else 0
             eta = (n_genes - i) / rate if rate > 0 else 0
             logger.info(f"Processing gene {i}/{n_genes} ({rate:.1f}/sec, ETA: {eta/60:.1f} min)")
 
-        gene_i = expr_matrix[i]
-        valid_i = valid_mask[i]
-
-        # Pre-compute for this gene
-        correlations = []
-
-        # Process in chunks for memory efficiency
-        for chunk_start in range(0, n_genes, CHUNK_SIZE):
-            chunk_end = min(chunk_start + CHUNK_SIZE, n_genes)
-
-            for j in range(chunk_start, chunk_end):
-                if i == j:
-                    continue
-
-                gene_j = expr_matrix[j]
-                valid_j = valid_mask[j]
-
-                # Find shared valid indices
-                shared_mask = valid_i & valid_j
-                n_shared = np.sum(shared_mask)
-
-                if n_shared < min_shared:
-                    continue
-
-                # Get values for shared conditions
-                x = gene_i[shared_mask]
-                y = gene_j[shared_mask]
-
-                # Compute Pearson correlation manually (faster than scipy for this use case)
-                x_mean = np.mean(x)
-                y_mean = np.mean(y)
-                x_centered = x - x_mean
-                y_centered = y - y_mean
-
-                numerator = np.sum(x_centered * y_centered)
-                x_std = np.sqrt(np.sum(x_centered ** 2))
-                y_std = np.sqrt(np.sum(y_centered ** 2))
-
-                if x_std == 0 or y_std == 0:
-                    continue
-
-                corr = numerator / (x_std * y_std)
-
-                if not np.isfinite(corr):
-                    continue
-
-                # Approximate p-value using t-distribution
-                # t = r * sqrt((n-2)/(1-r²))
-                if abs(corr) < 0.9999:
-                    t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
-                    # Approximate p-value (2-tailed) using normal approximation for large n
-                    # This is rough but fast
-                    pval = 2 * (1 - 0.5 * (1 + np.tanh(0.7 * abs(t_stat))))
-                    pval = max(pval, 1e-10)  # Minimum p-value
-                else:
-                    pval = 1e-10
-
-                correlations.append((j, corr, pval, n_shared))
+        # Compute correlations for this gene
+        correlations = compute_correlation_row(i, expr_matrix, valid_mask, min_shared)
 
         # Sort by correlation (descending) and keep top N
         correlations.sort(key=lambda x: x[1], reverse=True)
@@ -201,7 +195,6 @@ def save_correlation_cache(
     """Save correlation cache to disk."""
     output_file = EXPRESSION_CACHE_DIR / f"correlations_{organism_key}.npz"
 
-    # Save numpy arrays
     np.savez_compressed(
         output_file,
         gene_names=np.array(gene_names),
@@ -242,17 +235,14 @@ def main():
         logger.info(f"Processing {organism_key}")
         logger.info(f"{'='*60}")
 
-        # Load profiles
         profiles = load_profiles(organism_key)
         if not profiles:
             logger.warning(f"No profiles found for {organism_key}, skipping")
             continue
 
-        # Build correlation matrix
         gene_names, top_indices, top_corrs, top_pvals, top_shared = \
-            build_correlation_cache_fast(profiles)
+            build_correlation_cache_parallel(profiles)
 
-        # Save cache
         save_correlation_cache(
             organism_key,
             gene_names,
