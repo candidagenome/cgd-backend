@@ -117,11 +117,12 @@ def batch_get_gene_locations(
     hts_key: str
 ) -> Dict[int, Tuple[str, int, int]]:
     """
-    Batch fetch gene locations for multiple features in a single query.
+    Batch fetch gene locations for multiple features.
+
+    Handles Oracle's 1000 item IN clause limit by chunking.
 
     Returns dict mapping feature_no to (chromosome, start, end).
     """
-    from sqlalchemy import and_
     from sqlalchemy.orm import aliased
 
     if not feature_nos:
@@ -130,27 +131,37 @@ def batch_get_gene_locations(
     # Create alias for the chromosome feature
     ChromFeature = aliased(Feature)
 
-    # Single query with joins to get all location data at once
-    results = (
-        db.query(
-            FeatLocation.feature_no,
-            FeatLocation.start_coord,
-            FeatLocation.stop_coord,
-            ChromFeature.feature_name.label('chromosome')
+    # Oracle has 1000 item limit for IN clause - chunk the query
+    CHUNK_SIZE = 900
+    all_results = []
+
+    for i in range(0, len(feature_nos), CHUNK_SIZE):
+        chunk = feature_nos[i:i + CHUNK_SIZE]
+
+        results = (
+            db.query(
+                FeatLocation.feature_no,
+                FeatLocation.start_coord,
+                FeatLocation.stop_coord,
+                ChromFeature.feature_name.label('chromosome')
+            )
+            .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+            .join(ChromFeature, ChromFeature.feature_no == Seq.feature_no)
+            .filter(
+                FeatLocation.feature_no.in_(chunk),
+                FeatLocation.is_loc_current == "Y",
+                FeatLocation.root_seq_no.isnot(None)
+            )
+            .all()
         )
-        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
-        .join(ChromFeature, ChromFeature.feature_no == Seq.feature_no)
-        .filter(
-            FeatLocation.feature_no.in_(feature_nos),
-            FeatLocation.is_loc_current == "Y",
-            FeatLocation.root_seq_no.isnot(None)
-        )
-        .all()
-    )
+        all_results.extend(results)
+
+        if (i + CHUNK_SIZE) % 5000 < CHUNK_SIZE:
+            logger.info(f"  Fetched locations for {min(i + CHUNK_SIZE, len(feature_nos))}/{len(feature_nos)} features")
 
     # Group by feature_no and select best chromosome
     feature_locations: Dict[int, List[Tuple[str, int, int, int]]] = {}
-    for row in results:
+    for row in all_results:
         feature_no = row.feature_no
         chr_name = row.chromosome
         priority = get_chromosome_priority(chr_name, hts_key)
