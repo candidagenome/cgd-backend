@@ -1426,8 +1426,19 @@ except ImportError:
 # This is a simple dict cache that persists for the lifetime of the process
 _expression_profile_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
 
+# Pre-computed correlation cache: {organism: (gene_names, gene_index, arrays...)}
+_correlation_cache: Dict[str, tuple] = {}
+
 # Directory for pre-computed cache files
 EXPRESSION_CACHE_DIR = Path("/data/cache/expression")
+
+# Try to import numpy
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    logger.warning("numpy not installed - pre-computed correlations unavailable")
 
 
 def _load_expression_cache_from_file(organism_key: str) -> Optional[Dict[str, Dict[str, float]]]:
@@ -1454,6 +1465,101 @@ def _load_expression_cache_from_file(organism_key: str) -> Optional[Dict[str, Di
     except Exception as e:
         logger.error(f"Error loading cache file {cache_file}: {e}")
         return None
+
+
+def _load_correlation_cache(organism_key: str) -> Optional[tuple]:
+    """
+    Load pre-computed correlation cache from file.
+
+    Cache files are built by scripts/build_correlation_cache.py
+
+    Returns:
+        Tuple of (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared)
+        or None if not available
+    """
+    global _correlation_cache
+
+    # Return from memory cache if available
+    if organism_key in _correlation_cache:
+        return _correlation_cache[organism_key]
+
+    if not NUMPY_AVAILABLE:
+        return None
+
+    cache_file = EXPRESSION_CACHE_DIR / f"correlations_{organism_key}.npz"
+    index_file = EXPRESSION_CACHE_DIR / f"gene_index_{organism_key}.json"
+
+    if not cache_file.exists() or not index_file.exists():
+        logger.debug(f"Correlation cache not found for {organism_key}")
+        return None
+
+    try:
+        logger.info(f"Loading correlation cache from {cache_file}")
+
+        # Load numpy arrays
+        data = np.load(cache_file)
+        gene_names = data['gene_names'].tolist()
+        top_indices = data['top_indices']
+        top_correlations = data['top_correlations']
+        top_pvalues = data['top_pvalues']
+        top_shared = data['top_shared']
+
+        # Load gene index
+        with open(index_file, 'r') as f:
+            gene_index = json.load(f)
+
+        result = (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared)
+        _correlation_cache[organism_key] = result
+
+        logger.info(f"Loaded correlation cache: {len(gene_names)} genes")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error loading correlation cache {cache_file}: {e}")
+        return None
+
+
+def _get_similar_genes_from_cache(
+    organism_key: str,
+    query_feature_name: str,
+    limit: int = 20
+) -> Optional[List[Tuple[str, float, Optional[float], int]]]:
+    """
+    Get similar genes using pre-computed correlation cache.
+
+    Returns:
+        List of (feature_name, correlation, p_value, shared_conditions) or None if cache unavailable
+    """
+    cache_data = _load_correlation_cache(organism_key)
+    if not cache_data:
+        return None
+
+    gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared = cache_data
+
+    # Find query gene index
+    query_idx = gene_index.get(query_feature_name)
+    if query_idx is None:
+        logger.debug(f"Query gene {query_feature_name} not found in correlation cache")
+        return None
+
+    # Get pre-computed top correlations
+    results = []
+    for i in range(min(limit, len(top_indices[query_idx]))):
+        target_idx = top_indices[query_idx, i]
+        if target_idx == 0 and i > 0:  # End of valid results
+            break
+
+        corr = float(top_correlations[query_idx, i])
+        if corr == 0 and i > 0:  # No more valid correlations
+            break
+
+        pval = float(top_pvalues[query_idx, i])
+        shared = int(top_shared[query_idx, i])
+        target_name = gene_names[target_idx]
+
+        results.append((target_name, corr, pval if pval > 0 else None, shared))
+
+    return results
 
 
 def _get_all_condition_ids(organism_key: str) -> List[str]:
@@ -1733,6 +1839,50 @@ def get_similar_expression_genes(
             error=f"Gene '{gene_name}' not found"
         )
 
+    # Try pre-computed correlation cache first (for pearson metric only)
+    if metric == "pearson":
+        cached_correlations = _get_similar_genes_from_cache(
+            organism_key, query_feature.feature_name, limit
+        )
+        if cached_correlations:
+            logger.debug(f"Using pre-computed correlations for {query_feature.feature_name}")
+
+            # Fetch feature details for cached results
+            feature_names = [c[0] for c in cached_correlations]
+            features_map = {
+                f.feature_name: f
+                for f in db.query(Feature).filter(
+                    Feature.feature_name.in_(feature_names)
+                ).all()
+            }
+
+            similar_genes: List[SimilarGene] = []
+            for feature_name, corr, p_value, shared in cached_correlations:
+                feature = features_map.get(feature_name)
+                similar_genes.append(SimilarGene(
+                    gene_name=feature.gene_name if feature else None,
+                    feature_name=feature_name,
+                    description=feature.headline if feature else None,
+                    correlation=round(corr, 4),
+                    p_value=round(p_value, 6) if p_value is not None else None,
+                    shared_conditions=shared
+                ))
+
+            computation_time = (time.time() - start_time) * 1000
+
+            return SimilarGenesResponse(
+                success=True,
+                query_gene=query_feature.gene_name or query_feature.feature_name,
+                query_feature_name=query_feature.feature_name,
+                organism=organism,
+                metric=metric,
+                similar_genes=similar_genes,
+                total_genes_compared=len(cached_correlations),
+                conditions_used=0,  # Unknown from cache
+                computation_time_ms=round(computation_time, 2)
+            )
+
+    # Fall back to on-the-fly computation
     # Build all expression profiles (uses cache)
     all_profiles = _build_all_expression_profiles(db, organism_key)
     if not all_profiles:
