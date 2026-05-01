@@ -1751,6 +1751,9 @@ def get_similar_expression_genes(
     correlations: List[Tuple[str, float, Optional[float], int]] = []
 
     for feature_name, profile in all_profiles.items():
+        # For C. albicans, skip old orf19.XXXX genes and B alleles (show only A22 A alleles)
+        if organism_key == "C_albicans_SC5314" and (feature_name.startswith("orf19.") or feature_name.endswith("_B")):
+            continue
         if feature_name == query_feature.feature_name:
             continue
 
