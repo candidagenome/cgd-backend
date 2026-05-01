@@ -87,12 +87,110 @@ from cgd.api.services.expression_service import (
 # Helper Functions
 # ============================================================================
 
+def get_chromosome_priority(chr_name: str, hts_key: str) -> int:
+    """Determine priority for chromosome selection."""
+    if hts_key == "C_albicans_SC5314":
+        if chr_name.startswith("Ca22chr"):
+            return 4
+        elif chr_name.startswith("Ca21chr"):
+            return 3
+        elif chr_name.startswith("Ca20chr"):
+            return 2
+        elif "chr" in chr_name.lower():
+            return 1
+    elif hts_key == "C_parapsilosis_CDC317":
+        if chr_name.startswith("Contig"):
+            return 2
+        elif "contig" in chr_name.lower():
+            return 1
+    else:
+        if chr_name.startswith("Chr"):
+            return 2
+        elif "chr" in chr_name.lower():
+            return 1
+    return 0
+
+
+def batch_get_gene_locations(
+    db,
+    feature_nos: List[int],
+    hts_key: str
+) -> Dict[int, Tuple[str, int, int]]:
+    """
+    Batch fetch gene locations for multiple features in a single query.
+
+    Returns dict mapping feature_no to (chromosome, start, end).
+    """
+    from sqlalchemy import and_
+    from sqlalchemy.orm import aliased
+
+    if not feature_nos:
+        return {}
+
+    # Create alias for the chromosome feature
+    ChromFeature = aliased(Feature)
+
+    # Single query with joins to get all location data at once
+    results = (
+        db.query(
+            FeatLocation.feature_no,
+            FeatLocation.start_coord,
+            FeatLocation.stop_coord,
+            ChromFeature.feature_name.label('chromosome')
+        )
+        .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+        .join(ChromFeature, ChromFeature.feature_no == Seq.feature_no)
+        .filter(
+            FeatLocation.feature_no.in_(feature_nos),
+            FeatLocation.is_loc_current == "Y",
+            FeatLocation.root_seq_no.isnot(None)
+        )
+        .all()
+    )
+
+    # Group by feature_no and select best chromosome
+    feature_locations: Dict[int, List[Tuple[str, int, int, int]]] = {}
+    for row in results:
+        feature_no = row.feature_no
+        chr_name = row.chromosome
+        priority = get_chromosome_priority(chr_name, hts_key)
+
+        if feature_no not in feature_locations:
+            feature_locations[feature_no] = []
+        feature_locations[feature_no].append((chr_name, row.start_coord, row.stop_coord, priority))
+
+    # Select best location for each feature
+    best_locations: Dict[int, Tuple[str, int, int]] = {}
+    for feature_no, locs in feature_locations.items():
+        # Sort by priority descending, take first
+        locs.sort(key=lambda x: x[3], reverse=True)
+        best = locs[0]
+        chr_name, start, end, _ = best
+
+        # Map chromosome name for bigwig
+        mapped_chr = _map_chromosome_for_bigwig(chr_name, hts_key)
+        if mapped_chr:
+            best_locations[feature_no] = (mapped_chr, start, end)
+
+    return best_locations
+
+
 def get_gene_location_for_feature(
     db,
     feature: Feature,
     hts_key: str
 ) -> Optional[Tuple[str, int, int]]:
-    """Get gene location info for a specific feature."""
+    """Get gene location info for a specific feature (single gene version)."""
+    locations = batch_get_gene_locations(db, [feature.feature_no], hts_key)
+    return locations.get(feature.feature_no)
+
+
+def old_get_gene_location_for_feature(
+    db,
+    feature: Feature,
+    hts_key: str
+) -> Optional[Tuple[str, int, int]]:
+    """Get gene location info for a specific feature (old slow version)."""
     locations = (
         db.query(FeatLocation)
         .filter(
@@ -124,28 +222,7 @@ def get_gene_location_for_feature(
             continue
 
         chr_name = root_feature.feature_name
-
-        # Determine priority
-        priority = 0
-        if hts_key == "C_albicans_SC5314":
-            if chr_name.startswith("Ca22chr"):
-                priority = 4
-            elif chr_name.startswith("Ca21chr"):
-                priority = 3
-            elif chr_name.startswith("Ca20chr"):
-                priority = 2
-            elif "chr" in chr_name.lower():
-                priority = 1
-        elif hts_key == "C_parapsilosis_CDC317":
-            if chr_name.startswith("Contig"):
-                priority = 2
-            elif "contig" in chr_name.lower():
-                priority = 1
-        else:
-            if chr_name.startswith("Chr"):
-                priority = 2
-            elif "chr" in chr_name.lower():
-                priority = 1
+        priority = get_chromosome_priority(chr_name, hts_key)
 
         if priority > best_priority:
             best_priority = priority
@@ -244,15 +321,20 @@ def build_expression_cache(
     )
     logger.info(f"Found {len(features)} ORF features")
 
-    # Step 1: Get all gene locations
-    gene_locations: List[Tuple[str, str, int, int]] = []
-    for feature in features:
-        location_info = get_gene_location_for_feature(db, feature, organism_key)
-        if location_info:
-            chromosome, start, end = location_info
-            gene_locations.append((feature.feature_name, chromosome, start, end))
+    # Build feature_no -> feature_name mapping
+    feature_name_map = {f.feature_no: f.feature_name for f in features}
+    feature_nos = list(feature_name_map.keys())
 
-    logger.info(f"Got locations for {len(gene_locations)} genes")
+    # Step 1: Get all gene locations in ONE batch query
+    logger.info("Fetching gene locations (batch query)...")
+    location_map = batch_get_gene_locations(db, feature_nos, organism_key)
+    logger.info(f"Got locations for {len(location_map)} genes")
+
+    # Build gene_locations list
+    gene_locations: List[Tuple[str, str, int, int]] = []
+    for feature_no, (chromosome, start, end) in location_map.items():
+        feature_name = feature_name_map[feature_no]
+        gene_locations.append((feature_name, chromosome, start, end))
 
     if not gene_locations:
         return {}
