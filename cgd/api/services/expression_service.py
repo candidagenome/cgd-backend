@@ -1911,31 +1911,70 @@ def get_similar_expression_genes(
     # Optimization: If too many candidates, limit to top 3000 by variance
     # This reduces computation from O(n) to O(3000) with minimal quality loss
     MAX_CANDIDATES = 3000
-    if len(candidate_profiles) > MAX_CANDIDATES:
-        # Compute variance for each profile
-        import statistics
+    if NUMPY_AVAILABLE and len(candidate_profiles) > MAX_CANDIDATES:
+        # Compute variance for each profile using numpy (much faster)
         variances = []
         for feature_name, profile in candidate_profiles.items():
             if len(profile) >= 5:
-                try:
-                    var = statistics.variance(profile.values())
-                    variances.append((feature_name, var))
-                except statistics.StatisticsError:
-                    pass
+                vals = np.array(list(profile.values()))
+                var = np.var(vals)
+                variances.append((feature_name, var))
 
         # Keep top N by variance (most variable genes are most informative)
         variances.sort(key=lambda x: x[1], reverse=True)
         top_genes = set(v[0] for v in variances[:MAX_CANDIDATES])
         candidate_profiles = {k: v for k, v in candidate_profiles.items() if k in top_genes}
 
-    # Compare against candidate genes
+    # Compare against candidate genes using fast numpy computation
     correlations: List[Tuple[str, float, Optional[float], int]] = []
 
-    for feature_name, profile in candidate_profiles.items():
-        result = _compute_correlation(query_profile, profile, metric, min_conditions)
-        if result:
-            corr, p_value, shared = result
-            correlations.append((feature_name, corr, p_value, shared))
+    if NUMPY_AVAILABLE and metric == "pearson":
+        # Fast path: use numpy for batch correlation
+        query_keys = set(query_profile.keys())
+
+        for feature_name, profile in candidate_profiles.items():
+            # Find shared conditions
+            shared_keys = query_keys & set(profile.keys())
+            n_shared = len(shared_keys)
+
+            if n_shared < min_conditions:
+                continue
+
+            # Get values for shared conditions
+            sorted_keys = sorted(shared_keys)
+            x = np.array([query_profile[k] for k in sorted_keys])
+            y = np.array([profile[k] for k in sorted_keys])
+
+            # Fast Pearson correlation using numpy
+            x_centered = x - x.mean()
+            y_centered = y - y.mean()
+            numerator = (x_centered * y_centered).sum()
+            x_std = np.sqrt((x_centered ** 2).sum())
+            y_std = np.sqrt((y_centered ** 2).sum())
+
+            if x_std == 0 or y_std == 0:
+                continue
+
+            corr = numerator / (x_std * y_std)
+
+            if not np.isfinite(corr):
+                continue
+
+            # Approximate p-value for speed
+            if abs(corr) < 0.9999 and n_shared > 2:
+                t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
+                p_value = max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10)
+            else:
+                p_value = 1e-10
+
+            correlations.append((feature_name, float(corr), float(p_value), n_shared))
+    else:
+        # Fallback to scipy
+        for feature_name, profile in candidate_profiles.items():
+            result = _compute_correlation(query_profile, profile, metric, min_conditions)
+            if result:
+                corr, p_value, shared = result
+                correlations.append((feature_name, corr, p_value, shared))
 
     # Sort by correlation (descending for pearson/spearman, ascending distance for cosine)
     correlations.sort(key=lambda x: x[1], reverse=True)
