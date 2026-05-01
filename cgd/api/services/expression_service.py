@@ -1899,16 +1899,39 @@ def get_similar_expression_genes(
             error=f"No expression data available for '{gene_name}'"
         )
 
-    # Compare against all other genes
-    correlations: List[Tuple[str, float, Optional[float], int]] = []
-
+    # Filter to genes worth comparing (skip orf19.XXXX and B alleles for C. albicans)
+    candidate_profiles = {}
     for feature_name, profile in all_profiles.items():
-        # For C. albicans, skip old orf19.XXXX genes and B alleles (show only A22 A alleles)
         if organism_key == "C_albicans_SC5314" and (feature_name.startswith("orf19.") or feature_name.endswith("_B")):
             continue
         if feature_name == query_feature.feature_name:
             continue
+        candidate_profiles[feature_name] = profile
 
+    # Optimization: If too many candidates, limit to top 3000 by variance
+    # This reduces computation from O(n) to O(3000) with minimal quality loss
+    MAX_CANDIDATES = 3000
+    if len(candidate_profiles) > MAX_CANDIDATES:
+        # Compute variance for each profile
+        import statistics
+        variances = []
+        for feature_name, profile in candidate_profiles.items():
+            if len(profile) >= 5:
+                try:
+                    var = statistics.variance(profile.values())
+                    variances.append((feature_name, var))
+                except statistics.StatisticsError:
+                    pass
+
+        # Keep top N by variance (most variable genes are most informative)
+        variances.sort(key=lambda x: x[1], reverse=True)
+        top_genes = set(v[0] for v in variances[:MAX_CANDIDATES])
+        candidate_profiles = {k: v for k, v in candidate_profiles.items() if k in top_genes}
+
+    # Compare against candidate genes
+    correlations: List[Tuple[str, float, Optional[float], int]] = []
+
+    for feature_name, profile in candidate_profiles.items():
         result = _compute_correlation(query_profile, profile, metric, min_conditions)
         if result:
             corr, p_value, shared = result
