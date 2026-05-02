@@ -67,6 +67,11 @@ def get_expression(
     - **spearman**: Spearman rank correlation (more robust to outliers)
     - **cosine**: Cosine similarity
 
+    **Correlation direction:**
+    - **positive**: Only positively correlated genes (co-expressed)
+    - **negative**: Only negatively correlated genes (anti-correlated)
+    - **both**: Both positive and negative, sorted by correlation value
+
     **Performance notes:**
     - First query for an organism may take 20-30 seconds (building profiles)
     - Subsequent queries use cached data and complete in <2 seconds
@@ -93,11 +98,15 @@ def get_similar_genes(
         ge=1,
         description="Minimum shared conditions required for comparison"
     ),
+    direction: str = Query(
+        "positive",
+        description="Correlation direction: positive, negative, or both"
+    ),
     db: Session = Depends(get_db)
 ) -> SimilarGenesResponse:
     """Find genes with similar expression profiles to the query gene."""
     return get_similar_expression_genes(
-        db, gene_name, organism, limit, metric, min_conditions
+        db, gene_name, organism, limit, metric, min_conditions, direction
     )
 
 

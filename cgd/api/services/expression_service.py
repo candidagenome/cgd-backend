@@ -1478,8 +1478,10 @@ def _load_correlation_cache(organism_key: str, metric: str = "pearson") -> Optio
         metric: Correlation metric ('pearson', 'spearman', 'cosine')
 
     Returns:
-        Tuple of (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared)
-        or None if not available
+        Tuple of (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared,
+                  bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared)
+        or None if not available.
+        Note: bottom_* arrays may be None if cache was built before anticorrelation support.
     """
     global _correlation_cache
 
@@ -1516,11 +1518,18 @@ def _load_correlation_cache(organism_key: str, metric: str = "pearson") -> Optio
         top_pvalues = data['top_pvalues']
         top_shared = data['top_shared']
 
+        # Load anticorrelated data if available (backwards compatible)
+        bottom_indices = data.get('bottom_indices')
+        bottom_correlations = data.get('bottom_correlations')
+        bottom_pvalues = data.get('bottom_pvalues')
+        bottom_shared = data.get('bottom_shared')
+
         # Load gene index
         with open(index_file, 'r') as f:
             gene_index = json.load(f)
 
-        result = (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared)
+        result = (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared,
+                  bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared)
         _correlation_cache[cache_key] = result
 
         logger.info(f"Loaded {metric} correlation cache: {len(gene_names)} genes")
@@ -1535,7 +1544,8 @@ def _get_similar_genes_from_cache(
     organism_key: str,
     query_feature_name: str,
     metric: str = "pearson",
-    limit: int = 20
+    limit: int = 20,
+    direction: str = "positive"
 ) -> Optional[List[Tuple[str, float, Optional[float], int]]]:
     """
     Get similar genes using pre-computed correlation cache.
@@ -1545,6 +1555,7 @@ def _get_similar_genes_from_cache(
         query_feature_name: Query gene feature name
         metric: Correlation metric ('pearson', 'spearman', 'cosine')
         limit: Maximum number of results
+        direction: 'positive' for correlated, 'negative' for anticorrelated, 'both' for all
 
     Returns:
         List of (feature_name, correlation, p_value, shared_conditions) or None if cache unavailable
@@ -1553,7 +1564,8 @@ def _get_similar_genes_from_cache(
     if not cache_data:
         return None
 
-    gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared = cache_data
+    (gene_names, gene_index, top_indices, top_correlations, top_pvalues, top_shared,
+     bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared) = cache_data
 
     # Find query gene index
     query_idx = gene_index.get(query_feature_name)
@@ -1561,22 +1573,47 @@ def _get_similar_genes_from_cache(
         logger.debug(f"Query gene {query_feature_name} not found in {metric} correlation cache")
         return None
 
-    # Get pre-computed top correlations
     results = []
-    for i in range(min(limit, len(top_indices[query_idx]))):
-        target_idx = top_indices[query_idx, i]
-        if target_idx == 0 and i > 0:  # End of valid results
-            break
 
-        corr = float(top_correlations[query_idx, i])
-        if corr == 0 and i > 0:  # No more valid correlations
-            break
+    # Get positive correlations if requested
+    if direction in ("positive", "both"):
+        for i in range(min(limit, len(top_indices[query_idx]))):
+            target_idx = top_indices[query_idx, i]
+            if target_idx == 0 and i > 0:  # End of valid results
+                break
 
-        pval = float(top_pvalues[query_idx, i])
-        shared = int(top_shared[query_idx, i])
-        target_name = gene_names[target_idx]
+            corr = float(top_correlations[query_idx, i])
+            if corr == 0 and i > 0:  # No more valid correlations
+                break
 
-        results.append((target_name, corr, pval if pval > 0 else None, shared))
+            pval = float(top_pvalues[query_idx, i])
+            shared = int(top_shared[query_idx, i])
+            target_name = gene_names[target_idx]
+
+            results.append((target_name, corr, pval if pval > 0 else None, shared))
+
+    # Get negative correlations if requested and available
+    if direction in ("negative", "both") and bottom_indices is not None:
+        for i in range(min(limit, len(bottom_indices[query_idx]))):
+            target_idx = bottom_indices[query_idx, i]
+            if target_idx == 0 and i > 0:  # End of valid results
+                break
+
+            corr = float(bottom_correlations[query_idx, i])
+            if corr == 0 and i > 0:  # No more valid correlations
+                break
+
+            pval = float(bottom_pvalues[query_idx, i])
+            shared = int(bottom_shared[query_idx, i])
+            target_name = gene_names[target_idx]
+
+            results.append((target_name, corr, pval if pval > 0 else None, shared))
+
+    # For 'both', sort by actual correlation value (positive at top, negative at bottom)
+    if direction == "both":
+        results.sort(key=lambda x: x[1], reverse=True)
+        # Trim to limit after combining
+        results = results[:limit]
 
     return results
 
@@ -1792,7 +1829,8 @@ def get_similar_expression_genes(
     organism: str = "C_albicans_SC5314_A22",
     limit: int = 20,
     metric: str = "pearson",
-    min_conditions: int = 5
+    min_conditions: int = 5,
+    direction: str = "positive"
 ) -> SimilarGenesResponse:
     """
     Find genes with similar expression profiles to the query gene.
@@ -1804,6 +1842,7 @@ def get_similar_expression_genes(
         limit: Maximum number of results (1-100)
         metric: Similarity metric ('pearson', 'spearman', 'cosine')
         min_conditions: Minimum shared conditions required
+        direction: Correlation direction ('positive', 'negative', or 'both')
 
     Returns:
         SimilarGenesResponse with ranked list of similar genes
@@ -1858,9 +1897,16 @@ def get_similar_expression_genes(
             error=f"Gene '{gene_name}' not found"
         )
 
+    # Validate direction parameter
+    if direction not in ("positive", "negative", "both"):
+        return SimilarGenesResponse(
+            success=False,
+            error=f"Invalid direction: {direction}. Use 'positive', 'negative', or 'both'"
+        )
+
     # Try pre-computed correlation cache first (supports all metrics)
     cached_correlations = _get_similar_genes_from_cache(
-        organism_key, query_feature.feature_name, metric, limit
+        organism_key, query_feature.feature_name, metric, limit, direction
     )
     if cached_correlations:
         logger.debug(f"Using pre-computed {metric} correlations for {query_feature.feature_name}")
@@ -1994,11 +2040,22 @@ def get_similar_expression_genes(
                 corr, p_value, shared = result
                 correlations.append((feature_name, corr, p_value, shared))
 
-    # Sort by correlation (descending for pearson/spearman, ascending distance for cosine)
-    correlations.sort(key=lambda x: x[1], reverse=True)
+    # Filter and sort by direction
+    if direction == "positive":
+        # Only positive correlations, sorted descending
+        filtered = [c for c in correlations if c[1] > 0]
+        filtered.sort(key=lambda x: x[1], reverse=True)
+    elif direction == "negative":
+        # Only negative correlations, sorted ascending (most negative first)
+        filtered = [c for c in correlations if c[1] < 0]
+        filtered.sort(key=lambda x: x[1], reverse=False)
+    else:  # both
+        # All correlations, sorted by actual value (positive at top, negative at bottom)
+        filtered = correlations
+        filtered.sort(key=lambda x: x[1], reverse=True)
 
     # Take top N
-    top_correlations = correlations[:limit]
+    top_correlations = filtered[:limit]
 
     # Fetch feature details for top results
     similar_genes: List[SimilarGene] = []

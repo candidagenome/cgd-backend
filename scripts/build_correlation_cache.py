@@ -164,8 +164,12 @@ def build_correlation_cache_parallel(
     Args:
         profiles: Dict of gene_name -> {condition_id: fold_change}
         metric: 'pearson', 'spearman', or 'cosine'
-        top_n: Number of top correlations to store per gene
+        top_n: Number of top/bottom correlations to store per gene
         min_shared: Minimum shared conditions required
+
+    Returns:
+        Tuple of (gene_names, top_indices, top_correlations, top_pvalues, top_shared,
+                  bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared)
     """
     # Get sorted list of gene names
     gene_names = sorted(profiles.keys())
@@ -197,11 +201,17 @@ def build_correlation_cache_parallel(
 
     logger.info(f"Built expression matrix, computing {metric} correlations...")
 
-    # Initialize storage for top N correlations per gene
+    # Initialize storage for top N positive correlations per gene
     top_indices = np.zeros((n_genes, top_n), dtype=np.int32)
     top_correlations = np.zeros((n_genes, top_n), dtype=np.float32)
     top_pvalues = np.ones((n_genes, top_n), dtype=np.float32)
     top_shared = np.zeros((n_genes, top_n), dtype=np.int16)
+
+    # Initialize storage for bottom N negative correlations per gene
+    bottom_indices = np.zeros((n_genes, top_n), dtype=np.int32)
+    bottom_correlations = np.zeros((n_genes, top_n), dtype=np.float32)
+    bottom_pvalues = np.ones((n_genes, top_n), dtype=np.float32)
+    bottom_shared = np.zeros((n_genes, top_n), dtype=np.int16)
 
     start_time = time.time()
 
@@ -216,7 +226,7 @@ def build_correlation_cache_parallel(
         # Compute correlations for this gene
         correlations = compute_correlation_row(i, expr_matrix, valid_mask, metric, min_shared)
 
-        # Sort by correlation (descending) and keep top N
+        # Sort by correlation (descending) for top N positive correlations
         correlations.sort(key=lambda x: x[1], reverse=True)
         top = correlations[:top_n]
 
@@ -226,10 +236,23 @@ def build_correlation_cache_parallel(
             top_pvalues[i, k] = pval
             top_shared[i, k] = n_shared
 
+        # Sort by correlation (ascending) for bottom N negative correlations
+        correlations.sort(key=lambda x: x[1], reverse=False)
+        # Filter to only include negative correlations
+        negative_corrs = [c for c in correlations if c[1] < 0]
+        bottom = negative_corrs[:top_n]
+
+        for k, (j, corr, pval, n_shared) in enumerate(bottom):
+            bottom_indices[i, k] = j
+            bottom_correlations[i, k] = corr
+            bottom_pvalues[i, k] = pval
+            bottom_shared[i, k] = n_shared
+
     elapsed = time.time() - start_time
     logger.info(f"Computed {metric} correlations in {elapsed:.1f} seconds ({elapsed/60:.1f} min)")
 
-    return gene_names, top_indices, top_correlations, top_pvalues, top_shared
+    return (gene_names, top_indices, top_correlations, top_pvalues, top_shared,
+            bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared)
 
 
 def save_correlation_cache(
@@ -239,7 +262,11 @@ def save_correlation_cache(
     top_indices: np.ndarray,
     top_correlations: np.ndarray,
     top_pvalues: np.ndarray,
-    top_shared: np.ndarray
+    top_shared: np.ndarray,
+    bottom_indices: np.ndarray,
+    bottom_correlations: np.ndarray,
+    bottom_pvalues: np.ndarray,
+    bottom_shared: np.ndarray
 ) -> None:
     """Save correlation cache to disk.
 
@@ -247,7 +274,8 @@ def save_correlation_cache(
         organism_key: Organism identifier
         metric: Correlation metric ('pearson', 'spearman', 'cosine')
         gene_names: List of gene names
-        top_indices, top_correlations, top_pvalues, top_shared: Correlation data
+        top_indices, top_correlations, top_pvalues, top_shared: Positive correlation data
+        bottom_indices, bottom_correlations, bottom_pvalues, bottom_shared: Negative correlation data
     """
     # Use metric in filename (pearson uses original name for backwards compatibility)
     if metric == "pearson":
@@ -263,7 +291,12 @@ def save_correlation_cache(
         top_indices=top_indices,
         top_correlations=top_correlations,
         top_pvalues=top_pvalues,
-        top_shared=top_shared
+        top_shared=top_shared,
+        # Anticorrelated genes (negative correlations)
+        bottom_indices=bottom_indices,
+        bottom_correlations=bottom_correlations,
+        bottom_pvalues=bottom_pvalues,
+        bottom_shared=bottom_shared
     )
 
     size_mb = output_file.stat().st_size / (1024 * 1024)
@@ -311,7 +344,8 @@ def main():
         for metric in metrics:
             logger.info(f"\n--- Building {metric} correlations ---")
 
-            gene_names, top_indices, top_corrs, top_pvals, top_shared = \
+            (gene_names, top_indices, top_corrs, top_pvals, top_shared,
+             bottom_indices, bottom_corrs, bottom_pvals, bottom_shared) = \
                 build_correlation_cache_parallel(profiles, metric=metric)
 
             save_correlation_cache(
@@ -321,7 +355,11 @@ def main():
                 top_indices,
                 top_corrs,
                 top_pvals,
-                top_shared
+                top_shared,
+                bottom_indices,
+                bottom_corrs,
+                bottom_pvals,
+                bottom_shared
             )
 
     logger.info("\nCorrelation cache building complete!")
