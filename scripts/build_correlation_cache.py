@@ -41,7 +41,7 @@ ORGANISMS = [
 ]
 
 # Supported metrics
-METRICS = ["pearson", "spearman"]
+METRICS = ["pearson"]
 
 
 def load_profiles(organism_key: str) -> dict:
