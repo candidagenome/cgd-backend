@@ -2,10 +2,10 @@
 """
 Build pre-computed correlation cache for the Similar Expression Genes feature.
 
-Uses numpy's masked arrays for efficient computation with missing data.
+Computes Pearson, Spearman, and Cosine correlations for all gene pairs.
 
 Usage:
-    python scripts/build_correlation_cache.py [--organism ORGANISM]
+    python scripts/build_correlation_cache.py [--organism ORGANISM] [--metric METRIC]
 """
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 from numpy import ma
+from scipy.stats import pearsonr, spearmanr
+from scipy.spatial.distance import cosine as cosine_distance
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +40,9 @@ ORGANISMS = [
     "C_parapsilosis_CDC317",
 ]
 
+# Supported metrics
+METRICS = ["pearson", "spearman", "cosine"]
+
 
 def load_profiles(organism_key: str) -> dict:
     """Load expression profiles from JSON cache."""
@@ -55,8 +60,22 @@ def load_profiles(organism_key: str) -> dict:
     return profiles
 
 
-def compute_correlation_row(gene_idx: int, expr_matrix: np.ndarray, valid_mask: np.ndarray, min_shared: int = 5) -> list:
-    """Compute correlations for one gene against all others using vectorized operations."""
+def compute_correlation_row(
+    gene_idx: int,
+    expr_matrix: np.ndarray,
+    valid_mask: np.ndarray,
+    metric: str = "pearson",
+    min_shared: int = 5
+) -> list:
+    """Compute correlations for one gene against all others.
+
+    Args:
+        gene_idx: Index of the query gene
+        expr_matrix: Expression matrix (genes x conditions)
+        valid_mask: Boolean mask of valid values
+        metric: 'pearson', 'spearman', or 'cosine'
+        min_shared: Minimum shared conditions required
+    """
     n_genes = expr_matrix.shape[0]
     gene_i = expr_matrix[gene_idx]
     valid_i = valid_mask[gene_idx]
@@ -82,31 +101,52 @@ def compute_correlation_row(gene_idx: int, expr_matrix: np.ndarray, valid_mask: 
         x = gene_i[shared_mask]
         y = gene_j[shared_mask]
 
-        # Compute Pearson correlation
-        x_mean = x.mean()
-        y_mean = y.mean()
-        x_centered = x - x_mean
-        y_centered = y - y_mean
+        try:
+            if metric == "pearson":
+                # Compute Pearson correlation manually for speed
+                x_mean = x.mean()
+                y_mean = y.mean()
+                x_centered = x - x_mean
+                y_centered = y - y_mean
 
-        numerator = (x_centered * y_centered).sum()
-        x_var = (x_centered ** 2).sum()
-        y_var = (y_centered ** 2).sum()
+                numerator = (x_centered * y_centered).sum()
+                x_var = (x_centered ** 2).sum()
+                y_var = (y_centered ** 2).sum()
 
-        if x_var == 0 or y_var == 0:
+                if x_var == 0 or y_var == 0:
+                    continue
+
+                corr = numerator / np.sqrt(x_var * y_var)
+
+                # Approximate p-value
+                if abs(corr) < 0.9999 and n_shared > 2:
+                    t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
+                    pval = max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10)
+                else:
+                    pval = 1e-10
+
+            elif metric == "spearman":
+                corr, pval = spearmanr(x, y)
+                if pval is None or not np.isfinite(pval):
+                    pval = 1e-10
+
+            elif metric == "cosine":
+                # Cosine similarity = 1 - cosine distance
+                corr = 1.0 - cosine_distance(x, y)
+                pval = None  # No p-value for cosine
+
+            else:
+                raise ValueError(f"Unknown metric: {metric}")
+
+        except Exception:
             continue
-
-        corr = numerator / np.sqrt(x_var * y_var)
 
         if not np.isfinite(corr):
             continue
 
-        # Approximate p-value
-        if abs(corr) < 0.9999 and n_shared > 2:
-            t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
-            # Very rough p-value approximation
-            pval = max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10)
-        else:
-            pval = 1e-10
+        # For cosine, use a placeholder p-value
+        if pval is None:
+            pval = 0.0
 
         results.append((j, float(corr), float(pval), int(n_shared)))
 
@@ -115,15 +155,23 @@ def compute_correlation_row(gene_idx: int, expr_matrix: np.ndarray, valid_mask: 
 
 def build_correlation_cache_parallel(
     profiles: dict,
+    metric: str = "pearson",
     top_n: int = 100,
     min_shared: int = 5
 ) -> tuple:
-    """Build correlation cache using simple loop but optimized numpy operations."""
+    """Build correlation cache for a given metric.
+
+    Args:
+        profiles: Dict of gene_name -> {condition_id: fold_change}
+        metric: 'pearson', 'spearman', or 'cosine'
+        top_n: Number of top correlations to store per gene
+        min_shared: Minimum shared conditions required
+    """
     # Get sorted list of gene names
     gene_names = sorted(profiles.keys())
     n_genes = len(gene_names)
 
-    logger.info(f"Building correlation matrix for {n_genes} genes")
+    logger.info(f"Building {metric} correlation matrix for {n_genes} genes")
 
     # Get all unique conditions
     all_conditions = set()
@@ -147,7 +195,7 @@ def build_correlation_cache_parallel(
     # Create valid mask
     valid_mask = ~np.isnan(expr_matrix)
 
-    logger.info("Built expression matrix, computing correlations...")
+    logger.info(f"Built expression matrix, computing {metric} correlations...")
 
     # Initialize storage for top N correlations per gene
     top_indices = np.zeros((n_genes, top_n), dtype=np.int32)
@@ -166,7 +214,7 @@ def build_correlation_cache_parallel(
             logger.info(f"Processing gene {i}/{n_genes} ({rate:.1f}/sec, ETA: {eta/60:.1f} min)")
 
         # Compute correlations for this gene
-        correlations = compute_correlation_row(i, expr_matrix, valid_mask, min_shared)
+        correlations = compute_correlation_row(i, expr_matrix, valid_mask, metric, min_shared)
 
         # Sort by correlation (descending) and keep top N
         correlations.sort(key=lambda x: x[1], reverse=True)
@@ -179,21 +227,35 @@ def build_correlation_cache_parallel(
             top_shared[i, k] = n_shared
 
     elapsed = time.time() - start_time
-    logger.info(f"Computed correlations in {elapsed:.1f} seconds ({elapsed/60:.1f} min)")
+    logger.info(f"Computed {metric} correlations in {elapsed:.1f} seconds ({elapsed/60:.1f} min)")
 
     return gene_names, top_indices, top_correlations, top_pvalues, top_shared
 
 
 def save_correlation_cache(
     organism_key: str,
+    metric: str,
     gene_names: list,
     top_indices: np.ndarray,
     top_correlations: np.ndarray,
     top_pvalues: np.ndarray,
     top_shared: np.ndarray
 ) -> None:
-    """Save correlation cache to disk."""
-    output_file = EXPRESSION_CACHE_DIR / f"correlations_{organism_key}.npz"
+    """Save correlation cache to disk.
+
+    Args:
+        organism_key: Organism identifier
+        metric: Correlation metric ('pearson', 'spearman', 'cosine')
+        gene_names: List of gene names
+        top_indices, top_correlations, top_pvalues, top_shared: Correlation data
+    """
+    # Use metric in filename (pearson uses original name for backwards compatibility)
+    if metric == "pearson":
+        output_file = EXPRESSION_CACHE_DIR / f"correlations_{organism_key}.npz"
+        index_file = EXPRESSION_CACHE_DIR / f"gene_index_{organism_key}.json"
+    else:
+        output_file = EXPRESSION_CACHE_DIR / f"correlations_{metric}_{organism_key}.npz"
+        index_file = EXPRESSION_CACHE_DIR / f"gene_index_{metric}_{organism_key}.json"
 
     np.savez_compressed(
         output_file,
@@ -205,10 +267,9 @@ def save_correlation_cache(
     )
 
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    logger.info(f"Saved correlation cache to {output_file} ({size_mb:.1f} MB)")
+    logger.info(f"Saved {metric} correlation cache to {output_file} ({size_mb:.1f} MB)")
 
     # Also save a JSON index for gene name -> index lookup
-    index_file = EXPRESSION_CACHE_DIR / f"gene_index_{organism_key}.json"
     gene_index = {name: i for i, name in enumerate(gene_names)}
 
     with open(index_file, 'w') as f:
@@ -226,9 +287,16 @@ def main():
         type=str,
         help="Specific organism to build (e.g., C_albicans_SC5314)"
     )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        choices=METRICS,
+        help="Specific metric to build (pearson, spearman, cosine). Default: all"
+    )
     args = parser.parse_args()
 
     organisms = [args.organism] if args.organism else ORGANISMS
+    metrics = [args.metric] if args.metric else METRICS
 
     for organism_key in organisms:
         logger.info(f"\n{'='*60}")
@@ -240,17 +308,21 @@ def main():
             logger.warning(f"No profiles found for {organism_key}, skipping")
             continue
 
-        gene_names, top_indices, top_corrs, top_pvals, top_shared = \
-            build_correlation_cache_parallel(profiles)
+        for metric in metrics:
+            logger.info(f"\n--- Building {metric} correlations ---")
 
-        save_correlation_cache(
-            organism_key,
-            gene_names,
-            top_indices,
-            top_corrs,
-            top_pvals,
-            top_shared
-        )
+            gene_names, top_indices, top_corrs, top_pvals, top_shared = \
+                build_correlation_cache_parallel(profiles, metric=metric)
+
+            save_correlation_cache(
+                organism_key,
+                metric,
+                gene_names,
+                top_indices,
+                top_corrs,
+                top_pvals,
+                top_shared
+            )
 
     logger.info("\nCorrelation cache building complete!")
 
