@@ -20,6 +20,7 @@ class PAMType(str, Enum):
 class TargetRegion(str, Enum):
     """Target region preferences for guide design."""
     FIVE_PRIME = "5_prime"      # First 20% of CDS (for knockout)
+    FIVE_PRIME_UPSTREAM = "5_prime_upstream"  # First 20% of CDS + 500bp upstream (includes promoter)
     THREE_PRIME = "3_prime"     # Last 20% of CDS
     FULL_CDS = "full_cds"       # Entire coding sequence
     CUSTOM = "custom"           # User-provided sequence

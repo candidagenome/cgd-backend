@@ -52,6 +52,7 @@ MAX_GUIDES_PER_REQUEST = 100
 MAX_SEQUENCE_LENGTH = 50000  # 50kb max input sequence
 MAX_OFFTARGET_GENOMES = 3
 CRISPR_TIMEOUT = 300  # 5 minutes max for off-target search
+UPSTREAM_REGION_LENGTH = 500  # bp upstream of CDS for 5' upstream targeting
 
 # PAM patterns (5' to 3', where N = any nucleotide)
 PAM_PATTERNS: Dict[PAMType, dict] = {
@@ -859,20 +860,43 @@ def _find_pam_sites(
 def _filter_target_region(
     guides: List[Tuple[str, str, int, str]],
     sequence_length: int,
-    target_region: TargetRegion
+    target_region: TargetRegion,
+    upstream_length: int = 0
 ) -> List[Tuple[str, str, int, str]]:
-    """Filter guides to those within the target region."""
+    """
+    Filter guides to those within the target region.
+
+    Args:
+        guides: List of (guide_seq, pam_seq, position, strand) tuples
+        sequence_length: Total length of the target sequence
+        target_region: Target region type
+        upstream_length: Length of upstream sequence prepended (for FIVE_PRIME_UPSTREAM)
+                        Positions <= upstream_length are in the upstream region
+
+    Returns:
+        Filtered list of guides
+    """
     if target_region == TargetRegion.FULL_CDS or target_region == TargetRegion.CUSTOM:
         return guides
 
-    # Calculate region boundaries (20% of sequence)
-    region_size = int(sequence_length * 0.2)
+    # For FIVE_PRIME_UPSTREAM, the sequence includes upstream + CDS
+    # upstream_length indicates where CDS starts
+    cds_length = sequence_length - upstream_length
+
+    # Calculate region boundaries (20% of CDS)
+    region_size = int(cds_length * 0.2)
 
     if target_region == TargetRegion.FIVE_PRIME:
-        # First 20%
+        # First 20% of CDS (positions 1 to region_size, no upstream)
         return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
+    elif target_region == TargetRegion.FIVE_PRIME_UPSTREAM:
+        # Upstream region (positions 1 to upstream_length) + first 20% of CDS
+        # The upstream region positions are: 1 to upstream_length
+        # The first 20% of CDS positions are: upstream_length+1 to upstream_length+region_size
+        max_position = upstream_length + region_size
+        return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
     elif target_region == TargetRegion.THREE_PRIME:
-        # Last 20%
+        # Last 20% of CDS
         start = sequence_length - region_size
         return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
 
@@ -1621,6 +1645,9 @@ def design_guides(
     target_feature = None  # For paralog/ortholog lookup
     related_genes = {}  # Dict mapping gene_name -> relationship type
 
+    # Track upstream sequence length (for FIVE_PRIME_UPSTREAM option)
+    upstream_length = 0
+
     if request.gene_name:
         # Look up gene in database
         result = _get_gene_info(db, request.gene_name, request.organism)
@@ -1637,6 +1664,27 @@ def design_guides(
         # Get related genes (paralogs/orthologs) for off-target flagging
         if target_feature:
             related_genes = _get_related_genes(db, target_feature)
+
+        # For FIVE_PRIME_UPSTREAM, prepend upstream genomic sequence to CDS
+        if request.target_region == TargetRegion.FIVE_PRIME_UPSTREAM and target_feature:
+            genomic_context = _get_genomic_context(
+                db,
+                target_feature.feature_no,
+                upstream=UPSTREAM_REGION_LENGTH,
+                downstream=0
+            )
+            if genomic_context:
+                upstream_seq, _, _ = genomic_context
+                upstream_length = len(upstream_seq)
+                target_sequence = upstream_seq + target_sequence
+                logger.info(
+                    f"Added {upstream_length}bp upstream for FIVE_PRIME_UPSTREAM targeting "
+                    f"(total sequence: {len(target_sequence)}bp)"
+                )
+            else:
+                warnings.append(
+                    "Could not fetch upstream sequence; using CDS only"
+                )
     else:
         # Use provided sequence
         target_sequence = request.sequence.upper()
@@ -1670,7 +1718,8 @@ def design_guides(
         all_guides = _filter_target_region(
             all_guides,
             len(target_sequence),
-            request.target_region
+            request.target_region,
+            upstream_length=upstream_length
         )
 
     if not all_guides:
@@ -1726,15 +1775,26 @@ def design_guides(
         ot_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
 
         # Calculate genomic coordinates if we have gene info
+        # Account for upstream_length when FIVE_PRIME_UPSTREAM is used
+        # cds_relative_position: position relative to CDS start (can be negative for upstream)
         genomic_start = None
         genomic_end = None
         chromosome = None
         if gene_info and gene_info.start:
+            # Convert position in combined sequence to position relative to CDS start
+            # Position 1 in combined seq = -upstream_length relative to CDS start
+            # Position upstream_length+1 = 1 relative to CDS start
+            cds_relative_position = position - upstream_length
+
             if gene_info.strand == "+":
-                genomic_start = gene_info.start + position - 1
+                # For + strand: upstream is at lower genomic coords
+                # CDS position 1 = gene_info.start
+                genomic_start = gene_info.start + cds_relative_position - 1
                 genomic_end = genomic_start + request.guide_length - 1
             else:
-                genomic_end = gene_info.end - position + 1
+                # For - strand: upstream is at higher genomic coords
+                # CDS position 1 = gene_info.end
+                genomic_end = gene_info.end - cds_relative_position + 1
                 genomic_start = genomic_end - request.guide_length + 1
             chromosome = gene_info.chromosome
 
