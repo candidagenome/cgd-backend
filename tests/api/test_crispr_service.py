@@ -12,6 +12,8 @@ Tests cover:
 The test fixtures contain expected guide sequences validated against
 CRISPOR (crispor.tefor.net) for C. albicans SC5314 Assembly 22.
 """
+import json
+from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, patch
 from typing import List, Dict, Any, Optional
@@ -38,172 +40,18 @@ from cgd.api.services.crispr_service import (
 # Test Fixtures: 20 C. albicans genes with expected CRISPR guides
 # =============================================================================
 #
-# These fixtures contain expected guide sequences from CRISPOR analysis.
-# For each gene, we store:
-#   - gene_name: Standard gene name
-#   - feature_name: Systematic ORF name
-#   - cds_sequence: First 500bp of CDS (for 5' region testing)
-#   - expected_guides: List of guide sequences found by CRISPOR
-#   - pam: PAM type used (NGG)
+# These fixtures are loaded from the JSON file: fixtures/crispr_test_genes.json
+# The file contains expected guide sequences from CHOPCHOP analysis.
 #
-# To regenerate these fixtures:
-# 1. Go to https://crispor.tefor.net/
-# 2. Paste the CDS sequence for each gene
-# 3. Select "NGG (SpCas9)" PAM
-# 4. Copy top 10 guide sequences
-#
-# TODO: Populate expected_guides from CRISPOR for validation
+# To update fixtures:
+# 1. Edit tests/api/fixtures/crispr_test_genes.json
+# 2. See tests/api/fixtures/CRISPR_README.md for instructions
 # =============================================================================
 
-CRISPR_TEST_GENES = [
-    # Virulence/Adhesion genes
-    {
-        "gene_name": "ALS1",
-        "feature_name": "C1_13700C_A",
-        "description": "Agglutinin-like sequence protein",
-        "cds_first_500bp": "",  # TODO: Fetch from database
-        "expected_guides_5prime": [],  # TODO: Populate from CRISPOR
-    },
-    {
-        "gene_name": "ALS3",
-        "feature_name": "C6_01030W_A",
-        "description": "Agglutinin-like protein",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "HWP1",
-        "feature_name": "C1_06250C_A",
-        "description": "Hyphal wall protein 1",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "ECE1",
-        "feature_name": "C3_05610W_A",
-        "description": "Candidalysin precursor",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Secreted aspartyl proteases
-    {
-        "gene_name": "SAP1",
-        "feature_name": "C6_02460W_A",
-        "description": "Secreted aspartyl protease 1",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "SAP2",
-        "feature_name": "C6_02480W_A",
-        "description": "Secreted aspartyl protease 2",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Transcription factors
-    {
-        "gene_name": "EFG1",
-        "feature_name": "CR_07890W_A",
-        "description": "bHLH transcription factor",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "CPH1",
-        "feature_name": "C4_03540C_A",
-        "description": "Transcription factor for mating/filamentation",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "WOR1",
-        "feature_name": "C1_11000C_A",
-        "description": "Master regulator of white-opaque switching",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "BCR1",
-        "feature_name": "C3_04800W_A",
-        "description": "Biofilm transcription factor",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Signaling pathway genes
-    {
-        "gene_name": "HOG1",
-        "feature_name": "C1_05270W_A",
-        "description": "MAP kinase, stress response",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "RAS1",
-        "feature_name": "C2_05700W_A",
-        "description": "Ras-family GTPase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "CDC42",
-        "feature_name": "C5_02460C_A",
-        "description": "Rho-type GTPase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "CEK1",
-        "feature_name": "C2_00410C_A",
-        "description": "MAP kinase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Housekeeping genes
-    {
-        "gene_name": "ACT1",
-        "feature_name": "C1_13700C_A",
-        "description": "Actin",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "TUB1",
-        "feature_name": "CR_02550C_A",
-        "description": "Alpha-tubulin",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Cell wall genes
-    {
-        "gene_name": "PHR1",
-        "feature_name": "C5_01020C_A",
-        "description": "pH-responsive glycosidase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "CHT2",
-        "feature_name": "C1_04170C_A",
-        "description": "Chitinase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    # Drug resistance
-    {
-        "gene_name": "CDR1",
-        "feature_name": "C3_02280C_A",
-        "description": "ABC transporter, azole resistance",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-    {
-        "gene_name": "ERG11",
-        "feature_name": "C5_00660C_A",
-        "description": "Lanosterol 14-alpha-demethylase",
-        "cds_first_500bp": "",
-        "expected_guides_5prime": [],
-    },
-]
+# Load test genes from JSON fixture file
+_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "crispr_test_genes.json"
+with open(_FIXTURE_PATH) as f:
+    CRISPR_TEST_GENES = json.load(f)
 
 
 # =============================================================================
@@ -544,7 +392,6 @@ class TestCRISPORValidation:
         """Create a mock database session."""
         return MagicMock()
 
-    @pytest.mark.skip(reason="Fixtures not yet populated - run fetch_crispor_fixtures.py first")
     @pytest.mark.parametrize("gene_data", CRISPR_TEST_GENES, ids=lambda g: g["gene_name"])
     def test_finds_crispor_guides(self, mock_db, gene_data):
         """
