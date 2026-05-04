@@ -614,9 +614,11 @@ def get_autocomplete_suggestions(
 
     seen_texts = set()
 
-    # First pass: collect gene data and track which names appear in multiple organisms
-    gene_data: list[dict] = []
+    # First pass: collect ALL gene occurrences to track organisms and find best data
+    # gene_organisms: tracks all organisms for each gene name
+    # gene_best_data: stores the best data for each gene (prefer C. albicans)
     gene_organisms: dict[str, set] = {}  # gene_name -> set of organisms
+    gene_best_data: dict[str, dict] = {}  # gene_name -> best data dict
 
     for hit in response["hits"]["hits"]:
         source = hit["_source"]
@@ -626,8 +628,14 @@ def get_autocomplete_suggestions(
         if doc_type == "gene":
             display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
             organism = source.get("organism")
-            if display_name and display_name not in seen_texts:
-                seen_texts.add(display_name)
+            if display_name:
+                # Track ALL organisms for this gene name
+                if display_name not in gene_organisms:
+                    gene_organisms[display_name] = set()
+                if organism:
+                    gene_organisms[display_name].add(organism)
+
+                # Build data for this occurrence
                 headline = source.get("headline")
                 description = headline[:80] + "..." if headline and len(headline) > 80 else headline
 
@@ -635,27 +643,27 @@ def get_autocomplete_suggestions(
                 if not highlighted_text:
                     highlighted_text = _highlight_text(display_name, query)
 
-                # Track organisms for this gene name
-                if display_name not in gene_organisms:
-                    gene_organisms[display_name] = set()
-                if organism:
-                    gene_organisms[display_name].add(organism)
-
-                # Use highlighted description from ES or manual highlight
                 highlighted_desc = _extract_highlight(highlights, "headline", None)
                 if not highlighted_desc:
                     highlighted_desc = _extract_highlight(highlights, "name_description", None)
                 if not highlighted_desc and description:
                     highlighted_desc = _highlight_text(description, query)
 
-                gene_data.append({
+                current_data = {
                     "text": display_name,
                     "link": f"/locus/{display_name}",
                     "description": description,
                     "organism": organism,
                     "highlighted_text": highlighted_text,
                     "highlighted_description": highlighted_desc,
-                })
+                }
+
+                # Keep best data: prefer C. albicans SC5314, then first occurrence
+                if display_name not in gene_best_data:
+                    gene_best_data[display_name] = current_data
+                elif organism == "Candida albicans SC5314":
+                    # Replace with C. albicans data (better description usually)
+                    gene_best_data[display_name] = current_data
 
         elif doc_type == "go_term":
             go_term = source.get("go_term") or source.get("name")
@@ -718,11 +726,11 @@ def get_autocomplete_suggestions(
                     highlighted_description=_highlight_text(description, query) if description else None,
                 ))
 
-    # Second pass: create gene suggestions, only show organism if unique to one
-    for data in gene_data:
-        gene_name = data["text"]
-        # Only show organism if this gene name appears in exactly one organism
-        show_organism = len(gene_organisms.get(gene_name, set())) == 1
+    # Second pass: create gene suggestions from best data
+    # Only show organism if gene exists in exactly one organism
+    for gene_name, data in gene_best_data.items():
+        num_organisms = len(gene_organisms.get(gene_name, set()))
+        show_organism = num_organisms == 1
         genes.append(AutocompleteSuggestion(
             text=gene_name,
             category="gene",
