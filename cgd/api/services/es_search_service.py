@@ -162,8 +162,18 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"constant_score": {"filter": {"prefix": {"go_term.keyword": {"value": query_lower}}}, "boost": 1500}},
                     # Prefix match for phenotypes
                     {"constant_score": {"filter": {"prefix": {"observable.keyword": {"value": query_lower}}}, "boost": 1000}},
-                    # Headline/description match (for searches like "actin")
-                    # Uses TF-IDF scoring but capped below name matches
+                    # Gene headline/description match (for searches like "actin")
+                    # Boost genes with query in headline above GO terms with query in name
+                    {
+                        "bool": {
+                            "must": [
+                                {"match_phrase_prefix": {"headline": query}},
+                                {"term": {"type": "gene"}}
+                            ],
+                            "boost": 2000
+                        }
+                    },
+                    # General headline/description match as fallback
                     {
                         "multi_match": {
                             "query": query,
