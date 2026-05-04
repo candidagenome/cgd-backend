@@ -135,7 +135,8 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     4. CGDID prefix match - boost 35
     5. GO term prefix match - boost 15
     6. Phenotype prefix match - boost 10
-    7. Fallback text match on names only (no headline) - boost 1
+    7. Fallback text match on names - boost 5
+    8. Headline/description match - boost 2 (low priority, but still included)
     """
     query_upper = query.upper()
     query_lower = query.lower()
@@ -162,8 +163,7 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 15}}},
                     # Prefix match for phenotypes
                     {"prefix": {"observable.keyword": {"value": query_lower, "boost": 10}}},
-                    # Fallback to contains match on NAMES ONLY (not descriptions/headlines)
-                    # This prevents genes with query in description from drowning out exact matches
+                    # Text match on names (medium-low priority)
                     {
                         "multi_match": {
                             "query": query,
@@ -173,7 +173,20 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                                 "observable^2",
                             ],
                             "type": "phrase_prefix",
-                            "boost": 1,
+                            "boost": 5,
+                        }
+                    },
+                    # Headline/description match (low priority - for searches like "actin")
+                    # This allows finding genes by description but won't override exact name matches
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "fields": [
+                                "headline",
+                                "name_description",
+                            ],
+                            "type": "phrase_prefix",
+                            "boost": 2,
                         }
                     },
                 ],
