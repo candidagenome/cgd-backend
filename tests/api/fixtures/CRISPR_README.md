@@ -1,13 +1,20 @@
 # CRISPR Guide Designer Test Suite
 
-This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against established tools like CRISPOR.
+This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against established tools like CRISPOR and CHOPCHOP.
 
 ## Overview
 
 The CRISPR test suite provides:
 - **Unit tests** for core algorithm functions (GC content, PAM finding, etc.)
 - **Integration tests** for the full guide design pipeline
-- **Validation tests** comparing our results against CRISPOR predictions
+- **Validation tests** comparing our results against external tool predictions
+
+### External Validation Tools
+
+| Tool | URL | Status |
+|------|-----|--------|
+| **CRISPOR** | https://crispor.tefor.net/ | Primary (may have downtime) |
+| **CHOPCHOP** | https://chopchop.cbu.uib.no/ | Alternative |
 
 ## Directory Structure
 
@@ -119,11 +126,11 @@ We selected 20 well-characterized *C. albicans* genes representing diverse funct
 | CDR1 | C3_02280C_A | ABC transporter, azole resistance |
 | ERG11 | C5_00660C_A | Lanosterol 14-alpha-demethylase |
 
-## Populating CRISPOR Fixtures
+## Populating Validation Fixtures
 
-The CRISPOR validation tests require expected guide sequences from CRISPOR. Follow these steps to populate them:
+The validation tests require expected guide sequences from an external CRISPR design tool. You can use either CRISPOR or CHOPCHOP.
 
-### Step 1: Submit Sequences to CRISPOR
+### Option A: Using CRISPOR (Primary)
 
 1. Go to https://crispor.tefor.net/
 2. For each gene, paste the sequence from `crispr_test_sequences.fasta`
@@ -132,6 +139,22 @@ The CRISPOR validation tests require expected guide sequences from CRISPOR. Foll
    - **Genome**: Select "No genome" or paste sequence
 4. Click "Submit"
 5. Copy the top 5-10 guide sequences (20bp, without PAM)
+
+### Option B: Using CHOPCHOP (Alternative)
+
+If CRISPOR is unavailable, use CHOPCHOP:
+
+1. Go to https://chopchop.cbu.uib.no/
+2. Select **"Target"** tab → **"Paste your own sequence"**
+3. Paste the sequence from `crispr_test_sequences.fasta`
+4. Settings:
+   - **In**: Select "Other" or leave default
+   - **Using**: SpCas9
+   - **For**: Knock-out
+5. Click "Find Target Sites"
+6. Copy the top 5-10 guide sequences from the results table (20bp, without PAM)
+
+**Note**: CHOPCHOP and CRISPOR may return slightly different rankings due to different scoring algorithms, but the guide sequences themselves should overlap significantly.
 
 ### Step 2: Update the JSON Fixture
 
@@ -194,7 +217,7 @@ To add a new gene to the test suite:
    python scripts/fetch_crispr_test_fixtures.py
    ```
 
-3. Submit the new sequence to CRISPOR and collect expected guides
+3. Submit the new sequence to CRISPOR or CHOPCHOP and collect expected guides
 
 4. Update `crispr_test_genes.json` with the expected guides
 
@@ -222,6 +245,7 @@ If a CRISPOR guide isn't found by our tool:
 ## References
 
 - **CRISPOR**: Concordet & Haeussler, 2018. https://crispor.tefor.net/
+- **CHOPCHOP**: Labun et al., 2019. https://chopchop.cbu.uib.no/
 - **Rule Set 2**: Doench et al., 2016. Optimized sgRNA design.
 - **CFD Score**: Doench et al., 2016. Off-target scoring.
 
