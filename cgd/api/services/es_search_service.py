@@ -176,17 +176,18 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                             "boost": 5,
                         }
                     },
-                    # Headline/description match (low priority - for searches like "actin")
-                    # This allows finding genes by description but won't override exact name matches
+                    # Headline/description match (medium priority - for searches like "actin")
+                    # Boost higher than GO term prefix (15) so genes with query in description
+                    # appear before unrelated GO terms that happen to prefix-match
                     {
                         "multi_match": {
                             "query": query,
                             "fields": [
-                                "headline",
+                                "headline^2",
                                 "name_description",
                             ],
                             "type": "phrase_prefix",
-                            "boost": 2,
+                            "boost": 20,
                         }
                     },
                 ],
