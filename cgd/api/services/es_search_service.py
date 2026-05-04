@@ -128,15 +128,14 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     Uses case-insensitive matching for genes.
     Only returns types that autocomplete handles: gene, go_term, phenotype, reference.
 
-    Priority order:
-    1. Exact gene name match (case-insensitive) - boost 100
-    2. Gene name prefix match - boost 50
-    3. Feature name exact/prefix match - boost 40
-    4. CGDID prefix match - boost 35
-    5. GO term prefix match - boost 15
-    6. Phenotype prefix match - boost 10
-    7. Fallback text match on names - boost 5
-    8. Headline/description match - boost 2 (low priority, but still included)
+    Priority order (using constant_score to guarantee exact matches always win):
+    1. Exact gene name match - constant score 10000
+    2. Gene name prefix match - constant score 5000
+    3. Feature name prefix match - constant score 4000
+    4. CGDID prefix match - constant score 3500
+    5. GO term prefix match - constant score 1500
+    6. Phenotype prefix match - constant score 1000
+    7. Headline/description match - TF-IDF with boost 1 (max ~500)
     """
     query_upper = query.upper()
     query_lower = query.lower()
@@ -149,45 +148,31 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"terms": {"type": ["gene", "go_term", "phenotype", "reference"]}}
                 ],
                 "should": [
-                    # Exact gene name match (highest priority) - case-insensitive
-                    # Use wildcard without * for exact match with case_insensitive
-                    {"wildcard": {"gene_name.keyword": {"value": query_lower, "case_insensitive": True, "boost": 100}}},
-                    {"wildcard": {"feature_name": {"value": query_upper, "case_insensitive": True, "boost": 100}}},
+                    # Exact gene name match (highest priority) - use constant_score to guarantee
+                    # fixed score that beats TF-IDF headline scores
+                    {"constant_score": {"filter": {"wildcard": {"gene_name.keyword": {"value": query_lower, "case_insensitive": True}}}, "boost": 10000}},
+                    {"constant_score": {"filter": {"wildcard": {"feature_name": {"value": query_upper, "case_insensitive": True}}}, "boost": 10000}},
                     # Gene name prefix match (very high priority)
-                    {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 50}}},
+                    {"constant_score": {"filter": {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True}}}, "boost": 5000}},
                     # Feature name prefix match (high priority)
-                    {"wildcard": {"feature_name": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 40}}},
+                    {"constant_score": {"filter": {"wildcard": {"feature_name": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 4000}},
                     # CGDID prefix match
-                    {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 35}}},
+                    {"constant_score": {"filter": {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 3500}},
                     # Prefix match for GO terms
-                    {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 15}}},
+                    {"constant_score": {"filter": {"prefix": {"go_term.keyword": {"value": query_lower}}}, "boost": 1500}},
                     # Prefix match for phenotypes
-                    {"prefix": {"observable.keyword": {"value": query_lower, "boost": 10}}},
-                    # Text match on names (medium-low priority)
+                    {"constant_score": {"filter": {"prefix": {"observable.keyword": {"value": query_lower}}}, "boost": 1000}},
+                    # Headline/description match (for searches like "actin")
+                    # Uses TF-IDF scoring but capped below name matches
                     {
                         "multi_match": {
                             "query": query,
                             "fields": [
-                                "gene_name^3",
-                                "go_term^2",
-                                "observable^2",
-                            ],
-                            "type": "phrase_prefix",
-                            "boost": 5,
-                        }
-                    },
-                    # Headline/description match (medium priority - for searches like "actin")
-                    # Boost higher than GO term prefix (15) so genes with query in description
-                    # appear before unrelated GO terms that happen to prefix-match
-                    {
-                        "multi_match": {
-                            "query": query,
-                            "fields": [
-                                "headline^2",
+                                "headline",
                                 "name_description",
                             ],
                             "type": "phrase_prefix",
-                            "boost": 20,
+                            "boost": 1,
                         }
                     },
                 ],
