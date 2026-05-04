@@ -616,13 +616,16 @@ def get_autocomplete_suggestions(
     # First pass: collect ALL gene occurrences to track organisms and find best data
     # gene_organisms: tracks all organisms for each gene name
     # gene_best_data: stores the best data for each gene (prefer C. albicans)
+    # gene_max_score: tracks the max ES score for each gene (for sorting by relevance)
     gene_organisms: dict[str, set] = {}  # gene_name -> set of organisms
     gene_best_data: dict[str, dict] = {}  # gene_name -> best data dict
+    gene_max_score: dict[str, float] = {}  # gene_name -> max ES score
 
     for hit in response["hits"]["hits"]:
         source = hit["_source"]
         highlights = hit.get("highlight", {})
         doc_type = source.get("type")
+        score = hit.get("_score", 0.0)
 
         if doc_type == "gene":
             display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
@@ -633,6 +636,12 @@ def get_autocomplete_suggestions(
                     gene_organisms[display_name] = set()
                 if organism:
                     gene_organisms[display_name].add(organism)
+
+                # Track max ES score for this gene name
+                if display_name not in gene_max_score:
+                    gene_max_score[display_name] = score
+                else:
+                    gene_max_score[display_name] = max(gene_max_score[display_name], score)
 
                 # Build data for this occurrence
                 headline = source.get("headline")
@@ -740,8 +749,9 @@ def get_autocomplete_suggestions(
             highlighted_description=data["highlighted_description"],
         ))
 
-    # Sort genes by organism priority
-    genes.sort(key=lambda s: _get_organism_priority(s.organism))
+    # Sort genes: primary by ES score (descending), secondary by organism priority
+    # This ensures exact name matches (high score) always appear first
+    genes.sort(key=lambda s: (-gene_max_score.get(s.text, 0), _get_organism_priority(s.organism)))
 
     # Combine suggestions with priority limits
     suggestions: list[AutocompleteSuggestion] = []
