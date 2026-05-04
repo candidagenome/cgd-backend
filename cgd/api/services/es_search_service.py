@@ -163,13 +163,18 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     # Prefix match for phenotypes
                     {"constant_score": {"filter": {"prefix": {"observable.keyword": {"value": query_lower}}}, "boost": 1000}},
                     # Gene headline/description match (for searches like "actin")
-                    # Boost genes with query in headline above GO terms with query in name
+                    # Use constant_score to ensure headline matches rank between GO term matches (1500)
+                    # and name prefix matches (4000+), but below exact name matches (10000)
                     {
-                        "bool": {
-                            "must": [
-                                {"match_phrase_prefix": {"headline": query}},
-                                {"term": {"type": "gene"}}
-                            ],
+                        "constant_score": {
+                            "filter": {
+                                "bool": {
+                                    "must": [
+                                        {"match_phrase_prefix": {"headline": query}},
+                                        {"term": {"type": "gene"}}
+                                    ]
+                                }
+                            },
                             "boost": 2000
                         }
                     },
