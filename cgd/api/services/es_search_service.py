@@ -124,9 +124,18 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     """
     Build Elasticsearch query optimized for autocomplete.
 
-    Prioritizes prefix matching for fast suggestions.
-    Uses case-insensitive wildcard for genes to match regardless of case.
+    Prioritizes exact gene name matches, then prefix matching.
+    Uses case-insensitive matching for genes.
     Only returns types that autocomplete handles: gene, go_term, phenotype, reference.
+
+    Priority order:
+    1. Exact gene name match (case-insensitive) - boost 100
+    2. Gene name prefix match - boost 50
+    3. Feature name exact/prefix match - boost 40
+    4. CGDID prefix match - boost 35
+    5. GO term prefix match - boost 15
+    6. Phenotype prefix match - boost 10
+    7. Fallback text match on names only (no headline) - boost 1
     """
     query_upper = query.upper()
     query_lower = query.lower()
@@ -139,18 +148,22 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"terms": {"type": ["gene", "go_term", "phenotype", "reference"]}}
                 ],
                 "should": [
-                    # Exact match (highest priority) - genes
-                    {"term": {"gene_name.keyword": {"value": query_upper, "boost": 30}}},
-                    {"term": {"feature_name": {"value": query_upper, "boost": 30}}},
-                    # CGDID exact/prefix match (high priority)
-                    {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 28}}},
-                    # Case-insensitive wildcard for gene prefix (high priority)
-                    {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 25}}},
-                    {"wildcard": {"feature_name": {"value": f"{query_upper}*", "boost": 20}}},
-                    # Prefix match for GO terms and phenotypes
-                    {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
-                    {"prefix": {"observable.keyword": {"value": query_lower, "boost": 5}}},
-                    # Fallback to contains match (only on text fields, not keyword)
+                    # Exact gene name match (highest priority) - case-insensitive
+                    # Use wildcard without * for exact match with case_insensitive
+                    {"wildcard": {"gene_name.keyword": {"value": query_lower, "case_insensitive": True, "boost": 100}}},
+                    {"wildcard": {"feature_name": {"value": query_upper, "case_insensitive": True, "boost": 100}}},
+                    # Gene name prefix match (very high priority)
+                    {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 50}}},
+                    # Feature name prefix match (high priority)
+                    {"wildcard": {"feature_name": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 40}}},
+                    # CGDID prefix match
+                    {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 35}}},
+                    # Prefix match for GO terms
+                    {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 15}}},
+                    # Prefix match for phenotypes
+                    {"prefix": {"observable.keyword": {"value": query_lower, "boost": 10}}},
+                    # Fallback to contains match on NAMES ONLY (not descriptions/headlines)
+                    # This prevents genes with query in description from drowning out exact matches
                     {
                         "multi_match": {
                             "query": query,
@@ -158,10 +171,9 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                                 "gene_name^3",
                                 "go_term^2",
                                 "observable^2",
-                                "headline^2",
-                                "name_description",
                             ],
                             "type": "phrase_prefix",
+                            "boost": 1,
                         }
                     },
                 ],
