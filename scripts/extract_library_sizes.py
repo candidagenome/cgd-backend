@@ -83,7 +83,24 @@ def get_bam_path_from_bigwig(bigwig_path: Path) -> Optional[Path]:
 
 
 def get_mapped_reads_from_bam(bam_path: Path) -> Optional[int]:
-    """Get total mapped reads from BAM using samtools flagstat."""
+    """Get total mapped reads from BAM using pysam or samtools."""
+    # Try pysam first (preferred)
+    try:
+        import pysam
+        bam = pysam.AlignmentFile(str(bam_path), "rb")
+        # Get mapped reads from index stats
+        stats = bam.get_index_statistics()
+        total_mapped = sum(s.mapped for s in stats)
+        bam.close()
+        if total_mapped > 0:
+            return total_mapped
+    except ImportError:
+        pass  # pysam not available, try samtools
+    except Exception as e:
+        print(f"  pysam error: {e}", file=sys.stderr)
+        # Fall through to try samtools
+
+    # Fall back to samtools command line
     try:
         result = subprocess.run(
             ["samtools", "flagstat", str(bam_path)],
@@ -250,12 +267,25 @@ def main():
         sys.exit(1)
 
     if args.method == "bam":
-        # Check if samtools is available
+        # Check if pysam or samtools is available
+        pysam_available = False
+        samtools_available = False
+        try:
+            import pysam
+            pysam_available = True
+        except ImportError:
+            pass
         try:
             subprocess.run(["samtools", "--version"], capture_output=True, check=True)
+            samtools_available = True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print("ERROR: samtools not found. Install samtools or use --method bigwig.")
+            pass
+        if not pysam_available and not samtools_available:
+            print("ERROR: Neither pysam nor samtools found.")
+            print("Install pysam (pip install pysam) or samtools, or use --method bigwig.")
             sys.exit(1)
+        if pysam_available:
+            print("Using pysam for BAM parsing")
 
     print("=" * 60)
     print(f"Extracting library sizes using {args.method} method")
