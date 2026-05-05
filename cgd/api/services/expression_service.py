@@ -2025,9 +2025,11 @@ def get_similar_expression_genes(
                 continue
 
             # Approximate p-value for speed
+            # Note: The approximation 2*exp(-0.5*t^2) can exceed 1 for small t,
+            # so we cap at 1.0 to ensure valid probability values
             if abs(corr) < 0.9999 and n_shared > 2:
                 t_stat = corr * np.sqrt((n_shared - 2) / (1 - corr ** 2))
-                p_value = max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10)
+                p_value = min(max(2 * np.exp(-0.5 * t_stat ** 2), 1e-10), 1.0)
             else:
                 p_value = 1e-10
 
