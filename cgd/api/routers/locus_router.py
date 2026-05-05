@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
-from cgd.api.services import locus_service, synteny_service, es_search_service
+from cgd.api.services import locus_service, synteny_service, es_search_service, expression_service
 from cgd.core.elasticsearch import get_es_client
 from cgd.schemas.locus_schema import (
     LocusByOrganismResponse,
@@ -21,6 +21,7 @@ from cgd.schemas.go_schema import GODetailsResponse
 from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinPropertiesResponse, ProteinDomainResponse
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 from cgd.schemas.synteny_schema import SyntenyResponse
+from cgd.schemas.expression_schema import ExpressionDetailsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,21 @@ def history(name: str, db: Session = Depends(get_db)):
     Get change history for this locus, grouped by organism.
     """
     return locus_service.get_locus_history(db, name)
+
+
+@router.get("/{name}/expression_details", response_model=ExpressionDetailsResponse)
+def expression_details(name: str, db: Session = Depends(get_db)):
+    """
+    Get RNA-seq expression data for this locus, grouped by organism.
+
+    Returns fold change values across multiple studies and conditions.
+    """
+    try:
+        return expression_service.get_expression_details_by_organism(db, name)
+    except Exception as e:
+        logger.error(f"Error in expression_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/protein_properties", response_model=ProteinPropertiesResponse)

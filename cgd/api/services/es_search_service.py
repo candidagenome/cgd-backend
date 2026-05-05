@@ -124,9 +124,18 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
     """
     Build Elasticsearch query optimized for autocomplete.
 
-    Prioritizes prefix matching for fast suggestions.
-    Uses case-insensitive wildcard for genes to match regardless of case.
+    Prioritizes exact gene name matches, then prefix matching.
+    Uses case-insensitive matching for genes.
     Only returns types that autocomplete handles: gene, go_term, phenotype, reference.
+
+    Priority order (using constant_score to guarantee exact matches always win):
+    1. Exact gene name match - constant score 10000
+    2. Gene name prefix match - constant score 5000
+    3. Feature name prefix match - constant score 4000
+    4. CGDID prefix match - constant score 3500
+    5. GO term prefix match - constant score 1500
+    6. Phenotype prefix match - constant score 1000
+    7. Headline/description match - TF-IDF with boost 1 (max ~500)
     """
     query_upper = query.upper()
     query_lower = query.lower()
@@ -139,29 +148,46 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"terms": {"type": ["gene", "go_term", "phenotype", "reference"]}}
                 ],
                 "should": [
-                    # Exact match (highest priority) - genes
-                    {"term": {"gene_name.keyword": {"value": query_upper, "boost": 30}}},
-                    {"term": {"feature_name": {"value": query_upper, "boost": 30}}},
-                    # CGDID exact/prefix match (high priority)
-                    {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True, "boost": 28}}},
-                    # Case-insensitive wildcard for gene prefix (high priority)
-                    {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True, "boost": 25}}},
-                    {"wildcard": {"feature_name": {"value": f"{query_upper}*", "boost": 20}}},
-                    # Prefix match for GO terms and phenotypes
-                    {"prefix": {"go_term.keyword": {"value": query_lower, "boost": 8}}},
-                    {"prefix": {"observable.keyword": {"value": query_lower, "boost": 5}}},
-                    # Fallback to contains match (only on text fields, not keyword)
+                    # Exact gene name match (highest priority) - use constant_score to guarantee
+                    # fixed score that beats TF-IDF headline scores
+                    {"constant_score": {"filter": {"wildcard": {"gene_name.keyword": {"value": query_lower, "case_insensitive": True}}}, "boost": 10000}},
+                    {"constant_score": {"filter": {"wildcard": {"feature_name": {"value": query_upper, "case_insensitive": True}}}, "boost": 10000}},
+                    # Gene name prefix match (very high priority)
+                    {"constant_score": {"filter": {"wildcard": {"gene_name.keyword": {"value": f"{query_lower}*", "case_insensitive": True}}}, "boost": 5000}},
+                    # Feature name prefix match (high priority)
+                    {"constant_score": {"filter": {"wildcard": {"feature_name": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 4000}},
+                    # CGDID prefix match
+                    {"constant_score": {"filter": {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 3500}},
+                    # Prefix match for GO terms
+                    {"constant_score": {"filter": {"prefix": {"go_term.keyword": {"value": query_lower}}}, "boost": 1500}},
+                    # Prefix match for phenotypes
+                    {"constant_score": {"filter": {"prefix": {"observable.keyword": {"value": query_lower}}}, "boost": 1000}},
+                    # Gene headline/description match (for searches like "actin")
+                    # Use constant_score to ensure headline matches rank between GO term matches (1500)
+                    # and name prefix matches (4000+), but below exact name matches (10000)
+                    {
+                        "constant_score": {
+                            "filter": {
+                                "bool": {
+                                    "must": [
+                                        {"match_phrase_prefix": {"headline": query}},
+                                        {"term": {"type": "gene"}}
+                                    ]
+                                }
+                            },
+                            "boost": 2000
+                        }
+                    },
+                    # General headline/description match as fallback
                     {
                         "multi_match": {
                             "query": query,
                             "fields": [
-                                "gene_name^3",
-                                "go_term^2",
-                                "observable^2",
-                                "headline^2",
+                                "headline",
                                 "name_description",
                             ],
                             "type": "phrase_prefix",
+                            "boost": 1,
                         }
                     },
                 ],
@@ -602,20 +628,37 @@ def get_autocomplete_suggestions(
 
     seen_texts = set()
 
-    # First pass: collect gene data and track which names appear in multiple organisms
-    gene_data: list[dict] = []
+    # First pass: collect ALL gene occurrences to track organisms and find best data
+    # gene_organisms: tracks all organisms for each gene name
+    # gene_best_data: stores the best data for each gene (prefer C. albicans)
+    # gene_max_score: tracks the max ES score for each gene (for sorting by relevance)
     gene_organisms: dict[str, set] = {}  # gene_name -> set of organisms
+    gene_best_data: dict[str, dict] = {}  # gene_name -> best data dict
+    gene_max_score: dict[str, float] = {}  # gene_name -> max ES score
 
     for hit in response["hits"]["hits"]:
         source = hit["_source"]
         highlights = hit.get("highlight", {})
         doc_type = source.get("type")
+        score = hit.get("_score", 0.0)
 
         if doc_type == "gene":
             display_name = source.get("gene_name") or source.get("feature_name") or source.get("name")
             organism = source.get("organism")
-            if display_name and display_name not in seen_texts:
-                seen_texts.add(display_name)
+            if display_name:
+                # Track ALL organisms for this gene name
+                if display_name not in gene_organisms:
+                    gene_organisms[display_name] = set()
+                if organism:
+                    gene_organisms[display_name].add(organism)
+
+                # Track max ES score for this gene name
+                if display_name not in gene_max_score:
+                    gene_max_score[display_name] = score
+                else:
+                    gene_max_score[display_name] = max(gene_max_score[display_name], score)
+
+                # Build data for this occurrence
                 headline = source.get("headline")
                 description = headline[:80] + "..." if headline and len(headline) > 80 else headline
 
@@ -623,27 +666,27 @@ def get_autocomplete_suggestions(
                 if not highlighted_text:
                     highlighted_text = _highlight_text(display_name, query)
 
-                # Track organisms for this gene name
-                if display_name not in gene_organisms:
-                    gene_organisms[display_name] = set()
-                if organism:
-                    gene_organisms[display_name].add(organism)
-
-                # Use highlighted description from ES or manual highlight
                 highlighted_desc = _extract_highlight(highlights, "headline", None)
                 if not highlighted_desc:
                     highlighted_desc = _extract_highlight(highlights, "name_description", None)
                 if not highlighted_desc and description:
                     highlighted_desc = _highlight_text(description, query)
 
-                gene_data.append({
+                current_data = {
                     "text": display_name,
                     "link": f"/locus/{display_name}",
                     "description": description,
                     "organism": organism,
                     "highlighted_text": highlighted_text,
                     "highlighted_description": highlighted_desc,
-                })
+                }
+
+                # Keep best data: prefer C. albicans SC5314, then first occurrence
+                if display_name not in gene_best_data:
+                    gene_best_data[display_name] = current_data
+                elif organism == "Candida albicans SC5314":
+                    # Replace with C. albicans data (better description usually)
+                    gene_best_data[display_name] = current_data
 
         elif doc_type == "go_term":
             go_term = source.get("go_term") or source.get("name")
@@ -706,11 +749,11 @@ def get_autocomplete_suggestions(
                     highlighted_description=_highlight_text(description, query) if description else None,
                 ))
 
-    # Second pass: create gene suggestions, only show organism if unique to one
-    for data in gene_data:
-        gene_name = data["text"]
-        # Only show organism if this gene name appears in exactly one organism
-        show_organism = len(gene_organisms.get(gene_name, set())) == 1
+    # Second pass: create gene suggestions from best data
+    # Only show organism if gene exists in exactly one organism
+    for gene_name, data in gene_best_data.items():
+        num_organisms = len(gene_organisms.get(gene_name, set()))
+        show_organism = num_organisms == 1
         genes.append(AutocompleteSuggestion(
             text=gene_name,
             category="gene",
@@ -721,8 +764,9 @@ def get_autocomplete_suggestions(
             highlighted_description=data["highlighted_description"],
         ))
 
-    # Sort genes by organism priority
-    genes.sort(key=lambda s: _get_organism_priority(s.organism))
+    # Sort genes: primary by ES score (descending), secondary by organism priority
+    # This ensures exact name matches (high score) always appear first
+    genes.sort(key=lambda s: (-gene_max_score.get(s.text, 0), _get_organism_priority(s.organism)))
 
     # Combine suggestions with priority limits
     suggestions: list[AutocompleteSuggestion] = []
