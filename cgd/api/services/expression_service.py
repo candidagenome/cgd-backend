@@ -229,18 +229,18 @@ EXPRESSION_STUDIES = {
         },
         "Jakab_2021": {
             "category": "Stress Response",
-            "pmid": "31399405",
+            "pmid": "34643421",  # C. auris farnesol study (PRJNA746543)
             "path_style": "direct",
-            "control": "SRR10006214",
+            "control": "SRR15131027",
             "conditions": {
                 # Control (no farnesol)
-                "SRR10006214": {"label": "Control (rep 1)", "bucket": "control"},
-                "SRR10006215": {"label": "Control (rep 2)", "bucket": "control"},
-                "SRR10006216": {"label": "Control (rep 3)", "bucket": "control"},
+                "SRR15131027": {"label": "Control (rep 1)", "bucket": "control"},
+                "SRR15131028": {"label": "Control (rep 2)", "bucket": "control"},
+                "SRR15131029": {"label": "Control (rep 3)", "bucket": "control"},
                 # Farnesol treated
-                "SRR10006217": {"label": "Farnesol (rep 1)", "bucket": "stress"},
-                "SRR10006218": {"label": "Farnesol (rep 2)", "bucket": "stress"},
-                "SRR10006219": {"label": "Farnesol (rep 3)", "bucket": "stress"},
+                "SRR15131030": {"label": "Farnesol (rep 1)", "bucket": "stress"},
+                "SRR15131031": {"label": "Farnesol (rep 2)", "bucket": "stress"},
+                "SRR15131032": {"label": "Farnesol (rep 3)", "bucket": "stress"},
             },
         },
         "Balla_2023": {
@@ -807,7 +807,12 @@ LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
             "SRR17259772": 72.32,
         },
         "Jakab_2021": {
-            # BAM files not found for this study
+            "SRR15131027": 33.34,
+            "SRR15131028": 35.08,
+            "SRR15131029": 38.63,
+            "SRR15131030": 33.57,
+            "SRR15131031": 27.47,
+            "SRR15131032": 27.16,
         },
         "Balla_2023": {
             "SRR23266141": 33.34,
