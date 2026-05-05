@@ -757,7 +757,10 @@ LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
             "SRR25396039": 43.9,
         },
         "Lohse_2016": {
-            # BAM files not found for this study
+            "wt_con": 47.53,
+            "wt_gfp": 46.46,
+            "op_con": 31.70,
+            "op_gfp": 31.97,
         },
         "Zhang_2024": {
             "SRR18188695": 67.02,
