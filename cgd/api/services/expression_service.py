@@ -698,6 +698,30 @@ BUCKET_LABELS = {
     "stress": "Stress Response",
 }
 
+# Library sizes (total mapped reads in millions) for normalization
+# These values need to be populated from BAM files using:
+#   samtools flagstat <sample.bam> | grep "mapped ("
+# Or from BigWig total signal using scripts/extract_library_sizes.py
+#
+# Format: {organism: {study_id: {condition_id: library_size_in_millions}}}
+# If a condition is missing, normalization will be skipped for that comparison
+# and a warning will be logged.
+#
+# IMPORTANT: Set NORMALIZE_BY_LIBRARY_SIZE = True once library sizes are populated
+NORMALIZE_BY_LIBRARY_SIZE = False  # Set to True after populating LIBRARY_SIZES
+
+LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
+    # Example format (values need to be filled in from actual data):
+    # "C_albicans_SC5314": {
+    #     "Bruno_2010": {
+    #         "nOxi": 25.5,  # 25.5 million mapped reads
+    #         "lOxi": 22.3,
+    #         "hOxi": 28.1,
+    #         ...
+    #     },
+    # },
+}
+
 
 # ============================================================================
 # Helper Functions
@@ -872,6 +896,80 @@ def _get_expression_value(
     except Exception as e:
         logger.debug(f"Error reading bigwig {bigwig_path}: {e}")
         return None
+
+
+def _get_library_size(
+    organism_key: str,
+    study_id: str,
+    condition_id: str
+) -> Optional[float]:
+    """Get library size (in millions of reads) for a condition."""
+    org_sizes = LIBRARY_SIZES.get(organism_key, {})
+    study_sizes = org_sizes.get(study_id, {})
+    return study_sizes.get(condition_id)
+
+
+def _calculate_fold_change(
+    cond_value: float,
+    control_value: float,
+    organism_key: str = None,
+    study_id: str = None,
+    cond_id: str = None,
+    control_id: str = None,
+) -> Tuple[float, bool]:
+    """
+    Calculate fold change with optional library size normalization.
+
+    If NORMALIZE_BY_LIBRARY_SIZE is True and library sizes are available,
+    values are normalized to CPM (counts per million) before calculating
+    the ratio. This corrects for differences in sequencing depth between
+    samples.
+
+    Fold change formula:
+        Without normalization: cond_value / control_value
+        With normalization:    (cond_value / cond_lib_size) / (control_value / control_lib_size)
+                             = (cond_value * control_lib_size) / (control_value * cond_lib_size)
+
+    Note: Gene length normalization is NOT needed because:
+        - The same gene region is used for both condition and control
+        - Gene length cancels out in the ratio
+
+    Args:
+        cond_value: Raw expression value for condition
+        control_value: Raw expression value for control
+        organism_key: Organism identifier (e.g., "C_albicans_SC5314")
+        study_id: Study identifier (e.g., "Bruno_2010")
+        cond_id: Condition identifier
+        control_id: Control condition identifier
+
+    Returns:
+        Tuple of (fold_change, was_normalized)
+    """
+    if control_value <= 0:
+        return (0.0, False)
+
+    # Check if we should normalize
+    if (NORMALIZE_BY_LIBRARY_SIZE and organism_key and study_id
+            and cond_id and control_id):
+        cond_lib_size = _get_library_size(organism_key, study_id, cond_id)
+        control_lib_size = _get_library_size(organism_key, study_id, control_id)
+
+        if cond_lib_size and control_lib_size and cond_lib_size > 0:
+            # Normalized fold change:
+            # (cond / cond_lib) / (control / control_lib)
+            # = (cond * control_lib) / (control * cond_lib)
+            fold_change = (cond_value * control_lib_size) / (control_value * cond_lib_size)
+            return (round(fold_change, 3), True)
+        else:
+            # Library sizes not available - log warning once per study
+            logger.debug(
+                f"Library sizes not available for {study_id}, "
+                f"using raw fold change"
+            )
+
+    # Fall back to raw fold change (no normalization)
+    fold_change = cond_value / control_value
+    return (round(fold_change, 3), False)
 
 
 def _get_gene_location(
@@ -1051,8 +1149,14 @@ def get_gene_expression(
             if cond_value is None:
                 continue
 
-            fold_change = cond_value / control_value if control_value > 0 else 0
-            fold_change = round(fold_change, 3)
+            fold_change, _ = _calculate_fold_change(
+                cond_value=cond_value,
+                control_value=control_value,
+                organism_key=organism_key,
+                study_id=study_id,
+                cond_id=cond_id,
+                control_id=control_id,
+            )
 
             conditions.append(ExpressionCondition(
                 condition_id=cond_id,
@@ -1209,8 +1313,14 @@ def _get_expression_for_organism(
             if cond_value is None:
                 continue
 
-            fold_change = cond_value / control_value if control_value > 0 else 0
-            fold_change = round(fold_change, 3)
+            fold_change, _ = _calculate_fold_change(
+                cond_value=cond_value,
+                control_value=control_value,
+                organism_key=hts_key,
+                study_id=study_id,
+                cond_id=cond_id,
+                control_id=control_id,
+            )
 
             conditions.append(ExpressionCondition(
                 condition_id=cond_id,
@@ -1674,7 +1784,14 @@ def _build_expression_profile(
             if cond_value is None:
                 continue
 
-            fold_change = cond_value / control_value
+            fold_change, _ = _calculate_fold_change(
+                cond_value=cond_value,
+                control_value=control_value,
+                organism_key=hts_key,
+                study_id=study_id,
+                cond_id=cond_id,
+                control_id=control_id,
+            )
             condition_key = f"{study_id}:{cond_id}"
             profile[condition_key] = fold_change
 
