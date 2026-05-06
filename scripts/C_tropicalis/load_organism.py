@@ -36,11 +36,12 @@ ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # C. tropicalis configuration
 ORGANISM_CONFIG = {
-    "common_name": "Candida tropicalis MYA-3404",
-    "genus": "Candida",
-    "species": "tropicalis",
-    "strain_name": "MYA-3404",
+    "organism_name": "Candida tropicalis MYA-3404",
+    "organism_abbrev": "C_tropicalis",
     "taxon_id": 294747,
+    "taxonomic_rank": "Strain",
+    "organism_order": 6,  # After existing Candida species
+    "common_name": "Candida tropicalis MYA-3404",
 }
 
 GENOME_VERSION_CONFIG = {
@@ -62,24 +63,26 @@ def get_or_create_organism(session, dry_run: bool = False) -> int:
     query = text(f"""
         SELECT organism_no
         FROM {DB_SCHEMA}.organism
-        WHERE common_name = :common_name
+        WHERE organism_name = :organism_name
     """)
-    result = session.execute(query, {"common_name": ORGANISM_CONFIG["common_name"]}).first()
+    result = session.execute(query, {"organism_name": ORGANISM_CONFIG["organism_name"]}).first()
 
     if result:
-        logger.info(f"Organism already exists: {ORGANISM_CONFIG['common_name']} (organism_no={result[0]})")
+        logger.info(f"Organism already exists: {ORGANISM_CONFIG['organism_name']} (organism_no={result[0]})")
         return result[0]
 
     if dry_run:
-        logger.info(f"[DRY RUN] Would create organism: {ORGANISM_CONFIG['common_name']}")
+        logger.info(f"[DRY RUN] Would create organism: {ORGANISM_CONFIG['organism_name']}")
         return -1
 
     # Insert organism
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.organism (
-            common_name, genus, species, strain_name, taxon_id, created_by
+            organism_name, organism_abbrev, taxon_id, taxonomic_rank,
+            organism_order, common_name, created_by
         ) VALUES (
-            :common_name, :genus, :species, :strain_name, :taxon_id, :created_by
+            :organism_name, :organism_abbrev, :taxon_id, :taxonomic_rank,
+            :organism_order, :common_name, :created_by
         )
     """)
     session.execute(insert, {
@@ -89,9 +92,9 @@ def get_or_create_organism(session, dry_run: bool = False) -> int:
     session.commit()
 
     # Get the new organism_no
-    result = session.execute(query, {"common_name": ORGANISM_CONFIG["common_name"]}).first()
+    result = session.execute(query, {"organism_name": ORGANISM_CONFIG["organism_name"]}).first()
     organism_no = result[0]
-    logger.info(f"Created organism: {ORGANISM_CONFIG['common_name']} (organism_no={organism_no})")
+    logger.info(f"Created organism: {ORGANISM_CONFIG['organism_name']} (organism_no={organism_no})")
     return organism_no
 
 
