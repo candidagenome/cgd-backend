@@ -41,7 +41,6 @@ ORGANISM_CONFIG = {
     "species": "tropicalis",
     "strain_name": "MYA-3404",
     "taxon_id": 294747,
-    "abbreviation": "C. tropicalis",
 }
 
 GENOME_VERSION_CONFIG = {
@@ -78,9 +77,9 @@ def get_or_create_organism(session, dry_run: bool = False) -> int:
     # Insert organism
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.organism (
-            common_name, genus, species, strain_name, taxon_id, abbreviation, created_by
+            common_name, genus, species, strain_name, taxon_id, created_by
         ) VALUES (
-            :common_name, :genus, :species, :strain_name, :taxon_id, :abbreviation, :created_by
+            :common_name, :genus, :species, :strain_name, :taxon_id, :created_by
         )
     """)
     session.execute(insert, {
