@@ -215,8 +215,49 @@ def ensure_code(session, table_name: str, col_name: str, code_value: str, descri
     return True
 
 
+def ensure_dbuser(session, userid: str, dry_run: bool = False) -> bool:
+    """Ensure the database user exists in dbuser table."""
+    query = text(f"""
+        SELECT dbuser_no
+        FROM {DB_SCHEMA}.dbuser
+        WHERE userid = :userid
+    """)
+    result = session.execute(query, {"userid": userid}).first()
+
+    if result:
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create dbuser entry for: {userid}")
+        return True
+
+    # Ensure 'current' status code exists
+    ensure_code(session, "DBUSER", "STATUS", "current", "Current database user", dry_run)
+
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.dbuser (
+            userid, first_name, last_name, status, email
+        ) VALUES (
+            :userid, :first_name, :last_name, :status, :email
+        )
+    """)
+    session.execute(insert, {
+        "userid": userid,
+        "first_name": "Database",
+        "last_name": "System",
+        "status": "current",
+        "email": "cgd-admin@lists.stanford.edu",
+    })
+    session.commit()
+    logger.info(f"Created dbuser entry for: {userid}")
+    return True
+
+
 def load_go_annotations(session, tsv_file: Path, dry_run: bool = False):
     """Load GO annotations from InterProScan TSV."""
+    # Ensure the database user exists (required by trigger)
+    ensure_dbuser(session, "MULTI", dry_run)
+
     # Ensure required codes exist
     ensure_code(session, "GO_ANNOTATION", "GO_EVIDENCE", GO_EVIDENCE,
                 "Inferred from Electronic Annotation", dry_run)
