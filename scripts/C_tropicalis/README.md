@@ -167,21 +167,40 @@ python scripts/C_tropicalis/cleanup_features.py [--dry-run]
 
 ## Data Summary
 
+**Organism:** Candida tropicalis MYA-3404
+**Abbreviation:** C_tropicalis
+**Taxon ID:** 294747
+
 After loading, the following data should be present:
 
-| Data Type | Count |
-|-----------|-------|
-| Chromosome sequences | 7 |
-| Gene features | 6,678 |
-| Protein sequences | 6,218 |
-| Genomic DNA sequences | 6,678 |
-| Feature locations | 6,678 |
-| CDS features | 6,655 |
-| Intron features | 163 |
-| Gene descriptions | ~5,246 |
-| Ortholog pairs | ~23,167 |
-| Domain annotations | ~23,712 |
-| GO annotations | ~20,308 |
+| Data Type | Count | Data Source |
+|-----------|------:|-------------|
+| **Features** | | |
+| ORF Features | 6,678 | GFF file (Ctrop_liftover3_sorted.gff) |
+| Contig/Scaffold Features | 7 | [NCBI Assembly GCA_013177555.1](https://www.ncbi.nlm.nih.gov/assembly/GCA_013177555.1) |
+| CDS Features | 6,655 | GFF file (CDS entries) |
+| Intron Features | 163 | Calculated from CDS coordinates in GFF |
+| **Sequences** | | |
+| Protein Sequences | 6,218 | Protein FASTA (C_tropicalis_MYA-3404_proteins.fasta) |
+| Genomic DNA Sequences (genes) | 6,678 | Extracted from Genomic FASTA using GFF coordinates |
+| Chromosome Sequences | 7 | [NCBI Assembly GCA_013177555.1](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/013/177/555/GCA_013177555.1_ASM1317755v1/) |
+| **Coordinates** | | |
+| Feature Locations (ORFs) | 6,678 | GFF file coordinates |
+| Feature Locations (CDS) | 6,655 | GFF file coordinates |
+| Feature Locations (introns) | 163 | Calculated from CDS coordinates |
+| Feature Relationships | 6,818 | Generated during CDS/intron loading |
+| **Annotations** | | |
+| Gene Descriptions | 5,246 | C. albicans ortholog data (reciprocal best hits) |
+| Ortholog Entries | 23,167 | BLAST reciprocal best hits (5 species) |
+| Homology Groups | 23,167 | BLAST reciprocal best hits |
+| Domain Annotations | 57,607 | InterProScan (all_results.tsv) |
+| GO Annotations | 20,308 | InterProScan (all_results.tsv) - IEA evidence |
+
+### Download URLs
+
+- **Assembly page:** https://www.ncbi.nlm.nih.gov/assembly/GCA_013177555.1
+- **FTP directory:** https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/013/177/555/GCA_013177555.1_ASM1317755v1/
+- **Genomic FASTA:** https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/013/177/555/GCA_013177555.1_ASM1317755v1/GCA_013177555.1_ASM1317755v1_genomic.fna.gz
 
 ## Environment Variables
 
