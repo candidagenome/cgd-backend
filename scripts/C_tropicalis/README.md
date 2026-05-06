@@ -1,93 +1,199 @@
-# C. tropicalis Data Loading Scripts
+# C. tropicalis MYA-3404 Data Loading Scripts
 
-Scripts for loading C. tropicalis MYA-3404 data into the CGD database.
+Scripts for loading *Candida tropicalis* MYA-3404 data into the CGD database.
 
 ## Prerequisites
 
-- Database connection configured via environment variables
+- Python 3.9+
+- Database connection configured via `DATABASE_URL` environment variable
 - Python environment with cgd-backend dependencies installed
 - Data files prepared on the server
 
 ## Data Files Needed
 
 ```
-/home/ec2-user/C_tropicalis/
-├── Ctrop_liftover3_sorted.gff              # Gene annotations
-├── C_tropicalis_MYA-3404_proteins.fasta    # Protein sequences (in orthologs/)
-├── ctrop_ortholog_descriptions.tsv         # Generated descriptions
+/home/ec2-user/
+├── Ctrop_liftover3_sorted.gff                      # Gene annotations (GFF)
+├── GCA_013177555.1_ASM1317755v1_genomic.fna        # Genomic FASTA (chromosomes)
+├── C_tropicalis_MYA-3404_proteins.fasta            # Protein sequences
+├── ctrop_ortholog_descriptions.tsv                 # Generated descriptions
 ├── orthologs/
-│   ├── reciprocal_best_hits.txt            # C. albicans orthologs
-│   ├── reciprocal_best_hits_caur.txt       # C. auris orthologs
-│   ├── reciprocal_best_hits_cdub.txt       # C. dubliniensis orthologs
-│   ├── reciprocal_best_hits_cgla.txt       # C. glabrata orthologs
-│   └── reciprocal_best_hits_cpar.txt       # C. parapsilosis orthologs
+│   ├── reciprocal_best_hits.txt                    # C. albicans orthologs
+│   ├── reciprocal_best_hits_caur.txt               # C. auris orthologs
+│   ├── reciprocal_best_hits_cdub.txt               # C. dubliniensis orthologs
+│   ├── reciprocal_best_hits_cgla.txt               # C. glabrata orthologs
+│   └── reciprocal_best_hits_cpar.txt               # C. parapsilosis orthologs
 └── iprscan_results/
-    └── all_results.tsv                     # InterProScan output
+    └── all_results.tsv                             # InterProScan output (merged)
 ```
 
 ## Loading Order
 
-Scripts must be run in this order due to dependencies:
+Scripts must be run in this order due to database dependencies:
 
 ### 1. Create Organism Entry
 
 ```bash
-cd /opt/cgd_api
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_organism.py
+python scripts/C_tropicalis/load_organism.py [--dry-run]
 ```
 
-### 2. Load Genes and Sequences
+Creates organism and genome version for C. tropicalis MYA-3404.
+
+### 2. Load Genes and Protein Sequences
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_genes_and_sequences.py \
-    --gff /home/ec2-user/C_tropicalis/Ctrop_liftover3_sorted.gff \
-    --proteins /home/ec2-user/C_tropicalis/orthologs/C_tropicalis_MYA-3404_proteins.fasta
+python scripts/C_tropicalis/load_genes_and_sequences.py \
+    --gff /home/ec2-user/Ctrop_liftover3_sorted.gff \
+    --proteins /home/ec2-user/C_tropicalis_MYA-3404_proteins.fasta \
+    [--dry-run]
 ```
 
-### 3. Load Gene Descriptions (from orthologs)
+Loads gene features from GFF and protein sequences from FASTA.
+
+### 3. Load Feature Coordinates
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_descriptions.py \
-    --descriptions /home/ec2-user/C_tropicalis/ctrop_ortholog_descriptions.tsv
+python scripts/C_tropicalis/load_coordinates.py \
+    --gff /home/ec2-user/Ctrop_liftover3_sorted.gff \
+    --genomic /home/ec2-user/GCA_013177555.1_ASM1317755v1_genomic.fna \
+    [--dry-run] [--skip-subfeatures]
 ```
 
-### 4. Load Orthologs
+Creates chromosome/scaffold features and loads chromosomal coordinates into `feat_location`.
+
+### 4. Load Genomic DNA Sequences
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_orthologs.py \
-    --orthologs-dir /home/ec2-user/C_tropicalis/orthologs
+python scripts/C_tropicalis/load_genomic_sequences.py \
+    --gff /home/ec2-user/Ctrop_liftover3_sorted.gff \
+    --genomic /home/ec2-user/GCA_013177555.1_ASM1317755v1_genomic.fna \
+    [--dry-run]
 ```
 
-### 5. Load Protein Domains (from InterProScan)
+Extracts and loads genomic DNA sequences (with introns) for each gene.
+
+### 5. Load CDS and Intron Features
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_protein_domains.py \
-    --tsv /home/ec2-user/C_tropicalis/iprscan_results/all_results.tsv
+python scripts/C_tropicalis/load_cds_and_introns.py \
+    --gff /home/ec2-user/Ctrop_liftover3_sorted.gff \
+    [--dry-run]
 ```
 
-### 6. Load GO Annotations (IEA from InterProScan)
+Creates CDS and intron features with:
+- Feature records (`feature_type='CDS'` or `'intron'`)
+- `FEAT_RELATIONSHIP` linking to parent gene (`relationship_type='part of'`, `rank=2`)
+- `FEAT_LOCATION` with chromosomal coordinates
+
+### 6. Load Gene Descriptions
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_go_annotations.py \
-    --tsv /home/ec2-user/C_tropicalis/iprscan_results/all_results.tsv
+python scripts/C_tropicalis/load_descriptions.py \
+    --descriptions /home/ec2-user/ctrop_ortholog_descriptions.tsv \
+    [--dry-run]
 ```
 
-## Dry Run Mode
+Loads gene descriptions derived from C. albicans ortholog data into `feature.headline`.
 
-All scripts support `--dry-run` flag to preview changes without modifying the database:
+### 7. Load Orthologs
 
 ```bash
-PYTHONPATH=/opt/cgd_api python3 scripts/C_tropicalis/load_organism.py --dry-run
+python scripts/C_tropicalis/load_orthologs.py \
+    --orthologs-dir /home/ec2-user/orthologs \
+    [--dry-run]
 ```
 
-## Helper Scripts
+Loads ortholog relationships (BLAST reciprocal best hits) to 5 Candida species via `homology_group` and `feat_homology` tables.
 
-- `iprscan_submit.py` - Submit proteins to EBI InterProScan REST API
-- `generate_ortholog_descriptions.py` - Generate descriptions from C. albicans orthologs
+### 8. Load Protein Domains
+
+```bash
+python scripts/C_tropicalis/load_protein_domains.py \
+    --tsv /home/ec2-user/iprscan_results/all_results.tsv \
+    [--dry-run]
+```
+
+Loads protein domains from InterProScan TSV into `dbxref` and `dbxref_feat` tables.
+
+### 9. Load GO Annotations
+
+```bash
+python scripts/C_tropicalis/load_go_annotations.py \
+    --tsv /home/ec2-user/iprscan_results/all_results.tsv \
+    [--dry-run]
+```
+
+Loads GO annotations (IEA evidence) from InterProScan into `go_annotation` table.
+
+## Utility Scripts
+
+### generate_ortholog_descriptions.py
+
+Generates gene descriptions based on C. albicans ortholog data.
+
+```bash
+python scripts/C_tropicalis/generate_ortholog_descriptions.py \
+    --orthologs /home/ec2-user/orthologs/reciprocal_best_hits.txt \
+    --output /home/ec2-user/ctrop_ortholog_descriptions.tsv
+```
+
+### merge_iprscan_results.py
+
+Merges individual InterProScan TSV results into a single file, correcting protein IDs from filenames.
+
+```bash
+python scripts/C_tropicalis/merge_iprscan_results.py \
+    --input-dir /home/ec2-user/iprscan_results/ \
+    --output /home/ec2-user/iprscan_results/all_results.tsv
+```
+
+### iprscan_submit.py
+
+Submits protein sequences to EBI InterProScan REST API for analysis.
+
+```bash
+python scripts/C_tropicalis/iprscan_submit.py \
+    --fasta /home/ec2-user/C_tropicalis_MYA-3404_proteins.fasta \
+    --output-dir /home/ec2-user/iprscan_results/
+```
+
+### cleanup_features.py
+
+Utility script to delete C. tropicalis features before reloading.
+
+```bash
+python scripts/C_tropicalis/cleanup_features.py [--dry-run]
+```
+
+## Data Summary
+
+After loading, the following data should be present:
+
+| Data Type | Count |
+|-----------|-------|
+| Chromosome sequences | 7 |
+| Gene features | 6,678 |
+| Protein sequences | 6,218 |
+| Genomic DNA sequences | 6,678 |
+| Feature locations | 6,678 |
+| CDS features | 6,655 |
+| Intron features | 163 |
+| Gene descriptions | ~5,246 |
+| Ortholog pairs | ~23,167 |
+| Domain annotations | ~23,712 |
+| GO annotations | ~20,308 |
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | Database connection URL | Required |
+| `DB_SCHEMA` | Database schema name | `MULTI` |
+| `ADMIN_USER` | User for `created_by` field | `CGDADMIN` |
 
 ## Notes
 
+- All scripts support `--dry-run` flag to preview changes without modifying the database
 - Scripts are idempotent and can be re-run safely
 - Each script checks for existing data before inserting
 - Progress is logged and committed in batches of 500 records
-- Use `--dry-run` to test before actual loading
