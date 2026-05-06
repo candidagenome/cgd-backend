@@ -213,6 +213,10 @@ def get_or_create_dbxref(
             :dbxref_id, :dbxref_type, :source, :description, :created_by
         )
     """)
+    # Truncate description to 240 characters max
+    if description and len(description) > 240:
+        description = description[:237] + "..."
+
     session.execute(insert, {
         "dbxref_id": dbxref_id,
         "dbxref_type": dbxref_type,
