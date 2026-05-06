@@ -111,12 +111,15 @@ def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
 
 def get_go_no_by_goid(session, goid: str) -> Optional[int]:
     """Get go_no by GO ID (e.g., GO:0005515)."""
+    # Extract numeric part from GO:NNNNNNN format
+    goid_num = int(goid.replace("GO:", ""))
+
     query = text(f"""
         SELECT go_no
         FROM {DB_SCHEMA}.go
         WHERE goid = :goid
     """)
-    result = session.execute(query, {"goid": goid}).first()
+    result = session.execute(query, {"goid": goid_num}).first()
     return result[0] if result else None
 
 
