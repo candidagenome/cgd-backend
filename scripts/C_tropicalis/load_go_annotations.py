@@ -174,8 +174,57 @@ def create_go_annotation(
     return True
 
 
+def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
+    """Ensure a code value exists in the code table."""
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = :tab_name
+        AND col_name = :col_name
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value
+    }).first()
+
+    if result:
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for {table_name}.{col_name}: {code_value}")
+        return True
+
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            :tab_name, :col_name, :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value,
+        "description": description,
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for {table_name}.{col_name}: {code_value}")
+    return True
+
+
 def load_go_annotations(session, tsv_file: Path, dry_run: bool = False):
     """Load GO annotations from InterProScan TSV."""
+    # Ensure required codes exist
+    ensure_code(session, "GO_ANNOTATION", "GO_EVIDENCE", GO_EVIDENCE,
+                "Inferred from Electronic Annotation", dry_run)
+    ensure_code(session, "GO_ANNOTATION", "ANNOTATION_TYPE", ANNOTATION_TYPE,
+                "Computational GO annotation", dry_run)
+    ensure_code(session, "GO_ANNOTATION", "SOURCE", SOURCE,
+                "InterProScan GO annotation source", dry_run)
+
     logger.info(f"Parsing GO terms from InterProScan TSV: {tsv_file}")
     protein_go_terms = parse_go_terms_from_iprscan(tsv_file)
 
