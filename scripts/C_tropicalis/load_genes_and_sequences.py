@@ -54,6 +54,43 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def ensure_source_code(session, source: str, table_name: str, dry_run: bool = False) -> bool:
+    """Ensure the source value exists in the code table."""
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = :tab_name
+        AND col_name = 'SOURCE'
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {"tab_name": table_name, "code_value": source}).first()
+
+    if result:
+        logger.info(f"Code already exists for {table_name}.SOURCE: {source}")
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for {table_name}.SOURCE: {source}")
+        return True
+
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            :tab_name, 'SOURCE', :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "tab_name": table_name,
+        "code_value": source,
+        "description": f"Source for {ORGANISM_NAME} data",
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for {table_name}.SOURCE: {source}")
+    return True
+
+
 def parse_fasta(fasta_file: Path) -> Dict[str, str]:
     """Parse FASTA file into dict of {id: sequence}."""
     sequences = {}
@@ -256,6 +293,10 @@ def load_genes_and_proteins(
     dry_run: bool = False
 ):
     """Load genes from GFF and protein sequences from FASTA."""
+    # Ensure source code exists for FEATURE and SEQ tables
+    ensure_source_code(session, SOURCE, "FEATURE", dry_run)
+    ensure_source_code(session, SOURCE, "SEQ", dry_run)
+
     organism_no = get_organism_no(session)
     genome_version_no = get_genome_version_no(session, organism_no)
 
