@@ -60,6 +60,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
+    """Ensure a code value exists in the code table."""
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = :tab_name
+        AND col_name = :col_name
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value
+    }).first()
+
+    if result:
+        logger.info(f"Code already exists for {table_name}.{col_name}: {code_value}")
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for {table_name}.{col_name}: {code_value}")
+        return True
+
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            :tab_name, :col_name, :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value,
+        "description": description,
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for {table_name}.{col_name}: {code_value}")
+    return True
+
+
 def parse_ortholog_file(filepath: Path) -> List[Tuple[str, str]]:
     """Parse reciprocal best hits file."""
     orthologs = []
@@ -236,6 +278,12 @@ def main():
     total_skipped = 0
 
     with SessionLocal() as session:
+        # Ensure required codes exist
+        ensure_code(session, "HOMOLOGY_GROUP", "METHOD", "BLAST RBH",
+                    "BLAST Reciprocal Best Hit method for ortholog detection", args.dry_run)
+        ensure_code(session, "HOMOLOGY_GROUP", "HOMOLOGY_GROUP_TYPE", "ortholog",
+                    "Ortholog relationship type", args.dry_run)
+
         for filename, other_species in ORTHOLOG_FILES.items():
             filepath = args.orthologs_dir / filename
             if filepath.exists():
