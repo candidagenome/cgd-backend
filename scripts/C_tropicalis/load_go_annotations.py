@@ -159,9 +159,9 @@ def create_go_annotation(
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.go_annotation (
-            go_no, feature_no, go_evidence, annotation_type, source, created_by
+            go_no, feature_no, go_evidence, annotation_type, source
         ) VALUES (
-            :go_no, :feature_no, :go_evidence, :annotation_type, :source, :created_by
+            :go_no, :feature_no, :go_evidence, :annotation_type, :source
         )
     """)
     session.execute(insert, {
@@ -170,7 +170,6 @@ def create_go_annotation(
         "go_evidence": go_evidence,
         "annotation_type": annotation_type,
         "source": source,
-        "created_by": ADMIN_USER,
     })
     return True
 
