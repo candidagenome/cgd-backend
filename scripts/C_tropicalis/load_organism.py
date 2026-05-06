@@ -57,6 +57,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def ensure_organism_abbrev_code(session, organism_abbrev: str, dry_run: bool = False) -> bool:
+    """Ensure the organism_abbrev value exists in the code table."""
+    # Check if code exists
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = 'ORGANISM'
+        AND col_name = 'ORGANISM_ABBREV'
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {"code_value": organism_abbrev}).first()
+
+    if result:
+        logger.info(f"Code already exists for organism_abbrev: {organism_abbrev}")
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for organism_abbrev: {organism_abbrev}")
+        return True
+
+    # Insert code entry
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            'ORGANISM', 'ORGANISM_ABBREV', :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "code_value": organism_abbrev,
+        "description": f"Organism abbreviation for {ORGANISM_CONFIG['organism_name']}",
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for organism_abbrev: {organism_abbrev}")
+    return True
+
+
 def get_or_create_organism(session, dry_run: bool = False) -> int:
     """Get or create organism entry for C. tropicalis."""
     # Check if organism exists
@@ -158,6 +196,9 @@ def main():
         logger.info("[DRY RUN MODE - No changes will be made]")
 
     with SessionLocal() as session:
+        # First ensure the organism_abbrev code exists in the code table
+        ensure_organism_abbrev_code(session, ORGANISM_CONFIG["organism_abbrev"], args.dry_run)
+
         organism_no = get_or_create_organism(session, args.dry_run)
         if organism_no > 0:
             genome_version_no = get_or_create_genome_version(session, organism_no, args.dry_run)
