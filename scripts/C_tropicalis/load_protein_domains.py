@@ -167,7 +167,7 @@ def get_or_create_dbxref(
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.dbxref (
-            dbxref_id, dbxref_type, source, dbxref_name, created_by
+            dbxref_id, dbxref_type, source, description, created_by
         ) VALUES (
             :dbxref_id, :dbxref_type, :source, :description, :created_by
         )
