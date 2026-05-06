@@ -409,13 +409,15 @@ def calculate_exons_relative(exons: List[Dict], gene_start: int) -> List[Dict]:
     return relative_exons
 
 
-def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool = False):
+def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool = False,
+                      skip_subfeatures: bool = False):
     """Load feature coordinates and introns."""
     # Ensure required codes
     ensure_code(session, "FEATURE", "FEATURE_TYPE", "contig", "Contig/scaffold feature", dry_run)
     ensure_code(session, "SEQ", "SEQ_TYPE", "Genomic DNA", "Genomic DNA sequence", dry_run)
-    ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Exon", "Coding exon", dry_run)
-    ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Intron", "Intron", dry_run)
+    if not skip_subfeatures:
+        ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Exon", "Coding exon", dry_run)
+        ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Intron", "Intron", dry_run)
 
     organism_no, genome_version_no = get_organism_and_genome(session)
     logger.info(f"Loading for organism_no={organism_no}, genome_version_no={genome_version_no}")
@@ -497,54 +499,57 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
     logger.info(f"Feature locations created: {locations_created}, skipped: {locations_skipped}")
 
     # Step 3: Create subfeature entries (exons and introns)
-    logger.info("Creating exon and intron subfeatures...")
     exons_created = 0
     introns_created = 0
 
-    for i, gene in enumerate(genes):
-        gene_id = gene['gene_id']
-        protein_id = gene_to_protein.get(gene_id)
+    if skip_subfeatures:
+        logger.info("Skipping exon and intron subfeatures (table not available or --skip-subfeatures)")
+    else:
+        logger.info("Creating exon and intron subfeatures...")
+        for i, gene in enumerate(genes):
+            gene_id = gene['gene_id']
+            protein_id = gene_to_protein.get(gene_id)
 
-        # Find feature
-        feature_no = None
-        if protein_id:
-            feature_no = get_feature_no(session, protein_id)
-        if not feature_no:
-            feature_no = get_feature_no(session, gene_id)
+            # Find feature
+            feature_no = None
+            if protein_id:
+                feature_no = get_feature_no(session, protein_id)
+            if not feature_no:
+                feature_no = get_feature_no(session, gene_id)
 
-        if not feature_no:
-            continue
+            if not feature_no:
+                continue
 
-        # Get exons for this gene
-        exons = gene_to_exons.get(gene_id, [])
-        if not exons:
-            continue
+            # Get exons for this gene
+            exons = gene_to_exons.get(gene_id, [])
+            if not exons:
+                continue
 
-        gene_start = gene['start']
+            gene_start = gene['start']
 
-        # Create exon subfeatures
-        relative_exons = calculate_exons_relative(exons, gene_start)
-        for exon in relative_exons:
-            if not subfeature_exists(session, feature_no, exon['start'], exon['end']):
+            # Create exon subfeatures
+            relative_exons = calculate_exons_relative(exons, gene_start)
+            for exon in relative_exons:
+                if not subfeature_exists(session, feature_no, exon['start'], exon['end']):
+                    if not dry_run:
+                        create_subfeature(session, feature_no, exon['start'], exon['end'], 'Exon')
+                        exons_created += 1
+
+            # Create intron subfeatures
+            introns = calculate_introns(exons, gene_start, gene['strand'])
+            for intron in introns:
+                if not subfeature_exists(session, feature_no, intron['start'], intron['end']):
+                    if not dry_run:
+                        create_subfeature(session, feature_no, intron['start'], intron['end'], 'Intron')
+                        introns_created += 1
+
+            if (i + 1) % 500 == 0:
+                logger.info(f"Processed {i + 1}/{len(genes)} genes (subfeatures)...")
                 if not dry_run:
-                    create_subfeature(session, feature_no, exon['start'], exon['end'], 'Exon')
-                    exons_created += 1
+                    session.commit()
 
-        # Create intron subfeatures
-        introns = calculate_introns(exons, gene_start, gene['strand'])
-        for intron in introns:
-            if not subfeature_exists(session, feature_no, intron['start'], intron['end']):
-                if not dry_run:
-                    create_subfeature(session, feature_no, intron['start'], intron['end'], 'Intron')
-                    introns_created += 1
-
-        if (i + 1) % 500 == 0:
-            logger.info(f"Processed {i + 1}/{len(genes)} genes (subfeatures)...")
-            if not dry_run:
-                session.commit()
-
-    if not dry_run:
-        session.commit()
+        if not dry_run:
+            session.commit()
 
     logger.info("=" * 60)
     logger.info(f"Features not found: {features_not_found}")
@@ -554,11 +559,22 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
     logger.info(f"Intron subfeatures created: {introns_created}")
 
 
+def table_exists(session, table_name: str) -> bool:
+    """Check if a table exists in the database."""
+    query = text(f"""
+        SELECT COUNT(*) FROM all_tables
+        WHERE owner = :schema AND table_name = :table_name
+    """)
+    result = session.execute(query, {"schema": DB_SCHEMA, "table_name": table_name.upper()}).first()
+    return result[0] > 0 if result else False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis coordinates and introns")
     parser.add_argument("--gff", required=True, type=Path, help="GFF file")
     parser.add_argument("--genomic", required=True, type=Path, help="Genomic FASTA file")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
+    parser.add_argument("--skip-subfeatures", action="store_true", help="Skip exon/intron loading")
     args = parser.parse_args()
 
     logger.info("=" * 60)
@@ -569,7 +585,13 @@ def main():
         logger.info("[DRY RUN MODE]")
 
     with SessionLocal() as session:
-        load_coordinates(session, args.gff, args.genomic, args.dry_run)
+        # Check if subfeature table exists
+        skip_subfeatures = args.skip_subfeatures
+        if not skip_subfeatures and not table_exists(session, "SUBFEATURE"):
+            logger.warning("SUBFEATURE table does not exist - skipping exon/intron loading")
+            skip_subfeatures = True
+
+        load_coordinates(session, args.gff, args.genomic, args.dry_run, skip_subfeatures)
 
     logger.info("Done!")
 
