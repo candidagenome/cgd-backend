@@ -257,15 +257,14 @@ def create_dbxref_feat(
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.dbxref_feat (
-            feature_no, dbxref_no, created_by
+            feature_no, dbxref_no
         ) VALUES (
-            :feature_no, :dbxref_no, :created_by
+            :feature_no, :dbxref_no
         )
     """)
     session.execute(insert, {
         "feature_no": feature_no,
         "dbxref_no": dbxref_no,
-        "created_by": ADMIN_USER,
     })
     return True
 
