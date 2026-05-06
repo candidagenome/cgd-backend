@@ -115,9 +115,14 @@ def parse_fasta(fasta_file: Path) -> Dict[str, str]:
     return sequences
 
 
-def parse_gff(gff_file: Path) -> List[Dict]:
-    """Parse GFF file and extract gene features."""
+def parse_gff(gff_file: Path) -> Tuple[List[Dict], Dict[str, str]]:
+    """Parse GFF file and extract gene features and protein ID mapping.
+
+    Returns:
+        Tuple of (genes list, gene_id to protein_id mapping)
+    """
     genes = []
+    gene_to_protein = {}  # gene_id -> protein_id mapping from CDS lines
 
     with open(gff_file, 'r') as f:
         for line in f:
@@ -133,16 +138,23 @@ def parse_gff(gff_file: Path) -> List[Dict]:
 
             seqid, source, feature_type, start, end, score, strand, phase, attributes = fields
 
-            # Only process gene features
-            if feature_type != 'gene':
-                continue
-
             # Parse attributes
             attr_dict = {}
             for attr in attributes.split(';'):
                 if '=' in attr:
                     key, value = attr.split('=', 1)
                     attr_dict[key.strip()] = value.strip()
+
+            # Extract protein_id mapping from CDS features
+            if feature_type == 'CDS':
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    gene_to_protein[gene_id] = protein_id
+
+            # Only process gene features for the gene list
+            if feature_type != 'gene':
+                continue
 
             gene_id = attr_dict.get('ID', '').replace('ID=', '').split(',')[0]
             if not gene_id:
@@ -157,7 +169,7 @@ def parse_gff(gff_file: Path) -> List[Dict]:
                 'source': source,
             })
 
-    return genes
+    return genes, gene_to_protein
 
 
 def get_organism_no(session) -> int:
@@ -304,8 +316,9 @@ def load_genes_and_proteins(
 
     # Parse input files
     logger.info(f"Parsing GFF file: {gff_file}")
-    genes = parse_gff(gff_file)
+    genes, gene_to_protein = parse_gff(gff_file)
     logger.info(f"Found {len(genes)} genes in GFF")
+    logger.info(f"Found {len(gene_to_protein)} gene-to-protein mappings from CDS features")
 
     logger.info(f"Parsing protein FASTA: {proteins_file}")
     proteins = parse_fasta(proteins_file)
@@ -318,13 +331,15 @@ def load_genes_and_proteins(
     for i, gene in enumerate(genes):
         gene_id = gene['gene_id']
 
-        # Create feature
-        # Use gene_id as both feature_name and dbxref_id for now
-        # The protein ID mapping may need adjustment based on your GFF format
+        # Get protein_id if available (from CDS mapping)
+        protein_id = gene_to_protein.get(gene_id)
+
+        # Create feature - use protein_id as feature_name if available for better matching
+        feature_name = protein_id if protein_id else gene_id
         feature_no = create_feature(
             session,
             organism_no,
-            feature_name=gene_id,
+            feature_name=feature_name,
             dbxref_id=f"CTROP:{gene_id}",
             feature_type="ORF",
             dry_run=dry_run
@@ -333,10 +348,14 @@ def load_genes_and_proteins(
         if feature_no and not dry_run:
             features_created += 1
 
-            # Try to find matching protein sequence
-            # This assumes protein IDs can be mapped from gene IDs
-            # You may need to adjust this logic based on your data
-            protein_seq = proteins.get(gene_id)
+            # Try to find matching protein sequence using protein_id
+            protein_seq = None
+            if protein_id:
+                protein_seq = proteins.get(protein_id)
+            if not protein_seq:
+                # Fallback: try gene_id directly
+                protein_seq = proteins.get(gene_id)
+
             if protein_seq:
                 seq_no = create_sequence(
                     session,
