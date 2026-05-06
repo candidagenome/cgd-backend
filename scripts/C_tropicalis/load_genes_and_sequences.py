@@ -54,6 +54,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
+    """Ensure a code value exists in the code table."""
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = :tab_name
+        AND col_name = :col_name
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value
+    }).first()
+
+    if result:
+        logger.info(f"Code already exists for {table_name}.{col_name}: {code_value}")
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for {table_name}.{col_name}: {code_value}")
+        return True
+
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            :tab_name, :col_name, :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "tab_name": table_name,
+        "col_name": col_name,
+        "code_value": code_value,
+        "description": description,
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for {table_name}.{col_name}: {code_value}")
+    return True
+
+
 def ensure_source_code(session, source: str, table_name: str, dry_run: bool = False) -> bool:
     """Ensure the source value exists in the code table."""
     query = text(f"""
@@ -308,6 +350,9 @@ def load_genes_and_proteins(
     # Ensure source code exists for FEATURE and SEQ tables
     ensure_source_code(session, SOURCE, "FEATURE", dry_run)
     ensure_source_code(session, SOURCE, "SEQ", dry_run)
+
+    # Ensure seq_type code exists
+    ensure_code(session, "SEQ", "SEQ_TYPE", "Protein", "Protein sequence type", dry_run)
 
     organism_no = get_organism_no(session)
     genome_version_no = get_genome_version_no(session, organism_no)
