@@ -56,7 +56,7 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 # Domain databases to load
-DOMAIN_DATABASES = {"Pfam", "SMART", "Gene3D", "CDD", "SUPERFAMILY", "PRINTS", "ProSiteProfiles"}
+DOMAIN_DATABASES = {"Pfam", "SMART", "Gene3D", "CDD", "SUPERFAMILY", "PRINTS", "ProSiteProfiles", "PANTHER"}
 
 logging.basicConfig(
     level=logging.INFO,
