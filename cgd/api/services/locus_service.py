@@ -3191,6 +3191,82 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 )
                 break  # Only use first CGOB cluster
 
+        # Fallback: If no CGOB cluster, look for BLAST RBH orthologs
+        if ortholog_cluster is None:
+            # Collect all BLAST RBH orthologs across homology groups
+            blast_orthologs = []
+            seen_features = {f.feature_no}  # Track seen features to avoid duplicates
+
+            # Helper to format sequence_id
+            def format_seq_id(gene_name, feature_name):
+                if gene_name and gene_name != feature_name:
+                    return f"{gene_name}/{feature_name}"
+                return feature_name
+
+            # Add query gene first
+            query_status = None
+            qualifier_row = (
+                db.query(FeatProperty.property_value)
+                .filter(
+                    FeatProperty.feature_no == f.feature_no,
+                    FeatProperty.property_type == 'feature_qualifier',
+                )
+                .first()
+            )
+            if qualifier_row:
+                query_status = qualifier_row[0].upper() if qualifier_row[0] else None
+
+            blast_orthologs.append(OrthologOut(
+                sequence_id=format_seq_id(f.gene_name, f.feature_name),
+                feature_name=f.feature_name,
+                organism_name=organism_name,
+                source='CGD',
+                status=query_status,
+                is_query=True,
+            ))
+
+            # Find all BLAST RBH ortholog groups for this feature
+            for fh in f.feat_homology:
+                hg = fh.homology_group
+                if hg and hg.homology_group_type == 'ortholog' and hg.method and 'BLAST' in hg.method:
+                    for other_fh in hg.feat_homology:
+                        other_feat = other_fh.feature
+                        if other_feat and other_feat.feature_no not in seen_features:
+                            seen_features.add(other_feat.feature_no)
+                            other_org_name, _ = _get_organism_info(other_feat)
+
+                            # Get status for this ortholog
+                            other_status = None
+                            other_qualifier = (
+                                db.query(FeatProperty.property_value)
+                                .filter(
+                                    FeatProperty.feature_no == other_feat.feature_no,
+                                    FeatProperty.property_type == 'feature_qualifier',
+                                )
+                                .first()
+                            )
+                            if other_qualifier:
+                                other_status = other_qualifier[0].upper() if other_qualifier[0] else None
+
+                            blast_orthologs.append(OrthologOut(
+                                sequence_id=format_seq_id(other_feat.gene_name, other_feat.feature_name),
+                                feature_name=other_feat.feature_name,
+                                organism_name=other_org_name,
+                                source='CGD',
+                                status=other_status,
+                                is_query=False,
+                            ))
+
+            # Only create cluster if we found orthologs (more than just the query)
+            if len(blast_orthologs) > 1:
+                ortholog_cluster = OrthologClusterOut(
+                    cluster_name=None,
+                    method='BLAST RBH',
+                    cluster_url=None,  # No CGOB URL for BLAST-only orthologs
+                    download_links=[],  # No pre-computed alignments
+                    orthologs=blast_orthologs,
+                )
+
         # --- Best hits in CGD species (BLAST) ---
         best_hits_cgd = None
         cgd_organism_name = f.organism.common_name if f.organism else organism_name
