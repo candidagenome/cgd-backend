@@ -754,10 +754,11 @@ def _get_short_organism_name(organism_name: str | None) -> str:
         return ""
     mapping = {
         "Candida albicans SC5314": "C. albicans",
-        "Candida glabrata CBS138": "C. glabrata",
-        "Candida auris B8441": "C. auris",
         "Candida dubliniensis CD36": "C. dubliniensis",
+        "Candida tropicalis MYA-3404": "C. tropicalis",
         "Candida parapsilosis CDC317": "C. parapsilosis",
+        "Candida auris B8441": "C. auris",
+        "Candida glabrata CBS138": "C. glabrata",
     }
     return mapping.get(organism_name, organism_name.split()[0][:2] + ". " + organism_name.split()[-1] if organism_name else "")
 

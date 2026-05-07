@@ -94,6 +94,7 @@ ORGANISM_PRIORITY = [
     'Candida auris B8441',
     'Candida dubliniensis CD36',
     'Candida parapsilosis CDC317',
+    'Candida tropicalis MYA-3404',
 ]
 
 

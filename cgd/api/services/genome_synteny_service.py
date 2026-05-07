@@ -24,10 +24,11 @@ from cgd.schemas.synteny_schema import (
 
 logger = logging.getLogger(__name__)
 
-# The 5 Candida species in CGD with CGOB ortholog data for synteny comparison
+# The Candida species in CGD with ortholog data for synteny comparison
 CGD_SPECIES = [
     'Candida albicans SC5314',
     'Candida dubliniensis CD36',
+    'Candida tropicalis MYA-3404',
     'Candida parapsilosis CDC317',
     'Candida auris B8441',
     'Candida glabrata CBS138',
