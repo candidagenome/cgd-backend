@@ -110,7 +110,7 @@ class TestSequences:
             JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
             WHERE o.organism_name = :name
-            AND s.seq_type = 'Protein'
+            AND s.seq_type = 'protein'
             AND s.is_seq_current = 'Y'
         """)
         result = session.execute(query, {"name": ORGANISM_NAME}).first()
@@ -125,7 +125,7 @@ class TestSequences:
             JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
             WHERE o.organism_name = :name
-            AND s.seq_type = 'Genomic DNA'
+            AND s.seq_type = 'genomic'
             AND s.is_seq_current = 'Y'
             AND f.feature_type = 'ORF'
         """)

@@ -428,7 +428,7 @@ def load_genes_and_proteins(
                     session,
                     feature_no,
                     genome_version_no,
-                    seq_type="Protein",
+                    seq_type="protein",
                     residues=protein_seq,
                     dry_run=dry_run
                 )

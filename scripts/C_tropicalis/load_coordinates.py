@@ -241,7 +241,7 @@ def get_or_create_chromosome_seq(session, feature_no: int, genome_version_no: in
     """Get or create a chromosome/scaffold sequence."""
     query = text(f"""
         SELECT seq_no FROM {DB_SCHEMA}.seq
-        WHERE feature_no = :fno AND seq_type = 'Genomic DNA' AND is_seq_current = 'Y'
+        WHERE feature_no = :fno AND seq_type = 'genomic' AND is_seq_current = 'Y'
     """)
     result = session.execute(query, {"fno": feature_no}).first()
 
