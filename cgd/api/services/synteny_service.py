@@ -397,13 +397,26 @@ def get_synteny_data(
     orthologs_by_species: dict[str, list] = {sp: [] for sp in CGD_SPECIES}
     processed_clusters: set[int] = set()  # Track processed cluster IDs to avoid duplicates
 
-    def add_orthologs_from_cluster(cluster: HomologyGroup):
+    # Use the primary cluster's ID as the unified ortholog_id for all query orthologs
+    # This ensures all transitively connected genes share the same ortholog_id
+    primary_ortholog_id: Optional[str] = None
+
+    def add_orthologs_from_cluster(cluster: HomologyGroup, use_unified_id: bool = False):
         """Add orthologs from a cluster to the species dict."""
+        nonlocal primary_ortholog_id
+
         if cluster.homology_group_no in processed_clusters:
             return
         processed_clusters.add(cluster.homology_group_no)
 
         cluster_id = cluster.homology_group_id or f"CGOB_{cluster.homology_group_no}"
+
+        # Set the primary ortholog_id from the first (query gene's) cluster
+        if primary_ortholog_id is None:
+            primary_ortholog_id = cluster_id
+
+        # Use unified ID for query orthologs, or cluster's own ID otherwise
+        effective_id = primary_ortholog_id if use_unified_id else cluster_id
 
         for fh in cluster.feat_homology:
             other_feat = fh.feature
@@ -413,19 +426,21 @@ def get_synteny_data(
                     # Only add if not already in the list
                     if other_feat not in orthologs_by_species[other_org]:
                         orthologs_by_species[other_org].append(other_feat)
-                    # Track ortholog connection
-                    feature_to_ortholog[other_feat.feature_no] = cluster_id
-                    if cluster_id not in ortholog_connections:
-                        ortholog_connections[cluster_id] = set()
-                    ortholog_connections[cluster_id].add(other_feat.feature_name)
+                    # Track ortholog connection with the effective ID
+                    feature_to_ortholog[other_feat.feature_no] = effective_id
+                    if effective_id not in ortholog_connections:
+                        ortholog_connections[effective_id] = set()
+                    ortholog_connections[effective_id].add(other_feat.feature_name)
 
     if cgob_cluster:
         # First, add orthologs from the query gene's direct cluster
-        add_orthologs_from_cluster(cgob_cluster)
+        # This sets the primary_ortholog_id
+        add_orthologs_from_cluster(cgob_cluster, use_unified_id=True)
 
         # Transitive lookup: for each ortholog found, check if they belong to
         # additional clusters (e.g., C. tropicalis -> C. albicans via BLAST RBH,
         # then C. albicans -> other species via CGOB)
+        # Use the unified ID so all query orthologs share the same ortholog_id
         for species, orthologs in list(orthologs_by_species.items()):
             for ortholog_feat in orthologs:
                 # Get all ortholog clusters this feature belongs to
@@ -433,7 +448,7 @@ def get_synteny_data(
                     db, ortholog_feat.feature_no
                 )
                 for add_cluster in additional_clusters:
-                    add_orthologs_from_cluster(add_cluster)
+                    add_orthologs_from_cluster(add_cluster, use_unified_id=True)
 
     # For each species, get synteny region
     for species in CGD_SPECIES:
