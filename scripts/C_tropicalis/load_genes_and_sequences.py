@@ -55,15 +55,30 @@ logger = logging.getLogger(__name__)
 
 
 def get_max_cal_id(session) -> int:
-    """Get the maximum CAL ID number currently in use."""
-    query = text(f"""
+    """Get the maximum CAL ID number currently in use.
+
+    Checks both feature.dbxref_id and dbxref.dbxref_id tables since
+    triggers may create dbxref entries that don't have features yet.
+    """
+    # Check feature table
+    query1 = text(f"""
         SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
         FROM {DB_SCHEMA}.feature
         WHERE dbxref_id LIKE 'CAL%'
         AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
     """)
-    result = session.execute(query).scalar()
-    return result or 0
+    max_feature = session.execute(query1).scalar() or 0
+
+    # Check dbxref table
+    query2 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.dbxref
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_dbxref = session.execute(query2).scalar() or 0
+
+    return max(max_feature, max_dbxref)
 
 
 def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
@@ -206,8 +221,11 @@ def parse_gff(gff_file: Path) -> Tuple[List[Dict], Dict[str, str]]:
                 if protein_id and gene_id:
                     gene_to_protein[gene_id] = protein_id
 
-            # Only process gene features for the gene list
+            # Only process gene features from Liftoff source (CTRG_* genes)
+            # Skip AUGUSTUS predictions (g1, g2, etc.)
             if feature_type != 'gene':
+                continue
+            if source != 'Liftoff':
                 continue
 
             gene_id = attr_dict.get('ID', '').replace('ID=', '').split(',')[0]
