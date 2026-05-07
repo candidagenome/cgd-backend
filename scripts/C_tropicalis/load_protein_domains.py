@@ -2,7 +2,8 @@
 """
 Load C. tropicalis protein domain data from InterProScan results.
 
-This script loads protein domains from InterProScan TSV output into the database.
+This script loads protein domains from InterProScan TSV output into the
+protein_detail table, which is displayed on the Protein tab.
 
 Usage:
     python load_protein_domains.py --tsv FILE [--dry-run]
@@ -34,14 +35,11 @@ Environment Variables:
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import os
-import re
 import sys
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import text
@@ -56,7 +54,6 @@ from cgd.db.engine import SessionLocal
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
-SOURCE = "InterProScan"
 
 # Domain databases to load
 DOMAIN_DATABASES = {"Pfam", "SMART", "Gene3D", "CDD", "SUPERFAMILY", "PRINTS", "ProSiteProfiles"}
@@ -66,47 +63,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-
-def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
-    """Ensure a code value exists in the code table."""
-    query = text(f"""
-        SELECT code_no
-        FROM {DB_SCHEMA}.code
-        WHERE tab_name = :tab_name
-        AND col_name = :col_name
-        AND code_value = :code_value
-    """)
-    result = session.execute(query, {
-        "tab_name": table_name,
-        "col_name": col_name,
-        "code_value": code_value
-    }).first()
-
-    if result:
-        return True
-
-    if dry_run:
-        logger.info(f"[DRY RUN] Would create code entry for {table_name}.{col_name}: {code_value}")
-        return True
-
-    insert = text(f"""
-        INSERT INTO {DB_SCHEMA}.code (
-            tab_name, col_name, code_value, description, created_by
-        ) VALUES (
-            :tab_name, :col_name, :code_value, :description, :created_by
-        )
-    """)
-    session.execute(insert, {
-        "tab_name": table_name,
-        "col_name": col_name,
-        "code_value": code_value,
-        "description": description,
-        "created_by": ADMIN_USER,
-    })
-    session.commit()
-    logger.info(f"Created code entry for {table_name}.{col_name}: {code_value}")
-    return True
 
 
 def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
@@ -133,7 +89,6 @@ def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
             status = fields[9] if len(fields) > 9 else ''
             ipr_accession = fields[11] if len(fields) > 11 else ''
             ipr_description = fields[12] if len(fields) > 12 else ''
-            go_terms = fields[13] if len(fields) > 13 else ''
 
             # Only include true matches from selected databases
             if status != 'T':
@@ -152,54 +107,32 @@ def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
                 'evalue': evalue,
                 'ipr_accession': ipr_accession,
                 'ipr_description': ipr_description,
-                'go_terms': go_terms,
             })
 
     return domains
 
 
-def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
-    """Get feature_no by protein ID (looking in dbxref or feature_name)."""
-    # Try exact match on feature_name
+def get_protein_info_no(session, protein_id: str) -> Optional[int]:
+    """Get protein_info_no by protein ID (feature_name)."""
     query = text(f"""
-        SELECT feature_no
-        FROM {DB_SCHEMA}.feature
-        WHERE feature_name = :protein_id
+        SELECT pi.protein_info_no
+        FROM {DB_SCHEMA}.protein_info pi
+        JOIN {DB_SCHEMA}.feature f ON pi.feature_no = f.feature_no
+        WHERE f.feature_name = :protein_id
     """)
     result = session.execute(query, {"protein_id": protein_id}).first()
-    if result:
-        return result[0]
-
-    # Try pattern match on dbxref_id
-    query = text(f"""
-        SELECT feature_no
-        FROM {DB_SCHEMA}.feature
-        WHERE dbxref_id LIKE :pattern
-    """)
-    result = session.execute(query, {"pattern": f"%{protein_id}%"}).first()
     return result[0] if result else None
 
 
-def get_or_create_dbxref(
-    session,
-    dbxref_id: str,
-    dbxref_type: str,
-    source: str,
-    description: str = None,
-    dry_run: bool = False
-) -> Optional[int]:
-    """Get or create a dbxref entry."""
+def create_protein_info(session, feature_no: int, dry_run: bool = False) -> Optional[int]:
+    """Create protein_info record if it doesn't exist."""
+    # Check if exists
     query = text(f"""
-        SELECT dbxref_no
-        FROM {DB_SCHEMA}.dbxref
-        WHERE dbxref_id = :dbxref_id
-        AND dbxref_type = :dbxref_type
+        SELECT protein_info_no
+        FROM {DB_SCHEMA}.protein_info
+        WHERE feature_no = :feature_no
     """)
-    result = session.execute(query, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-    }).first()
-
+    result = session.execute(query, {"feature_no": feature_no}).first()
     if result:
         return result[0]
 
@@ -207,50 +140,63 @@ def get_or_create_dbxref(
         return None
 
     insert = text(f"""
-        INSERT INTO {DB_SCHEMA}.dbxref (
-            dbxref_id, dbxref_type, source, description, created_by
+        INSERT INTO {DB_SCHEMA}.protein_info (
+            feature_no, created_by
         ) VALUES (
-            :dbxref_id, :dbxref_type, :source, :description, :created_by
+            :feature_no, :created_by
         )
     """)
-    # Truncate description to 240 characters max
-    if description and len(description) > 240:
-        description = description[:237] + "..."
-
     session.execute(insert, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-        "source": source,
-        "description": description,
+        "feature_no": feature_no,
         "created_by": ADMIN_USER,
     })
 
-    result = session.execute(query, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-    }).first()
+    result = session.execute(query, {"feature_no": feature_no}).first()
     return result[0] if result else None
 
 
-def create_dbxref_feat(
+def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
+    """Get feature_no by protein ID."""
+    query = text(f"""
+        SELECT feature_no
+        FROM {DB_SCHEMA}.feature
+        WHERE feature_name = :protein_id
+    """)
+    result = session.execute(query, {"protein_id": protein_id}).first()
+    return result[0] if result else None
+
+
+def create_protein_detail(
     session,
-    feature_no: int,
-    dbxref_no: int,
-    start_coord: int = None,
-    end_coord: int = None,
+    protein_info_no: int,
+    domain: Dict,
     dry_run: bool = False
 ) -> bool:
-    """Create dbxref_feat linking entry."""
+    """Create protein_detail record for a domain."""
+    # Use the signature description or InterPro description
+    detail_value = domain['sig_description'] or domain['ipr_description'] or domain['sig_accession']
+    # Truncate to 240 chars max
+    if len(detail_value) > 240:
+        detail_value = detail_value[:237] + "..."
+
     # Check if exists
     query = text(f"""
-        SELECT dbxref_feat_no
-        FROM {DB_SCHEMA}.dbxref_feat
-        WHERE feature_no = :feature_no
-        AND dbxref_no = :dbxref_no
+        SELECT protein_detail_no
+        FROM {DB_SCHEMA}.protein_detail
+        WHERE protein_info_no = :protein_info_no
+        AND protein_detail_group = :group
+        AND protein_detail_type = :type
+        AND protein_detail_value = :value
+        AND start_coord = :start
+        AND stop_coord = :stop
     """)
     result = session.execute(query, {
-        "feature_no": feature_no,
-        "dbxref_no": dbxref_no,
+        "protein_info_no": protein_info_no,
+        "group": domain['analysis'],
+        "type": "domain",
+        "value": detail_value,
+        "start": domain['start'],
+        "stop": domain['end'],
     }).first()
 
     if result:
@@ -260,27 +206,32 @@ def create_dbxref_feat(
         return True
 
     insert = text(f"""
-        INSERT INTO {DB_SCHEMA}.dbxref_feat (
-            feature_no, dbxref_no
+        INSERT INTO {DB_SCHEMA}.protein_detail (
+            protein_info_no, protein_detail_group, protein_detail_type,
+            protein_detail_value, start_coord, stop_coord,
+            interpro_dbxref_id, member_dbxref_id, created_by
         ) VALUES (
-            :feature_no, :dbxref_no
+            :protein_info_no, :group, :type,
+            :value, :start, :stop,
+            :interpro_id, :member_id, :created_by
         )
     """)
     session.execute(insert, {
-        "feature_no": feature_no,
-        "dbxref_no": dbxref_no,
+        "protein_info_no": protein_info_no,
+        "group": domain['analysis'],
+        "type": "domain",
+        "value": detail_value,
+        "start": domain['start'],
+        "stop": domain['end'],
+        "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
+        "member_id": domain['sig_accession'],
+        "created_by": ADMIN_USER,
     })
     return True
 
 
 def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
-    """Load protein domains from InterProScan TSV."""
-    # Ensure required codes exist
-    ensure_code(session, "DBXREF", "SOURCE", "InterProScan", "InterProScan domain database", dry_run)
-    for db_type in DOMAIN_DATABASES:
-        ensure_code(session, "DBXREF", "DBXREF_TYPE", db_type, f"{db_type} domain database", dry_run)
-    ensure_code(session, "DBXREF", "DBXREF_TYPE", "InterPro", "InterPro integrated domain database", dry_run)
-
+    """Load protein domains from InterProScan TSV into protein_detail table."""
     logger.info(f"Parsing InterProScan TSV: {tsv_file}")
     domains = parse_iprscan_tsv(tsv_file)
     logger.info(f"Found {len(domains)} domain annotations")
@@ -298,60 +249,38 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
     domains_loaded = 0
     proteins_found = 0
     proteins_not_found = 0
+    protein_info_created = 0
 
     for protein_id, domain_list in protein_domains.items():
-        feature_no = get_feature_no_by_protein_id(session, protein_id)
+        # Get or create protein_info
+        protein_info_no = get_protein_info_no(session, protein_id)
 
-        if not feature_no:
+        if not protein_info_no:
+            # Need to create protein_info first
+            feature_no = get_feature_no_by_protein_id(session, protein_id)
+            if not feature_no:
+                proteins_not_found += 1
+                continue
+
+            protein_info_no = create_protein_info(session, feature_no, dry_run)
+            if protein_info_no:
+                protein_info_created += 1
+
+        if not protein_info_no:
             proteins_not_found += 1
             continue
 
         proteins_found += 1
 
         for domain in domain_list:
-            # Create dbxref for the domain signature
-            dbxref_id = domain['sig_accession']
-            dbxref_type = domain['analysis']
-            description = domain['sig_description'] or domain['ipr_description']
-
-            dbxref_no = get_or_create_dbxref(
+            created = create_protein_detail(
                 session,
-                dbxref_id=dbxref_id,
-                dbxref_type=dbxref_type,
-                source=SOURCE,
-                description=description,
-                dry_run=dry_run
+                protein_info_no,
+                domain,
+                dry_run
             )
-
-            if dbxref_no:
-                created = create_dbxref_feat(
-                    session,
-                    feature_no=feature_no,
-                    dbxref_no=dbxref_no,
-                    start_coord=domain['start'],
-                    end_coord=domain['end'],
-                    dry_run=dry_run
-                )
-                if created:
-                    domains_loaded += 1
-
-            # Also create InterPro entry if available
-            if domain['ipr_accession']:
-                ipr_dbxref_no = get_or_create_dbxref(
-                    session,
-                    dbxref_id=domain['ipr_accession'],
-                    dbxref_type="InterPro",
-                    source=SOURCE,
-                    description=domain['ipr_description'],
-                    dry_run=dry_run
-                )
-                if ipr_dbxref_no:
-                    create_dbxref_feat(
-                        session,
-                        feature_no=feature_no,
-                        dbxref_no=ipr_dbxref_no,
-                        dry_run=dry_run
-                    )
+            if created:
+                domains_loaded += 1
 
         if proteins_found % 500 == 0:
             logger.info(f"Processed {proteins_found} proteins...")
@@ -364,6 +293,7 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
     logger.info("=" * 60)
     logger.info(f"Proteins found in database: {proteins_found}")
     logger.info(f"Proteins not found: {proteins_not_found}")
+    logger.info(f"Protein info records created: {protein_info_created}")
     logger.info(f"Domain annotations loaded: {domains_loaded}")
 
 
