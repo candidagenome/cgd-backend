@@ -26,12 +26,47 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Dict, Optional
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
+    """Parse GFF file to get protein_id -> gene_id mapping."""
+    protein_to_gene = {}
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            if feature_type == 'CDS':
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key.strip()] = value.strip()
+
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    protein_to_gene[protein_id] = gene_id
+
+    return protein_to_gene
 
 # Map InterProScan analysis names to display names
 ANALYSIS_DISPLAY = {
@@ -57,8 +92,13 @@ ANALYSIS_DISPLAY = {
 }
 
 
-def parse_interproscan_tsv(tsv_file: Path):
-    """Parse InterProScan TSV and yield GFF lines."""
+def parse_interproscan_tsv(tsv_file: Path, protein_to_gene: Optional[Dict[str, str]] = None):
+    """Parse InterProScan TSV and yield GFF lines.
+
+    Args:
+        tsv_file: InterProScan TSV results file
+        protein_to_gene: Optional mapping of protein_id to gene_id
+    """
     with open(tsv_file, 'r') as f:
         for line in f:
             line = line.strip()
@@ -70,6 +110,12 @@ def parse_interproscan_tsv(tsv_file: Path):
                 continue
 
             protein_id = fields[0]
+
+            # Map protein_id to gene_id if mapping provided
+            if protein_to_gene:
+                seq_id = protein_to_gene.get(protein_id, protein_id)
+            else:
+                seq_id = protein_id
             analysis = fields[3]
             sig_accession = fields[4]
             sig_description = fields[5] if len(fields) > 5 else ''
@@ -99,11 +145,18 @@ def parse_interproscan_tsv(tsv_file: Path):
                 attributes += f";interpro={ipr_accession}"
 
             # GFF3 line: seqid source type start end score strand phase attributes
-            yield f"{protein_id}\t{display_name}\t{display_name}\t{start}\t{end}\t{score}\t.\t.\t{attributes}"
+            yield f"{seq_id}\t{display_name}\t{display_name}\t{start}\t{end}\t{score}\t.\t.\t{attributes}"
 
 
-def convert_to_gff(tsv_file: Path, output_file: Path):
-    """Convert InterProScan TSV to GFF format."""
+def convert_to_gff(tsv_file: Path, output_file: Path,
+                   protein_to_gene: Optional[Dict[str, str]] = None):
+    """Convert InterProScan TSV to GFF format.
+
+    Args:
+        tsv_file: InterProScan TSV results file
+        output_file: Output GFF file
+        protein_to_gene: Optional mapping of protein_id to gene_id
+    """
     logger.info(f"Converting {tsv_file} to GFF format")
 
     line_count = 0
@@ -111,7 +164,7 @@ def convert_to_gff(tsv_file: Path, output_file: Path):
         # Write GFF header
         out.write("##gff-version 3\n")
 
-        for gff_line in parse_interproscan_tsv(tsv_file):
+        for gff_line in parse_interproscan_tsv(tsv_file, protein_to_gene):
             out.write(gff_line + '\n')
             line_count += 1
 
@@ -137,13 +190,28 @@ def main():
         required=True,
         help="Output GFF file"
     )
+    parser.add_argument(
+        "--gff",
+        type=Path,
+        help="GFF file for protein_id to gene_id mapping (optional)"
+    )
     args = parser.parse_args()
 
     if not args.tsv.exists():
         logger.error(f"TSV file not found: {args.tsv}")
         sys.exit(1)
 
-    convert_to_gff(args.tsv, args.output)
+    # Parse GFF for protein_id -> gene_id mapping if provided
+    protein_to_gene = None
+    if args.gff:
+        if not args.gff.exists():
+            logger.error(f"GFF file not found: {args.gff}")
+            sys.exit(1)
+        logger.info(f"Parsing GFF for protein mapping: {args.gff}")
+        protein_to_gene = parse_gff_protein_mapping(args.gff)
+        logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
+
+    convert_to_gff(args.tsv, args.output, protein_to_gene)
     logger.info("Done!")
 
 
