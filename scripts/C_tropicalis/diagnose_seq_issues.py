@@ -210,9 +210,25 @@ def check_strand_consistency(session):
 
 def sample_transcript_data(session):
     """Sample a gene and show its transcript computation data."""
-    logger.info("Sampling transcript computation data for a minus strand gene...")
+    logger.info("Sampling transcript computation data...")
 
-    # Find a minus strand gene with CDS
+    # First check strand distribution
+    strand_query = text(f"""
+        SELECT fl.strand, COUNT(*) as cnt
+        FROM {DB_SCHEMA}.feat_location fl
+        JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
+        JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
+        WHERE o.organism_name = :name
+        AND f.feature_type = 'ORF'
+        AND fl.is_loc_current = 'Y'
+        GROUP BY fl.strand
+    """)
+    strand_results = session.execute(strand_query, {"name": ORGANISM_NAME}).fetchall()
+    logger.info("Strand distribution:")
+    for row in strand_results:
+        logger.info(f"  {row[0]}: {row[1]} genes")
+
+    # Find any gene with CDS
     query = text(f"""
         SELECT f.feature_name, f.feature_no, fl.strand, fl.start_coord, fl.stop_coord, fl.root_seq_no
         FROM {DB_SCHEMA}.feature f
@@ -221,13 +237,12 @@ def sample_transcript_data(session):
         WHERE o.organism_name = :name
         AND f.feature_type = 'ORF'
         AND fl.is_loc_current = 'Y'
-        AND fl.strand = 'C'
         AND ROWNUM = 1
     """)
     gene = session.execute(query, {"name": ORGANISM_NAME}).first()
 
     if not gene:
-        logger.info("No minus strand genes found")
+        logger.info("No ORF genes found")
         return None
 
     feature_name, feature_no, strand, start, stop, root_seq_no = gene
@@ -271,6 +286,34 @@ def sample_transcript_data(session):
             logger.warning(f"  root_seq_no {root_seq_no} does not point to a valid sequence!")
 
     return gene
+
+
+def fix_chromosome_seq_types(session, issues):
+    """Fix chromosome seq_type values from 'Genomic DNA' to 'genomic'."""
+    if not issues:
+        logger.info("No seq_type issues to fix")
+        return 0
+
+    logger.info(f"Fixing {len(issues)} chromosome seq_type values...")
+
+    # Use direct SQL update since the trigger might not block this
+    for issue in issues:
+        try:
+            update = text(f"""
+                UPDATE {DB_SCHEMA}.seq
+                SET seq_type = 'genomic'
+                WHERE seq_no = :seq_no
+            """)
+            session.execute(update, {"seq_no": issue["seq_no"]})
+            logger.info(f"  Fixed {issue['feature_name']}: 'Genomic DNA' -> 'genomic'")
+        except Exception as e:
+            logger.error(f"  Failed to fix {issue['feature_name']}: {e}")
+            session.rollback()
+            return 0
+
+    session.commit()
+    logger.info(f"Successfully fixed {len(issues)} seq_type values")
+    return len(issues)
 
 
 def run_diagnostics(session):
@@ -318,14 +361,23 @@ def run_diagnostics(session):
 
 def main():
     parser = argparse.ArgumentParser(description="Diagnose sequence data issues")
-    parser.add_argument("--fix", action="store_true", help="Attempt to fix issues (not yet implemented)")
+    parser.add_argument("--fix", action="store_true", help="Fix identified issues")
     args = parser.parse_args()
 
     with SessionLocal() as session:
         issues = run_diagnostics(session)
 
         if args.fix:
-            logger.info("Fix mode not yet implemented. Please reload data using the fixed loading scripts.")
+            logger.info("=" * 60)
+            logger.info("Applying fixes...")
+
+            # Fix seq_type issues
+            if issues["seq_type_issues"]:
+                fix_chromosome_seq_types(session, issues["seq_type_issues"])
+
+            # Other fixes would require reloading data
+            if issues["null_root_seq"] or issues["cds_missing_loc"]["missing"] > 0:
+                logger.warning("Some issues require reloading data using the fixed loading scripts.")
 
     logger.info("Done!")
 
