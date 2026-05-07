@@ -239,9 +239,10 @@ def get_or_create_chromosome_feature(session, organism_no: int, chrom_name: str,
 def get_or_create_chromosome_seq(session, feature_no: int, genome_version_no: int,
                                   sequence: str, dry_run: bool = False) -> Optional[int]:
     """Get or create a chromosome/scaffold sequence."""
+    # Check both lowercase and mixed-case seq_type for backward compatibility
     query = text(f"""
         SELECT seq_no FROM {DB_SCHEMA}.seq
-        WHERE feature_no = :fno AND seq_type = 'genomic' AND is_seq_current = 'Y'
+        WHERE feature_no = :fno AND seq_type IN ('genomic', 'Genomic DNA') AND is_seq_current = 'Y'
     """)
     result = session.execute(query, {"fno": feature_no}).first()
 
@@ -256,7 +257,7 @@ def get_or_create_chromosome_seq(session, feature_no: int, genome_version_no: in
             feature_no, genome_version_no, seq_version, seq_type, source,
             is_seq_current, seq_length, residues, created_by
         ) VALUES (
-            :fno, :gvno, SYSDATE, 'Genomic DNA', :source, 'Y', :len, :res, :created_by
+            :fno, :gvno, SYSDATE, 'genomic', :source, 'Y', :len, :res, :created_by
         )
     """)
     session.execute(insert, {
@@ -414,7 +415,7 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
     """Load feature coordinates and introns."""
     # Ensure required codes
     ensure_code(session, "FEATURE", "FEATURE_TYPE", "contig", "Contig/scaffold feature", dry_run)
-    ensure_code(session, "SEQ", "SEQ_TYPE", "Genomic DNA", "Genomic DNA sequence", dry_run)
+    ensure_code(session, "SEQ", "SEQ_TYPE", "genomic", "Genomic DNA sequence", dry_run)
     if not skip_subfeatures:
         ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Exon", "Coding exon", dry_run)
         ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Intron", "Intron", dry_run)
