@@ -1381,11 +1381,11 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     dbxref_id=allele_feature.dbxref_id,
                 ))
 
-        # Get Candida orthologs (internal CGD species via CGOB method)
+        # Get Candida orthologs (internal CGD species via CGOB or BLAST RBH method)
         candida_orthologs = []
         for fh in f.feat_homology:
             hg = fh.homology_group
-            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+            if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
                 # Get other features in same homology group
                 other_members = (
                     db.query(FeatHomology)
