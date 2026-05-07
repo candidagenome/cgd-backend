@@ -274,8 +274,14 @@ def create_protein_detail(
     protein_info_no: int,
     domain: Dict,
     dry_run: bool = False
-) -> bool:
-    """Create protein_detail record for a domain."""
+) -> str:
+    """Create protein_detail record for a domain.
+
+    Returns:
+        'created' - record was inserted
+        'exists' - record already exists (found by check)
+        'duplicate' - insert failed with IntegrityError
+    """
     # Use the signature description or InterPro description
     detail_value = domain['sig_description'] or domain['ipr_description'] or domain['sig_accession']
     # Truncate to 240 chars max
@@ -303,10 +309,10 @@ def create_protein_detail(
     }).first()
 
     if result:
-        return False
+        return 'exists'
 
     if dry_run:
-        return True
+        return 'created'
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.protein_detail (
@@ -320,22 +326,23 @@ def create_protein_detail(
         )
     """)
     try:
-        session.execute(insert, {
-            "protein_info_no": protein_info_no,
-            "group": domain['analysis'],
-            "type": "domain",
-            "value": detail_value,
-            "start": domain['start'],
-            "stop": domain['end'],
-            "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
-            "member_id": domain['sig_accession'],
-            "created_by": ADMIN_USER,
-        })
-        return True
+        # Use savepoint so rollback only affects this insert
+        with session.begin_nested():
+            session.execute(insert, {
+                "protein_info_no": protein_info_no,
+                "group": domain['analysis'],
+                "type": "domain",
+                "value": detail_value,
+                "start": domain['start'],
+                "stop": domain['end'],
+                "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
+                "member_id": domain['sig_accession'],
+                "created_by": ADMIN_USER,
+            })
+        return 'created'
     except IntegrityError:
-        # Duplicate entry - rollback and continue
-        session.rollback()
-        return False
+        # Duplicate entry - savepoint auto-rolled back, continue
+        return 'duplicate'
 
 
 def load_protein_domains(
@@ -386,6 +393,8 @@ def load_protein_domains(
     logger.info(f"Domains for {len(protein_domains)} proteins")
 
     domains_loaded = 0
+    domains_existed = 0
+    domains_duplicate = 0
     proteins_found = 0
     proteins_not_found = 0
     protein_info_created = 0
@@ -412,14 +421,18 @@ def load_protein_domains(
         proteins_found += 1
 
         for domain in domain_list:
-            created = create_protein_detail(
+            result = create_protein_detail(
                 session,
                 protein_info_no,
                 domain,
                 dry_run
             )
-            if created:
+            if result == 'created':
                 domains_loaded += 1
+            elif result == 'exists':
+                domains_existed += 1
+            elif result == 'duplicate':
+                domains_duplicate += 1
 
         if proteins_found % 500 == 0:
             logger.info(f"Processed {proteins_found} proteins...")
@@ -434,6 +447,8 @@ def load_protein_domains(
     logger.info(f"Proteins not found: {proteins_not_found}")
     logger.info(f"Protein info records created: {protein_info_created}")
     logger.info(f"Domain annotations loaded: {domains_loaded}")
+    logger.info(f"Domain annotations already existed: {domains_existed}")
+    logger.info(f"Domain annotations skipped (duplicate): {domains_duplicate}")
 
 
 def main():
