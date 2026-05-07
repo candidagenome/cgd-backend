@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""
+Load C. tropicalis organism and genome version into database.
+
+This script creates the organism entry and genome version for C. tropicalis MYA-3404.
+
+Usage:
+    python load_organism.py [--dry-run]
+
+Environment Variables:
+    DATABASE_URL: Database connection URL
+    DB_SCHEMA: Database schema name (default: MULTI)
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+from sqlalchemy import text
+
+# Project root directory
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from cgd.db.engine import SessionLocal
+
+# Configuration
+DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
+
+# C. tropicalis configuration
+ORGANISM_CONFIG = {
+    "organism_name": "Candida tropicalis MYA-3404",
+    "organism_abbrev": "C_tropicalis",
+    "taxon_id": 294747,
+    "taxonomic_rank": "Strain",
+    "organism_order": 6,  # After existing Candida species
+    "common_name": "Candida tropicalis MYA-3404",
+}
+
+GENOME_VERSION_CONFIG = {
+    "genome_version": "MYA-3404_v1",
+    "description": "C. tropicalis MYA-3404 genome from NCBI (GCA_013177555.1)",
+    "is_ver_current": "Y",
+}
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def ensure_organism_abbrev_code(session, organism_abbrev: str, dry_run: bool = False) -> bool:
+    """Ensure the organism_abbrev value exists in the code table."""
+    # Check if code exists
+    query = text(f"""
+        SELECT code_no
+        FROM {DB_SCHEMA}.code
+        WHERE tab_name = 'ORGANISM'
+        AND col_name = 'ORGANISM_ABBREV'
+        AND code_value = :code_value
+    """)
+    result = session.execute(query, {"code_value": organism_abbrev}).first()
+
+    if result:
+        logger.info(f"Code already exists for organism_abbrev: {organism_abbrev}")
+        return True
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create code entry for organism_abbrev: {organism_abbrev}")
+        return True
+
+    # Insert code entry
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.code (
+            tab_name, col_name, code_value, description, created_by
+        ) VALUES (
+            'ORGANISM', 'ORGANISM_ABBREV', :code_value, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        "code_value": organism_abbrev,
+        "description": f"Organism abbreviation for {ORGANISM_CONFIG['organism_name']}",
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+    logger.info(f"Created code entry for organism_abbrev: {organism_abbrev}")
+    return True
+
+
+def get_or_create_organism(session, dry_run: bool = False) -> int:
+    """Get or create organism entry for C. tropicalis."""
+    # Check if organism exists
+    query = text(f"""
+        SELECT organism_no
+        FROM {DB_SCHEMA}.organism
+        WHERE organism_name = :organism_name
+    """)
+    result = session.execute(query, {"organism_name": ORGANISM_CONFIG["organism_name"]}).first()
+
+    if result:
+        logger.info(f"Organism already exists: {ORGANISM_CONFIG['organism_name']} (organism_no={result[0]})")
+        return result[0]
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create organism: {ORGANISM_CONFIG['organism_name']}")
+        return -1
+
+    # Insert organism
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.organism (
+            organism_name, organism_abbrev, taxon_id, taxonomic_rank,
+            organism_order, common_name, created_by
+        ) VALUES (
+            :organism_name, :organism_abbrev, :taxon_id, :taxonomic_rank,
+            :organism_order, :common_name, :created_by
+        )
+    """)
+    session.execute(insert, {
+        **ORGANISM_CONFIG,
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+
+    # Get the new organism_no
+    result = session.execute(query, {"organism_name": ORGANISM_CONFIG["organism_name"]}).first()
+    organism_no = result[0]
+    logger.info(f"Created organism: {ORGANISM_CONFIG['organism_name']} (organism_no={organism_no})")
+    return organism_no
+
+
+def get_or_create_genome_version(session, organism_no: int, dry_run: bool = False) -> int:
+    """Get or create genome version entry."""
+    # Check if genome version exists
+    query = text(f"""
+        SELECT genome_version_no
+        FROM {DB_SCHEMA}.genome_version
+        WHERE genome_version = :genome_version
+        AND organism_no = :organism_no
+    """)
+    result = session.execute(query, {
+        "genome_version": GENOME_VERSION_CONFIG["genome_version"],
+        "organism_no": organism_no,
+    }).first()
+
+    if result:
+        logger.info(f"Genome version already exists: {GENOME_VERSION_CONFIG['genome_version']} (genome_version_no={result[0]})")
+        return result[0]
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would create genome version: {GENOME_VERSION_CONFIG['genome_version']}")
+        return -1
+
+    # Insert genome version
+    insert = text(f"""
+        INSERT INTO {DB_SCHEMA}.genome_version (
+            genome_version, organism_no, is_ver_current, description, created_by
+        ) VALUES (
+            :genome_version, :organism_no, :is_ver_current, :description, :created_by
+        )
+    """)
+    session.execute(insert, {
+        **GENOME_VERSION_CONFIG,
+        "organism_no": organism_no,
+        "created_by": ADMIN_USER,
+    })
+    session.commit()
+
+    # Get the new genome_version_no
+    result = session.execute(query, {
+        "genome_version": GENOME_VERSION_CONFIG["genome_version"],
+        "organism_no": organism_no,
+    }).first()
+    genome_version_no = result[0]
+    logger.info(f"Created genome version: {GENOME_VERSION_CONFIG['genome_version']} (genome_version_no={genome_version_no})")
+    return genome_version_no
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Load C. tropicalis organism into database")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    args = parser.parse_args()
+
+    logger.info("=" * 60)
+    logger.info("Loading C. tropicalis organism and genome version")
+    logger.info("=" * 60)
+
+    if args.dry_run:
+        logger.info("[DRY RUN MODE - No changes will be made]")
+
+    with SessionLocal() as session:
+        # First ensure the organism_abbrev code exists in the code table
+        ensure_organism_abbrev_code(session, ORGANISM_CONFIG["organism_abbrev"], args.dry_run)
+
+        organism_no = get_or_create_organism(session, args.dry_run)
+        if organism_no > 0:
+            genome_version_no = get_or_create_genome_version(session, organism_no, args.dry_run)
+
+    logger.info("Done!")
+
+
+if __name__ == "__main__":
+    main()
