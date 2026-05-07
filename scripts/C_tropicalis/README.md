@@ -210,6 +210,167 @@ After loading, the following data should be present:
 | `DB_SCHEMA` | Database schema name | `MULTI` |
 | `ADMIN_USER` | User for `created_by` field | `CGDADMIN` |
 
+## JBrowse2 Protein Domain Visualization
+
+After loading protein domain data into the database, set up JBrowse2 to display domain tracks on the Protein tab.
+
+### Prerequisites
+
+- InterProScan TSV results loaded into `protein_detail` table (Step 8 above)
+- Protein FASTA file
+- Access to the frontend server (`cgd-frontend-dev` or production)
+- Tools: `samtools`, `bgzip`, `tabix`
+
+### Data Files Needed
+
+On the frontend server, ensure these directories exist:
+```
+/data/jbrowse2/protein_data/     # Protein FASTA and domain GFF files
+/data/domain/C_tropicalis_MYA3404/  # Source InterProScan data
+```
+
+### Setup Steps
+
+#### 1. Copy Data Files to Frontend Server
+
+**Development (separate servers):** Copy from backend to frontend:
+```bash
+# On cgd-backend-dev
+scp -i /path/to/cgd-dev.pem \
+    /home/ec2-user/iprscan_results/all_results.tsv \
+    /home/ec2-user/C_tropicalis/orthologs/C_tropicalis_MYA-3404_proteins.fasta \
+    ec2-user@cgd-frontend-dev:/data/domain/C_tropicalis_MYA3404/
+```
+
+**Production (same server):** Simply copy/move files:
+```bash
+cp /home/ec2-user/iprscan_results/all_results.tsv /data/domain/C_tropicalis_MYA3404/
+cp /home/ec2-user/C_tropicalis_MYA-3404_proteins.fasta /data/domain/C_tropicalis_MYA3404/
+```
+
+#### 2. Run JBrowse2 Setup Script
+
+On the frontend server:
+```bash
+cd /data/jbrowse2/protein_data
+bash /path/to/setup_jbrowse_proteins.sh
+```
+
+Or manually create the files:
+
+```bash
+ORGANISM="C_tropicalis"
+DOMAIN_DIR="/data/domain/C_tropicalis_MYA3404"
+DATA_DIR="/data/jbrowse2/protein_data"
+
+# Create protein FASTA symlink and index
+ln -sf ${DOMAIN_DIR}/C_tropicalis_MYA-3404_proteins.fasta ${DATA_DIR}/${ORGANISM}_proteins.fasta
+samtools faidx ${DATA_DIR}/${ORGANISM}_proteins.fasta
+
+# Convert InterProScan TSV to GFF for each database
+python interproscan_to_gff.py \
+    --tsv ${DOMAIN_DIR}/all_results.tsv \
+    --output /tmp/${ORGANISM}_domains.gff
+
+# Split by database, sort, compress, and index
+for DB in Pfam PANTHER SUPERFAMILY CATH SMART ProSiteProfiles CDD PRINTS; do
+    grep -P "\\t${DB}\\t" /tmp/${ORGANISM}_domains.gff | \
+        sort -k1,1 -k4,4n > /tmp/${ORGANISM}_${DB}_sorted.gff
+    bgzip -c /tmp/${ORGANISM}_${DB}_sorted.gff > ${DATA_DIR}/${ORGANISM}_${DB}.gff.gz
+    tabix -p gff ${DATA_DIR}/${ORGANISM}_${DB}.gff.gz
+done
+```
+
+#### 3. Update JBrowse2 Configuration
+
+Edit `/data/jbrowse2/config.json` to add the protein assembly and tracks:
+
+```json
+{
+  "assemblies": [
+    {
+      "name": "C_tropicalis_prot",
+      "displayName": "C. tropicalis Proteins",
+      "sequence": {
+        "type": "ReferenceSequenceTrack",
+        "trackId": "C_tropicalis_prot-ReferenceSequenceTrack",
+        "adapter": {
+          "type": "IndexedFastaAdapter",
+          "fastaLocation": { "uri": "protein_data/C_tropicalis_proteins.fasta" },
+          "faiLocation": { "uri": "protein_data/C_tropicalis_proteins.fasta.fai" }
+        }
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "type": "FeatureTrack",
+      "trackId": "C_tropicalis_Pfam",
+      "name": "Pfam",
+      "assemblyNames": ["C_tropicalis_prot"],
+      "adapter": {
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": { "uri": "protein_data/C_tropicalis_Pfam.gff.gz" },
+        "index": { "location": { "uri": "protein_data/C_tropicalis_Pfam.gff.gz.tbi" } }
+      }
+    }
+    // ... repeat for PANTHER, SUPERFAMILY, CATH, SMART, ProSiteProfiles, CDD, PRINTS
+  ]
+}
+```
+
+#### 4. Update Frontend Configuration
+
+In `cgd-frontend/src/components/locus/ProteinDetails.jsx`, add the organism to `proteinAssemblyConfig`:
+
+```javascript
+const proteinAssemblyConfig = {
+  // ... existing organisms ...
+  'C_tropicalis': {
+    assembly: 'C_tropicalis_prot',
+  },
+};
+```
+
+#### 5. Rebuild Frontend
+
+```bash
+cd cgd-frontend
+npm run build
+# Deploy to server
+```
+
+### Files Created
+
+After setup, these files should exist in `/data/jbrowse2/protein_data/`:
+
+```
+C_tropicalis_proteins.fasta      # Symlink to protein FASTA
+C_tropicalis_proteins.fasta.fai  # FASTA index
+C_tropicalis_Pfam.gff.gz         # Domain tracks (bgzipped)
+C_tropicalis_Pfam.gff.gz.tbi     # Tabix index
+C_tropicalis_PANTHER.gff.gz
+C_tropicalis_PANTHER.gff.gz.tbi
+C_tropicalis_SUPERFAMILY.gff.gz
+C_tropicalis_SUPERFAMILY.gff.gz.tbi
+C_tropicalis_CATH.gff.gz
+C_tropicalis_CATH.gff.gz.tbi
+C_tropicalis_SMART.gff.gz
+C_tropicalis_SMART.gff.gz.tbi
+C_tropicalis_ProSiteProfiles.gff.gz
+C_tropicalis_ProSiteProfiles.gff.gz.tbi
+C_tropicalis_CDD.gff.gz
+C_tropicalis_CDD.gff.gz.tbi
+C_tropicalis_PRINTS.gff.gz
+C_tropicalis_PRINTS.gff.gz.tbi
+```
+
+### Troubleshooting
+
+- **"Could not resolve identifiers" error**: Track doesn't exist in JBrowse config. Check that the track ID in `config.json` matches the frontend's `domainTrackTypes` array.
+- **No JBrowse viewer showing**: Ensure `protein_length` is available (calculated from sequence if not in `protein_info`).
+- **Empty tracks**: Verify the GFF files have data: `zcat C_tropicalis_Pfam.gff.gz | head`
+
 ## Notes
 
 - All scripts support `--dry-run` flag to preview changes without modifying the database
