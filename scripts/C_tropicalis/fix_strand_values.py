@@ -195,7 +195,16 @@ def fix_feature_type(session, gene_strands: Dict[str, str], feature_type: str, d
             """)
             session.execute(delete, {"fln": item['feat_location_no']})
 
-            # Insert with correct strand
+            # Insert with swapped coordinates for minus strand
+            # The database trigger sets strand based on start/stop:
+            #   start > stop => strand = 'C' (Crick/minus)
+            #   start < stop => strand = 'W' (Watson/plus)
+            start = item['start_coord']
+            stop = item['stop_coord']
+            if item['expected_strand'] == 'C':
+                # Swap coordinates so start > stop, trigger will set strand='C'
+                start, stop = stop, start
+
             insert = text(f"""
                 INSERT INTO {DB_SCHEMA}.feat_location (
                     feature_no, root_seq_no, coord_version, start_coord, stop_coord,
@@ -207,8 +216,8 @@ def fix_feature_type(session, gene_strands: Dict[str, str], feature_type: str, d
             session.execute(insert, {
                 "fno": item['feature_no'],
                 "root_seq_no": item['root_seq_no'],
-                "start": item['start_coord'],
-                "stop": item['stop_coord'],
+                "start": start,
+                "stop": stop,
                 "strand": item['expected_strand'],
             })
 
@@ -304,6 +313,12 @@ def fix_cds_strands(session, gene_strands: Dict[str, str], dry_run: bool):
             delete = text(f"DELETE FROM {DB_SCHEMA}.feat_location WHERE feat_location_no = :fln")
             session.execute(delete, {"fln": item['feat_location_no']})
 
+            # Swap coordinates for minus strand (trigger sets strand based on start/stop order)
+            start = item['start_coord']
+            stop = item['stop_coord']
+            if item['expected_strand'] == 'C':
+                start, stop = stop, start
+
             insert = text(f"""
                 INSERT INTO {DB_SCHEMA}.feat_location (
                     feature_no, root_seq_no, coord_version, start_coord, stop_coord,
@@ -315,8 +330,8 @@ def fix_cds_strands(session, gene_strands: Dict[str, str], dry_run: bool):
             session.execute(insert, {
                 "fno": item['feature_no'],
                 "root_seq_no": item['root_seq_no'],
-                "start": item['start_coord'],
-                "stop": item['stop_coord'],
+                "start": start,
+                "stop": stop,
                 "strand": item['expected_strand'],
             })
             fixed += 1
