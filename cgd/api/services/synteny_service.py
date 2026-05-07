@@ -125,7 +125,7 @@ def _get_cgob_cluster_for_feature(
     feature_no: int,
 ) -> Optional[tuple[str, int]]:
     """
-    Get CGOB ortholog cluster info for a feature.
+    Get ortholog cluster info for a feature (CGOB or BLAST RBH).
 
     Returns (homology_group_id, homology_group_no) or None.
     """
@@ -138,7 +138,7 @@ def _get_cgob_cluster_for_feature(
         .filter(
             FeatHomology.feature_no == feature_no,
             HomologyGroup.homology_group_type == 'ortholog',
-            HomologyGroup.method == 'CGOB',
+            HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
         )
         .first()
     )
@@ -164,16 +164,16 @@ def _find_cgob_cluster_for_gene(
     query_feature: Feature,
 ) -> Optional[HomologyGroup]:
     """
-    Find CGOB ortholog cluster for a gene.
+    Find ortholog cluster for a gene (CGOB or BLAST RBH).
 
     First checks the query feature's feat_homology. If not found, searches for
     other ORF features with the same gene_name in the same organism that have
-    CGOB links. This handles cases where CGOB data was loaded with Assembly 22
+    ortholog links. This handles cases where ortholog data was loaded with Assembly 22
     names (e.g., C1_13700W_A) but the query uses Assembly 19 names (e.g., orf19.5007).
 
     Args:
         db: Database session
-        query_feature: The feature to find CGOB cluster for
+        query_feature: The feature to find ortholog cluster for
 
     Returns:
         HomologyGroup if found, None otherwise
@@ -181,7 +181,7 @@ def _find_cgob_cluster_for_gene(
     # First, check the query feature's own feat_homology
     for fh in query_feature.feat_homology:
         hg = fh.homology_group
-        if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+        if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
             return hg
 
     # If not found and we have a gene_name, search for alternate assembly versions
@@ -207,9 +207,9 @@ def _find_cgob_cluster_for_gene(
     for alt_feat in alternate_features:
         for fh in alt_feat.feat_homology:
             hg = fh.homology_group
-            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+            if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
                 logger.debug(
-                    f"Found CGOB cluster via alternate feature: "
+                    f"Found ortholog cluster via alternate feature: "
                     f"{query_feature.feature_name} -> {alt_feat.feature_name}"
                 )
                 return hg
