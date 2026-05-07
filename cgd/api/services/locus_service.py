@@ -2227,8 +2227,13 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
                 group = pd.protein_detail_group or ''
                 group_lower = group.lower()
 
-                # Conserved domains typically have group containing 'domain' or specific types
-                if 'domain' in group_lower or group_lower in ('pfam', 'smart', 'interpro', 'prosite'):
+                # Conserved domains: group contains 'domain' or is a known domain database
+                domain_databases = (
+                    'pfam', 'smart', 'interpro', 'prosite', 'panther', 'superfamily',
+                    'gene3d', 'cdd', 'prints', 'prositeprofiles', 'prositepatterns',
+                    'tigrfams', 'pirsf', 'hamap', 'sfld', 'ncbifam'
+                )
+                if 'domain' in group_lower or group_lower in domain_databases:
                     conserved_domains.append(ConservedDomainOut(
                         domain_name=pd.protein_detail_value,
                         domain_type=pd.protein_detail_type,
