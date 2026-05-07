@@ -2264,13 +2264,19 @@ def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
         if protein_info or protein_sequence:
             # Generate GCG format sequence
             protein_seq_gcg = None
+            calculated_protein_length = None
             if protein_sequence:
                 seq_name = protein_standard_name or protein_systematic_name or systematic_name
                 seq_length = len(protein_sequence)
+                calculated_protein_length = seq_length
                 protein_seq_gcg = _format_sequence_gcg(protein_sequence, seq_name, seq_length)
 
+            # Use stored protein_length, or calculate from sequence if not available
+            stored_protein_length = protein_info.protein_length if protein_info else None
+            effective_protein_length = stored_protein_length or calculated_protein_length
+
             sequence_detail = SequenceDetailOut(
-                protein_length=protein_info.protein_length if protein_info else None,
+                protein_length=effective_protein_length,
                 protein_sequence=protein_sequence,
                 protein_sequence_gcg=protein_seq_gcg,
                 n_term_seq=protein_info.n_term_seq if protein_info else None,
