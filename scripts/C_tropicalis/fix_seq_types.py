@@ -5,7 +5,8 @@ Fix seq_type values for C. tropicalis sequences.
 The loading scripts used mixed-case seq_type values ('Genomic DNA', 'Protein')
 but the API expects lowercase values ('genomic', 'protein', 'coding').
 
-This script updates the seq_type values to match the expected format.
+This script deletes sequences with wrong seq_type and re-inserts them with
+correct values. Direct UPDATE is blocked by database trigger.
 
 Usage:
     python fix_seq_types.py [--dry-run]
@@ -68,35 +69,73 @@ def fix_seq_types(session, dry_run: bool = False):
         count = result[0] if result else 0
 
         if count == 0:
-            logger.info(f"No sequences with seq_type='{old_type}' to update")
+            logger.info(f"No sequences with seq_type='{old_type}' to fix")
             continue
 
         logger.info(f"Found {count} sequences with seq_type='{old_type}' -> '{new_type}'")
 
         if dry_run:
-            logger.info(f"[DRY RUN] Would update {count} sequences")
+            logger.info(f"[DRY RUN] Would fix {count} sequences")
             continue
 
-        # Update seq_type
-        update_query = text(f"""
-            UPDATE {DB_SCHEMA}.seq s
-            SET s.seq_type = :new_type
-            WHERE s.feature_no IN (
-                SELECT f.feature_no FROM {DB_SCHEMA}.feature f
-                WHERE f.organism_no = :org_no
-            )
+        # Get all sequences to fix
+        select_query = text(f"""
+            SELECT s.seq_no, s.feature_no, s.genome_version_no, s.seq_version,
+                   s.source, s.is_seq_current, s.seq_length, s.residues, s.created_by
+            FROM {DB_SCHEMA}.seq s
+            JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
+            WHERE f.organism_no = :org_no
             AND s.seq_type = :old_type
         """)
-        session.execute(update_query, {
-            "org_no": organism_no,
-            "old_type": old_type,
-            "new_type": new_type,
-        })
-        logger.info(f"Updated {count} sequences: '{old_type}' -> '{new_type}'")
+        rows = session.execute(select_query, {"org_no": organism_no, "old_type": old_type}).fetchall()
 
-    if not dry_run:
+        fixed = 0
+        for row in rows:
+            seq_no = row[0]
+            feature_no = row[1]
+            genome_version_no = row[2]
+            seq_version = row[3]
+            source = row[4]
+            is_seq_current = row[5]
+            seq_length = row[6]
+            residues = row[7]
+            created_by = row[8]
+
+            # Delete old record
+            delete_query = text(f"DELETE FROM {DB_SCHEMA}.seq WHERE seq_no = :seq_no")
+            session.execute(delete_query, {"seq_no": seq_no})
+
+            # Insert with correct seq_type
+            insert_query = text(f"""
+                INSERT INTO {DB_SCHEMA}.seq (
+                    feature_no, genome_version_no, seq_version, seq_type,
+                    source, is_seq_current, seq_length, residues, created_by
+                ) VALUES (
+                    :feature_no, :genome_version_no, :seq_version, :seq_type,
+                    :source, :is_seq_current, :seq_length, :residues, :created_by
+                )
+            """)
+            session.execute(insert_query, {
+                "feature_no": feature_no,
+                "genome_version_no": genome_version_no,
+                "seq_version": seq_version,
+                "seq_type": new_type,
+                "source": source,
+                "is_seq_current": is_seq_current,
+                "seq_length": seq_length,
+                "residues": residues,
+                "created_by": created_by,
+            })
+            fixed += 1
+
+            if fixed % 500 == 0:
+                logger.info(f"  Fixed {fixed}/{count}...")
+                session.commit()
+
         session.commit()
-        logger.info("Changes committed")
+        logger.info(f"Fixed {fixed} sequences: '{old_type}' -> '{new_type}'")
+
+    logger.info("All changes committed")
 
 
 def main():
