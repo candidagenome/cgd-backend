@@ -253,7 +253,14 @@ def create_feat_relationship(session, parent_feature_no: int, child_feature_no: 
 
 def create_feat_location(session, feature_no: int, root_seq_no: int,
                           start_coord: int, stop_coord: int, strand: str) -> bool:
-    """Create a feat_location entry."""
+    """Create a feat_location entry.
+
+    Note: The database trigger FEATLOCATION_BIUDR sets strand based on coordinate order:
+      - start > stop => strand = 'C' (Crick/minus)
+      - start < stop => strand = 'W' (Watson/plus)
+
+    For minus strand features, we swap coordinates so start > stop.
+    """
     # Check if exists
     query = text(f"""
         SELECT feat_location_no FROM {DB_SCHEMA}.feat_location
@@ -266,6 +273,12 @@ def create_feat_location(session, feature_no: int, root_seq_no: int,
     # Convert strand format: + -> W, - -> C
     db_strand = 'W' if strand == '+' else 'C'
 
+    # Swap coordinates for minus strand so trigger sets correct strand
+    db_start = start_coord
+    db_stop = stop_coord
+    if strand == '-':
+        db_start, db_stop = stop_coord, start_coord
+
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feat_location (
             feature_no, root_seq_no, coord_version, start_coord, stop_coord,
@@ -276,7 +289,7 @@ def create_feat_location(session, feature_no: int, root_seq_no: int,
     """)
     session.execute(insert, {
         "fno": feature_no, "root_seq_no": root_seq_no,
-        "start": start_coord, "stop": stop_coord,
+        "start": db_start, "stop": db_stop,
         "strand": db_strand, "created_by": ADMIN_USER,
     })
     return True
