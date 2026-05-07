@@ -43,6 +43,7 @@ from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 # Project root directory
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -281,24 +282,24 @@ def create_protein_detail(
     if len(detail_value) > 240:
         detail_value = detail_value[:237] + "..."
 
-    # Check if exists (unique on protein_info_no, group, type, value, start, stop)
+    # Check if exists (unique on protein_info_no, type, value, start, stop, member_dbxref_id)
     query = text(f"""
         SELECT protein_detail_no
         FROM {DB_SCHEMA}.protein_detail
         WHERE protein_info_no = :protein_info_no
-        AND protein_detail_group = :group
         AND protein_detail_type = :type
         AND protein_detail_value = :value
         AND start_coord = :start
         AND stop_coord = :stop
+        AND member_dbxref_id = :member_id
     """)
     result = session.execute(query, {
         "protein_info_no": protein_info_no,
-        "group": domain['analysis'],
         "type": "domain",
         "value": detail_value,
         "start": domain['start'],
         "stop": domain['end'],
+        "member_id": domain['sig_accession'],
     }).first()
 
     if result:
@@ -318,18 +319,23 @@ def create_protein_detail(
             :interpro_id, :member_id, :created_by
         )
     """)
-    session.execute(insert, {
-        "protein_info_no": protein_info_no,
-        "group": domain['analysis'],
-        "type": "domain",
-        "value": detail_value,
-        "start": domain['start'],
-        "stop": domain['end'],
-        "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
-        "member_id": domain['sig_accession'],
-        "created_by": ADMIN_USER,
-    })
-    return True
+    try:
+        session.execute(insert, {
+            "protein_info_no": protein_info_no,
+            "group": domain['analysis'],
+            "type": "domain",
+            "value": detail_value,
+            "start": domain['start'],
+            "stop": domain['end'],
+            "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
+            "member_id": domain['sig_accession'],
+            "created_by": ADMIN_USER,
+        })
+        return True
+    except IntegrityError:
+        # Duplicate entry - rollback and continue
+        session.rollback()
+        return False
 
 
 def load_protein_domains(
