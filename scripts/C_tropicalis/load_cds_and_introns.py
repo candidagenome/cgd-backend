@@ -322,17 +322,9 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
     for gene_id, cds_list in gene_to_cds.items():
         genes_processed += 1
 
-        # Find parent feature
-        protein_id = gene_to_protein.get(gene_id)
-        parent_feature_no = None
-        parent_name = None
-
-        if protein_id:
-            parent_feature_no = get_feature_no(session, protein_id)
-            parent_name = protein_id
-        if not parent_feature_no:
-            parent_feature_no = get_feature_no(session, gene_id)
-            parent_name = gene_id
+        # Find parent feature by gene_id (systematic name)
+        parent_feature_no = get_feature_no(session, gene_id)
+        parent_name = gene_id
 
         if not parent_feature_no:
             genes_not_found += 1

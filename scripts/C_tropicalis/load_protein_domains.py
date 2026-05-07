@@ -106,6 +106,45 @@ def ensure_code(session, table_name: str, col_name: str, code_value: str, descri
     return True
 
 
+def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
+    """Parse GFF file to get protein_id -> gene_id mapping.
+
+    The InterProScan results use protein_id (e.g., EER30082.1) but the
+    feature_name in the database is gene_id (e.g., CTRG_01181).
+    """
+    protein_to_gene = {}
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            # Extract protein_id from CDS features
+            if feature_type == 'CDS':
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key.strip()] = value.strip()
+
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    protein_to_gene[protein_id] = gene_id
+
+    return protein_to_gene
+
+
 def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
     """Parse InterProScan TSV output."""
     domains = []
@@ -196,8 +235,30 @@ def create_protein_info(session, feature_no: int, dry_run: bool = False) -> Opti
     return result[0] if result else None
 
 
-def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
-    """Get feature_no by protein ID."""
+def get_feature_no_by_protein_id(
+    session,
+    protein_id: str,
+    protein_to_gene: Optional[Dict[str, str]] = None
+) -> Optional[int]:
+    """Get feature_no by protein ID.
+
+    If protein_to_gene mapping is provided, use it to look up by gene_id.
+    Otherwise, fall back to looking up by protein_id directly.
+    """
+    # Try gene_id first if mapping is available
+    if protein_to_gene:
+        gene_id = protein_to_gene.get(protein_id)
+        if gene_id:
+            query = text(f"""
+                SELECT feature_no
+                FROM {DB_SCHEMA}.feature
+                WHERE feature_name = :gene_id
+            """)
+            result = session.execute(query, {"gene_id": gene_id}).first()
+            if result:
+                return result[0]
+
+    # Fall back to protein_id lookup (for backward compatibility)
     query = text(f"""
         SELECT feature_no
         FROM {DB_SCHEMA}.feature
@@ -269,8 +330,27 @@ def create_protein_detail(
     return True
 
 
-def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
-    """Load protein domains from InterProScan TSV into protein_detail table."""
+def load_protein_domains(
+    session,
+    tsv_file: Path,
+    gff_file: Optional[Path] = None,
+    dry_run: bool = False
+):
+    """Load protein domains from InterProScan TSV into protein_detail table.
+
+    Args:
+        session: Database session
+        tsv_file: InterProScan TSV results file
+        gff_file: Optional GFF file for protein_id to gene_id mapping
+        dry_run: If True, don't make changes
+    """
+    # Parse GFF for protein_id -> gene_id mapping if provided
+    protein_to_gene = {}
+    if gff_file:
+        logger.info(f"Parsing GFF for protein mapping: {gff_file}")
+        protein_to_gene = parse_gff_protein_mapping(gff_file)
+        logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
+
     # Ensure code values exist for domain databases
     logger.info("Ensuring code values exist for domain databases...")
     for db_name in DOMAIN_DATABASES:
@@ -308,7 +388,7 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
 
         if not protein_info_no:
             # Need to create protein_info first
-            feature_no = get_feature_no_by_protein_id(session, protein_id)
+            feature_no = get_feature_no_by_protein_id(session, protein_id, protein_to_gene)
             if not feature_no:
                 proteins_not_found += 1
                 continue
@@ -351,6 +431,7 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis protein domains")
     parser.add_argument("--tsv", required=True, type=Path, help="InterProScan TSV results file")
+    parser.add_argument("--gff", type=Path, help="GFF file for protein_id to gene_id mapping")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     args = parser.parse_args()
 
@@ -362,7 +443,7 @@ def main():
         logger.info("[DRY RUN MODE]")
 
     with SessionLocal() as session:
-        load_protein_domains(session, args.tsv, args.dry_run)
+        load_protein_domains(session, args.tsv, args.gff, args.dry_run)
 
     logger.info("Done!")
 

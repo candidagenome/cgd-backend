@@ -472,14 +472,9 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
 
     for i, gene in enumerate(genes):
         gene_id = gene['gene_id']
-        protein_id = gene_to_protein.get(gene_id)
 
-        # Find feature
-        feature_no = None
-        if protein_id:
-            feature_no = get_feature_no(session, protein_id)
-        if not feature_no:
-            feature_no = get_feature_no(session, gene_id)
+        # Find feature by gene_id (systematic name)
+        feature_no = get_feature_no(session, gene_id)
 
         if not feature_no:
             features_not_found += 1

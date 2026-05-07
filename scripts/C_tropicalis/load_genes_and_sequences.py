@@ -396,8 +396,9 @@ def load_genes_and_proteins(
         # Get protein_id if available (from CDS mapping)
         protein_id = gene_to_protein.get(gene_id)
 
-        # Create feature - use protein_id as feature_name if available for better matching
-        feature_name = protein_id if protein_id else gene_id
+        # Use gene_id (e.g., CTRG_01181) as the systematic name (feature_name)
+        # This is consistent with other CGD organisms and matches external databases
+        feature_name = gene_id
 
         # Generate CAL-format CGD ID
         dbxref_id = f"CAL{next_cal_id:010d}"

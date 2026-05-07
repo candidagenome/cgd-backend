@@ -70,8 +70,63 @@ def parse_descriptions_file(filepath: Path) -> Dict[str, str]:
     return descriptions
 
 
-def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
-    """Get feature_no by protein ID."""
+def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
+    """Parse GFF file to get protein_id -> gene_id mapping."""
+    protein_to_gene = {}
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            if feature_type == 'CDS':
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key.strip()] = value.strip()
+
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    protein_to_gene[protein_id] = gene_id
+
+    return protein_to_gene
+
+
+def get_feature_no_by_protein_id(
+    session,
+    protein_id: str,
+    protein_to_gene: Optional[Dict[str, str]] = None
+) -> Optional[int]:
+    """Get feature_no by protein ID.
+
+    If protein_to_gene mapping is provided, use it to look up by gene_id.
+    """
+    # Try gene_id first if mapping is available
+    if protein_to_gene:
+        gene_id = protein_to_gene.get(protein_id)
+        if gene_id:
+            query = text(f"""
+                SELECT feature_no
+                FROM {DB_SCHEMA}.feature
+                WHERE feature_name = :gene_id
+            """)
+            result = session.execute(query, {"gene_id": gene_id}).first()
+            if result:
+                return result[0]
+
+    # Fall back to protein_id lookup
     query = text(f"""
         SELECT feature_no
         FROM {DB_SCHEMA}.feature
@@ -112,8 +167,27 @@ def update_feature_headline(
     return True
 
 
-def load_descriptions(session, descriptions_file: Path, dry_run: bool = False):
-    """Load gene descriptions from ortholog-based descriptions file."""
+def load_descriptions(
+    session,
+    descriptions_file: Path,
+    gff_file: Optional[Path] = None,
+    dry_run: bool = False
+):
+    """Load gene descriptions from ortholog-based descriptions file.
+
+    Args:
+        session: Database session
+        descriptions_file: TSV file with protein_id and descriptions
+        gff_file: Optional GFF file for protein_id to gene_id mapping
+        dry_run: If True, don't make changes
+    """
+    # Parse GFF for protein_id -> gene_id mapping if provided
+    protein_to_gene = {}
+    if gff_file:
+        logger.info(f"Parsing GFF for protein mapping: {gff_file}")
+        protein_to_gene = parse_gff_protein_mapping(gff_file)
+        logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
+
     logger.info(f"Parsing descriptions file: {descriptions_file}")
     descriptions = parse_descriptions_file(descriptions_file)
     logger.info(f"Found {len(descriptions)} descriptions")
@@ -123,7 +197,7 @@ def load_descriptions(session, descriptions_file: Path, dry_run: bool = False):
     features_not_found = 0
 
     for protein_id, description in descriptions.items():
-        feature_no = get_feature_no_by_protein_id(session, protein_id)
+        feature_no = get_feature_no_by_protein_id(session, protein_id, protein_to_gene)
 
         if not feature_no:
             features_not_found += 1
@@ -158,6 +232,7 @@ def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis gene descriptions")
     parser.add_argument("--descriptions", required=True, type=Path,
                         help="Ortholog descriptions TSV file")
+    parser.add_argument("--gff", type=Path, help="GFF file for protein_id to gene_id mapping")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     args = parser.parse_args()
 
@@ -169,7 +244,7 @@ def main():
         logger.info("[DRY RUN MODE]")
 
     with SessionLocal() as session:
-        load_descriptions(session, args.descriptions, args.dry_run)
+        load_descriptions(session, args.descriptions, args.gff, args.dry_run)
 
     logger.info("Done!")
 
