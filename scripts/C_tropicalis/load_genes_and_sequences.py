@@ -54,6 +54,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_max_cal_id(session) -> int:
+    """Get the maximum CAL ID number currently in use."""
+    query = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.feature
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    result = session.execute(query).scalar()
+    return result or 0
+
+
 def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
     """Ensure a code value exists in the code table."""
     query = text(f"""
@@ -359,6 +371,11 @@ def load_genes_and_proteins(
 
     logger.info(f"Loading genes for organism_no={organism_no}, genome_version_no={genome_version_no}")
 
+    # Get current max CAL ID for generating new CGD IDs
+    max_cal_id = get_max_cal_id(session)
+    next_cal_id = max_cal_id + 1
+    logger.info(f"Starting CAL ID: CAL{next_cal_id:010d}")
+
     # Parse input files
     logger.info(f"Parsing GFF file: {gff_file}")
     genes, gene_to_protein = parse_gff(gff_file)
@@ -381,11 +398,16 @@ def load_genes_and_proteins(
 
         # Create feature - use protein_id as feature_name if available for better matching
         feature_name = protein_id if protein_id else gene_id
+
+        # Generate CAL-format CGD ID
+        dbxref_id = f"CAL{next_cal_id:010d}"
+        next_cal_id += 1
+
         feature_no = create_feature(
             session,
             organism_no,
             feature_name=feature_name,
-            dbxref_id=f"CTROP:{gene_id}",
+            dbxref_id=dbxref_id,
             feature_type="ORF",
             dry_run=dry_run
         )
