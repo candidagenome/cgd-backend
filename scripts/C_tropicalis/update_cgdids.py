@@ -33,12 +33,37 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
 ORGANISM_NAME = "Candida tropicalis MYA-3404"
+TRIGGER_NAME = f"{DB_SCHEMA}.FEATURE_BIUR"
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def disable_trigger(session) -> bool:
+    """Disable the FEATURE_BIUR trigger to allow dbxref_id updates."""
+    try:
+        session.execute(text(f"ALTER TRIGGER {TRIGGER_NAME} DISABLE"))
+        session.commit()
+        logger.info(f"Disabled trigger {TRIGGER_NAME}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to disable trigger: {e}")
+        return False
+
+
+def enable_trigger(session) -> bool:
+    """Re-enable the FEATURE_BIUR trigger."""
+    try:
+        session.execute(text(f"ALTER TRIGGER {TRIGGER_NAME} ENABLE"))
+        session.commit()
+        logger.info(f"Re-enabled trigger {TRIGGER_NAME}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to enable trigger: {e}")
+        return False
 
 
 def get_max_cal_id(session) -> int:
@@ -92,36 +117,49 @@ def update_cgdids(session, dry_run: bool = False):
         logger.info("No features to update")
         return
 
-    # Update each feature
-    next_cal = max_cal + 1
-    updated = 0
-
-    for feature_no, feature_name, old_dbxref_id in features:
-        new_dbxref_id = f"CAL{next_cal:010d}"
-
-        if dry_run:
-            logger.info(f"[DRY RUN] {feature_name}: {old_dbxref_id} -> {new_dbxref_id}")
-        else:
-            update_dbxref_id(session, feature_no, new_dbxref_id)
-            updated += 1
-
-        next_cal += 1
-
-        if updated % 500 == 0 and updated > 0:
-            logger.info(f"Updated {updated} features...")
-            if not dry_run:
-                session.commit()
-
     if not dry_run:
-        session.commit()
+        # Disable trigger to allow dbxref_id updates
+        if not disable_trigger(session):
+            logger.error("Cannot proceed without disabling trigger")
+            return
 
-    logger.info("=" * 60)
-    logger.info(f"Features processed: {len(features)}")
-    logger.info(f"New CAL ID range: CAL{max_cal + 1:010d} to CAL{next_cal - 1:010d}")
-    if dry_run:
-        logger.info("[DRY RUN] No changes made")
-    else:
-        logger.info(f"Features updated: {updated}")
+    try:
+        # Update each feature
+        next_cal = max_cal + 1
+        updated = 0
+
+        for feature_no, feature_name, old_dbxref_id in features:
+            new_dbxref_id = f"CAL{next_cal:010d}"
+
+            if dry_run:
+                if updated < 10:  # Only show first 10 in dry run
+                    logger.info(f"[DRY RUN] {feature_name}: {old_dbxref_id} -> {new_dbxref_id}")
+            else:
+                update_dbxref_id(session, feature_no, new_dbxref_id)
+                updated += 1
+
+            next_cal += 1
+
+            if updated % 500 == 0 and updated > 0:
+                logger.info(f"Updated {updated} features...")
+                if not dry_run:
+                    session.commit()
+
+        if not dry_run:
+            session.commit()
+
+        logger.info("=" * 60)
+        logger.info(f"Features processed: {len(features)}")
+        logger.info(f"New CAL ID range: CAL{max_cal + 1:010d} to CAL{next_cal - 1:010d}")
+        if dry_run:
+            logger.info("[DRY RUN] No changes made")
+        else:
+            logger.info(f"Features updated: {updated}")
+
+    finally:
+        if not dry_run:
+            # Always re-enable trigger
+            enable_trigger(session)
 
 
 def main():
