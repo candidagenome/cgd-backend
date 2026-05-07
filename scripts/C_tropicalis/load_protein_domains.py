@@ -281,11 +281,12 @@ def create_protein_detail(
     if len(detail_value) > 240:
         detail_value = detail_value[:237] + "..."
 
-    # Check if exists (unique constraint is on protein_info_no, type, value, start, stop)
+    # Check if exists (unique on protein_info_no, group, type, value, start, stop)
     query = text(f"""
         SELECT protein_detail_no
         FROM {DB_SCHEMA}.protein_detail
         WHERE protein_info_no = :protein_info_no
+        AND protein_detail_group = :group
         AND protein_detail_type = :type
         AND protein_detail_value = :value
         AND start_coord = :start
@@ -293,6 +294,7 @@ def create_protein_detail(
     """)
     result = session.execute(query, {
         "protein_info_no": protein_info_no,
+        "group": domain['analysis'],
         "type": "domain",
         "value": detail_value,
         "start": domain['start'],
