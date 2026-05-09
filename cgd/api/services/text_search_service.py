@@ -1164,13 +1164,14 @@ def search_paper_titles(
         # Use PMID as ID if available, otherwise CGD ID
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
-        # Build citation from fields - always build fresh to ensure consistent format
-        # The database citation field may be empty, contain just PMID, or have inconsistent formatting
-        citation_text = _build_citation_string(db, ref)
+        # Use title as citation - in CGD, ref.title contains the full formatted citation
+        # Format: "Author, et al. (Year) Title. Journal Volume:Pages"
+        citation_text = ref.title or ""
 
-        # Get ref_url for building links
+        # Get ref_url for building links (load url relationship for accessing url details)
         ref_urls = (
             db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
             .filter(RefUrl.reference_no == ref.reference_no)
             .all()
         )
