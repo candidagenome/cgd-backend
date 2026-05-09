@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import re
 from typing import List, Tuple, Dict
 
 from sqlalchemy.orm import Session, joinedload
@@ -28,6 +29,18 @@ from cgd.api.services.sequence_service import (
 )
 from cgd.schemas.sequence_schema import SeqType
 from cgd.schemas.batch_download_schema import ChromosomalRegion
+
+
+def _map_organism_to_abbrev(organism: str) -> str:
+    """
+    Map frontend organism identifier to database organism_abbrev.
+
+    E.g., "C_tropicalis_MYA-3404" -> "C_tropicalis" (strip strain suffix)
+    """
+    if not organism:
+        return organism
+    # Strip strain suffixes like _MYA-3404
+    return re.sub(r'_MYA-\d+$', '', organism)
 
 
 # GO aspect mapping
@@ -102,8 +115,9 @@ def resolve_features(
 
         # Filter by organism if specified
         if organism:
+            org_abbrev = _map_organism_to_abbrev(organism)
             query = query.join(Organism, Feature.organism_no == Organism.organism_no)
-            query = query.filter(Organism.organism_abbrev == organism)
+            query = query.filter(Organism.organism_abbrev == org_abbrev)
 
         chunk_features = query.all()
 
