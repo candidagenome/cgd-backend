@@ -1164,10 +1164,9 @@ def search_paper_titles(
         # Use PMID as ID if available, otherwise CGD ID
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
-        # Build citation from fields if database citation is empty
-        citation_text = ref.citation
-        if not citation_text or citation_text.strip() == "":
-            citation_text = _build_citation_string(db, ref)
+        # Build citation from fields - always build fresh to ensure consistent format
+        # The database citation field may be empty, contain just PMID, or have inconsistent formatting
+        citation_text = _build_citation_string(db, ref)
 
         # Get ref_url for building links
         ref_urls = (
