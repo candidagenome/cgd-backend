@@ -1347,10 +1347,11 @@ def main() -> int:
             ("C_albicans_SC5314", "C. albicans SC5314 Assembly 22"),
             ("C_albicans_SC5314", "C. albicans SC5314 Assembly 21"),
             ("C_albicans_SC5314", "C. albicans SC5314 Assembly 19"),
+            ("C_auris_B8441", None),
             ("C_dubliniensis_CD36", None),
             ("C_glabrata_CBS138", None),
             ("C_parapsilosis_CDC317", None),
-            ("C_auris_B8441", None),
+            ("C_tropicalis_MYA-3404", None),
         ]
         success = True
         for strain, seq_source in strains:

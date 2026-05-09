@@ -79,19 +79,21 @@ DEFAULT_MITO_TRANS_TABLE = 3      # Yeast mitochondrial code
 # Strain configurations
 STRAIN_ABBREVS = [
     "C_albicans_SC5314",
+    "C_auris_B8441",
     "C_dubliniensis_CD36",
     "C_glabrata_CBS138",
     "C_parapsilosis_CDC317",
-    "C_auris_B8441",
+    "C_tropicalis_MYA-3404",
 ]
 
 # Mitochondrial feature names by strain
 MITO_FEATURES = {
     "C_albicans_SC5314": ["Ca19-mtDNA"],
+    "C_auris_B8441": [],
     "C_dubliniensis_CD36": ["Cd36-mtDNA"],
     "C_glabrata_CBS138": ["ChrMT", "Mito"],
     "C_parapsilosis_CDC317": ["ChrMT"],
-    "C_auris_B8441": [],
+    "C_tropicalis_MYA-3404": [],
 }
 
 # Configure logging

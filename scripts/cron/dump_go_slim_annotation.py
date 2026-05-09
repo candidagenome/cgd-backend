@@ -82,6 +82,10 @@ STRAIN_CONFIGS = {
         "seq_source": "C. albicans SC5314 Assembly 22",
         "taxon_id": "237561",
     },
+    "C_auris_B8441": {
+        "seq_source": "C. auris B8441",
+        "taxon_id": "498019",
+    },
     "C_dubliniensis_CD36": {
         "seq_source": "C. dubliniensis CD36",
         "taxon_id": "573826",
@@ -94,9 +98,9 @@ STRAIN_CONFIGS = {
         "seq_source": "C. parapsilosis CDC317",
         "taxon_id": "578454",
     },
-    "C_auris_B8441": {
-        "seq_source": "C. auris B8441",
-        "taxon_id": "498019",
+    "C_tropicalis_MYA-3404": {
+        "seq_source": "C. tropicalis MYA-3404",
+        "taxon_id": "294747",
     },
 }
 
