@@ -1116,11 +1116,11 @@ def search_paper_titles(
     )
 
     for ref in ref_query:
-        # Use citation as name
-        name = ref.citation or (f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id)
-
-        # Use PMID as ID if available
+        # Use PMID as ID if available, otherwise CGD ID
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+
+        # Use citation from database - it contains the full formatted citation
+        citation_text = ref.citation or ""
 
         # Get ref_url for building links
         ref_urls = (
@@ -1133,12 +1133,14 @@ def search_paper_titles(
         results.append(TextSearchResult(
             category="paper_titles",
             id=display_id,
-            name=name,
+            name=display_id,  # Use ID as name for display
             description=ref.title,
-            link=None,
+            link=f"/reference/{ref.dbxref_id}",
             links=links,
-            highlighted_name=_highlight_text(name, query),
-            highlighted_description=_highlight_text(ref.title, query),
+            highlighted_name=display_id,
+            highlighted_description=_highlight_text(ref.title, query) if ref.title else None,
+            citation=citation_text,
+            highlighted_citation=_highlight_text(citation_text, query) if citation_text else None,
         ))
 
     return results
