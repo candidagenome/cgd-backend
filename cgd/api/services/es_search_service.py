@@ -67,17 +67,23 @@ def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
     return pattern.sub(replacer, text)
 
 
-def _build_reference_links(dbxref_id: Optional[str], pubmed: Optional[str]) -> list[SearchResultLink]:
+def _build_reference_links(
+    dbxref_id: Optional[str],
+    pubmed: Optional[str],
+    full_text_url: Optional[str] = None
+) -> list[SearchResultLink]:
     """
     Build citation links for a reference in ES search results.
 
     Generates links for:
     - CGD Paper (internal link to reference page)
     - PubMed (external link to NCBI PubMed)
+    - Full Text (external link if available)
 
     Args:
         dbxref_id: CGD reference ID (e.g., CAL0125222)
         pubmed: PubMed ID
+        full_text_url: Full text URL if available
 
     Returns:
         List of SearchResultLink objects
@@ -97,6 +103,14 @@ def _build_reference_links(dbxref_id: Optional[str], pubmed: Optional[str]) -> l
         links.append(SearchResultLink(
             name="PubMed",
             url=f"https://pubmed.ncbi.nlm.nih.gov/{pubmed}",
+            link_type="external"
+        ))
+
+    # Full Text link (if available)
+    if full_text_url:
+        links.append(SearchResultLink(
+            name="Full Text",
+            url=full_text_url,
             link_type="external"
         ))
 
@@ -1337,6 +1351,7 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         citation = source.get("citation")
         abstract = source.get("abstract")
         title = source.get("title")
+        full_text_url = source.get("full_text_url")
 
         name = f"PMID:{pubmed}" if pubmed else dbxref_id or ""
 
@@ -1360,8 +1375,8 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         # For paper_titles, use title as citation (contains full formatted citation)
         citation_text = title if category == "paper_titles" else citation
 
-        # Build links for CGD Paper and PubMed
-        links = _build_reference_links(dbxref_id, pubmed)
+        # Build links for CGD Paper, PubMed, and Full Text
+        links = _build_reference_links(dbxref_id, pubmed, full_text_url)
 
         return TextSearchResult(
             category=result_category,
@@ -1403,6 +1418,7 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         citation = source.get("citation")
         pubmed = source.get("pubmed")
         link = source.get("link")
+        full_text_url = source.get("full_text_url")
 
         # Extract dbxref_id from link (format: /reference/CAL0125222)
         dbxref_id = link.split("/")[-1] if link and link.startswith("/reference/") else None
@@ -1411,8 +1427,8 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         if not highlighted_name:
             highlighted_name = _highlight_text(author_name, query)
 
-        # Build links for CGD Paper and PubMed
-        links = _build_reference_links(dbxref_id, pubmed)
+        # Build links for CGD Paper, PubMed, and Full Text
+        links = _build_reference_links(dbxref_id, pubmed, full_text_url)
 
         return TextSearchResult(
             category="authors",
@@ -1539,6 +1555,7 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         citation = source.get("citation")
         pubmed = source.get("pubmed")
         link = source.get("link")
+        full_text_url = source.get("full_text_url")
 
         # Extract dbxref_id from link (format: /reference/CAL0125222)
         dbxref_id = link.split("/")[-1] if link and link.startswith("/reference/") else None
@@ -1549,8 +1566,8 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         if not highlighted_name:
             highlighted_name = _highlight_text(topic, query)
 
-        # Build links for CGD Paper and PubMed
-        links = _build_reference_links(dbxref_id, pubmed)
+        # Build links for CGD Paper, PubMed, and Full Text
+        links = _build_reference_links(dbxref_id, pubmed, full_text_url)
 
         return TextSearchResult(
             category="literature_topics",

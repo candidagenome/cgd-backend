@@ -20,7 +20,7 @@ from cgd.models.models import (
     Dbxref, DbxrefFeat, Note, NoteLink, HomologyGroup, FeatHomology,
     DbxrefHomology, RefProperty, GoSynonym, GoGosyn, FeatRelationship,
     PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
-    RefLink,
+    RefLink, RefUrl, Url,
 )
 from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
@@ -260,6 +260,25 @@ def index_phenotypes(db: Session, es: Elasticsearch) -> int:
     return success
 
 
+def _get_full_text_url(db: Session, reference_no: int) -> Optional[str]:
+    """Get full text URL for a reference if available."""
+    ref_url = (
+        db.query(RefUrl)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(
+            RefUrl.reference_no == reference_no,
+            or_(
+                Url.url_type.ilike('%full text%'),
+                Url.url_type.ilike('%linkout%')
+            )
+        )
+        .first()
+    )
+    if ref_url and ref_url.url:
+        return ref_url.url.url
+    return None
+
+
 def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
     """Generate Elasticsearch documents for references with abstracts."""
     # Get references with abstracts
@@ -271,6 +290,10 @@ def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
 
     for ref, abstract_text in references:
         display_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+
+        # Get full text URL if available
+        full_text_url = _get_full_text_url(db, ref.reference_no)
+
         doc = {
             "_index": INDEX_NAME,
             "_id": f"reference_{ref.reference_no}",
@@ -285,6 +308,7 @@ def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
                 "year": ref.year,
                 "reference_no": ref.reference_no,
                 "link": f"/reference/{ref.dbxref_id}",
+                "full_text_url": full_text_url,
             }
         }
         yield doc
@@ -370,6 +394,9 @@ def _generate_author_docs(db: Session) -> Generator[dict, None, None]:
 
         # Create one doc per author-reference pair for better search
         for ref in refs:
+            # Get full text URL if available
+            full_text_url = _get_full_text_url(db, ref.reference_no)
+
             doc = {
                 "_index": INDEX_NAME,
                 "_id": f"author_{author_no}_{ref.reference_no}",
@@ -382,6 +409,7 @@ def _generate_author_docs(db: Session) -> Generator[dict, None, None]:
                     "citation": ref.citation,
                     "reference_no": ref.reference_no,
                     "link": f"/reference/{ref.dbxref_id}",
+                    "full_text_url": full_text_url,
                 }
             }
             yield doc
@@ -793,6 +821,9 @@ def _generate_literature_topic_docs(db: Session) -> Generator[dict, None, None]:
     for rp, ref in lit_topics:
         display_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
+        # Get full text URL if available
+        full_text_url = _get_full_text_url(db, ref.reference_no)
+
         doc = {
             "_index": INDEX_NAME,
             "_id": f"lit_topic_{rp.ref_property_no}",
@@ -806,6 +837,7 @@ def _generate_literature_topic_docs(db: Session) -> Generator[dict, None, None]:
                 "year": ref.year,
                 "reference_no": ref.reference_no,
                 "link": f"/reference/{ref.dbxref_id}",
+                "full_text_url": full_text_url,
             }
         }
         yield doc
