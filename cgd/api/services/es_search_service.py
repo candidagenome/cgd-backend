@@ -1320,6 +1320,9 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         # Use the category passed in (paper_titles or abstracts)
         result_category = category if category in ("paper_titles", "abstracts") else "abstracts"
 
+        # For paper_titles, use title as citation (contains full formatted citation)
+        citation_text = title if category == "paper_titles" else citation
+
         return TextSearchResult(
             category=result_category,
             id=dbxref_id or "",
@@ -1330,6 +1333,8 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
             match_context=match_context,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=match_context,
+            citation=citation_text,
+            highlighted_citation=_highlight_text(citation_text, query) if citation_text else None,
         )
 
     elif doc_type == "paragraph":
