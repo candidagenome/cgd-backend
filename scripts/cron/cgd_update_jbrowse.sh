@@ -63,7 +63,7 @@ declare -A SPECIES_CONFIG=(
     ["C_dubliniensis_CD36"]="|"
     ["C_glabrata_CBS138"]="|"
     ["C_parapsilosis_CDC317"]="|"
-    ["C_tropicalis_MYA-3404"]="|"
+    ["C_tropicalis"]="|"
 )
 
 # Find source GFF file using glob pattern

@@ -28,7 +28,7 @@ echo ""
 # Track errors but continue processing all species
 errors=0
 
-for strain in C_albicans_SC5314 C_auris_B8441 C_dubliniensis_CD36 C_glabrata_CBS138 C_parapsilosis_CDC317 C_tropicalis_MYA-3404; do
+for strain in C_albicans_SC5314 C_auris_B8441 C_dubliniensis_CD36 C_glabrata_CBS138 C_parapsilosis_CDC317 C_tropicalis; do
     output=$(python3 "$SCRIPT_DIR/curator_reports.py" --strain "$strain" 2>&1)
     exit_code=$?
 

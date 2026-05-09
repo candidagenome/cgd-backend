@@ -105,7 +105,7 @@ STRAIN_ABBREVS = [
     "C_dubliniensis_CD36",
     "C_glabrata_CBS138",
     "C_parapsilosis_CDC317",
-    "C_tropicalis_MYA-3404",
+    "C_tropicalis",
 ]
 
 # Assemblies to process per strain (strains not listed use default/current only)

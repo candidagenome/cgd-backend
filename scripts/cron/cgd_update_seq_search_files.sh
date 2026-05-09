@@ -50,7 +50,7 @@ run_update C_auris_B8441
 run_update C_dubliniensis_CD36
 run_update C_glabrata_CBS138
 run_update C_parapsilosis_CDC317
-run_update C_tropicalis_MYA-3404
+run_update C_tropicalis
 
 echo ""
 echo "========================================"

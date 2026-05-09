@@ -83,7 +83,7 @@ STRAIN_ABBREVS = [
     "C_dubliniensis_CD36",
     "C_glabrata_CBS138",
     "C_parapsilosis_CDC317",
-    "C_tropicalis_MYA-3404",
+    "C_tropicalis",
 ]
 
 # Mitochondrial feature names by strain
@@ -93,7 +93,7 @@ MITO_FEATURES = {
     "C_dubliniensis_CD36": ["Cd36-mtDNA"],
     "C_glabrata_CBS138": ["ChrMT", "Mito"],
     "C_parapsilosis_CDC317": ["ChrMT"],
-    "C_tropicalis_MYA-3404": [],
+    "C_tropicalis": [],
 }
 
 # Configure logging

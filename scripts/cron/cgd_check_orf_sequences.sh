@@ -44,7 +44,7 @@ run_check C_dubliniensis_CD36
 run_check C_glabrata_CBS138
 run_check C_parapsilosis_CDC317
 run_check C_auris_B8441
-run_check C_tropicalis_MYA-3404
+run_check C_tropicalis
 
 echo "========================================"
 

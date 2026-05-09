@@ -47,7 +47,7 @@ run_embl C_auris_B8441
 run_embl C_dubliniensis_CD36
 run_embl C_glabrata_CBS138
 run_embl C_parapsilosis_CDC317
-run_embl C_tropicalis_MYA-3404
+run_embl C_tropicalis
 
 echo ""
 echo "========================================"

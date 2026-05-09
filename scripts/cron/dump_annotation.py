@@ -94,8 +94,8 @@ STRAIN_CONFIGS = {
         "seq_source": "C. parapsilosis CDC317",
         "taxon_id": "578454",
     },
-    "C_tropicalis_MYA-3404": {
-        "seq_source": "C. tropicalis MYA-3404",
+    "C_tropicalis": {
+        "seq_source": "C. tropicalis",
         "taxon_id": "294747",
     },
 }
