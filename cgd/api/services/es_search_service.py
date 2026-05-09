@@ -15,6 +15,7 @@ from cgd.core.elasticsearch import INDEX_NAME, get_es_client
 from cgd.schemas.search_schema import (
     SearchResult,
     SearchResponse,
+    SearchResultLink,
     AutocompleteSuggestion,
     AutocompleteResponse,
     CategorySearchResponse,
@@ -64,6 +65,42 @@ def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
         return f"<mark>{match.group(0)}</mark>"
 
     return pattern.sub(replacer, text)
+
+
+def _build_reference_links(dbxref_id: Optional[str], pubmed: Optional[str]) -> list[SearchResultLink]:
+    """
+    Build citation links for a reference in ES search results.
+
+    Generates links for:
+    - CGD Paper (internal link to reference page)
+    - PubMed (external link to NCBI PubMed)
+
+    Args:
+        dbxref_id: CGD reference ID (e.g., CAL0125222)
+        pubmed: PubMed ID
+
+    Returns:
+        List of SearchResultLink objects
+    """
+    links = []
+
+    # CGD Paper link (always present if we have dbxref_id)
+    if dbxref_id:
+        links.append(SearchResultLink(
+            name="CGD Paper",
+            url=f"/reference/{dbxref_id}",
+            link_type="internal"
+        ))
+
+    # PubMed link (if pubmed ID exists)
+    if pubmed:
+        links.append(SearchResultLink(
+            name="PubMed",
+            url=f"https://pubmed.ncbi.nlm.nih.gov/{pubmed}",
+            link_type="external"
+        ))
+
+    return links
 
 
 def _build_wildcard_query_for_match_mode(
@@ -1323,6 +1360,9 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         # For paper_titles, use title as citation (contains full formatted citation)
         citation_text = title if category == "paper_titles" else citation
 
+        # Build links for CGD Paper and PubMed
+        links = _build_reference_links(dbxref_id, pubmed)
+
         return TextSearchResult(
             category=result_category,
             id=dbxref_id or "",
@@ -1331,6 +1371,7 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
             link=source.get("link") or f"/reference/{dbxref_id}",
             organism=None,
             match_context=match_context,
+            links=links,
             highlighted_name=_highlight_text(name, query),
             highlighted_description=match_context,
             citation=citation_text,
@@ -1360,18 +1401,27 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
     elif doc_type == "author":
         author_name = source.get("author_name") or source.get("name")
         citation = source.get("citation")
+        pubmed = source.get("pubmed")
+        link = source.get("link")
+
+        # Extract dbxref_id from link (format: /reference/CAL0125222)
+        dbxref_id = link.split("/")[-1] if link and link.startswith("/reference/") else None
 
         highlighted_name = _extract_highlight(highlights, "author_name", None)
         if not highlighted_name:
             highlighted_name = _highlight_text(author_name, query)
+
+        # Build links for CGD Paper and PubMed
+        links = _build_reference_links(dbxref_id, pubmed)
 
         return TextSearchResult(
             category="authors",
             id=source.get("id", ""),
             name=author_name or "",
             description=citation,
-            link=source.get("link"),
+            link=link,
             organism=None,
+            links=links,
             highlighted_name=highlighted_name,
             highlighted_description=_highlight_text(citation, query) if citation else None,
         )
@@ -1488,6 +1538,10 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         topic = source.get("literature_topic")
         citation = source.get("citation")
         pubmed = source.get("pubmed")
+        link = source.get("link")
+
+        # Extract dbxref_id from link (format: /reference/CAL0125222)
+        dbxref_id = link.split("/")[-1] if link and link.startswith("/reference/") else None
 
         name = f"PMID:{pubmed}" if pubmed else source.get("name", "")
 
@@ -1495,13 +1549,17 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         if not highlighted_name:
             highlighted_name = _highlight_text(topic, query)
 
+        # Build links for CGD Paper and PubMed
+        links = _build_reference_links(dbxref_id, pubmed)
+
         return TextSearchResult(
             category="literature_topics",
             id=source.get("id", ""),
             name=name,
             description=f"{topic}: {citation}" if citation else topic,
-            link=source.get("link"),
+            link=link,
             organism=None,
+            links=links,
             highlighted_name=highlighted_name,
             highlighted_description=_highlight_text(citation, query) if citation else None,
         )
