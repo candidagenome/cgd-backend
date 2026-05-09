@@ -33,8 +33,8 @@ fi
 cd "$PROJECT_ROOT"
 
 # Arrays to track results
-declare -a SPECIES_LIST=("C_albicans" "C_dubliniensis" "C_glabrata" "C_parapsilosis" "C_auris")
-declare -a SPECIES_QUERIES=("Candida AND albicans" "Candida AND dubliniensis" "Candida AND glabrata" "Candida AND parapsilosis" "Candida AND auris")
+declare -a SPECIES_LIST=("C_albicans" "C_dubliniensis" "C_glabrata" "C_parapsilosis" "C_auris" "C_tropicalis")
+declare -a SPECIES_QUERIES=("Candida AND albicans" "Candida AND dubliniensis" "Candida AND glabrata" "Candida AND parapsilosis" "Candida AND auris" "Candida AND tropicalis")
 declare -a LOG_FILES=()
 declare -a REFS_LOADED=()
 declare -a ERRORS=()
@@ -76,7 +76,7 @@ echo "Loading ref_temp entries..."
 echo "----------------------------------------"
 
 # Load ref_temp for species and synonyms
-REF_TEMP_QUERIES=("albicans" "glabrata" "dubliniensis" "parapsilosis" "auris" "Torulopsis" "Candida" "Nakaseomyces AND glabratus" "Nakaseomyces AND glabrata" "Candidozyma AND auris" "Candida AND krusei" "Pichia AND kudriavzevii")
+REF_TEMP_QUERIES=("albicans" "glabrata" "dubliniensis" "parapsilosis" "auris" "tropicalis" "Torulopsis" "Candida" "Nakaseomyces AND glabratus" "Nakaseomyces AND glabrata" "Candidozyma AND auris" "Candida AND krusei" "Pichia AND kudriavzevii")
 REF_TEMP_SUCCESS=0
 REF_TEMP_TOTAL=${#REF_TEMP_QUERIES[@]}
 
@@ -86,6 +86,7 @@ python3 "$SCRIPT_DIR/load_ref_temp.py" --query "glabrata" \
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "dubliniensis" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "parapsilosis" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "auris" && ((REF_TEMP_SUCCESS++)) || true
+python3 "$SCRIPT_DIR/load_ref_temp.py" --query "tropicalis" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Torulopsis" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida" --exclude "Folsomia" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabratus" && ((REF_TEMP_SUCCESS++)) || true
