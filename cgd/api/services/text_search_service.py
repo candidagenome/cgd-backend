@@ -1079,6 +1079,50 @@ def search_abstracts(
     return results
 
 
+def _build_citation_string(db: Session, ref: Reference) -> str:
+    """
+    Build a citation string from reference fields.
+
+    Format: "Author1, Author2, ... (Year) Title. Journal Volume:Pages"
+    """
+    parts = []
+
+    # Get authors ordered by author_order
+    author_names = (
+        db.query(Author.author_name)
+        .join(AuthorEditor, Author.author_no == AuthorEditor.author_no)
+        .filter(AuthorEditor.reference_no == ref.reference_no)
+        .order_by(AuthorEditor.author_order)
+        .all()
+    )
+    if author_names:
+        names = [a[0] for a in author_names if a[0]]
+        if len(names) > 3:
+            parts.append(f"{names[0]}, et al.")
+        elif names:
+            parts.append(", ".join(names))
+
+    # Add year
+    if ref.year:
+        parts.append(f"({ref.year})")
+
+    # Add title
+    if ref.title:
+        parts.append(ref.title)
+
+    # Add journal info
+    if ref.journal:
+        journal_part = ref.journal.abbreviation or ref.journal.full_name or ""
+        if ref.volume:
+            journal_part += f" {ref.volume}"
+        if ref.page:
+            journal_part += f":{ref.page}"
+        if journal_part.strip():
+            parts.append(journal_part.strip())
+
+    return " ".join(parts) if parts else ""
+
+
 def search_paper_titles(
     db: Session,
     query: str,
@@ -1107,6 +1151,7 @@ def search_paper_titles(
     # Order by exact phrase match first
     ref_query = (
         db.query(Reference)
+        .options(joinedload(Reference.journal))
         .filter(
             Reference.title.isnot(None),
             title_filter
@@ -1119,8 +1164,10 @@ def search_paper_titles(
         # Use PMID as ID if available, otherwise CGD ID
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
-        # Use citation from database - it contains the full formatted citation
-        citation_text = ref.citation or ""
+        # Build citation from fields if database citation is empty
+        citation_text = ref.citation
+        if not citation_text or citation_text.strip() == "":
+            citation_text = _build_citation_string(db, ref)
 
         # Get ref_url for building links
         ref_urls = (
