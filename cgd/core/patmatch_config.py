@@ -192,6 +192,13 @@ _register_organism_datasets(
     [""]
 )
 
+# Register C. tropicalis MYA-3404
+_register_organism_datasets(
+    "C_tropicalis",
+    "C. tropicalis MYA-3404",
+    [""]
+)
+
 
 def get_available_datasets(pattern_type: Optional[PatternType] = None) -> List[DatasetConfig]:
     """
