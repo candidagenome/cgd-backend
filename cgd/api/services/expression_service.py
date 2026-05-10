@@ -1603,6 +1603,26 @@ ORGANISM_TO_HTS_KEY = {
     "Candida parapsilosis CDC317": "C_parapsilosis_CDC317",
 }
 
+# Reverse mapping from HTS directory keys to database organism names
+HTS_KEY_TO_ORGANISM = {v: k for k, v in ORGANISM_TO_HTS_KEY.items()}
+
+
+def _get_organism_no_from_key(db: Session, organism_key: str) -> Optional[int]:
+    """
+    Get organism_no from HTS directory key (e.g., 'C_albicans_SC5314').
+
+    Returns the organism_no or None if not found.
+    """
+    organism_name = HTS_KEY_TO_ORGANISM.get(organism_key)
+    if not organism_name:
+        return None
+
+    organism = db.query(Organism).filter(
+        Organism.organism_name == organism_name
+    ).first()
+
+    return organism.organism_no if organism else None
+
 
 def _get_expression_for_organism(
     db: Session,
@@ -2354,6 +2374,9 @@ def get_similar_expression_genes(
             error=f"No expression studies configured for organism: {organism}"
         )
 
+    # Get organism_no for downstream analysis (e.g., GO Term Finder)
+    organism_no = _get_organism_no_from_key(db, organism_key)
+
     # Find the query gene feature
     query_feature = (
         db.query(Feature)
@@ -2411,6 +2434,7 @@ def get_similar_expression_genes(
             query_gene=query_feature.gene_name or query_feature.feature_name,
             query_feature_name=query_feature.feature_name,
             organism=organism,
+            organism_no=organism_no,
             metric=metric,
             similar_genes=similar_genes,
             total_genes_compared=len(cached_correlations),
@@ -2561,6 +2585,7 @@ def get_similar_expression_genes(
         query_gene=query_feature.gene_name or query_feature.feature_name,
         query_feature_name=query_feature.feature_name,
         organism=organism,
+        organism_no=organism_no,
         metric=metric,
         similar_genes=similar_genes,
         total_genes_compared=len(correlations),
