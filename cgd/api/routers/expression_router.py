@@ -4,6 +4,7 @@ Expression Data API Router.
 Provides endpoints for gene expression analysis from RNA-seq data.
 """
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
@@ -12,6 +13,7 @@ from cgd.api.services.expression_service import (
     get_expression_config,
     get_similar_expression_genes,
     get_batch_expression_data,
+    generate_expression_matrix_csv,
 )
 from cgd.schemas.expression_schema import (
     GeneExpressionResponse,
@@ -19,6 +21,7 @@ from cgd.schemas.expression_schema import (
     SimilarGenesResponse,
     BatchExpressionRequest,
     BatchExpressionResponse,
+    ExpressionMatrixRequest,
 )
 
 router = APIRouter(prefix="/api/expression", tags=["Expression"])
@@ -143,3 +146,49 @@ def get_batch_expression(
 ) -> BatchExpressionResponse:
     """Get expression data for multiple genes in batch."""
     return get_batch_expression_data(db, request.gene_names, request.organism)
+
+
+@router.post(
+    "/matrix/download",
+    response_class=Response,
+    summary="Download expression matrix as TSV",
+    description="""
+    Downloads expression data as a gene × condition matrix in TSV format.
+
+    The matrix contains:
+    - **Rows**: Genes (one per row)
+    - **Columns**: Experimental conditions (organized by study)
+    - **Values**: Fold change values relative to control
+
+    **Request body:**
+    - gene_names: List of gene names to include (max 200)
+    - organism: Organism display name
+    - include_metadata: Include description and correlation columns
+    - correlations: Optional dict of gene → correlation value
+    """
+)
+def download_expression_matrix(
+    request: ExpressionMatrixRequest,
+    db: Session = Depends(get_db)
+) -> Response:
+    """Download expression matrix as TSV file."""
+    content = generate_expression_matrix_csv(
+        db,
+        request.gene_names,
+        request.organism,
+        request.include_metadata,
+        request.correlations
+    )
+
+    # Generate filename
+    gene_count = len(request.gene_names)
+    first_gene = request.gene_names[0] if request.gene_names else "genes"
+    filename = f"expression_matrix_{first_gene}_{gene_count}genes.tsv"
+
+    return Response(
+        content=content,
+        media_type="text/tab-separated-values",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )

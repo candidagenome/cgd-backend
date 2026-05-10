@@ -3,7 +3,7 @@ Expression Data Schemas.
 """
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 
 
@@ -169,3 +169,28 @@ class BatchExpressionResponse(BaseModel):
     genes_found: int = Field(0, description="Number of genes with data")
     genes_missing: int = Field(0, description="Number of genes without data")
     computation_time_ms: float = Field(0.0, description="Time taken in ms")
+
+
+# ============================================================================
+# Expression Matrix Download
+# ============================================================================
+
+class ExpressionMatrixRequest(BaseModel):
+    """Request for expression matrix download."""
+    gene_names: List[str] = Field(
+        description="List of gene names to include in matrix",
+        min_length=1,
+        max_length=200
+    )
+    organism: str = Field(
+        default="Candida albicans SC5314",
+        description="Organism display name"
+    )
+    include_metadata: bool = Field(
+        default=True,
+        description="Include gene metadata columns (description, correlation)"
+    )
+    correlations: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Optional correlation values for each gene (from similar genes)"
+    )

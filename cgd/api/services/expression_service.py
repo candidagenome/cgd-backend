@@ -2681,3 +2681,125 @@ def get_batch_expression_data(
         genes_missing=genes_missing,
         computation_time_ms=round(computation_time, 2)
     )
+
+
+def generate_expression_matrix_csv(
+    db: Session,
+    gene_names: List[str],
+    organism: str = "Candida albicans SC5314",
+    include_metadata: bool = True,
+    correlations: Optional[Dict[str, float]] = None,
+) -> str:
+    """
+    Generate a CSV expression matrix for multiple genes.
+
+    The matrix has:
+    - Rows: genes (one per row)
+    - Columns: conditions (organized by study)
+    - Values: fold change values
+
+    Args:
+        db: Database session
+        gene_names: List of gene names to include
+        organism: Organism display name
+        include_metadata: Include gene description and correlation columns
+        correlations: Optional dict mapping gene names to correlation values
+
+    Returns:
+        CSV string with expression matrix
+    """
+    from datetime import datetime
+    import csv
+    import io
+
+    # Get batch expression data
+    batch_response = get_batch_expression_data(db, gene_names, organism)
+
+    if not batch_response.success or not batch_response.results:
+        return "# Error: No expression data available\n"
+
+    # Build condition list from all genes' data
+    # condition_key = "study_id|condition_id" for uniqueness
+    all_conditions = []  # List of (study_id, condition_id, label, category)
+    condition_set = set()
+
+    for gene_result in batch_response.results:
+        if gene_result.data and gene_result.data.studies:
+            for study in gene_result.data.studies:
+                for condition in study.conditions:
+                    key = f"{study.study_id}|{condition.condition_id}"
+                    if key not in condition_set:
+                        condition_set.add(key)
+                        all_conditions.append((
+                            study.study_id,
+                            condition.condition_id,
+                            condition.label,
+                            study.category
+                        ))
+
+    # Sort conditions by study, then by condition id
+    all_conditions.sort(key=lambda x: (x[0], x[1]))
+
+    # Build CSV
+    output = io.StringIO()
+
+    # Header comments
+    output.write(f"# Expression Matrix\n")
+    output.write(f"# Organism: {organism}\n")
+    output.write(f"# Genes: {len(gene_names)}\n")
+    output.write(f"# Conditions: {len(all_conditions)}\n")
+    output.write(f"# Data type: Fold Change (vs control)\n")
+    output.write(f"# Generated: {datetime.now().isoformat()}\n")
+    output.write(f"#\n")
+
+    # Build header row
+    header = ["Gene", "Feature Name"]
+    if include_metadata:
+        header.append("Description")
+        if correlations:
+            header.append("Correlation")
+
+    # Add condition columns (format: "Study|Condition Label")
+    for study_id, cond_id, label, category in all_conditions:
+        header.append(f"{study_id}|{label}")
+
+    output.write("\t".join(header) + "\n")
+
+    # Build data rows
+    for gene_result in batch_response.results:
+        gene_name = gene_result.gene_name
+        if not gene_result.data:
+            continue
+
+        data = gene_result.data
+        row = [
+            data.gene_name or gene_name,
+            data.feature_name or ""
+        ]
+
+        if include_metadata:
+            row.append(data.description or "")
+            if correlations:
+                corr = correlations.get(gene_name, "")
+                row.append(str(corr) if corr != "" else "")
+
+        # Build fold change lookup for this gene
+        fc_lookup = {}  # key = "study_id|condition_id" -> fold_change
+        if data.studies:
+            for study in data.studies:
+                for condition in study.conditions:
+                    key = f"{study.study_id}|{condition.condition_id}"
+                    fc_lookup[key] = condition.fold_change
+
+        # Add fold change values for each condition
+        for study_id, cond_id, label, category in all_conditions:
+            key = f"{study_id}|{cond_id}"
+            fc = fc_lookup.get(key)
+            if fc is not None:
+                row.append(f"{fc:.4f}")
+            else:
+                row.append("")  # Missing data
+
+        output.write("\t".join(row) + "\n")
+
+    return output.getvalue()
