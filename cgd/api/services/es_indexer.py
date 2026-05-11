@@ -745,6 +745,7 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                         "ortholog_name": orth_name,
                         "ortholog_feature_name": ortholog.feature_name,
                         "ortholog_organism": orth_organism,
+                        "ortholog_dbxref_id": ortholog.dbxref_id,  # Ortholog's own CGDID
                         "ortholog_display": f"{short_organism} {ortholog.feature_name}/{orth_name}",
                         "ortholog_type": "Ortholog",
                         "ortholog_source": hg.method,  # "CGOB" or "BLAST"

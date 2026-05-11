@@ -398,6 +398,7 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     ortholog_feature = source.get("ortholog_feature_name")
     ortholog_organism = source.get("ortholog_organism")
     ortholog_type = source.get("ortholog_type", "Ortholog")
+    ortholog_dbxref_id = source.get("ortholog_dbxref_id")  # Ortholog's own CGDID
 
     # Display name: show ortholog gene/feature name
     # Use "name/feature" format when both exist and are different (like locus page)
@@ -415,7 +416,7 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
 
     return SearchResult(
         category="orthologs",
-        id=cgd_gene_id or "",
+        id=ortholog_dbxref_id or cgd_gene_id or "",  # Show ortholog's own CGDID
         name=display_name,
         description=None,
         link=ortholog_link,
