@@ -1525,34 +1525,35 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         )
 
     elif doc_type == "ortholog":
-        # Show ortholog gene info (not the C. albicans gene)
-        cgd_gene_name = source.get("cgd_gene_name")
-        ortholog_name = source.get("ortholog_name")
-        ortholog_feature = source.get("ortholog_feature_name")
-        ortholog_organism = source.get("ortholog_organism")
+        # Each document is one gene in an ortholog group
+        gene_name = source.get("gene_name")
+        feature_name = source.get("feature_name")
+        organism = source.get("organism")
+        related_orthologs = source.get("related_orthologs", [])
 
         # Display name: use "name/feature" format when both exist and are different
-        if ortholog_name and ortholog_feature and ortholog_name != ortholog_feature:
-            display_name = f"{ortholog_name}/{ortholog_feature}"
+        if gene_name and feature_name and gene_name != feature_name:
+            display_name = f"{gene_name}/{feature_name}"
         else:
-            display_name = ortholog_name or ortholog_feature or ""
+            display_name = gene_name or feature_name or ""
 
         highlighted_name = _highlight_text(display_name, query)
 
-        # Link to the ortholog's locus page, not the CGD gene
-        ortholog_link = f"/locus/{ortholog_feature}" if ortholog_feature else source.get("link")
+        # Link to the gene's locus page
+        gene_link = f"/locus/{feature_name}" if feature_name else source.get("link")
 
         return TextSearchResult(
             category="orthologs",
-            id=source.get("id", ""),
+            id=source.get("dbxref_id") or source.get("id", ""),
             name=display_name,
             description=None,
-            link=ortholog_link,
-            organism=ortholog_organism,  # Show ortholog organism
+            link=gene_link,
+            organism=organism,
             homology_group_no=source.get("homology_group_no"),
             highlighted_name=highlighted_name,
             highlighted_description=None,
-            ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
+            ortholog_display=display_name,  # Unique per gene for AG Grid row deduplication
+            related_orthologs=related_orthologs,  # Other genes in the ortholog group
         )
 
     elif doc_type == "literature_topic":
@@ -2193,21 +2194,21 @@ def text_search(
 
         # Step 13: Override orthologs count with wildcard query
         if "ortholog" in type_counts:
-            # Search by both CGD gene name and ortholog name using wildcard
-            # Include CGOB and BLAST (no SGD best hits)
-            # Show all orthologs in cluster (transitive) - don't filter by organism
-            cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
-            ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
+            # Search ortholog groups by any gene name or feature name in the group
+            # Each document is one gene in an ortholog group; searching returns all
+            # members of groups where any member matches the query
+            all_genes_wildcard = _build_wildcard_query_for_match_mode("all_gene_names", query, match_mode)
+            all_features_wildcard = _build_wildcard_query_for_match_mode("all_feature_names", query, match_mode)
             ortholog_wc_query = {
                 "query": {
                     "bool": {
                         "must": [
                             {"term": {"type": "ortholog"}},
-                            {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
+                            {"terms": {"ortholog_source": ["CGOB", "BLAST RBH"]}},
                         ],
                         "should": [
-                            cgd_gene_wildcard,
-                            ortholog_name_wildcard,
+                            all_genes_wildcard,
+                            all_features_wildcard,
                         ],
                         "minimum_should_match": 1,
                     }
