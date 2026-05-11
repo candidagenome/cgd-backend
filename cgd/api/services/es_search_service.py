@@ -1087,26 +1087,29 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
 
     if es_type == "ortholog":
         # For orthologs, search by both CGD gene name and ortholog name
-        # This finds all orthologs of a gene (e.g., HOG1 finds all 4 Candida orthologs)
-        # Filter to C. albicans as reference; include CGOB and BLAST (no SGD best hits)
+        # This finds all orthologs of a gene (e.g., HOG1 finds all Candida orthologs)
+        # Show all orthologs in cluster (transitive) - don't filter by organism
         # Use wildcard instead of match to avoid partial word matches (e.g., "3" matching POX1-3)
         return {
             "query": {
                 "bool": {
                     "must": [
                         {"term": {"type": "ortholog"}},
-                        {"term": {"organism": "Candida albicans SC5314"}},
                         {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                     ],
                     "should": [
-                        # Match CGD gene name (finds all orthologs of the C. albicans gene)
+                        # Match CGD gene name (source gene)
                         {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 15}}},
                         {"prefix": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
                         {"wildcard": {"cgd_gene_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
-                        # Match ortholog name
+                        # Match CGD feature name (source gene)
+                        {"term": {"cgd_feature_name": {"value": query_upper, "boost": 15}}},
+                        # Match ortholog name (target gene)
                         {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 15}}},
                         {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
                         {"wildcard": {"ortholog_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
+                        # Match ortholog feature name (target gene)
+                        {"term": {"ortholog_feature_name": {"value": query_upper, "boost": 15}}},
                     ],
                     "minimum_should_match": 1,
                 }
@@ -1115,7 +1118,9 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
             "highlight": {
                 "fields": {
                     "ortholog_name": {},
+                    "ortholog_feature_name": {},
                     "cgd_gene_name": {},
+                    "cgd_feature_name": {},
                 },
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
@@ -2190,7 +2195,7 @@ def text_search(
         if "ortholog" in type_counts:
             # Search by both CGD gene name and ortholog name using wildcard
             # Include CGOB and BLAST (no SGD best hits)
-            # Filter to C. albicans as reference organism (consistent with locus page)
+            # Show all orthologs in cluster (transitive) - don't filter by organism
             cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
             ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
             ortholog_wc_query = {
@@ -2199,7 +2204,6 @@ def text_search(
                         "must": [
                             {"term": {"type": "ortholog"}},
                             {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
-                            {"term": {"organism": "Candida albicans SC5314"}},
                         ],
                         "should": [
                             cgd_gene_wildcard,
@@ -2483,7 +2487,7 @@ def text_search_category(
     elif category == "orthologs":
         # Search by both CGD gene name and ortholog name using wildcard
         # Include CGOB and BLAST (no SGD best hits)
-        # Filter to C. albicans as reference organism (consistent with locus page)
+        # Show all orthologs in cluster (transitive) - don't filter by organism
         cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
         ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
         es_query = {
@@ -2492,7 +2496,6 @@ def text_search_category(
                     "must": [
                         {"term": {"type": "ortholog"}},
                         {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
-                        {"term": {"organism": "Candida albicans SC5314"}},
                     ],
                     "should": [
                         cgd_gene_wildcard,
