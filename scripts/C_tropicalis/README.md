@@ -50,7 +50,16 @@ python scripts/C_tropicalis/load_genes_and_sequences.py \
 
 Loads gene features from GFF and protein sequences from FASTA.
 
-### 3. Load Feature Coordinates
+### 3. Add Feature Qualifiers
+
+```bash
+python scripts/C_tropicalis/add_feature_qualifiers.py [--dry-run]
+```
+
+Adds `feature_qualifier = 'Uncharacterized'` to all C. tropicalis ORFs. This is required
+for the Genome Snapshot page to display the ORF distribution pie chart correctly.
+
+### 4. Load Feature Coordinates
 
 ```bash
 python scripts/C_tropicalis/load_coordinates.py \
@@ -61,7 +70,7 @@ python scripts/C_tropicalis/load_coordinates.py \
 
 Creates chromosome/scaffold features and loads chromosomal coordinates into `feat_location`.
 
-### 4. Load Genomic DNA Sequences
+### 5. Load Genomic DNA Sequences
 
 ```bash
 python scripts/C_tropicalis/load_genomic_sequences.py \
@@ -72,7 +81,7 @@ python scripts/C_tropicalis/load_genomic_sequences.py \
 
 Extracts and loads genomic DNA sequences (with introns) for each gene.
 
-### 5. Load CDS and Intron Features
+### 6. Load CDS and Intron Features
 
 ```bash
 python scripts/C_tropicalis/load_cds_and_introns.py \
@@ -85,7 +94,7 @@ Creates CDS and intron features with:
 - `FEAT_RELATIONSHIP` linking to parent gene (`relationship_type='part of'`, `rank=2`)
 - `FEAT_LOCATION` with chromosomal coordinates
 
-### 6. Load Gene Descriptions
+### 7. Load Gene Descriptions
 
 ```bash
 python scripts/C_tropicalis/load_descriptions.py \
@@ -95,7 +104,7 @@ python scripts/C_tropicalis/load_descriptions.py \
 
 Loads gene descriptions derived from C. albicans ortholog data into `feature.headline`.
 
-### 7. Load Orthologs
+### 8. Load Orthologs
 
 ```bash
 python scripts/C_tropicalis/load_orthologs.py \
@@ -105,7 +114,7 @@ python scripts/C_tropicalis/load_orthologs.py \
 
 Loads ortholog relationships (BLAST reciprocal best hits) to 5 Candida species via `homology_group` and `feat_homology` tables.
 
-### 8. Load Protein Domains
+### 9. Load Protein Domains
 
 ```bash
 python scripts/C_tropicalis/load_protein_domains.py \
@@ -115,7 +124,7 @@ python scripts/C_tropicalis/load_protein_domains.py \
 
 Loads protein domains from InterProScan TSV into `dbxref` and `dbxref_feat` tables.
 
-### 9. Load GO Annotations
+### 10. Load GO Annotations
 
 ```bash
 python scripts/C_tropicalis/load_go_annotations.py \
@@ -190,6 +199,7 @@ After loading, the following data should be present:
 | Feature Locations (introns) | 163 | Calculated from CDS coordinates |
 | Feature Relationships | 6,818 | Generated during CDS/intron loading |
 | **Annotations** | | |
+| Feature Qualifiers | 6,403 | All ORFs set as 'Uncharacterized' |
 | Gene Descriptions | 5,246 | C. albicans ortholog data (reciprocal best hits) |
 | Ortholog Entries | 23,167 | BLAST reciprocal best hits (5 species) |
 | Homology Groups | 23,167 | BLAST reciprocal best hits |
@@ -216,7 +226,7 @@ After loading protein domain data into the database, set up JBrowse2 to display 
 
 ### Prerequisites
 
-- InterProScan TSV results loaded into `protein_detail` table (Step 8 above)
+- InterProScan TSV results loaded into `protein_detail` table (Step 9 above)
 - Protein FASTA file
 - Access to the frontend server (`cgd-frontend-dev` or production)
 - Tools: `samtools`, `bgzip`, `tabix`
