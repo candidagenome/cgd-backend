@@ -881,6 +881,31 @@ class LitGuideCurationService:
             property_type,
         )
 
+        # If the feature was previously unlinked, remove it from RefUnlink
+        # This ensures re-curated features are properly re-linked
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if reference and reference.pubmed:
+            unlink_entry = (
+                self.db.query(RefUnlink)
+                .filter(
+                    RefUnlink.pubmed == reference.pubmed,
+                    RefUnlink.tab_name == "FEATURE",
+                    RefUnlink.primary_key == feature.feature_no,
+                )
+                .first()
+            )
+            if unlink_entry:
+                self.db.delete(unlink_entry)
+                self.db.commit()
+                logger.info(
+                    f"Removed feature {feature.feature_name} from RefUnlink for "
+                    f"pubmed {reference.pubmed} (re-linked via topic assignment)"
+                )
+
         return {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
