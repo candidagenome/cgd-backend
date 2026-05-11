@@ -506,12 +506,11 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
         # Fallback to generic name match
         should_clauses = [{"match": {"name": {"query": query}}}]
 
-    # Build must clauses - add C. albicans and CGOB filters for orthologs
+    # Build must clauses - add CGOB filter for orthologs
     must_clauses = [{"term": {"type": doc_type}}]
     if doc_type == "ortholog":
-        # Filter to only C. albicans as the reference organism for clearer display
         # Include CGOB (curated orthologs) and BLAST (best hits), but not SGD
-        must_clauses.append({"term": {"organism": "Candida albicans SC5314"}})
+        # Don't filter by organism - show ALL orthologs in the cluster (transitive)
         must_clauses.append({"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}})
 
     return {
