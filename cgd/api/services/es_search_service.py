@@ -511,7 +511,7 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
         # Filter to only C. albicans as the reference organism for clearer display
         # Include CGOB (curated orthologs) and BLAST (best hits), but not SGD
         must_clauses.append({"term": {"organism": "Candida albicans SC5314"}})
-        must_clauses.append({"terms": {"ortholog_source": ["CGOB", "BLAST"]}})
+        must_clauses.append({"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}})
 
     return {
         "query": {
@@ -1096,7 +1096,7 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                     "must": [
                         {"term": {"type": "ortholog"}},
                         {"term": {"organism": "Candida albicans SC5314"}},
-                        {"terms": {"ortholog_source": ["CGOB", "BLAST"]}},
+                        {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                     ],
                     "should": [
                         # Match CGD gene name (finds all orthologs of the C. albicans gene)
@@ -2198,7 +2198,7 @@ def text_search(
                     "bool": {
                         "must": [
                             {"term": {"type": "ortholog"}},
-                            {"terms": {"ortholog_source": ["CGOB", "BLAST"]}},
+                            {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                             {"term": {"organism": "Candida albicans SC5314"}},
                         ],
                         "should": [
@@ -2491,7 +2491,7 @@ def text_search_category(
                 "bool": {
                     "must": [
                         {"term": {"type": "ortholog"}},
-                        {"terms": {"ortholog_source": ["CGOB", "BLAST"]}},
+                        {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                         {"term": {"organism": "Candida albicans SC5314"}},
                     ],
                     "should": [
