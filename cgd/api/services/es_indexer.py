@@ -652,11 +652,15 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
     - One of its orthologs (from another CGD organism OR external DB like SGD)
 
     For a gene with 4 CGD orthologs + 1 SGD ortholog = 5 documents.
+
+    Includes both:
+    - CGOB orthologs (curated ortholog groups)
+    - BLAST best hits (computed best hits between CGD species)
     """
     a21_exclude = _get_a21_exclusion_set(db)
 
-    # Get CGOB homology groups
-    homology_groups = (
+    # Get CGOB homology groups (curated orthologs)
+    cgob_homology_groups = (
         db.query(HomologyGroup)
         .filter(
             HomologyGroup.method == 'CGOB',
@@ -664,6 +668,20 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
         )
         .all()
     )
+
+    # Get BLAST best hit homology groups (computed best hits)
+    # These have homology_group_type like 'best hit for Candida albicans SC5314'
+    blast_homology_groups = (
+        db.query(HomologyGroup)
+        .filter(
+            HomologyGroup.method == 'BLAST',
+            HomologyGroup.homology_group_type.like('best hit for %')
+        )
+        .all()
+    )
+
+    # Combine both types
+    homology_groups = cgob_homology_groups + blast_homology_groups
 
     for hg in homology_groups:
         # Get all CGD features in this homology group
@@ -718,7 +736,7 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                         "ortholog_organism": orth_organism,
                         "ortholog_display": f"{short_organism} {ortholog.feature_name}/{orth_name}",
                         "ortholog_type": "Ortholog",
-                        "ortholog_source": "CGOB",
+                        "ortholog_source": hg.method,  # "CGOB" or "BLAST"
                         # For searching - search by ortholog name to find genes
                         "name": orth_name,
                         "gene_name": orth_name,
