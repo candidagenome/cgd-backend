@@ -384,10 +384,6 @@ def get_synteny_data(
         strand=query_loc.strand,
     )
 
-    # Find CGOB ortholog cluster for query gene
-    # This also checks alternate assembly versions (e.g., Assembly 22 vs Assembly 19)
-    cgob_cluster = _find_cgob_cluster_for_gene(db, query_feature)
-
     # Build synteny regions for each species
     synteny_regions: dict[str, SyntenyRegion] = {}
     ortholog_connections: dict[str, set] = {}  # ortholog_id -> set of feature_names
@@ -432,10 +428,16 @@ def get_synteny_data(
                         ortholog_connections[effective_id] = set()
                     ortholog_connections[effective_id].add(other_feat.feature_name)
 
-    if cgob_cluster:
-        # First, add orthologs from the query gene's direct cluster
-        # This sets the primary_ortholog_id
-        add_orthologs_from_cluster(cgob_cluster, use_unified_id=True)
+    # Get ALL ortholog clusters for the query gene (not just the first one)
+    # This is important for C. tropicalis which has separate pairwise BLAST RBH
+    # clusters for each species instead of one CGOB cluster containing all orthologs
+    all_query_clusters = _get_all_ortholog_clusters_for_feature(db, query_feature.feature_no)
+
+    if all_query_clusters:
+        # First, add orthologs from ALL of the query gene's direct clusters
+        # This sets the primary_ortholog_id from the first cluster
+        for cluster in all_query_clusters:
+            add_orthologs_from_cluster(cluster, use_unified_id=True)
 
         # Transitive lookup: for each ortholog found, check if they belong to
         # additional clusters (e.g., C. tropicalis -> C. albicans via BLAST RBH,
