@@ -405,9 +405,8 @@ def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     else:
         display_name = gene_name or feature_name or ""
 
+    # Only highlight the display name, not all_gene_names (which contains all names in group)
     highlighted_name = _extract_highlight(highlights, "gene_name", None)
-    if not highlighted_name:
-        highlighted_name = _extract_highlight(highlights, "all_gene_names", None)
     if not highlighted_name:
         highlighted_name = _highlight_text(display_name, query)
 
