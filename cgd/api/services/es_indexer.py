@@ -653,13 +653,20 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
     For a 6-organism ortholog group containing ACT1, searching "act1" or
     "CPAR2_201570" (C. parapsilosis ACT1) returns all 6 genes in the group.
 
-    Includes both:
+    Includes:
     - CGOB orthologs (curated ortholog groups)
     - BLAST RBH (reciprocal best hits between CGD species)
+    - BLAST (one-directional best hits)
+
+    Results are deduplicated by feature_no to avoid duplicate entries when a
+    gene appears in multiple ortholog groups.
     """
     a21_exclude = _get_a21_exclusion_set(db)
 
-    # Get CGOB homology groups (curated orthologs)
+    # Track which features we've already indexed to avoid duplicates
+    indexed_features: set[int] = set()
+
+    # Get CGOB homology groups (curated orthologs) - highest priority
     cgob_homology_groups = (
         db.query(HomologyGroup)
         .filter(
@@ -680,9 +687,20 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
         .all()
     )
 
-    # Combine CGOB (curated) + BLAST RBH
-    # Note: Excluding one-directional BLAST best hits to avoid duplication
-    homology_groups = cgob_homology_groups + blast_rbh_groups
+    # Get BLAST (one-directional best hits) homology groups
+    blast_groups = (
+        db.query(HomologyGroup)
+        .filter(
+            HomologyGroup.method == 'BLAST',
+            HomologyGroup.homology_group_type == 'ortholog'
+        )
+        .all()
+    )
+
+    # Combine all groups: CGOB first (highest priority), then BLAST RBH, then BLAST
+    # This ordering ensures that if a gene appears in multiple groups,
+    # the CGOB entry is indexed first and subsequent duplicates are skipped
+    homology_groups = cgob_homology_groups + blast_rbh_groups + blast_groups
 
     for hg in homology_groups:
         # Get all CGD features in this homology group
@@ -729,6 +747,13 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
 
         # Create one document per gene in the group
         for fh, gene in valid_features:
+            # Skip if we've already indexed this feature from a higher-priority group
+            if gene.feature_no in indexed_features:
+                continue
+
+            # Mark this feature as indexed
+            indexed_features.add(gene.feature_no)
+
             gene_name = gene.gene_name or gene.feature_name
             gene_organism = gene.organism.organism_name if gene.organism else None
             short_organism = _get_short_organism_name(gene_organism)
@@ -741,7 +766,7 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
 
             doc = {
                 "_index": INDEX_NAME,
-                "_id": f"ortholog_{hg.homology_group_no}_{gene.feature_no}",
+                "_id": f"ortholog_{gene.feature_no}",  # Use feature_no only for uniqueness
                 "_source": {
                     "type": "ortholog",
                     "id": gene.dbxref_id,
@@ -754,7 +779,7 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                     "name": gene_name,  # For display in search results
                     # Ortholog group info
                     "homology_group_no": hg.homology_group_no,
-                    "ortholog_source": hg.method,  # "CGOB" or "BLAST RBH"
+                    "ortholog_source": hg.method,  # "CGOB", "BLAST RBH", or "BLAST"
                     "group_size": len(valid_features),
                     # All names in group for searching (space-separated for text search)
                     "all_gene_names": " ".join(all_gene_names),

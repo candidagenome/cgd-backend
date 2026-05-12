@@ -382,53 +382,53 @@ def _parse_reference_result(hit: dict, query: str) -> SearchResult:
 def _parse_ortholog_result(hit: dict, query: str) -> SearchResult:
     """Parse ES hit into SearchResult for ortholog type.
 
-    Shows the ortholog gene info (from other Candida species), with a description
-    showing the relationship to the C. albicans gene.
+    Each document represents one gene in an ortholog group. The fields are:
+    - gene_name: this gene's name
+    - feature_name: this gene's feature name
+    - organism: this gene's organism
+    - all_gene_names: space-separated list of all gene names in the group
+    - related_orthologs: list of other orthologs in the group
     """
     source = hit["_source"]
     highlights = hit.get("highlight", {})
 
-    # CGD gene info (the C. albicans gene)
-    cgd_gene_name = source.get("cgd_gene_name") or source.get("gene_name") or source.get("name")
-    cgd_feature_name = source.get("cgd_feature_name") or source.get("feature_name")
-    cgd_gene_id = source.get("cgd_gene_id") or source.get("id")
+    # This gene's info
+    gene_name = source.get("gene_name")
+    feature_name = source.get("feature_name")
+    organism = source.get("organism")
+    dbxref_id = source.get("dbxref_id") or source.get("id")
+    ortholog_source = source.get("ortholog_source", "Ortholog")
 
-    # Ortholog info (the related gene from another Candida species)
-    ortholog_name = source.get("ortholog_name")
-    ortholog_feature = source.get("ortholog_feature_name")
-    ortholog_organism = source.get("ortholog_organism")
-    ortholog_type = source.get("ortholog_type", "Ortholog")
-    ortholog_dbxref_id = source.get("ortholog_dbxref_id")  # Ortholog's own CGDID
-
-    # Display name: show ortholog gene/feature name
-    # Use "name/feature" format when both exist and are different (like locus page)
-    if ortholog_name and ortholog_feature and ortholog_name != ortholog_feature:
-        display_name = f"{ortholog_name}/{ortholog_feature}"
+    # Display name: use "name/feature" format when both exist and are different
+    if gene_name and feature_name and gene_name != feature_name:
+        display_name = f"{gene_name}/{feature_name}"
     else:
-        display_name = ortholog_name or ortholog_feature or ""
+        display_name = gene_name or feature_name or ""
 
-    highlighted_name = _extract_highlight(highlights, "ortholog_name", None)
+    highlighted_name = _extract_highlight(highlights, "gene_name", None)
+    if not highlighted_name:
+        highlighted_name = _extract_highlight(highlights, "all_gene_names", None)
     if not highlighted_name:
         highlighted_name = _highlight_text(display_name, query)
 
-    # Link to the ortholog's locus page, not the CGD gene
-    ortholog_link = f"/locus/{ortholog_feature}" if ortholog_feature else source.get("link")
+    # Link to this gene's locus page
+    gene_link = f"/locus/{feature_name}" if feature_name else source.get("link")
 
     return SearchResult(
         category="orthologs",
-        id=ortholog_dbxref_id or cgd_gene_id or "",  # Show ortholog's own CGDID
+        id=dbxref_id or "",
         name=display_name,
         description=None,
-        link=ortholog_link,
-        organism=ortholog_organism,  # Show ortholog organism
+        link=gene_link,
+        organism=organism,
         highlighted_name=highlighted_name,
         highlighted_description=None,
-        # Relationship fields for frontend - ortholog_display used for unique row IDs
-        ortholog_display=display_name,  # Unique per ortholog for AG Grid row deduplication
-        ortholog_organism=ortholog_organism,
-        ortholog_type=ortholog_type,
-        cgd_gene_name=cgd_gene_name,
-        cgd_gene_id=cgd_gene_id,
+        # Relationship fields for frontend
+        ortholog_display=display_name,
+        ortholog_organism=organism,
+        ortholog_type=ortholog_source,
+        cgd_gene_name=gene_name,
+        cgd_gene_id=dbxref_id,
     )
 
 
@@ -496,20 +496,21 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
                 {"match": {"title": {"query": query, "boost": 5}}},
             ]
     elif doc_type == "ortholog":
+        # Search all_gene_names and all_feature_names to find matching ortholog groups
         should_clauses = [
-            {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-            {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
-            {"match": {"ortholog_name": {"query": query, "boost": 5}}},
+            {"wildcard": {"all_gene_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 10}}},
+            {"wildcard": {"all_feature_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
+            {"match": {"gene_name": {"query": query, "boost": 5}}},
         ]
 
     if not should_clauses:
         # Fallback to generic name match
         should_clauses = [{"match": {"name": {"query": query}}}]
 
-    # Build must clauses - add CGOB filter for orthologs
+    # Build must clauses - add CGOB/BLAST RBH/BLAST filter for orthologs
     must_clauses = [{"term": {"type": doc_type}}]
     if doc_type == "ortholog":
-        # Include CGOB (curated orthologs) and BLAST (best hits), but not SGD
+        # Include CGOB (curated), BLAST RBH (reciprocal best hits), and BLAST (best hits)
         # Don't filter by organism - show ALL orthologs in the cluster (transitive)
         must_clauses.append({"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}})
 
@@ -528,8 +529,9 @@ def _build_quick_search_type_query(query: str, doc_type: str, size: int = 20) ->
                 "feature_name": {},
                 "aliases": {},
                 "go_term": {},
-                                "observable": {},
-                "ortholog_name": {},
+                "observable": {},
+                "all_gene_names": {},
+                "all_feature_names": {},
                 "title": {},
             },
             "pre_tags": ["<mark>"],
@@ -569,10 +571,9 @@ def _build_quick_search_counts_query(query: str) -> dict:
         {"prefix": {"observable.keyword": {"value": query_lower, "boost": 8}}},
         {"match": {"observable": {"query": query, "boost": 5}}},
 
-        # Ortholog fields
-        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 8}}},
-        {"match": {"ortholog_name": {"query": query, "boost": 5}}},
+        # Ortholog fields - search all gene/feature names in the group
+        {"wildcard": {"all_gene_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 10}}},
+        {"wildcard": {"all_feature_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
 
         # Reference fields - search title
         {"match": {"title": {"query": query, "boost": 3}}},
@@ -913,7 +914,7 @@ def _build_category_query(query: str, es_type: str, size: int = 10000) -> dict:
         "pathway": ["pathway_name^3", "pathway_id", "related_genes"],
         "note": ["note_text^3", "gene_name", "feature_name"],
         "external_id": ["external_id^3", "source", "description", "gene_name"],
-        "ortholog": ["gene_name^3", "feature_name^2", "ortholog_name^3", "related_genes", "external_id"],
+        "ortholog": ["gene_name^3", "feature_name^2", "all_gene_names^3", "all_feature_names^2"],
         "literature_topic": ["literature_topic^3", "citation"],
     }
 
@@ -1060,8 +1061,8 @@ def _build_category_query(query: str, es_type: str, size: int = 10000) -> dict:
                 "pathway_name": {},
                 "note_text": {},
                 "external_id": {},
-                "ortholog_name": {},
-                "related_genes": {},
+                "all_gene_names": {},
+                "all_feature_names": {},
                 "literature_topic": {},
                 "name_description": {},
             },
@@ -1086,7 +1087,7 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
     query_upper = query.upper()
 
     if es_type == "ortholog":
-        # For orthologs, search by both CGD gene name and ortholog name
+        # For orthologs, search all_gene_names and all_feature_names to find matching groups
         # This finds all orthologs of a gene (e.g., HOG1 finds all Candida orthologs)
         # Show all orthologs in cluster (transitive) - don't filter by organism
         # Use wildcard instead of match to avoid partial word matches (e.g., "3" matching POX1-3)
@@ -1098,18 +1099,13 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
                         {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                     ],
                     "should": [
-                        # Match CGD gene name (source gene)
-                        {"term": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 15}}},
-                        {"prefix": {"cgd_gene_name.keyword": {"value": query_upper, "boost": 10}}},
-                        {"wildcard": {"cgd_gene_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
-                        # Match CGD feature name (source gene)
-                        {"term": {"cgd_feature_name": {"value": query_upper, "boost": 15}}},
-                        # Match ortholog name (target gene)
-                        {"term": {"ortholog_name.keyword": {"value": query_upper, "boost": 15}}},
-                        {"prefix": {"ortholog_name.keyword": {"value": query_upper, "boost": 10}}},
-                        {"wildcard": {"ortholog_name": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 8}}},
-                        # Match ortholog feature name (target gene)
-                        {"term": {"ortholog_feature_name": {"value": query_upper, "boost": 15}}},
+                        # Match any gene name in the ortholog group
+                        {"wildcard": {"all_gene_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 15}}},
+                        # Match any feature name in the ortholog group
+                        {"wildcard": {"all_feature_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 10}}},
+                        # Also match this gene's specific name/feature
+                        {"term": {"gene_name.keyword": {"value": query_upper, "boost": 15}}},
+                        {"term": {"feature_name": {"value": query_upper, "boost": 15}}},
                     ],
                     "minimum_should_match": 1,
                 }
@@ -1117,18 +1113,18 @@ def _build_restrictive_gene_query(query: str, es_type: str, size: int = 10000) -
             "size": size,
             "highlight": {
                 "fields": {
-                    "ortholog_name": {},
-                    "ortholog_feature_name": {},
-                    "cgd_gene_name": {},
-                    "cgd_feature_name": {},
+                    "gene_name": {},
+                    "feature_name": {},
+                    "all_gene_names": {},
+                    "all_feature_names": {},
                 },
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
             },
             "aggs": {
-                # Aggregate by ortholog organism (not CGD gene organism)
+                # Aggregate by organism
                 "by_organism": {
-                    "terms": {"field": "ortholog_organism", "size": 20}
+                    "terms": {"field": "organism", "size": 20}
                 }
             },
         }
@@ -1625,8 +1621,8 @@ def _get_text_search_fields() -> list[str]:
         "pathway_name",
         "note_text",
         "external_id",
-        "ortholog_name",
-        "related_genes",
+        "all_gene_names",
+        "all_feature_names",
         "literature_topic",
     ]
 
@@ -1696,7 +1692,8 @@ def _build_text_search_type_query(query: str, doc_type: str, size: int = 10) -> 
             "pathway_name": {},
             "note_text": {},
             "external_id": {},
-            "ortholog_name": {},
+            "all_gene_names": {},
+            "all_feature_names": {},
             "literature_topic": {},
             "dbxref_id": {},
         },
@@ -2204,7 +2201,7 @@ def text_search(
                     "bool": {
                         "must": [
                             {"term": {"type": "ortholog"}},
-                            {"terms": {"ortholog_source": ["CGOB", "BLAST RBH"]}},
+                            {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                         ],
                         "should": [
                             all_genes_wildcard,
@@ -2486,11 +2483,11 @@ def text_search_category(
             },
         }
     elif category == "orthologs":
-        # Search by both CGD gene name and ortholog name using wildcard
-        # Include CGOB and BLAST (no SGD best hits)
+        # Search all_gene_names and all_feature_names to find matching ortholog groups
+        # Include CGOB, BLAST RBH, and BLAST
         # Show all orthologs in cluster (transitive) - don't filter by organism
-        cgd_gene_wildcard = _build_wildcard_query_for_match_mode("cgd_gene_name.keyword", query, match_mode)
-        ortholog_name_wildcard = _build_wildcard_query_for_match_mode("ortholog_name.keyword", query, match_mode)
+        all_genes_wildcard = _build_wildcard_query_for_match_mode("all_gene_names", query, match_mode)
+        all_features_wildcard = _build_wildcard_query_for_match_mode("all_feature_names", query, match_mode)
         es_query = {
             "query": {
                 "bool": {
@@ -2499,21 +2496,21 @@ def text_search_category(
                         {"terms": {"ortholog_source": ["CGOB", "BLAST RBH", "BLAST"]}},
                     ],
                     "should": [
-                        cgd_gene_wildcard,
-                        ortholog_name_wildcard,
+                        all_genes_wildcard,
+                        all_features_wildcard,
                     ],
                     "minimum_should_match": 1,
                 }
             },
             "size": 10000,
             "highlight": {
-                "fields": {"cgd_gene_name": {}, "ortholog_name": {}},
+                "fields": {"gene_name": {}, "all_gene_names": {}, "all_feature_names": {}},
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
             },
             "aggs": {
-                # Aggregate by ortholog organism (not CGD gene organism)
-                "by_organism": {"terms": {"field": "ortholog_organism", "size": 20}}
+                # Aggregate by organism
+                "by_organism": {"terms": {"field": "organism", "size": 20}}
             },
         }
     else:
@@ -2578,11 +2575,9 @@ def get_ortholog_organisms(
         List of dicts with {organism, feature_name} for each ortholog organism
     """
     query_upper = gene_name_or_feature.upper()
-    query_lower = gene_name_or_feature.lower()
 
-    # Query ortholog docs where this gene is the CGD gene (not the ortholog)
-    # Use aggregation to get unique organisms with their feature names
-    # Use case-insensitive matching to handle variations in gene name casing
+    # Query ortholog docs where this gene appears in the ortholog group
+    # Search all_gene_names and all_feature_names to find matching groups
     es_query = {
         "query": {
             "bool": {
@@ -2590,12 +2585,10 @@ def get_ortholog_organisms(
                     {"term": {"type": "ortholog"}},
                 ],
                 "should": [
-                    # Case-insensitive wildcard on gene name
-                    {"wildcard": {"cgd_gene_name.keyword": {"value": query_lower, "case_insensitive": True, "boost": 10}}},
-                    # Feature names are typically uppercase
-                    {"term": {"cgd_feature_name": {"value": query_upper, "boost": 10}}},
-                    # Also try match query on analyzed field (case-insensitive by default)
-                    {"match": {"cgd_gene_name": {"query": gene_name_or_feature, "boost": 8}}},
+                    # Search all gene names in the group
+                    {"wildcard": {"all_gene_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 10}}},
+                    # Search all feature names in the group
+                    {"wildcard": {"all_feature_names": {"value": f"*{query_upper}*", "case_insensitive": True, "boost": 10}}},
                 ],
                 "minimum_should_match": 1,
             }
@@ -2604,14 +2597,14 @@ def get_ortholog_organisms(
         "aggs": {
             "by_organism": {
                 "terms": {
-                    "field": "ortholog_organism",
+                    "field": "organism",
                     "size": 50,
                 },
                 "aggs": {
-                    "feature_name": {
+                    "feature_info": {
                         "top_hits": {
                             "size": 1,
-                            "_source": ["ortholog_feature_name", "ortholog_organism"],
+                            "_source": ["feature_name", "organism"],
                         }
                     }
                 }
@@ -2627,10 +2620,10 @@ def get_ortholog_organisms(
         for bucket in buckets:
             organism = bucket["key"]
             # Get the feature_name from the top hit
-            top_hits = bucket.get("feature_name", {}).get("hits", {}).get("hits", [])
+            top_hits = bucket.get("feature_info", {}).get("hits", {}).get("hits", [])
             if top_hits:
                 source = top_hits[0].get("_source", {})
-                feature_name = source.get("ortholog_feature_name")
+                feature_name = source.get("feature_name")
                 if organism and feature_name:
                     results.append({
                         "organism": organism,
