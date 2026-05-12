@@ -59,10 +59,11 @@ updated=0
 # Format: "assembly_suffix|gff_subdir" where gff_subdir is optional subdirectory for GFF files
 declare -A SPECIES_CONFIG=(
     ["C_albicans_SC5314"]="_A22|Assembly22"
+    ["C_auris_B8441"]="|"
     ["C_dubliniensis_CD36"]="|"
     ["C_glabrata_CBS138"]="|"
     ["C_parapsilosis_CDC317"]="|"
-    ["C_auris_B8441"]="|"
+    ["C_tropicalis"]="|"
 )
 
 # Find source GFF file using glob pattern

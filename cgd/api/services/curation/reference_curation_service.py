@@ -1256,12 +1256,13 @@ class ReferenceCurationService:
     def get_url_types(self) -> list[str]:
         """Get list of valid URL types for references."""
         # Based on legacy Database::Url->allowed_reference_url_type
+        # NOTE: Values must match CODE table exactly (case-sensitive)
         return [
             "Reference Data",
             "Reference LINKOUT",
             "Reference full text",
-            "Reference full text all",
-            "Reference Supplement",
+            "Reference full text alt",
+            "Reference supplement",
         ]
 
     def get_url_sources(self) -> list[str]:

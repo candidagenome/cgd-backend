@@ -24,10 +24,11 @@ from cgd.schemas.synteny_schema import (
 
 logger = logging.getLogger(__name__)
 
-# The 5 Candida species in CGD with CGOB ortholog data for synteny comparison
+# The Candida species in CGD with ortholog data for synteny comparison
 CGD_SPECIES = [
     'Candida albicans SC5314',
     'Candida dubliniensis CD36',
+    'Candida tropicalis MYA-3404',
     'Candida parapsilosis CDC317',
     'Candida auris B8441',
     'Candida glabrata CBS138',
@@ -141,9 +142,9 @@ def _bulk_get_cgob_clusters(
     feature_nos: list[int],
 ) -> dict[int, str]:
     """
-    Efficiently get CGOB ortholog cluster IDs for multiple features.
+    Efficiently get ortholog cluster IDs for multiple features (CGOB or BLAST RBH).
 
-    Returns dict mapping feature_no -> ortholog_id (CGOB cluster ID).
+    Returns dict mapping feature_no -> ortholog_id (cluster ID).
     """
     if not feature_nos:
         return {}
@@ -164,7 +165,7 @@ def _bulk_get_cgob_clusters(
             .filter(
                 FeatHomology.feature_no.in_(chunk),
                 HomologyGroup.homology_group_type == 'ortholog',
-                HomologyGroup.method == 'CGOB',
+                HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
             )
             .all()
         )

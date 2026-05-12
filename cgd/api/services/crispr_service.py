@@ -43,6 +43,21 @@ from cgd.schemas.crispr_schema import (
 
 logger = logging.getLogger(__name__)
 
+
+def _map_organism_tag_to_abbrev(organism_tag: str) -> str:
+    """
+    Map an organism tag to database organism_abbrev.
+
+    E.g., "C_albicans_SC5314_A22" -> "C_albicans_SC5314" (strip assembly suffix)
+         "C_tropicalis_MYA-3404" -> "C_tropicalis" (strip strain suffix)
+    """
+    # Strip assembly suffixes like _A19, _A21, _A22
+    result = re.sub(r"_A\d+$", "", organism_tag)
+    # Strip strain suffixes like _MYA-3404
+    result = re.sub(r"_MYA-\d+$", "", result)
+    return result
+
+
 # ============================================================================
 # Configuration and Limits
 # ============================================================================
@@ -291,7 +306,7 @@ def _generate_jbrowse_url(
 
     # Map organism tag to JBrowse assembly name
     # Strip assembly suffix (e.g., _A22) for JBrowse2
-    assembly = re.sub(r"_A\d+$", "", organism_tag)
+    assembly = _map_organism_tag_to_abbrev(organism_tag)
 
     # Get the correct gene features track name for this assembly
     # C. albicans uses "TranscribedFeatures", others use "{assembly}_features.sorted.gff"
@@ -342,7 +357,7 @@ def _get_gene_info(
     query_upper = gene_name.strip().upper()
 
     # Map organism tag to organism_abbrev (strip assembly suffix)
-    org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
+    org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
 
     # Determine target chromosome prefix based on organism/assembly
     # For C_albicans_SC5314_A22, prefer Ca22 chromosomes
@@ -1076,7 +1091,7 @@ def _get_chromosome_seq_no(
 ) -> Optional[int]:
     """Get the seq_no (root_seq_no) for a chromosome by name."""
     # Map organism tag to organism_abbrev (strip assembly suffix)
-    org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
+    org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
 
     # Find chromosome feature and its sequence
     chromosome = (
@@ -1126,7 +1141,7 @@ def _map_position_to_gene(
     check for introns vs exons using exon coordinates.
     """
     # Map organism tag to organism_abbrev
-    org_abbrev = re.sub(r"_A\d+$", "", organism_tag)
+    org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
 
     # Get the root_seq_no for this chromosome
     root_seq_no = _get_chromosome_seq_no(db, chromosome_name, organism_tag)

@@ -26,10 +26,11 @@ from cgd.schemas.synteny_schema import (
 
 logger = logging.getLogger(__name__)
 
-# The 5 Candida species in CGD with CGOB ortholog data for synteny comparison
+# The Candida species in CGD with ortholog data for synteny comparison
 CGD_SPECIES = [
     'Candida albicans SC5314',
     'Candida dubliniensis CD36',
+    'Candida tropicalis MYA-3404',
     'Candida parapsilosis CDC317',
     'Candida auris B8441',
     'Candida glabrata CBS138',
@@ -124,7 +125,7 @@ def _get_cgob_cluster_for_feature(
     feature_no: int,
 ) -> Optional[tuple[str, int]]:
     """
-    Get CGOB ortholog cluster info for a feature.
+    Get ortholog cluster info for a feature (CGOB or BLAST RBH).
 
     Returns (homology_group_id, homology_group_no) or None.
     """
@@ -137,7 +138,7 @@ def _get_cgob_cluster_for_feature(
         .filter(
             FeatHomology.feature_no == feature_no,
             HomologyGroup.homology_group_type == 'ortholog',
-            HomologyGroup.method == 'CGOB',
+            HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
         )
         .first()
     )
@@ -158,21 +159,47 @@ def _get_ortholog_members(
     return [r[0] for r in results]
 
 
+def _get_all_ortholog_clusters_for_feature(
+    db: Session,
+    feature_no: int,
+) -> list[HomologyGroup]:
+    """
+    Get all ortholog clusters (CGOB or BLAST RBH) that a feature belongs to.
+
+    Returns list of HomologyGroup objects with their feat_homology eagerly loaded.
+    """
+    return (
+        db.query(HomologyGroup)
+        .options(
+            joinedload(HomologyGroup.feat_homology)
+            .joinedload(FeatHomology.feature)
+            .joinedload(Feature.organism)
+        )
+        .join(FeatHomology, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        .filter(
+            FeatHomology.feature_no == feature_no,
+            HomologyGroup.homology_group_type == 'ortholog',
+            HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
+        )
+        .all()
+    )
+
+
 def _find_cgob_cluster_for_gene(
     db: Session,
     query_feature: Feature,
 ) -> Optional[HomologyGroup]:
     """
-    Find CGOB ortholog cluster for a gene.
+    Find ortholog cluster for a gene (CGOB or BLAST RBH).
 
     First checks the query feature's feat_homology. If not found, searches for
     other ORF features with the same gene_name in the same organism that have
-    CGOB links. This handles cases where CGOB data was loaded with Assembly 22
+    ortholog links. This handles cases where ortholog data was loaded with Assembly 22
     names (e.g., C1_13700W_A) but the query uses Assembly 19 names (e.g., orf19.5007).
 
     Args:
         db: Database session
-        query_feature: The feature to find CGOB cluster for
+        query_feature: The feature to find ortholog cluster for
 
     Returns:
         HomologyGroup if found, None otherwise
@@ -180,7 +207,7 @@ def _find_cgob_cluster_for_gene(
     # First, check the query feature's own feat_homology
     for fh in query_feature.feat_homology:
         hg = fh.homology_group
-        if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+        if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
             return hg
 
     # If not found and we have a gene_name, search for alternate assembly versions
@@ -206,9 +233,9 @@ def _find_cgob_cluster_for_gene(
     for alt_feat in alternate_features:
         for fh in alt_feat.feat_homology:
             hg = fh.homology_group
-            if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
+            if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
                 logger.debug(
-                    f"Found CGOB cluster via alternate feature: "
+                    f"Found ortholog cluster via alternate feature: "
                     f"{query_feature.feature_name} -> {alt_feat.feature_name}"
                 )
                 return hg
@@ -357,10 +384,6 @@ def get_synteny_data(
         strand=query_loc.strand,
     )
 
-    # Find CGOB ortholog cluster for query gene
-    # This also checks alternate assembly versions (e.g., Assembly 22 vs Assembly 19)
-    cgob_cluster = _find_cgob_cluster_for_gene(db, query_feature)
-
     # Build synteny regions for each species
     synteny_regions: dict[str, SyntenyRegion] = {}
     ortholog_connections: dict[str, set] = {}  # ortholog_id -> set of feature_names
@@ -368,20 +391,66 @@ def get_synteny_data(
 
     # If we have a CGOB cluster, get all orthologs and their locations
     orthologs_by_species: dict[str, list] = {sp: [] for sp in CGD_SPECIES}
+    processed_clusters: set[int] = set()  # Track processed cluster IDs to avoid duplicates
 
-    if cgob_cluster:
-        for fh in cgob_cluster.feat_homology:
+    # Use the primary cluster's ID as the unified ortholog_id for all query orthologs
+    # This ensures all transitively connected genes share the same ortholog_id
+    primary_ortholog_id: Optional[str] = None
+
+    def add_orthologs_from_cluster(cluster: HomologyGroup, use_unified_id: bool = False):
+        """Add orthologs from a cluster to the species dict."""
+        nonlocal primary_ortholog_id
+
+        if cluster.homology_group_no in processed_clusters:
+            return
+        processed_clusters.add(cluster.homology_group_no)
+
+        cluster_id = cluster.homology_group_id or f"CGOB_{cluster.homology_group_no}"
+
+        # Set the primary ortholog_id from the first (query gene's) cluster
+        if primary_ortholog_id is None:
+            primary_ortholog_id = cluster_id
+
+        # Use unified ID for query orthologs, or cluster's own ID otherwise
+        effective_id = primary_ortholog_id if use_unified_id else cluster_id
+
+        for fh in cluster.feat_homology:
             other_feat = fh.feature
             if other_feat:
                 other_org, _ = _get_organism_info(other_feat)
                 if other_org in orthologs_by_species:
-                    orthologs_by_species[other_org].append(other_feat)
-                    # Track ortholog connection
-                    cluster_id = cgob_cluster.homology_group_id or f"CGOB_{cgob_cluster.homology_group_no}"
-                    feature_to_ortholog[other_feat.feature_no] = cluster_id
-                    if cluster_id not in ortholog_connections:
-                        ortholog_connections[cluster_id] = set()
-                    ortholog_connections[cluster_id].add(other_feat.feature_name)
+                    # Only add if not already in the list
+                    if other_feat not in orthologs_by_species[other_org]:
+                        orthologs_by_species[other_org].append(other_feat)
+                    # Track ortholog connection with the effective ID
+                    feature_to_ortholog[other_feat.feature_no] = effective_id
+                    if effective_id not in ortholog_connections:
+                        ortholog_connections[effective_id] = set()
+                    ortholog_connections[effective_id].add(other_feat.feature_name)
+
+    # Get ALL ortholog clusters for the query gene (not just the first one)
+    # This is important for C. tropicalis which has separate pairwise BLAST RBH
+    # clusters for each species instead of one CGOB cluster containing all orthologs
+    all_query_clusters = _get_all_ortholog_clusters_for_feature(db, query_feature.feature_no)
+
+    if all_query_clusters:
+        # First, add orthologs from ALL of the query gene's direct clusters
+        # This sets the primary_ortholog_id from the first cluster
+        for cluster in all_query_clusters:
+            add_orthologs_from_cluster(cluster, use_unified_id=True)
+
+        # Transitive lookup: for each ortholog found, check if they belong to
+        # additional clusters (e.g., C. tropicalis -> C. albicans via BLAST RBH,
+        # then C. albicans -> other species via CGOB)
+        # Use the unified ID so all query orthologs share the same ortholog_id
+        for species, orthologs in list(orthologs_by_species.items()):
+            for ortholog_feat in orthologs:
+                # Get all ortholog clusters this feature belongs to
+                additional_clusters = _get_all_ortholog_clusters_for_feature(
+                    db, ortholog_feat.feature_no
+                )
+                for add_cluster in additional_clusters:
+                    add_orthologs_from_cluster(add_cluster, use_unified_id=True)
 
     # For each species, get synteny region
     for species in CGD_SPECIES:
@@ -428,16 +497,37 @@ def get_synteny_data(
             # Check for ortholog group membership
             ortholog_id = feature_to_ortholog.get(feat_no)
             if not ortholog_id:
-                # Check if this flanking gene has its own CGOB cluster
-                cluster_info = _get_cgob_cluster_for_feature(db, feat_no)
-                if cluster_info:
-                    hg_id, hg_no = cluster_info
-                    ortholog_id = hg_id or f"CGOB_{hg_no}"
-                    # Get all members for this cluster
-                    members = _get_ortholog_members(db, hg_no)
+                # Get ALL ortholog clusters for this flanking gene (not just the first one)
+                # This is important for C. tropicalis which has pairwise BLAST RBH clusters
+                flanking_clusters = _get_all_ortholog_clusters_for_feature(db, feat_no)
+                if flanking_clusters:
+                    # First, check if any member of any cluster already has an ortholog_id
+                    # This ensures we unify ortholog groups that are connected transitively
+                    existing_id = None
+                    for cluster in flanking_clusters:
+                        for fh in cluster.feat_homology:
+                            if fh.feature and fh.feature.feature_no in feature_to_ortholog:
+                                existing_id = feature_to_ortholog[fh.feature.feature_no]
+                                break
+                        if existing_id:
+                            break
+
+                    # Use existing ID if found, otherwise create new one from first cluster
+                    if existing_id:
+                        ortholog_id = existing_id
+                    else:
+                        first_cluster = flanking_clusters[0]
+                        ortholog_id = first_cluster.homology_group_id or f"CGOB_{first_cluster.homology_group_no}"
+
                     if ortholog_id not in ortholog_connections:
                         ortholog_connections[ortholog_id] = set()
-                    ortholog_connections[ortholog_id].update(members)
+
+                    # Collect members from ALL clusters and unify under the same ortholog_id
+                    for cluster in flanking_clusters:
+                        for fh in cluster.feat_homology:
+                            if fh.feature:
+                                ortholog_connections[ortholog_id].add(fh.feature.feature_name)
+                                feature_to_ortholog[fh.feature.feature_no] = ortholog_id
 
             genes.append(SyntenyGene(
                 feature_name=feat_name,

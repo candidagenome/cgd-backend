@@ -43,6 +43,7 @@ run_gpi C_dubliniensis_CD36
 run_gpi C_glabrata_CBS138
 run_gpi C_parapsilosis_CDC317
 run_gpi C_auris_B8441
+run_gpi C_tropicalis
 
 echo ""
 echo "========================================"

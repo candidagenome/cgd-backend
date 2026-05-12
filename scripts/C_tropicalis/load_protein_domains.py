@@ -2,7 +2,8 @@
 """
 Load C. tropicalis protein domain data from InterProScan results.
 
-This script loads protein domains from InterProScan TSV output into the database.
+This script loads protein domains from InterProScan TSV output into the
+protein_detail table, which is displayed on the Protein tab.
 
 Usage:
     python load_protein_domains.py --tsv FILE [--dry-run]
@@ -34,17 +35,15 @@ Environment Variables:
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import os
-import re
 import sys
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 # Project root directory
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -56,10 +55,9 @@ from cgd.db.engine import SessionLocal
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
-SOURCE = "InterProScan"
 
 # Domain databases to load
-DOMAIN_DATABASES = {"Pfam", "SMART", "Gene3D", "CDD", "SUPERFAMILY", "PRINTS", "ProSiteProfiles"}
+DOMAIN_DATABASES = {"Pfam", "SMART", "Gene3D", "CDD", "SUPERFAMILY", "PRINTS", "ProSiteProfiles", "PANTHER"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,6 +107,45 @@ def ensure_code(session, table_name: str, col_name: str, code_value: str, descri
     return True
 
 
+def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
+    """Parse GFF file to get protein_id -> gene_id mapping.
+
+    The InterProScan results use protein_id (e.g., EER30082.1) but the
+    feature_name in the database is gene_id (e.g., CTRG_01181).
+    """
+    protein_to_gene = {}
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            # Extract protein_id from CDS features
+            if feature_type == 'CDS':
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key.strip()] = value.strip()
+
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    protein_to_gene[protein_id] = gene_id
+
+    return protein_to_gene
+
+
 def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
     """Parse InterProScan TSV output."""
     domains = []
@@ -133,7 +170,6 @@ def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
             status = fields[9] if len(fields) > 9 else ''
             ipr_accession = fields[11] if len(fields) > 11 else ''
             ipr_description = fields[12] if len(fields) > 12 else ''
-            go_terms = fields[13] if len(fields) > 13 else ''
 
             # Only include true matches from selected databases
             if status != 'T':
@@ -152,54 +188,32 @@ def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
                 'evalue': evalue,
                 'ipr_accession': ipr_accession,
                 'ipr_description': ipr_description,
-                'go_terms': go_terms,
             })
 
     return domains
 
 
-def get_feature_no_by_protein_id(session, protein_id: str) -> Optional[int]:
-    """Get feature_no by protein ID (looking in dbxref or feature_name)."""
-    # Try exact match on feature_name
+def get_protein_info_no(session, protein_id: str) -> Optional[int]:
+    """Get protein_info_no by protein ID (feature_name)."""
     query = text(f"""
-        SELECT feature_no
-        FROM {DB_SCHEMA}.feature
-        WHERE feature_name = :protein_id
+        SELECT pi.protein_info_no
+        FROM {DB_SCHEMA}.protein_info pi
+        JOIN {DB_SCHEMA}.feature f ON pi.feature_no = f.feature_no
+        WHERE f.feature_name = :protein_id
     """)
     result = session.execute(query, {"protein_id": protein_id}).first()
-    if result:
-        return result[0]
-
-    # Try pattern match on dbxref_id
-    query = text(f"""
-        SELECT feature_no
-        FROM {DB_SCHEMA}.feature
-        WHERE dbxref_id LIKE :pattern
-    """)
-    result = session.execute(query, {"pattern": f"%{protein_id}%"}).first()
     return result[0] if result else None
 
 
-def get_or_create_dbxref(
-    session,
-    dbxref_id: str,
-    dbxref_type: str,
-    source: str,
-    description: str = None,
-    dry_run: bool = False
-) -> Optional[int]:
-    """Get or create a dbxref entry."""
+def create_protein_info(session, feature_no: int, dry_run: bool = False) -> Optional[int]:
+    """Create protein_info record if it doesn't exist."""
+    # Check if exists
     query = text(f"""
-        SELECT dbxref_no
-        FROM {DB_SCHEMA}.dbxref
-        WHERE dbxref_id = :dbxref_id
-        AND dbxref_type = :dbxref_type
+        SELECT protein_info_no
+        FROM {DB_SCHEMA}.protein_info
+        WHERE feature_no = :feature_no
     """)
-    result = session.execute(query, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-    }).first()
-
+    result = session.execute(query, {"feature_no": feature_no}).first()
     if result:
         return result[0]
 
@@ -207,79 +221,162 @@ def get_or_create_dbxref(
         return None
 
     insert = text(f"""
-        INSERT INTO {DB_SCHEMA}.dbxref (
-            dbxref_id, dbxref_type, source, description, created_by
+        INSERT INTO {DB_SCHEMA}.protein_info (
+            feature_no, created_by
         ) VALUES (
-            :dbxref_id, :dbxref_type, :source, :description, :created_by
+            :feature_no, :created_by
         )
     """)
-    # Truncate description to 240 characters max
-    if description and len(description) > 240:
-        description = description[:237] + "..."
-
     session.execute(insert, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-        "source": source,
-        "description": description,
+        "feature_no": feature_no,
         "created_by": ADMIN_USER,
     })
 
-    result = session.execute(query, {
-        "dbxref_id": dbxref_id,
-        "dbxref_type": dbxref_type,
-    }).first()
+    result = session.execute(query, {"feature_no": feature_no}).first()
     return result[0] if result else None
 
 
-def create_dbxref_feat(
+def get_feature_no_by_protein_id(
     session,
-    feature_no: int,
-    dbxref_no: int,
-    start_coord: int = None,
-    end_coord: int = None,
-    dry_run: bool = False
-) -> bool:
-    """Create dbxref_feat linking entry."""
-    # Check if exists
+    protein_id: str,
+    protein_to_gene: Optional[Dict[str, str]] = None
+) -> Optional[int]:
+    """Get feature_no by protein ID.
+
+    If protein_to_gene mapping is provided, use it to look up by gene_id.
+    Otherwise, fall back to looking up by protein_id directly.
+    """
+    # Try gene_id first if mapping is available
+    if protein_to_gene:
+        gene_id = protein_to_gene.get(protein_id)
+        if gene_id:
+            query = text(f"""
+                SELECT feature_no
+                FROM {DB_SCHEMA}.feature
+                WHERE feature_name = :gene_id
+            """)
+            result = session.execute(query, {"gene_id": gene_id}).first()
+            if result:
+                return result[0]
+
+    # Fall back to protein_id lookup (for backward compatibility)
     query = text(f"""
-        SELECT dbxref_feat_no
-        FROM {DB_SCHEMA}.dbxref_feat
-        WHERE feature_no = :feature_no
-        AND dbxref_no = :dbxref_no
+        SELECT feature_no
+        FROM {DB_SCHEMA}.feature
+        WHERE feature_name = :protein_id
+    """)
+    result = session.execute(query, {"protein_id": protein_id}).first()
+    return result[0] if result else None
+
+
+def create_protein_detail(
+    session,
+    protein_info_no: int,
+    domain: Dict,
+    dry_run: bool = False
+) -> str:
+    """Create protein_detail record for a domain.
+
+    Returns:
+        'created' - record was inserted
+        'exists' - record already exists (found by check)
+        'duplicate' - insert failed with IntegrityError
+    """
+    # Use the signature description or InterPro description
+    detail_value = domain['sig_description'] or domain['ipr_description'] or domain['sig_accession']
+    # Truncate to 240 chars max
+    if len(detail_value) > 240:
+        detail_value = detail_value[:237] + "..."
+
+    # Check if exists (unique on protein_info_no, type, value, start, stop, member_dbxref_id)
+    query = text(f"""
+        SELECT protein_detail_no
+        FROM {DB_SCHEMA}.protein_detail
+        WHERE protein_info_no = :protein_info_no
+        AND protein_detail_type = :type
+        AND protein_detail_value = :value
+        AND start_coord = :start
+        AND stop_coord = :stop
+        AND member_dbxref_id = :member_id
     """)
     result = session.execute(query, {
-        "feature_no": feature_no,
-        "dbxref_no": dbxref_no,
+        "protein_info_no": protein_info_no,
+        "type": "domain",
+        "value": detail_value,
+        "start": domain['start'],
+        "stop": domain['end'],
+        "member_id": domain['sig_accession'],
     }).first()
 
     if result:
-        return False
+        return 'exists'
 
     if dry_run:
-        return True
+        return 'created'
 
     insert = text(f"""
-        INSERT INTO {DB_SCHEMA}.dbxref_feat (
-            feature_no, dbxref_no
+        INSERT INTO {DB_SCHEMA}.protein_detail (
+            protein_info_no, protein_detail_group, protein_detail_type,
+            protein_detail_value, start_coord, stop_coord,
+            interpro_dbxref_id, member_dbxref_id, created_by
         ) VALUES (
-            :feature_no, :dbxref_no
+            :protein_info_no, :group, :type,
+            :value, :start, :stop,
+            :interpro_id, :member_id, :created_by
         )
     """)
-    session.execute(insert, {
-        "feature_no": feature_no,
-        "dbxref_no": dbxref_no,
-    })
-    return True
+    try:
+        # Use savepoint so rollback only affects this insert
+        with session.begin_nested():
+            session.execute(insert, {
+                "protein_info_no": protein_info_no,
+                "group": domain['analysis'],
+                "type": "domain",
+                "value": detail_value,
+                "start": domain['start'],
+                "stop": domain['end'],
+                "interpro_id": domain['ipr_accession'] if domain['ipr_accession'] else None,
+                "member_id": domain['sig_accession'],
+                "created_by": ADMIN_USER,
+            })
+        return 'created'
+    except IntegrityError:
+        # Duplicate entry - savepoint auto-rolled back, continue
+        return 'duplicate'
 
 
-def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
-    """Load protein domains from InterProScan TSV."""
-    # Ensure required codes exist
-    ensure_code(session, "DBXREF", "SOURCE", "InterProScan", "InterProScan domain database", dry_run)
-    for db_type in DOMAIN_DATABASES:
-        ensure_code(session, "DBXREF", "DBXREF_TYPE", db_type, f"{db_type} domain database", dry_run)
-    ensure_code(session, "DBXREF", "DBXREF_TYPE", "InterPro", "InterPro integrated domain database", dry_run)
+def load_protein_domains(
+    session,
+    tsv_file: Path,
+    gff_file: Optional[Path] = None,
+    dry_run: bool = False
+):
+    """Load protein domains from InterProScan TSV into protein_detail table.
+
+    Args:
+        session: Database session
+        tsv_file: InterProScan TSV results file
+        gff_file: Optional GFF file for protein_id to gene_id mapping
+        dry_run: If True, don't make changes
+    """
+    # Parse GFF for protein_id -> gene_id mapping if provided
+    protein_to_gene = {}
+    if gff_file:
+        logger.info(f"Parsing GFF for protein mapping: {gff_file}")
+        protein_to_gene = parse_gff_protein_mapping(gff_file)
+        logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
+
+    # Ensure code values exist for domain databases
+    logger.info("Ensuring code values exist for domain databases...")
+    for db_name in DOMAIN_DATABASES:
+        ensure_code(
+            session,
+            "PROTEIN_DETAIL",
+            "PROTEIN_DETAIL_GROUP",
+            db_name,
+            f"{db_name} protein domain database",
+            dry_run
+        )
 
     logger.info(f"Parsing InterProScan TSV: {tsv_file}")
     domains = parse_iprscan_tsv(tsv_file)
@@ -296,62 +393,46 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
     logger.info(f"Domains for {len(protein_domains)} proteins")
 
     domains_loaded = 0
+    domains_existed = 0
+    domains_duplicate = 0
     proteins_found = 0
     proteins_not_found = 0
+    protein_info_created = 0
 
     for protein_id, domain_list in protein_domains.items():
-        feature_no = get_feature_no_by_protein_id(session, protein_id)
+        # Get or create protein_info
+        protein_info_no = get_protein_info_no(session, protein_id)
 
-        if not feature_no:
+        if not protein_info_no:
+            # Need to create protein_info first
+            feature_no = get_feature_no_by_protein_id(session, protein_id, protein_to_gene)
+            if not feature_no:
+                proteins_not_found += 1
+                continue
+
+            protein_info_no = create_protein_info(session, feature_no, dry_run)
+            if protein_info_no:
+                protein_info_created += 1
+
+        if not protein_info_no:
             proteins_not_found += 1
             continue
 
         proteins_found += 1
 
         for domain in domain_list:
-            # Create dbxref for the domain signature
-            dbxref_id = domain['sig_accession']
-            dbxref_type = domain['analysis']
-            description = domain['sig_description'] or domain['ipr_description']
-
-            dbxref_no = get_or_create_dbxref(
+            result = create_protein_detail(
                 session,
-                dbxref_id=dbxref_id,
-                dbxref_type=dbxref_type,
-                source=SOURCE,
-                description=description,
-                dry_run=dry_run
+                protein_info_no,
+                domain,
+                dry_run
             )
-
-            if dbxref_no:
-                created = create_dbxref_feat(
-                    session,
-                    feature_no=feature_no,
-                    dbxref_no=dbxref_no,
-                    start_coord=domain['start'],
-                    end_coord=domain['end'],
-                    dry_run=dry_run
-                )
-                if created:
-                    domains_loaded += 1
-
-            # Also create InterPro entry if available
-            if domain['ipr_accession']:
-                ipr_dbxref_no = get_or_create_dbxref(
-                    session,
-                    dbxref_id=domain['ipr_accession'],
-                    dbxref_type="InterPro",
-                    source=SOURCE,
-                    description=domain['ipr_description'],
-                    dry_run=dry_run
-                )
-                if ipr_dbxref_no:
-                    create_dbxref_feat(
-                        session,
-                        feature_no=feature_no,
-                        dbxref_no=ipr_dbxref_no,
-                        dry_run=dry_run
-                    )
+            if result == 'created':
+                domains_loaded += 1
+            elif result == 'exists':
+                domains_existed += 1
+            elif result == 'duplicate':
+                domains_duplicate += 1
 
         if proteins_found % 500 == 0:
             logger.info(f"Processed {proteins_found} proteins...")
@@ -364,12 +445,16 @@ def load_protein_domains(session, tsv_file: Path, dry_run: bool = False):
     logger.info("=" * 60)
     logger.info(f"Proteins found in database: {proteins_found}")
     logger.info(f"Proteins not found: {proteins_not_found}")
+    logger.info(f"Protein info records created: {protein_info_created}")
     logger.info(f"Domain annotations loaded: {domains_loaded}")
+    logger.info(f"Domain annotations already existed: {domains_existed}")
+    logger.info(f"Domain annotations skipped (duplicate): {domains_duplicate}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis protein domains")
     parser.add_argument("--tsv", required=True, type=Path, help="InterProScan TSV results file")
+    parser.add_argument("--gff", type=Path, help="GFF file for protein_id to gene_id mapping")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     args = parser.parse_args()
 
@@ -381,7 +466,7 @@ def main():
         logger.info("[DRY RUN MODE]")
 
     with SessionLocal() as session:
-        load_protein_domains(session, args.tsv, args.dry_run)
+        load_protein_domains(session, args.tsv, args.gff, args.dry_run)
 
     logger.info("Done!")
 

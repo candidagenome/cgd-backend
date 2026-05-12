@@ -211,17 +211,49 @@ def feature_exists(session, feature_name: str) -> bool:
     return result is not None
 
 
-def create_feature(session, organism_no: int, feature_name: str, feature_type: str) -> Optional[int]:
-    """Create a CDS or intron feature."""
+def get_max_cal_id(session) -> int:
+    """Get the maximum CAL ID number currently in use."""
+    # Check feature table
+    query1 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.feature
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_feature = session.execute(query1).scalar() or 0
+
+    # Check dbxref table
+    query2 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.dbxref
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_dbxref = session.execute(query2).scalar() or 0
+
+    return max(max_feature, max_dbxref)
+
+
+def create_feature(session, organism_no: int, feature_name: str, feature_type: str,
+                   next_cal_id: list) -> Optional[int]:
+    """Create a CDS or intron feature.
+
+    Args:
+        next_cal_id: A list with one int element, used as a mutable counter
+    """
+    # Generate dbxref_id to avoid trigger conflicts
+    dbxref_id = f"CAL{next_cal_id[0]:010d}"
+    next_cal_id[0] += 1
+
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feature (
-            organism_no, feature_name, feature_type, source, created_by
+            organism_no, feature_name, dbxref_id, feature_type, source, created_by
         ) VALUES (
-            :org_no, :name, :ftype, :source, :created_by
+            :org_no, :name, :dbxref_id, :ftype, :source, :created_by
         )
     """)
     session.execute(insert, {
-        "org_no": organism_no, "name": feature_name,
+        "org_no": organism_no, "name": feature_name, "dbxref_id": dbxref_id,
         "ftype": feature_type, "source": SOURCE, "created_by": ADMIN_USER,
     })
     return get_feature_no(session, feature_name)
@@ -253,7 +285,14 @@ def create_feat_relationship(session, parent_feature_no: int, child_feature_no: 
 
 def create_feat_location(session, feature_no: int, root_seq_no: int,
                           start_coord: int, stop_coord: int, strand: str) -> bool:
-    """Create a feat_location entry."""
+    """Create a feat_location entry.
+
+    Note: The database trigger FEATLOCATION_BIUDR sets strand based on coordinate order:
+      - start > stop => strand = 'C' (Crick/minus)
+      - start < stop => strand = 'W' (Watson/plus)
+
+    For minus strand features, we swap coordinates so start > stop.
+    """
     # Check if exists
     query = text(f"""
         SELECT feat_location_no FROM {DB_SCHEMA}.feat_location
@@ -266,6 +305,12 @@ def create_feat_location(session, feature_no: int, root_seq_no: int,
     # Convert strand format: + -> W, - -> C
     db_strand = 'W' if strand == '+' else 'C'
 
+    # Swap coordinates for minus strand so trigger sets correct strand
+    db_start = start_coord
+    db_stop = stop_coord
+    if strand == '-':
+        db_start, db_stop = stop_coord, start_coord
+
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feat_location (
             feature_no, root_seq_no, coord_version, start_coord, stop_coord,
@@ -276,7 +321,7 @@ def create_feat_location(session, feature_no: int, root_seq_no: int,
     """)
     session.execute(insert, {
         "fno": feature_no, "root_seq_no": root_seq_no,
-        "start": start_coord, "stop": stop_coord,
+        "start": db_start, "stop": db_stop,
         "strand": db_strand, "created_by": ADMIN_USER,
     })
     return True
@@ -292,6 +337,11 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
 
     organism_no = get_organism_no(session)
     logger.info(f"Loading CDS and introns for organism_no={organism_no}")
+
+    # Get next available CAL ID
+    max_cal_id = get_max_cal_id(session)
+    next_cal_id = [max_cal_id + 1]  # Use list for mutable counter
+    logger.info(f"Starting CAL ID: CAL{next_cal_id[0]:010d}")
 
     # Parse GFF
     logger.info(f"Parsing GFF: {gff_file}")
@@ -309,17 +359,9 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
     for gene_id, cds_list in gene_to_cds.items():
         genes_processed += 1
 
-        # Find parent feature
-        protein_id = gene_to_protein.get(gene_id)
-        parent_feature_no = None
-        parent_name = None
-
-        if protein_id:
-            parent_feature_no = get_feature_no(session, protein_id)
-            parent_name = protein_id
-        if not parent_feature_no:
-            parent_feature_no = get_feature_no(session, gene_id)
-            parent_name = gene_id
+        # Find parent feature by gene_id (systematic name)
+        parent_feature_no = get_feature_no(session, gene_id)
+        parent_name = gene_id
 
         if not parent_feature_no:
             genes_not_found += 1
@@ -344,7 +386,7 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
                 cds_created += 1
                 continue
 
-            cds_feature_no = create_feature(session, organism_no, cds_name, "CDS")
+            cds_feature_no = create_feature(session, organism_no, cds_name, "CDS", next_cal_id)
             if cds_feature_no:
                 create_feat_relationship(session, parent_feature_no, cds_feature_no)
                 create_feat_location(
@@ -365,7 +407,7 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
                 introns_created += 1
                 continue
 
-            intron_feature_no = create_feature(session, organism_no, intron_name, "intron")
+            intron_feature_no = create_feature(session, organism_no, intron_name, "intron", next_cal_id)
             if intron_feature_no:
                 create_feat_relationship(session, parent_feature_no, intron_feature_no)
                 create_feat_location(

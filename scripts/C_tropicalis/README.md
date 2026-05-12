@@ -50,7 +50,16 @@ python scripts/C_tropicalis/load_genes_and_sequences.py \
 
 Loads gene features from GFF and protein sequences from FASTA.
 
-### 3. Load Feature Coordinates
+### 3. Add Feature Qualifiers
+
+```bash
+python scripts/C_tropicalis/add_feature_qualifiers.py [--dry-run]
+```
+
+Adds `feature_qualifier = 'Uncharacterized'` to all C. tropicalis ORFs. This is required
+for the Genome Snapshot page to display the ORF distribution pie chart correctly.
+
+### 4. Load Feature Coordinates
 
 ```bash
 python scripts/C_tropicalis/load_coordinates.py \
@@ -61,7 +70,7 @@ python scripts/C_tropicalis/load_coordinates.py \
 
 Creates chromosome/scaffold features and loads chromosomal coordinates into `feat_location`.
 
-### 4. Load Genomic DNA Sequences
+### 5. Load Genomic DNA Sequences
 
 ```bash
 python scripts/C_tropicalis/load_genomic_sequences.py \
@@ -72,7 +81,7 @@ python scripts/C_tropicalis/load_genomic_sequences.py \
 
 Extracts and loads genomic DNA sequences (with introns) for each gene.
 
-### 5. Load CDS and Intron Features
+### 6. Load CDS and Intron Features
 
 ```bash
 python scripts/C_tropicalis/load_cds_and_introns.py \
@@ -85,7 +94,7 @@ Creates CDS and intron features with:
 - `FEAT_RELATIONSHIP` linking to parent gene (`relationship_type='part of'`, `rank=2`)
 - `FEAT_LOCATION` with chromosomal coordinates
 
-### 6. Load Gene Descriptions
+### 7. Load Gene Descriptions
 
 ```bash
 python scripts/C_tropicalis/load_descriptions.py \
@@ -95,7 +104,7 @@ python scripts/C_tropicalis/load_descriptions.py \
 
 Loads gene descriptions derived from C. albicans ortholog data into `feature.headline`.
 
-### 7. Load Orthologs
+### 8. Load Orthologs
 
 ```bash
 python scripts/C_tropicalis/load_orthologs.py \
@@ -105,7 +114,7 @@ python scripts/C_tropicalis/load_orthologs.py \
 
 Loads ortholog relationships (BLAST reciprocal best hits) to 5 Candida species via `homology_group` and `feat_homology` tables.
 
-### 8. Load Protein Domains
+### 9. Load Protein Domains
 
 ```bash
 python scripts/C_tropicalis/load_protein_domains.py \
@@ -115,7 +124,7 @@ python scripts/C_tropicalis/load_protein_domains.py \
 
 Loads protein domains from InterProScan TSV into `dbxref` and `dbxref_feat` tables.
 
-### 9. Load GO Annotations
+### 10. Load GO Annotations
 
 ```bash
 python scripts/C_tropicalis/load_go_annotations.py \
@@ -190,6 +199,7 @@ After loading, the following data should be present:
 | Feature Locations (introns) | 163 | Calculated from CDS coordinates |
 | Feature Relationships | 6,818 | Generated during CDS/intron loading |
 | **Annotations** | | |
+| Feature Qualifiers | 6,403 | All ORFs set as 'Uncharacterized' |
 | Gene Descriptions | 5,246 | C. albicans ortholog data (reciprocal best hits) |
 | Ortholog Entries | 23,167 | BLAST reciprocal best hits (5 species) |
 | Homology Groups | 23,167 | BLAST reciprocal best hits |
@@ -209,6 +219,167 @@ After loading, the following data should be present:
 | `DATABASE_URL` | Database connection URL | Required |
 | `DB_SCHEMA` | Database schema name | `MULTI` |
 | `ADMIN_USER` | User for `created_by` field | `CGDADMIN` |
+
+## JBrowse2 Protein Domain Visualization
+
+After loading protein domain data into the database, set up JBrowse2 to display domain tracks on the Protein tab.
+
+### Prerequisites
+
+- InterProScan TSV results loaded into `protein_detail` table (Step 9 above)
+- Protein FASTA file
+- Access to the frontend server (`cgd-frontend-dev` or production)
+- Tools: `samtools`, `bgzip`, `tabix`
+
+### Data Files Needed
+
+On the frontend server, ensure these directories exist:
+```
+/data/jbrowse2/protein_data/     # Protein FASTA and domain GFF files
+/data/domain/C_tropicalis_MYA3404/  # Source InterProScan data
+```
+
+### Setup Steps
+
+#### 1. Copy Data Files to Frontend Server
+
+**Development (separate servers):** Copy from backend to frontend:
+```bash
+# On cgd-backend-dev
+scp -i /path/to/cgd-dev.pem \
+    /home/ec2-user/iprscan_results/all_results.tsv \
+    /home/ec2-user/C_tropicalis/orthologs/C_tropicalis_MYA-3404_proteins.fasta \
+    ec2-user@cgd-frontend-dev:/data/domain/C_tropicalis_MYA3404/
+```
+
+**Production (same server):** Simply copy/move files:
+```bash
+cp /home/ec2-user/iprscan_results/all_results.tsv /data/domain/C_tropicalis_MYA3404/
+cp /home/ec2-user/C_tropicalis_MYA-3404_proteins.fasta /data/domain/C_tropicalis_MYA3404/
+```
+
+#### 2. Run JBrowse2 Setup Script
+
+On the frontend server:
+```bash
+cd /data/jbrowse2/protein_data
+bash /path/to/setup_jbrowse_proteins.sh
+```
+
+Or manually create the files:
+
+```bash
+ORGANISM="C_tropicalis"
+DOMAIN_DIR="/data/domain/C_tropicalis_MYA3404"
+DATA_DIR="/data/jbrowse2/protein_data"
+
+# Create protein FASTA symlink and index
+ln -sf ${DOMAIN_DIR}/C_tropicalis_MYA-3404_proteins.fasta ${DATA_DIR}/${ORGANISM}_proteins.fasta
+samtools faidx ${DATA_DIR}/${ORGANISM}_proteins.fasta
+
+# Convert InterProScan TSV to GFF for each database
+python interproscan_to_gff.py \
+    --tsv ${DOMAIN_DIR}/all_results.tsv \
+    --output /tmp/${ORGANISM}_domains.gff
+
+# Split by database, sort, compress, and index
+for DB in Pfam PANTHER SUPERFAMILY CATH SMART ProSiteProfiles CDD PRINTS; do
+    grep -P "\\t${DB}\\t" /tmp/${ORGANISM}_domains.gff | \
+        sort -k1,1 -k4,4n > /tmp/${ORGANISM}_${DB}_sorted.gff
+    bgzip -c /tmp/${ORGANISM}_${DB}_sorted.gff > ${DATA_DIR}/${ORGANISM}_${DB}.gff.gz
+    tabix -p gff ${DATA_DIR}/${ORGANISM}_${DB}.gff.gz
+done
+```
+
+#### 3. Update JBrowse2 Configuration
+
+Edit `/data/jbrowse2/config.json` to add the protein assembly and tracks:
+
+```json
+{
+  "assemblies": [
+    {
+      "name": "C_tropicalis_prot",
+      "displayName": "C. tropicalis Proteins",
+      "sequence": {
+        "type": "ReferenceSequenceTrack",
+        "trackId": "C_tropicalis_prot-ReferenceSequenceTrack",
+        "adapter": {
+          "type": "IndexedFastaAdapter",
+          "fastaLocation": { "uri": "protein_data/C_tropicalis_proteins.fasta" },
+          "faiLocation": { "uri": "protein_data/C_tropicalis_proteins.fasta.fai" }
+        }
+      }
+    }
+  ],
+  "tracks": [
+    {
+      "type": "FeatureTrack",
+      "trackId": "C_tropicalis_Pfam",
+      "name": "Pfam",
+      "assemblyNames": ["C_tropicalis_prot"],
+      "adapter": {
+        "type": "Gff3TabixAdapter",
+        "gffGzLocation": { "uri": "protein_data/C_tropicalis_Pfam.gff.gz" },
+        "index": { "location": { "uri": "protein_data/C_tropicalis_Pfam.gff.gz.tbi" } }
+      }
+    }
+    // ... repeat for PANTHER, SUPERFAMILY, CATH, SMART, ProSiteProfiles, CDD, PRINTS
+  ]
+}
+```
+
+#### 4. Update Frontend Configuration
+
+In `cgd-frontend/src/components/locus/ProteinDetails.jsx`, add the organism to `proteinAssemblyConfig`:
+
+```javascript
+const proteinAssemblyConfig = {
+  // ... existing organisms ...
+  'C_tropicalis': {
+    assembly: 'C_tropicalis_prot',
+  },
+};
+```
+
+#### 5. Rebuild Frontend
+
+```bash
+cd cgd-frontend
+npm run build
+# Deploy to server
+```
+
+### Files Created
+
+After setup, these files should exist in `/data/jbrowse2/protein_data/`:
+
+```
+C_tropicalis_proteins.fasta      # Symlink to protein FASTA
+C_tropicalis_proteins.fasta.fai  # FASTA index
+C_tropicalis_Pfam.gff.gz         # Domain tracks (bgzipped)
+C_tropicalis_Pfam.gff.gz.tbi     # Tabix index
+C_tropicalis_PANTHER.gff.gz
+C_tropicalis_PANTHER.gff.gz.tbi
+C_tropicalis_SUPERFAMILY.gff.gz
+C_tropicalis_SUPERFAMILY.gff.gz.tbi
+C_tropicalis_CATH.gff.gz
+C_tropicalis_CATH.gff.gz.tbi
+C_tropicalis_SMART.gff.gz
+C_tropicalis_SMART.gff.gz.tbi
+C_tropicalis_ProSiteProfiles.gff.gz
+C_tropicalis_ProSiteProfiles.gff.gz.tbi
+C_tropicalis_CDD.gff.gz
+C_tropicalis_CDD.gff.gz.tbi
+C_tropicalis_PRINTS.gff.gz
+C_tropicalis_PRINTS.gff.gz.tbi
+```
+
+### Troubleshooting
+
+- **"Could not resolve identifiers" error**: Track doesn't exist in JBrowse config. Check that the track ID in `config.json` matches the frontend's `domainTrackTypes` array.
+- **No JBrowse viewer showing**: Ensure `protein_length` is available (calculated from sequence if not in `protein_info`).
+- **Empty tracks**: Verify the GFF files have data: `zcat C_tropicalis_Pfam.gff.gz | head`
 
 ## Notes
 

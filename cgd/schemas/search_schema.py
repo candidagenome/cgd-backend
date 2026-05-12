@@ -132,6 +132,9 @@ class TextSearchResult(BaseModel):
     # Highlighted versions with <mark> tags around matching text
     highlighted_name: Optional[str] = None
     highlighted_description: Optional[str] = None
+    # For paper_titles/abstracts - full citation text
+    citation: Optional[str] = None  # Full citation: "Author (Year) Title. Journal..."
+    highlighted_citation: Optional[str] = None  # Citation with search terms highlighted
     # For ortholog results - grouping and relationship data
     gene_name: Optional[str] = None  # Standard gene name (for orthologs category)
     homology_group_no: Optional[int] = None  # CGOB homology group ID for grouping

@@ -42,10 +42,11 @@ run_dump() {
 }
 
 run_dump C_albicans_SC5314
+run_dump C_auris_B8441
 run_dump C_dubliniensis_CD36
 run_dump C_glabrata_CBS138
 run_dump C_parapsilosis_CDC317
-run_dump C_auris_B8441
+run_dump C_tropicalis
 
 echo ""
 echo "========================================"

@@ -46,10 +46,11 @@ run_update() {
 
 # Process all strains
 run_update C_albicans_SC5314
+run_update C_auris_B8441
 run_update C_dubliniensis_CD36
 run_update C_glabrata_CBS138
 run_update C_parapsilosis_CDC317
-run_update C_auris_B8441
+run_update C_tropicalis
 
 echo ""
 echo "========================================"

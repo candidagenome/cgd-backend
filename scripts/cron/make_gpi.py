@@ -95,6 +95,10 @@ STRAIN_CONFIGS = {
         "taxon_id": "237561",
         "has_b_alleles": True,  # Diploid genome with A and B alleles
     },
+    "C_auris_B8441": {
+        "seq_source": "C. auris B8441",
+        "taxon_id": "498019",
+    },
     "C_dubliniensis_CD36": {
         "seq_source": "C. dubliniensis CD36",
         "taxon_id": "573826",
@@ -107,9 +111,9 @@ STRAIN_CONFIGS = {
         "seq_source": "C. parapsilosis CDC317",
         "taxon_id": "578454",
     },
-    "C_auris_B8441": {
-        "seq_source": "C. auris B8441",
-        "taxon_id": "498019",
+    "C_tropicalis": {
+        "seq_source": "C. tropicalis",
+        "taxon_id": "294747",
     },
 }
 

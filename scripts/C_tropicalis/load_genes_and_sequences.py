@@ -54,6 +54,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_max_cal_id(session) -> int:
+    """Get the maximum CAL ID number currently in use.
+
+    Checks both feature.dbxref_id and dbxref.dbxref_id tables since
+    triggers may create dbxref entries that don't have features yet.
+    """
+    # Check feature table
+    query1 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.feature
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_feature = session.execute(query1).scalar() or 0
+
+    # Check dbxref table
+    query2 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.dbxref
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_dbxref = session.execute(query2).scalar() or 0
+
+    return max(max_feature, max_dbxref)
+
+
 def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
     """Ensure a code value exists in the code table."""
     query = text(f"""
@@ -194,8 +221,11 @@ def parse_gff(gff_file: Path) -> Tuple[List[Dict], Dict[str, str]]:
                 if protein_id and gene_id:
                     gene_to_protein[gene_id] = protein_id
 
-            # Only process gene features for the gene list
+            # Only process gene features from Liftoff source (CTRG_* genes)
+            # Skip AUGUSTUS predictions (g1, g2, etc.)
             if feature_type != 'gene':
+                continue
+            if source != 'Liftoff':
                 continue
 
             gene_id = attr_dict.get('ID', '').replace('ID=', '').split(',')[0]
@@ -359,6 +389,11 @@ def load_genes_and_proteins(
 
     logger.info(f"Loading genes for organism_no={organism_no}, genome_version_no={genome_version_no}")
 
+    # Get current max CAL ID for generating new CGD IDs
+    max_cal_id = get_max_cal_id(session)
+    next_cal_id = max_cal_id + 1
+    logger.info(f"Starting CAL ID: CAL{next_cal_id:010d}")
+
     # Parse input files
     logger.info(f"Parsing GFF file: {gff_file}")
     genes, gene_to_protein = parse_gff(gff_file)
@@ -379,13 +414,19 @@ def load_genes_and_proteins(
         # Get protein_id if available (from CDS mapping)
         protein_id = gene_to_protein.get(gene_id)
 
-        # Create feature - use protein_id as feature_name if available for better matching
-        feature_name = protein_id if protein_id else gene_id
+        # Use gene_id (e.g., CTRG_01181) as the systematic name (feature_name)
+        # This is consistent with other CGD organisms and matches external databases
+        feature_name = gene_id
+
+        # Generate CAL-format CGD ID
+        dbxref_id = f"CAL{next_cal_id:010d}"
+        next_cal_id += 1
+
         feature_no = create_feature(
             session,
             organism_no,
             feature_name=feature_name,
-            dbxref_id=f"CTROP:{gene_id}",
+            dbxref_id=dbxref_id,
             feature_type="ORF",
             dry_run=dry_run
         )
@@ -406,7 +447,7 @@ def load_genes_and_proteins(
                     session,
                     feature_no,
                     genome_version_no,
-                    seq_type="Protein",
+                    seq_type="protein",
                     residues=protein_seq,
                     dry_run=dry_run
                 )

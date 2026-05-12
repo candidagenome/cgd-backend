@@ -214,7 +214,7 @@ def create_sequence(session, feature_no: int, genome_version_no: int, seq_type: 
 def load_genomic_sequences(session, gff_file: Path, genomic_file: Path, dry_run: bool = False):
     """Load genomic DNA sequences for genes."""
     # Ensure seq_type code exists
-    ensure_code(session, "SEQ", "SEQ_TYPE", "Genomic DNA", "Genomic DNA sequence with introns", dry_run)
+    ensure_code(session, "SEQ", "SEQ_TYPE", "genomic", "genomic sequence with introns", dry_run)
 
     organism_no, genome_version_no = get_organism_and_genome(session)
     logger.info(f"Loading for organism_no={organism_no}, genome_version_no={genome_version_no}")
@@ -249,7 +249,7 @@ def load_genomic_sequences(session, gff_file: Path, genomic_file: Path, dry_run:
         features_found += 1
 
         # Check if genomic sequence already exists
-        if sequence_exists(session, feature_no, "Genomic DNA"):
+        if sequence_exists(session, feature_no, "genomic"):
             continue
 
         # Extract genomic sequence
@@ -267,7 +267,7 @@ def load_genomic_sequences(session, gff_file: Path, genomic_file: Path, dry_run:
             genomic_seq = reverse_complement(genomic_seq)
 
         if not dry_run:
-            create_sequence(session, feature_no, genome_version_no, "Genomic DNA",
+            create_sequence(session, feature_no, genome_version_no, "genomic",
                             genomic_seq, SOURCE)
             sequences_created += 1
 

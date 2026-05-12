@@ -204,9 +204,36 @@ def get_organism_and_genome(session) -> Tuple[int, int]:
     return organism_no, result[0]
 
 
+def get_max_cal_id(session) -> int:
+    """Get the maximum CAL ID number currently in use."""
+    # Check feature table
+    query1 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.feature
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_feature = session.execute(query1).scalar() or 0
+
+    # Check dbxref table
+    query2 = text(f"""
+        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
+        FROM {DB_SCHEMA}.dbxref
+        WHERE dbxref_id LIKE 'CAL%'
+        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
+    """)
+    max_dbxref = session.execute(query2).scalar() or 0
+
+    return max(max_feature, max_dbxref)
+
+
 def get_or_create_chromosome_feature(session, organism_no: int, chrom_name: str,
-                                      dry_run: bool = False) -> Optional[int]:
-    """Get or create a chromosome/scaffold feature."""
+                                      next_cal_id: list, dry_run: bool = False) -> Optional[int]:
+    """Get or create a chromosome/scaffold feature.
+
+    Args:
+        next_cal_id: A list with one int element, used as a mutable counter
+    """
     query = text(f"""
         SELECT feature_no FROM {DB_SCHEMA}.feature
         WHERE feature_name = :name AND organism_no = :org_no
@@ -220,15 +247,19 @@ def get_or_create_chromosome_feature(session, organism_no: int, chrom_name: str,
         logger.info(f"[DRY RUN] Would create chromosome feature: {chrom_name}")
         return None
 
+    # Generate dbxref_id to avoid trigger conflicts
+    dbxref_id = f"CAL{next_cal_id[0]:010d}"
+    next_cal_id[0] += 1
+
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feature (
-            organism_no, feature_name, feature_type, source, created_by
+            organism_no, feature_name, dbxref_id, feature_type, source, created_by
         ) VALUES (
-            :org_no, :name, 'contig', :source, :created_by
+            :org_no, :name, :dbxref_id, 'contig', :source, :created_by
         )
     """)
     session.execute(insert, {
-        "org_no": organism_no, "name": chrom_name,
+        "org_no": organism_no, "name": chrom_name, "dbxref_id": dbxref_id,
         "source": SOURCE, "created_by": ADMIN_USER,
     })
 
@@ -239,9 +270,10 @@ def get_or_create_chromosome_feature(session, organism_no: int, chrom_name: str,
 def get_or_create_chromosome_seq(session, feature_no: int, genome_version_no: int,
                                   sequence: str, dry_run: bool = False) -> Optional[int]:
     """Get or create a chromosome/scaffold sequence."""
+    # Check both lowercase and mixed-case seq_type for backward compatibility
     query = text(f"""
         SELECT seq_no FROM {DB_SCHEMA}.seq
-        WHERE feature_no = :fno AND seq_type = 'Genomic DNA' AND is_seq_current = 'Y'
+        WHERE feature_no = :fno AND seq_type IN ('genomic', 'Genomic DNA') AND is_seq_current = 'Y'
     """)
     result = session.execute(query, {"fno": feature_no}).first()
 
@@ -256,7 +288,7 @@ def get_or_create_chromosome_seq(session, feature_no: int, genome_version_no: in
             feature_no, genome_version_no, seq_version, seq_type, source,
             is_seq_current, seq_length, residues, created_by
         ) VALUES (
-            :fno, :gvno, SYSDATE, 'Genomic DNA', :source, 'Y', :len, :res, :created_by
+            :fno, :gvno, SYSDATE, 'genomic', :source, 'Y', :len, :res, :created_by
         )
     """)
     session.execute(insert, {
@@ -287,9 +319,22 @@ def feat_location_exists(session, feature_no: int) -> bool:
 
 def create_feat_location(session, feature_no: int, root_seq_no: int,
                           start_coord: int, stop_coord: int, strand: str) -> bool:
-    """Create a feat_location entry."""
+    """Create a feat_location entry.
+
+    Note: The database trigger FEATLOCATION_BIUDR sets strand based on coordinate order:
+      - start > stop => strand = 'C' (Crick/minus)
+      - start < stop => strand = 'W' (Watson/plus)
+
+    For minus strand features, we swap coordinates so start > stop.
+    """
     # Convert strand format: + -> W, - -> C
     db_strand = 'W' if strand == '+' else 'C'
+
+    # Swap coordinates for minus strand so trigger sets correct strand
+    db_start = start_coord
+    db_stop = stop_coord
+    if strand == '-':
+        db_start, db_stop = stop_coord, start_coord
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feat_location (
@@ -301,7 +346,7 @@ def create_feat_location(session, feature_no: int, root_seq_no: int,
     """)
     session.execute(insert, {
         "fno": feature_no, "root_seq_no": root_seq_no,
-        "start": start_coord, "stop": stop_coord,
+        "start": db_start, "stop": db_stop,
         "strand": db_strand, "created_by": ADMIN_USER,
     })
     return True
@@ -414,13 +459,18 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
     """Load feature coordinates and introns."""
     # Ensure required codes
     ensure_code(session, "FEATURE", "FEATURE_TYPE", "contig", "Contig/scaffold feature", dry_run)
-    ensure_code(session, "SEQ", "SEQ_TYPE", "Genomic DNA", "Genomic DNA sequence", dry_run)
+    ensure_code(session, "SEQ", "SEQ_TYPE", "genomic", "Genomic DNA sequence", dry_run)
     if not skip_subfeatures:
         ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Exon", "Coding exon", dry_run)
         ensure_code(session, "SUBFEATURE_TYPE", "SUBFEATURE_TYPE", "Intron", "Intron", dry_run)
 
     organism_no, genome_version_no = get_organism_and_genome(session)
     logger.info(f"Loading for organism_no={organism_no}, genome_version_no={genome_version_no}")
+
+    # Get next available CAL ID for chromosome features
+    max_cal_id = get_max_cal_id(session)
+    next_cal_id = [max_cal_id + 1]  # Use list for mutable counter
+    logger.info(f"Starting CAL ID for chromosomes: CAL{next_cal_id[0]:010d}")
 
     # Parse files
     logger.info(f"Parsing genomic FASTA: {genomic_file}")
@@ -437,7 +487,7 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
 
     for chrom_name, chrom_seq in genomic_seqs.items():
         chrom_feature_no = get_or_create_chromosome_feature(
-            session, organism_no, chrom_name, dry_run
+            session, organism_no, chrom_name, next_cal_id, dry_run
         )
         if chrom_feature_no and not dry_run:
             seq_no = get_or_create_chromosome_seq(
@@ -458,14 +508,9 @@ def load_coordinates(session, gff_file: Path, genomic_file: Path, dry_run: bool 
 
     for i, gene in enumerate(genes):
         gene_id = gene['gene_id']
-        protein_id = gene_to_protein.get(gene_id)
 
-        # Find feature
-        feature_no = None
-        if protein_id:
-            feature_no = get_feature_no(session, protein_id)
-        if not feature_no:
-            feature_no = get_feature_no(session, gene_id)
+        # Find feature by gene_id (systematic name)
+        feature_no = get_feature_no(session, gene_id)
 
         if not feature_no:
             features_not_found += 1

@@ -845,3 +845,62 @@ def remove_nongene_topic(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+class RelinkFeatureRequest(BaseModel):
+    """Request to re-link a feature to a reference."""
+
+    feature_identifier: str = Field(..., description="Feature name, gene name, or feature_no")
+    organism_abbrev: Optional[str] = Field(
+        None, description="Organism abbreviation to filter feature lookup"
+    )
+
+
+class RelinkFeatureResponse(BaseModel):
+    """Response for re-linking a feature to a reference."""
+
+    feature_no: int
+    feature_name: str
+    gene_name: Optional[str]
+    pubmed: int
+    message: str
+
+
+@router.post("/reference/{reference_no}/relink-feature", response_model=RelinkFeatureResponse)
+def relink_feature_to_reference(
+    reference_no: int,
+    request: RelinkFeatureRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Re-link a feature to a reference by removing it from the unlinked list.
+
+    This is used to fix data issues where a feature is incorrectly marked
+    as unlinked but already has topic associations (curated topics).
+
+    Use this endpoint when a feature appears in both "Public Topics Curated for"
+    AND "Unlinked from" lists simultaneously.
+    """
+    service = LitGuideCurationService(db)
+
+    try:
+        result = service.relink_feature_to_reference(
+            reference_no,
+            request.feature_identifier,
+            current_user.userid,
+            organism_abbrev=request.organism_abbrev,
+        )
+
+        return RelinkFeatureResponse(
+            feature_no=result["feature_no"],
+            feature_name=result["feature_name"],
+            gene_name=result["gene_name"],
+            pubmed=result["pubmed"],
+            message=f"Feature '{result['feature_name']}' re-linked to reference {reference_no}",
+        )
+    except LitGuideCurationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )

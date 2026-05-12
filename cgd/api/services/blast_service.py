@@ -411,9 +411,13 @@ def _map_organism_tag_to_abbrev(organism_tag: str) -> str:
     Map a BLAST organism tag to database organism_abbrev.
 
     E.g., "C_albicans_SC5314_A22" -> "C_albicans_SC5314" (strip assembly suffix)
+         "C_tropicalis_MYA-3404" -> "C_tropicalis" (strip strain suffix)
     """
     # Strip assembly suffixes like _A19, _A21, _A22
-    return re.sub(r'_A\d+$', '', organism_tag)
+    result = re.sub(r'_A\d+$', '', organism_tag)
+    # Strip strain suffixes like _MYA-3404
+    result = re.sub(r'_MYA-\d+$', '', result)
+    return result
 
 
 def _get_sequence_for_locus(

@@ -110,7 +110,7 @@ class TestSequences:
             JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
             WHERE o.organism_name = :name
-            AND s.seq_type = 'Protein'
+            AND s.seq_type = 'protein'
             AND s.is_seq_current = 'Y'
         """)
         result = session.execute(query, {"name": ORGANISM_NAME}).first()
@@ -125,7 +125,7 @@ class TestSequences:
             JOIN {DB_SCHEMA}.feature f ON s.feature_no = f.feature_no
             JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
             WHERE o.organism_name = :name
-            AND s.seq_type = 'Genomic DNA'
+            AND s.seq_type = 'genomic'
             AND s.is_seq_current = 'Y'
             AND f.feature_type = 'ORF'
         """)
@@ -186,6 +186,40 @@ class TestCoordinates:
         assert result[1] > 0, "stop_coord should be positive"
         assert result[2] in ('W', 'C'), f"Invalid strand: {result[2]}"
 
+    def test_location_has_root_seq_no(self, session):
+        """Verify feat_location has valid root_seq_no linking to chromosome."""
+        # Check that root_seq_no is not NULL and links to a valid chromosome sequence
+        query = text(f"""
+            SELECT COUNT(*)
+            FROM {DB_SCHEMA}.feat_location fl
+            JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
+            JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
+            JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
+            WHERE o.organism_name = :name
+            AND f.feature_type = 'ORF'
+            AND fl.is_loc_current = 'Y'
+            AND s.is_seq_current = 'Y'
+        """)
+        result = session.execute(query, {"name": ORGANISM_NAME}).first()
+
+        assert result[0] >= 6000, f"Expected ~6678 feat_locations with valid root_seq_no, got {result[0]}"
+
+    def test_no_null_root_seq_no(self, session):
+        """Verify no feat_location has NULL root_seq_no."""
+        query = text(f"""
+            SELECT COUNT(*)
+            FROM {DB_SCHEMA}.feat_location fl
+            JOIN {DB_SCHEMA}.feature f ON fl.feature_no = f.feature_no
+            JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
+            WHERE o.organism_name = :name
+            AND f.feature_type = 'ORF'
+            AND fl.is_loc_current = 'Y'
+            AND fl.root_seq_no IS NULL
+        """)
+        result = session.execute(query, {"name": ORGANISM_NAME}).first()
+
+        assert result[0] == 0, f"Found {result[0]} feat_locations with NULL root_seq_no"
+
 
 class TestCDSAndIntrons:
     """Tests for CDS and intron features."""
@@ -230,6 +264,22 @@ class TestCDSAndIntrons:
         result = session.execute(query, {"name": ORGANISM_NAME}).first()
 
         assert result[0] >= 6000, f"Expected CDS with relationships, got {result[0]}"
+
+    def test_cds_has_feat_location(self, session):
+        """Verify CDS features have feat_location entries with valid root_seq_no."""
+        query = text(f"""
+            SELECT COUNT(*)
+            FROM {DB_SCHEMA}.feature f
+            JOIN {DB_SCHEMA}.organism o ON f.organism_no = o.organism_no
+            JOIN {DB_SCHEMA}.feat_location fl ON fl.feature_no = f.feature_no
+            WHERE o.organism_name = :name
+            AND f.feature_type = 'CDS'
+            AND fl.is_loc_current = 'Y'
+            AND fl.root_seq_no IS NOT NULL
+        """)
+        result = session.execute(query, {"name": ORGANISM_NAME}).first()
+
+        assert result[0] >= 6000, f"Expected ~6655 CDS with feat_location, got {result[0]}"
 
 
 class TestOrthologs:

@@ -881,6 +881,31 @@ class LitGuideCurationService:
             property_type,
         )
 
+        # If the feature was previously unlinked, remove it from RefUnlink
+        # This ensures re-curated features are properly re-linked
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if reference and reference.pubmed:
+            unlink_entry = (
+                self.db.query(RefUnlink)
+                .filter(
+                    RefUnlink.pubmed == reference.pubmed,
+                    RefUnlink.tab_name == "FEATURE",
+                    RefUnlink.primary_key == feature.feature_no,
+                )
+                .first()
+            )
+            if unlink_entry:
+                self.db.delete(unlink_entry)
+                self.db.commit()
+                logger.info(
+                    f"Removed feature {feature.feature_name} from RefUnlink for "
+                    f"pubmed {reference.pubmed} (re-linked via topic assignment)"
+                )
+
         return {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
@@ -1244,3 +1269,82 @@ class LitGuideCurationService:
         )
 
         return True
+
+    def relink_feature_to_reference(
+        self,
+        reference_no: int,
+        feature_identifier: str,
+        curator_userid: str,
+        organism_abbrev: Optional[str] = None,
+    ) -> dict:
+        """
+        Re-link a feature to a reference by removing it from RefUnlink.
+
+        This is used to fix data issues where a feature is incorrectly marked
+        as unlinked but already has topic associations.
+
+        Args:
+            reference_no: Reference number
+            feature_identifier: Feature name, gene name, or feature_no
+            curator_userid: Curator user ID for logging
+            organism_abbrev: Optional organism abbreviation to filter feature lookup
+
+        Returns:
+            Dict with feature info and status
+        """
+        # Find feature
+        try:
+            feature_no = int(feature_identifier)
+            feature = self.get_feature_by_no(feature_no)
+        except ValueError:
+            feature = self.get_feature_by_name(feature_identifier, organism_abbrev)
+
+        if not feature:
+            raise LitGuideCurationError(f"Feature '{feature_identifier}' not found")
+
+        # Verify reference exists
+        reference = (
+            self.db.query(Reference)
+            .filter(Reference.reference_no == reference_no)
+            .first()
+        )
+        if not reference:
+            raise LitGuideCurationError(f"Reference {reference_no} not found")
+
+        if not reference.pubmed:
+            raise LitGuideCurationError(
+                f"Reference {reference_no} has no pubmed ID, cannot check RefUnlink"
+            )
+
+        # Check if feature is in RefUnlink
+        unlink_entry = (
+            self.db.query(RefUnlink)
+            .filter(
+                RefUnlink.pubmed == reference.pubmed,
+                RefUnlink.tab_name == "FEATURE",
+                RefUnlink.primary_key == feature.feature_no,
+            )
+            .first()
+        )
+
+        if not unlink_entry:
+            raise LitGuideCurationError(
+                f"Feature '{feature.feature_name}' is not in the unlinked list "
+                f"for reference {reference_no}"
+            )
+
+        # Remove from RefUnlink
+        self.db.delete(unlink_entry)
+        self.db.commit()
+
+        logger.info(
+            f"Re-linked feature {feature.feature_name} (no={feature.feature_no}) "
+            f"to reference {reference_no} (pubmed={reference.pubmed}) by {curator_userid}"
+        )
+
+        return {
+            "feature_no": feature.feature_no,
+            "feature_name": feature.feature_name,
+            "gene_name": feature.gene_name,
+            "pubmed": reference.pubmed,
+        }

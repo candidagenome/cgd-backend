@@ -101,10 +101,11 @@ BLAST_NUCLEOTIDE_EXTENSIONS = ["ndb", "nhr", "nin", "nog", "nos", "not", "nsq", 
 # Strain configurations
 STRAIN_ABBREVS = [
     "C_albicans_SC5314",
+    "C_auris_B8441",
     "C_dubliniensis_CD36",
     "C_glabrata_CBS138",
     "C_parapsilosis_CDC317",
-    "C_auris_B8441",
+    "C_tropicalis",
 ]
 
 # Assemblies to process per strain (strains not listed use default/current only)

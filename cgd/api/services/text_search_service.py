@@ -94,6 +94,7 @@ ORGANISM_PRIORITY = [
     'Candida auris B8441',
     'Candida dubliniensis CD36',
     'Candida parapsilosis CDC317',
+    'Candida tropicalis MYA-3404',
 ]
 
 
@@ -1078,6 +1079,50 @@ def search_abstracts(
     return results
 
 
+def _build_citation_string(db: Session, ref: Reference) -> str:
+    """
+    Build a citation string from reference fields.
+
+    Format: "Author1, Author2, ... (Year) Title. Journal Volume:Pages"
+    """
+    parts = []
+
+    # Get authors ordered by author_order
+    author_names = (
+        db.query(Author.author_name)
+        .join(AuthorEditor, Author.author_no == AuthorEditor.author_no)
+        .filter(AuthorEditor.reference_no == ref.reference_no)
+        .order_by(AuthorEditor.author_order)
+        .all()
+    )
+    if author_names:
+        names = [a[0] for a in author_names if a[0]]
+        if len(names) > 3:
+            parts.append(f"{names[0]}, et al.")
+        elif names:
+            parts.append(", ".join(names))
+
+    # Add year
+    if ref.year:
+        parts.append(f"({ref.year})")
+
+    # Add title
+    if ref.title:
+        parts.append(ref.title)
+
+    # Add journal info
+    if ref.journal:
+        journal_part = ref.journal.abbreviation or ref.journal.full_name or ""
+        if ref.volume:
+            journal_part += f" {ref.volume}"
+        if ref.page:
+            journal_part += f":{ref.page}"
+        if journal_part.strip():
+            parts.append(journal_part.strip())
+
+    return " ".join(parts) if parts else ""
+
+
 def search_paper_titles(
     db: Session,
     query: str,
@@ -1106,6 +1151,7 @@ def search_paper_titles(
     # Order by exact phrase match first
     ref_query = (
         db.query(Reference)
+        .options(joinedload(Reference.journal))
         .filter(
             Reference.title.isnot(None),
             title_filter
@@ -1115,15 +1161,17 @@ def search_paper_titles(
     )
 
     for ref in ref_query:
-        # Use citation as name
-        name = ref.citation or (f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id)
-
-        # Use PMID as ID if available
+        # Use PMID as ID if available, otherwise CGD ID
         display_id = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
-        # Get ref_url for building links
+        # Use title as citation - in CGD, ref.title contains the full formatted citation
+        # Format: "Author, et al. (Year) Title. Journal Volume:Pages"
+        citation_text = ref.title or ""
+
+        # Get ref_url for building links (load url relationship for accessing url details)
         ref_urls = (
             db.query(RefUrl)
+            .options(joinedload(RefUrl.url))
             .filter(RefUrl.reference_no == ref.reference_no)
             .all()
         )
@@ -1132,12 +1180,14 @@ def search_paper_titles(
         results.append(TextSearchResult(
             category="paper_titles",
             id=display_id,
-            name=name,
+            name=display_id,  # Use ID as name for display
             description=ref.title,
-            link=None,
+            link=f"/reference/{ref.dbxref_id}",
             links=links,
-            highlighted_name=_highlight_text(name, query),
-            highlighted_description=_highlight_text(ref.title, query),
+            highlighted_name=display_id,
+            highlighted_description=_highlight_text(ref.title, query) if ref.title else None,
+            citation=citation_text,
+            highlighted_citation=_highlight_text(citation_text, query) if citation_text else None,
         ))
 
     return results

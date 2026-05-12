@@ -353,20 +353,21 @@ def get_sequence_by_feature(
             sequence = seq_record.residues if seq_record else None
     else:
         # Standard sequence types: retrieve from database
-        # Note: Database stores lowercase values ("genomic", "protein", "coding")
+        # Note: Most organisms use lowercase ("genomic", "protein", "coding")
+        # but some (e.g., C. tropicalis) may use mixed-case ("Genomic DNA", "Protein")
         if seq_type == SeqType.PROTEIN:
-            db_seq_type = "protein"
+            db_seq_types = ["protein", "Protein"]
         elif seq_type == SeqType.CODING:
-            db_seq_type = "coding"
+            db_seq_types = ["coding", "CDS"]
         else:
-            db_seq_type = "genomic"
+            db_seq_types = ["genomic", "Genomic DNA"]
 
-        # Get current sequence for this feature
+        # Get current sequence for this feature (try multiple formats)
         seq_record = (
             db.query(Seq)
             .filter(
                 Seq.feature_no == feature.feature_no,
-                Seq.seq_type == db_seq_type,
+                Seq.seq_type.in_(db_seq_types),
                 Seq.is_seq_current == "Y"
             )
             .first()

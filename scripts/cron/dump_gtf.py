@@ -612,10 +612,11 @@ def main() -> int:
     if args.all:
         strains = [
             "C_albicans_SC5314",
+            "C_auris_B8441",
             "C_dubliniensis_CD36",
             "C_glabrata_CBS138",
             "C_parapsilosis_CDC317",
-            "C_auris_B8441",
+            "C_tropicalis",
         ]
     elif args.strain_abbrev:
         strains = [args.strain_abbrev]

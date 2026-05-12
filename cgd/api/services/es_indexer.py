@@ -20,7 +20,7 @@ from cgd.models.models import (
     Dbxref, DbxrefFeat, Note, NoteLink, HomologyGroup, FeatHomology,
     DbxrefHomology, RefProperty, GoSynonym, GoGosyn, FeatRelationship,
     PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
-    RefLink,
+    RefLink, RefUrl, Url,
 )
 from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
@@ -260,6 +260,25 @@ def index_phenotypes(db: Session, es: Elasticsearch) -> int:
     return success
 
 
+def _get_full_text_url(db: Session, reference_no: int) -> Optional[str]:
+    """Get full text URL for a reference if available."""
+    ref_url = (
+        db.query(RefUrl)
+        .join(Url, RefUrl.url_no == Url.url_no)
+        .filter(
+            RefUrl.reference_no == reference_no,
+            or_(
+                Url.url_type.ilike('%full text%'),
+                Url.url_type.ilike('%linkout%')
+            )
+        )
+        .first()
+    )
+    if ref_url and ref_url.url:
+        return ref_url.url.url
+    return None
+
+
 def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
     """Generate Elasticsearch documents for references with abstracts."""
     # Get references with abstracts
@@ -271,6 +290,10 @@ def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
 
     for ref, abstract_text in references:
         display_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
+
+        # Get full text URL if available
+        full_text_url = _get_full_text_url(db, ref.reference_no)
+
         doc = {
             "_index": INDEX_NAME,
             "_id": f"reference_{ref.reference_no}",
@@ -285,6 +308,7 @@ def _generate_reference_docs(db: Session) -> Generator[dict, None, None]:
                 "year": ref.year,
                 "reference_no": ref.reference_no,
                 "link": f"/reference/{ref.dbxref_id}",
+                "full_text_url": full_text_url,
             }
         }
         yield doc
@@ -370,6 +394,9 @@ def _generate_author_docs(db: Session) -> Generator[dict, None, None]:
 
         # Create one doc per author-reference pair for better search
         for ref in refs:
+            # Get full text URL if available
+            full_text_url = _get_full_text_url(db, ref.reference_no)
+
             doc = {
                 "_index": INDEX_NAME,
                 "_id": f"author_{author_no}_{ref.reference_no}",
@@ -382,6 +409,7 @@ def _generate_author_docs(db: Session) -> Generator[dict, None, None]:
                     "citation": ref.citation,
                     "reference_no": ref.reference_no,
                     "link": f"/reference/{ref.dbxref_id}",
+                    "full_text_url": full_text_url,
                 }
             }
             yield doc
@@ -617,28 +645,42 @@ def index_external_ids(db: Session, es: Elasticsearch) -> int:
 
 def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
     """
-    Generate Elasticsearch documents for ortholog relationships.
+    Generate Elasticsearch documents for ortholog groups.
 
-    Each document represents ONE ortholog relationship:
-    - A CGD gene
-    - One of its orthologs (from another CGD organism OR external DB like SGD)
+    Each document represents ONE gene with ALL its orthologs across all homology
+    groups. When searching for any gene name in any of its ortholog groups,
+    the gene and all its orthologs are returned.
 
-    For a gene with 4 CGD orthologs + 1 SGD ortholog = 5 documents.
+    Strategy:
+    1. First pass: collect all ortholog relationships for each feature across
+       ALL homology groups (CGOB, BLAST RBH, BLAST)
+    2. Second pass: yield one document per feature with combined ortholog data
+
+    This ensures that searching for "HOG1" finds all 6 Candida species even if
+    some orthologs are only linked via BLAST RBH (not CGOB).
     """
     a21_exclude = _get_a21_exclusion_set(db)
 
-    # Get CGOB homology groups
+    # Get all ortholog homology groups (CGOB, BLAST RBH, BLAST)
     homology_groups = (
         db.query(HomologyGroup)
         .filter(
-            HomologyGroup.method == 'CGOB',
+            HomologyGroup.method.in_(['CGOB', 'BLAST RBH', 'BLAST']),
             HomologyGroup.homology_group_type == 'ortholog'
         )
         .all()
     )
 
+    # First pass: build a map of feature_no -> set of all related feature_nos
+    # This collects orthologs transitively across all groups
+    feature_orthologs: dict[int, set[int]] = {}
+    feature_data: dict[int, Feature] = {}  # Cache feature data
+    feature_best_source: dict[int, str] = {}  # Track best source (CGOB > BLAST RBH > BLAST)
+
+    source_priority = {'CGOB': 0, 'BLAST RBH': 1, 'BLAST': 2}
+
     for hg in homology_groups:
-        # Get all CGD features in this homology group
+        # Get all features in this homology group
         feat_homologies = (
             db.query(FeatHomology, Feature)
             .join(Feature, FeatHomology.feature_no == Feature.feature_no)
@@ -653,99 +695,93 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
             if feat.feature_no not in a21_exclude
         ]
 
-        # Collect all ortholog names for searchability
-        all_ortholog_names = []
+        if len(valid_features) < 2:
+            continue  # Need at least 2 features to be orthologs
+
+        # Collect all feature_nos in this group
+        group_feature_nos = {feat.feature_no for fh, feat in valid_features}
+
+        # For each feature in the group, add all others as orthologs
         for fh, feat in valid_features:
-            if feat.gene_name:
-                all_ortholog_names.append(feat.gene_name)
+            if feat.feature_no not in feature_orthologs:
+                feature_orthologs[feat.feature_no] = set()
+                feature_data[feat.feature_no] = feat
 
-        # For each CGD gene, create docs for its orthologs
-        for fh, cgd_gene in valid_features:
-            cgd_name = cgd_gene.gene_name or cgd_gene.feature_name
-            cgd_organism = cgd_gene.organism.organism_name if cgd_gene.organism else None
-
-            # CGD-to-CGD orthologs (other CGD organisms)
-            for fh2, ortholog in valid_features:
-                if ortholog.feature_no == cgd_gene.feature_no:
-                    continue  # Skip self
-
-                orth_name = ortholog.gene_name or ortholog.feature_name
-                orth_organism = ortholog.organism.organism_name if ortholog.organism else None
-                short_organism = _get_short_organism_name(orth_organism)
-
-                doc = {
-                    "_index": INDEX_NAME,
-                    "_id": f"ortholog_{hg.homology_group_no}_{cgd_gene.feature_no}_{ortholog.feature_no}",
-                    "_source": {
-                        "type": "ortholog",
-                        "id": cgd_gene.dbxref_id,
-                        # CGD gene (the gene we're showing orthologs FOR)
-                        "cgd_gene_name": cgd_name,
-                        "cgd_feature_name": cgd_gene.feature_name,
-                        "cgd_gene_id": cgd_gene.dbxref_id,
-                        "organism": cgd_organism,
-                        # The ortholog
-                        "ortholog_name": orth_name,
-                        "ortholog_feature_name": ortholog.feature_name,
-                        "ortholog_organism": orth_organism,
-                        "ortholog_display": f"{short_organism} {ortholog.feature_name}/{orth_name}",
-                        "ortholog_type": "Ortholog",
-                        "ortholog_source": "CGOB",
-                        # For searching - search by ortholog name to find genes
-                        "name": orth_name,
-                        "gene_name": orth_name,
-                        "feature_name": ortholog.feature_name,
-                        "homology_group_no": hg.homology_group_no,
-                        "related_genes": " ".join(all_ortholog_names),
-                        "link": f"/locus/{cgd_gene.feature_name}",
-                    }
-                }
-                yield doc
-
-            # External DB orthologs (SGD) - stored in DbxrefFeat, not DbxrefHomology
-            # Query DbxrefFeat for this gene to find external orthologs
-            external_orthologs = (
-                db.query(Dbxref)
-                .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
-                .filter(
-                    DbxrefFeat.feature_no == cgd_gene.feature_no,
-                    Dbxref.source == 'SGD'  # Only SGD for now
-                )
-                .all()
+            # Add all other features in this group as orthologs
+            feature_orthologs[feat.feature_no].update(
+                group_feature_nos - {feat.feature_no}
             )
 
-            for dbx in external_orthologs:
-                orth_name = dbx.description or dbx.dbxref_id
-                source_organism = _get_organism_for_source(dbx.source)
+            # Track best source (prefer CGOB over BLAST RBH over BLAST)
+            current_priority = feature_best_source.get(feat.feature_no, 'BLAST')
+            if source_priority.get(hg.method, 2) < source_priority.get(current_priority, 2):
+                feature_best_source[feat.feature_no] = hg.method
 
-                doc = {
-                    "_index": INDEX_NAME,
-                    "_id": f"ortholog_ext_{cgd_gene.feature_no}_{dbx.dbxref_no}",
-                    "_source": {
-                        "type": "ortholog",
-                        "id": cgd_gene.dbxref_id,
-                        # CGD gene
-                        "cgd_gene_name": cgd_name,
-                        "cgd_feature_name": cgd_gene.feature_name,
-                        "cgd_gene_id": cgd_gene.dbxref_id,
-                        "organism": cgd_organism,
-                        # The ortholog (external)
-                        "ortholog_name": orth_name,
-                        "ortholog_organism": source_organism,
-                        "ortholog_display": f"{source_organism} {orth_name}",
-                        "ortholog_type": "Ortholog",
-                        "ortholog_source": dbx.source,
-                        "external_id": dbx.dbxref_id,
-                        # For searching - search by ortholog name
-                        "name": orth_name,
-                        "gene_name": orth_name,
-                        "feature_name": cgd_gene.feature_name,
-                        "homology_group_no": hg.homology_group_no,
-                        "related_genes": " ".join(all_ortholog_names),
-                        "link": f"/locus/{cgd_gene.feature_name}",
-                    }
-                }
-                yield doc
+    # Second pass: yield one document per feature with all its orthologs
+    for feature_no, ortholog_feature_nos in feature_orthologs.items():
+        feat = feature_data[feature_no]
+        gene_name = feat.gene_name or feat.feature_name
+        gene_organism = feat.organism.organism_name if feat.organism else None
+        short_organism = _get_short_organism_name(gene_organism)
+
+        # Collect all gene names and feature names from this feature + all orthologs
+        all_gene_names = set()
+        all_feature_names = set()
+
+        # Add this feature's names
+        if feat.gene_name:
+            all_gene_names.add(feat.gene_name)
+        if feat.feature_name:
+            all_feature_names.add(feat.feature_name)
+
+        # Build ortholog list and collect names
+        ortholog_list = []
+        for orth_feature_no in ortholog_feature_nos:
+            if orth_feature_no in feature_data:
+                orth = feature_data[orth_feature_no]
+                orth_name = orth.gene_name or orth.feature_name
+                orth_organism = orth.organism.organism_name if orth.organism else None
+
+                # Add to searchable names
+                if orth.gene_name:
+                    all_gene_names.add(orth.gene_name)
+                if orth.feature_name:
+                    all_feature_names.add(orth.feature_name)
+
+                ortholog_list.append({
+                    "name": orth_name,
+                    "feature_name": orth.feature_name,
+                    "organism": orth_organism,
+                    "short_organism": _get_short_organism_name(orth_organism),
+                    "dbxref_id": orth.dbxref_id,
+                    "link": f"/locus/{orth.feature_name}",
+                })
+
+        doc = {
+            "_index": INDEX_NAME,
+            "_id": f"ortholog_{feature_no}",
+            "_source": {
+                "type": "ortholog",
+                "id": feat.dbxref_id,
+                # This gene's info
+                "gene_name": gene_name,
+                "feature_name": feat.feature_name,
+                "dbxref_id": feat.dbxref_id,
+                "organism": gene_organism,
+                "short_organism": short_organism,
+                "name": gene_name,
+                # Ortholog info
+                "ortholog_source": feature_best_source.get(feature_no, 'BLAST'),
+                "group_size": len(ortholog_feature_nos) + 1,  # Include self
+                # All names for searching (from this gene + all orthologs)
+                "all_gene_names": " ".join(sorted(all_gene_names)),
+                "all_feature_names": " ".join(sorted(all_feature_names)),
+                # Related orthologs for display
+                "related_orthologs": ortholog_list,
+                "link": f"/locus/{feat.feature_name}",
+            }
+        }
+        yield doc
 
 
 def _get_short_organism_name(organism_name: str | None) -> str:
@@ -754,10 +790,11 @@ def _get_short_organism_name(organism_name: str | None) -> str:
         return ""
     mapping = {
         "Candida albicans SC5314": "C. albicans",
-        "Candida glabrata CBS138": "C. glabrata",
-        "Candida auris B8441": "C. auris",
         "Candida dubliniensis CD36": "C. dubliniensis",
+        "Candida tropicalis MYA-3404": "C. tropicalis",
         "Candida parapsilosis CDC317": "C. parapsilosis",
+        "Candida auris B8441": "C. auris",
+        "Candida glabrata CBS138": "C. glabrata",
     }
     return mapping.get(organism_name, organism_name.split()[0][:2] + ". " + organism_name.split()[-1] if organism_name else "")
 
@@ -792,6 +829,9 @@ def _generate_literature_topic_docs(db: Session) -> Generator[dict, None, None]:
     for rp, ref in lit_topics:
         display_name = f"PMID:{ref.pubmed}" if ref.pubmed else ref.dbxref_id
 
+        # Get full text URL if available
+        full_text_url = _get_full_text_url(db, ref.reference_no)
+
         doc = {
             "_index": INDEX_NAME,
             "_id": f"lit_topic_{rp.ref_property_no}",
@@ -805,6 +845,7 @@ def _generate_literature_topic_docs(db: Session) -> Generator[dict, None, None]:
                 "year": ref.year,
                 "reference_no": ref.reference_no,
                 "link": f"/reference/{ref.dbxref_id}",
+                "full_text_url": full_text_url,
             }
         }
         yield doc

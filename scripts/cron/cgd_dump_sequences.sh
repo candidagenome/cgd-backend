@@ -63,10 +63,11 @@ run_dump C_albicans_SC5314 "C. albicans SC5314 Assembly 21" "_A21"
 run_dump C_albicans_SC5314 "C. albicans SC5314 Assembly 19" "_A19"
 
 # Other species (auto-detect seq_source)
+run_dump C_auris_B8441
 run_dump C_dubliniensis_CD36
 run_dump C_glabrata_CBS138
 run_dump C_parapsilosis_CDC317
-run_dump C_auris_B8441
+run_dump C_tropicalis
 
 echo ""
 echo "========================================"

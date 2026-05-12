@@ -26,7 +26,6 @@ import csv
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -58,6 +57,40 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
+    """Parse GFF file to get protein_id -> gene_id mapping."""
+    protein_to_gene = {}
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            attributes = fields[8]
+
+            if feature_type == 'CDS':
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key.strip()] = value.strip()
+
+                protein_id = attr_dict.get('protein_id', '')
+                gene_id = attr_dict.get('gene_id', '')
+                if protein_id and gene_id:
+                    protein_to_gene[protein_id] = gene_id
+
+    return protein_to_gene
 
 
 def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
@@ -214,9 +247,18 @@ def load_orthologs_from_file(
     session,
     filepath: Path,
     other_species: str,
+    protein_to_gene: Optional[Dict[str, str]] = None,
     dry_run: bool = False
 ) -> Tuple[int, int, int]:
-    """Load orthologs from a single file."""
+    """Load orthologs from a single file.
+
+    Args:
+        session: Database session
+        filepath: Path to ortholog file
+        other_species: Name of the other species
+        protein_to_gene: Optional mapping of protein_id to gene_id for C. tropicalis
+        dry_run: If True, don't make changes
+    """
     logger.info(f"Loading orthologs from {filepath.name} ({other_species})")
 
     orthologs = parse_ortholog_file(filepath)
@@ -227,8 +269,19 @@ def load_orthologs_from_file(
     pairs_skipped = 0
 
     for ctrop_id, other_id in orthologs:
-        # Find C. tropicalis feature
-        ctrop_feature_no = get_feature_no_by_name(session, ctrop_id)
+        # Find C. tropicalis feature - use protein_to_gene mapping if available
+        ctrop_feature_no = None
+
+        # First try the gene_id from mapping
+        if protein_to_gene:
+            gene_id = protein_to_gene.get(ctrop_id)
+            if gene_id:
+                ctrop_feature_no = get_feature_no_by_name(session, gene_id)
+
+        # Fallback to direct lookup by protein_id
+        if not ctrop_feature_no:
+            ctrop_feature_no = get_feature_no_by_name(session, ctrop_id)
+
         if not ctrop_feature_no:
             # Try by dbxref pattern (protein ID like EER30087.1)
             ctrop_feature_no = get_feature_no_by_dbxref(session, ctrop_id)
@@ -262,7 +315,9 @@ def load_orthologs_from_file(
 
 def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis orthologs")
-    parser.add_argument("--orthologs-dir", required=True, type=Path, help="Directory with ortholog files")
+    parser.add_argument("--orthologs", dest="orthologs_dir", required=True, type=Path,
+                        help="Directory with ortholog files")
+    parser.add_argument("--gff", type=Path, help="GFF file for protein_id to gene_id mapping")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     args = parser.parse_args()
 
@@ -272,6 +327,13 @@ def main():
 
     if args.dry_run:
         logger.info("[DRY RUN MODE]")
+
+    # Parse GFF for protein_id -> gene_id mapping if provided
+    protein_to_gene = {}
+    if args.gff:
+        logger.info(f"Parsing GFF for protein mapping: {args.gff}")
+        protein_to_gene = parse_gff_protein_mapping(args.gff)
+        logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
 
     total_groups = 0
     total_loaded = 0
@@ -288,7 +350,7 @@ def main():
             filepath = args.orthologs_dir / filename
             if filepath.exists():
                 groups, loaded, skipped = load_orthologs_from_file(
-                    session, filepath, other_species, args.dry_run
+                    session, filepath, other_species, protein_to_gene, args.dry_run
                 )
                 total_groups += groups
                 total_loaded += loaded
