@@ -501,14 +501,28 @@ def get_synteny_data(
                 # This is important for C. tropicalis which has pairwise BLAST RBH clusters
                 flanking_clusters = _get_all_ortholog_clusters_for_feature(db, feat_no)
                 if flanking_clusters:
-                    # Use the first cluster's ID as the unified ortholog_id
-                    first_cluster = flanking_clusters[0]
-                    ortholog_id = first_cluster.homology_group_id or f"CGOB_{first_cluster.homology_group_no}"
+                    # First, check if any member of any cluster already has an ortholog_id
+                    # This ensures we unify ortholog groups that are connected transitively
+                    existing_id = None
+                    for cluster in flanking_clusters:
+                        for fh in cluster.feat_homology:
+                            if fh.feature and fh.feature.feature_no in feature_to_ortholog:
+                                existing_id = feature_to_ortholog[fh.feature.feature_no]
+                                break
+                        if existing_id:
+                            break
+
+                    # Use existing ID if found, otherwise create new one from first cluster
+                    if existing_id:
+                        ortholog_id = existing_id
+                    else:
+                        first_cluster = flanking_clusters[0]
+                        ortholog_id = first_cluster.homology_group_id or f"CGOB_{first_cluster.homology_group_no}"
 
                     if ortholog_id not in ortholog_connections:
                         ortholog_connections[ortholog_id] = set()
 
-                    # Collect members from ALL clusters
+                    # Collect members from ALL clusters and unify under the same ortholog_id
                     for cluster in flanking_clusters:
                         for fh in cluster.feat_homology:
                             if fh.feature:
