@@ -497,16 +497,23 @@ def get_synteny_data(
             # Check for ortholog group membership
             ortholog_id = feature_to_ortholog.get(feat_no)
             if not ortholog_id:
-                # Check if this flanking gene has its own CGOB cluster
-                cluster_info = _get_cgob_cluster_for_feature(db, feat_no)
-                if cluster_info:
-                    hg_id, hg_no = cluster_info
-                    ortholog_id = hg_id or f"CGOB_{hg_no}"
-                    # Get all members for this cluster
-                    members = _get_ortholog_members(db, hg_no)
+                # Get ALL ortholog clusters for this flanking gene (not just the first one)
+                # This is important for C. tropicalis which has pairwise BLAST RBH clusters
+                flanking_clusters = _get_all_ortholog_clusters_for_feature(db, feat_no)
+                if flanking_clusters:
+                    # Use the first cluster's ID as the unified ortholog_id
+                    first_cluster = flanking_clusters[0]
+                    ortholog_id = first_cluster.homology_group_id or f"CGOB_{first_cluster.homology_group_no}"
+
                     if ortholog_id not in ortholog_connections:
                         ortholog_connections[ortholog_id] = set()
-                    ortholog_connections[ortholog_id].update(members)
+
+                    # Collect members from ALL clusters
+                    for cluster in flanking_clusters:
+                        for fh in cluster.feat_homology:
+                            if fh.feature:
+                                ortholog_connections[ortholog_id].add(fh.feature.feature_name)
+                                feature_to_ortholog[fh.feature.feature_no] = ortholog_id
 
             genes.append(SyntenyGene(
                 feature_name=feat_name,
