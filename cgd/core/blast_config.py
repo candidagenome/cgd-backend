@@ -127,6 +127,14 @@ BLAST_ORGANISMS: Dict[str, Dict[str, Any]] = {
         "jbrowse_data": "cgd_data/C_tropicalis_MYA-3404",
         "is_cgd": True,
     },
+    # C. tropicalis (alias without strain suffix for database matching)
+    "C_tropicalis": {
+        "full_name": "Candida tropicalis MYA-3404",
+        "trans_table": 12,
+        "seq_sets": ["genomic", "gene", "coding", "protein"],
+        "jbrowse_data": "cgd_data/C_tropicalis_MYA-3404",
+        "is_cgd": True,
+    },
     # D. hansenii
     "D_hansenii_CBS767": {
         "full_name": "Debaryomyces hansenii CBS767",
