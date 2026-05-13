@@ -777,14 +777,21 @@ def get_chromosome_inventory(
             .subquery()
         )
 
-        # Get chromosomes - match the working _get_chromosomes_and_length() pattern
+        # Get chromosomes with their lengths from feat_location.stop_coord
+        # (matches the Perl logic which uses fl.stop_coord for chromosome length)
         chr_names_query = (
-            db.query(Feature.feature_no, Feature.feature_name)
+            db.query(
+                Feature.feature_no,
+                Feature.feature_name,
+                FeatLocation.stop_coord,
+            )
+            .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
             .filter(
                 Feature.organism_no == organism_no,
                 Feature.feature_type == "chromosome",
+                FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
                 GenomeVersion.is_ver_current == "Y",
             )
@@ -793,23 +800,12 @@ def get_chromosome_inventory(
             .all()
         )
 
-        # Get chromosome lengths from Genomic sequences
+        # Build chromosome length map
         chr_length_map = {}
-        for chr_fno, chr_name in chr_names_query:
-            length = (
-                db.query(Seq.seq_length)
-                .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
-                .filter(
-                    Seq.feature_no == chr_fno,
-                    Seq.is_seq_current == "Y",
-                    Seq.seq_type == "Genomic",
-                    GenomeVersion.is_ver_current == "Y",
-                )
-                .scalar() or 0
-            )
-            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": length}
+        for chr_fno, chr_name, stop_coord in chr_names_query:
+            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": stop_coord or 0}
 
-        chromosomes_query = chr_names_query
+        chromosomes_query = [(fno, name) for fno, name, _ in chr_names_query]
 
         if not chromosomes_query:
             return ChromosomeInventoryResponse(
