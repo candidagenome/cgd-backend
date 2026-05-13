@@ -777,25 +777,39 @@ def get_chromosome_inventory(
             .subquery()
         )
 
-        # Get chromosomes with their lengths
-        chromosomes_query = (
-            db.query(
-                Feature.feature_no,
-                Feature.feature_name,
-                Seq.seq_length,
-            )
+        # Get chromosomes - match the working _get_chromosomes_and_length() pattern
+        chr_names_query = (
+            db.query(Feature.feature_no, Feature.feature_name)
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
             .filter(
                 Feature.organism_no == organism_no,
                 Feature.feature_type == "chromosome",
                 Seq.is_seq_current == "Y",
-                Seq.seq_type == "Genomic",
                 GenomeVersion.is_ver_current == "Y",
             )
             .order_by(Feature.feature_name)
+            .distinct()
             .all()
         )
+
+        # Get chromosome lengths from Genomic sequences
+        chr_length_map = {}
+        for chr_fno, chr_name in chr_names_query:
+            length = (
+                db.query(Seq.seq_length)
+                .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+                .filter(
+                    Seq.feature_no == chr_fno,
+                    Seq.is_seq_current == "Y",
+                    Seq.seq_type == "Genomic",
+                    GenomeVersion.is_ver_current == "Y",
+                )
+                .scalar() or 0
+            )
+            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": length}
+
+        chromosomes_query = chr_names_query
 
         if not chromosomes_query:
             return ChromosomeInventoryResponse(
@@ -806,13 +820,10 @@ def get_chromosome_inventory(
                 feature_types=[],
             )
 
-        # Build chromosome info dict
+        # Build chromosome info dict using the length map
         chr_info = {}
-        for chr_feature_no, chr_name, chr_length in chromosomes_query:
-            chr_info[chr_name] = {
-                "feature_no": chr_feature_no,
-                "length": chr_length or 0,
-            }
+        for chr_feature_no, chr_name in chromosomes_query:
+            chr_info[chr_name] = chr_length_map.get(chr_name, {"feature_no": chr_feature_no, "length": 0})
 
         # Get all features on current chromosomes with their qualifiers
         # Join through feat_location -> seq (root_seq_no) -> chromosome feature
