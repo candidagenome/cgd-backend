@@ -50,8 +50,8 @@ JBROWSE_CONFIG = {
         "tracks": "DNA,TranscribedFeatures",
     },
     "Candida tropicalis MYA-3404": {
-        "assembly": "C_tropicalis",
-        "tracks": "DNA,TranscribedFeatures",
+        "assembly": "C_tropicalis_MYA3404",
+        "tracks": "DNA_ctrop,TranscribedFeatures_ctrop",
     },
 }
 
