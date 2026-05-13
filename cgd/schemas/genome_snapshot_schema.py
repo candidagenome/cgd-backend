@@ -102,3 +102,45 @@ class GenomeSnapshotListResponse(BaseModel):
         description="List of available organisms with abbrev and name"
     )
     error: Optional[str] = Field(None, description="Error message if failed")
+
+
+class ChromosomeFeatureCounts(BaseModel):
+    """Feature counts for a single chromosome."""
+    chromosome: str = Field(..., description="Chromosome name")
+    chromosome_display: str = Field(..., description="Display name for chromosome")
+    length_bp: int = Field(0, description="Chromosome length in base pairs")
+    total_orfs: int = Field(0, description="Total ORFs on this chromosome")
+    verified_orfs: int = Field(0, description="Verified ORFs")
+    uncharacterized_orfs: int = Field(0, description="Uncharacterized ORFs")
+    dubious_orfs: int = Field(0, description="Dubious ORFs")
+    trna: int = Field(0, description="tRNA count")
+    snorna: int = Field(0, description="snoRNA count")
+    rrna: int = Field(0, description="rRNA count")
+    ncrna: int = Field(0, description="ncRNA count")
+    pseudogene: int = Field(0, description="Pseudogene count")
+    total_features: int = Field(0, description="Total features")
+
+
+class ChromosomeInventoryResponse(BaseModel):
+    """Response for chromosome feature inventory."""
+    success: bool = Field(..., description="Request success")
+    organism_abbrev: str = Field(..., description="Organism abbreviation")
+    organism_name: str = Field(..., description="Full organism name")
+    chromosomes: List[ChromosomeFeatureCounts] = Field(
+        default_factory=list,
+        description="Feature counts per chromosome"
+    )
+    nuclear_totals: Optional[ChromosomeFeatureCounts] = Field(
+        None, description="Totals for nuclear genome"
+    )
+    mitochondrial: Optional[ChromosomeFeatureCounts] = Field(
+        None, description="Mitochondrial genome counts"
+    )
+    grand_totals: Optional[ChromosomeFeatureCounts] = Field(
+        None, description="Grand totals across all chromosomes"
+    )
+    feature_types: List[str] = Field(
+        default_factory=list,
+        description="List of feature types present in this organism"
+    )
+    error: Optional[str] = Field(None, description="Error message if failed")
