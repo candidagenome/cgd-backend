@@ -2998,6 +2998,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
         # Build Ortholog Cluster section (CGOB orthologs)
         ortholog_cluster = None
+        cluster_alignment_dbid = None  # dbxref_id for alignment files (from C. albicans ortholog)
         for fh in f.feat_homology:
             hg = fh.homology_group
             if hg and hg.homology_group_type == 'ortholog' and hg.method == 'CGOB':
@@ -3050,6 +3051,11 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                     is_query=True,
                 ))
 
+                # Track C. albicans dbxref_id for alignment files
+                # If query is C. albicans SC5314, use its dbxref_id
+                if organism_name == 'Candida albicans SC5314' and f.dbxref_id:
+                    cluster_alignment_dbid = f.dbxref_id
+
                 # Add other CGD orthologs (only from database strains, not "aliens")
                 for other_fh in hg.feat_homology:
                     other_feat = other_fh.feature
@@ -3076,6 +3082,11 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             status=other_status,
                             is_query=False,
                         ))
+
+                        # Track C. albicans dbxref_id for alignment files
+                        # If this ortholog is from C. albicans SC5314, use its dbxref_id
+                        if other_org_name == 'Candida albicans SC5314' and other_feat.dbxref_id:
+                            cluster_alignment_dbid = other_feat.dbxref_id
 
                 # Add external orthologs (SGD, EnsemblFungi) to the cluster table
                 # Use the eager-loaded relationship from homology_group
@@ -3405,13 +3416,15 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         reciprocal_best_hits = ExternalHomologsSectionOut(by_source=reciprocal_by_source) if reciprocal_by_source else None
 
         # Load phylogenetic tree if available
-        # Use dbxref_id (Stanford ID like CAL0126527) as the dbid for tree files
-        phylogenetic_tree = _load_phylogenetic_tree(f.dbxref_id) if f.dbxref_id else None
+        # Use cluster_alignment_dbid (C. albicans dbxref_id) for tree/alignment files
+        # Fall back to f.dbxref_id if no cluster alignment dbid found
+        alignment_dbid = cluster_alignment_dbid or f.dbxref_id
+        phylogenetic_tree = _load_phylogenetic_tree(alignment_dbid) if alignment_dbid else None
 
         # Load protein and coding sequence alignments if available
         # Pass feature_name as query_seq_id to put the query sequence first
-        protein_alignment = _load_sequence_alignment(f.dbxref_id, "protein", f.feature_name) if f.dbxref_id else None
-        coding_alignment = _load_sequence_alignment(f.dbxref_id, "coding", f.feature_name) if f.dbxref_id else None
+        protein_alignment = _load_sequence_alignment(alignment_dbid, "protein", f.feature_name) if alignment_dbid else None
+        coding_alignment = _load_sequence_alignment(alignment_dbid, "coding", f.feature_name) if alignment_dbid else None
 
         out[organism_name] = HomologyDetailsForOrganism(
             locus_display_name=locus_display_name,
