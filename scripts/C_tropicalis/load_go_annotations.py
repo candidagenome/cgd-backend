@@ -186,8 +186,14 @@ def create_go_annotation(
     annotation_type: str,
     source: str,
     dry_run: bool = False
-) -> bool:
-    """Create GO annotation entry."""
+) -> str:
+    """Create GO annotation entry.
+
+    Returns:
+        'created' - record was inserted
+        'exists' - record already exists
+        'duplicate' - insert failed with IntegrityError
+    """
     # Check if exists
     query = text(f"""
         SELECT go_annotation_no
@@ -207,10 +213,10 @@ def create_go_annotation(
     }).first()
 
     if result:
-        return False
+        return 'exists'
 
     if dry_run:
-        return True
+        return 'created'
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.go_annotation (
@@ -219,14 +225,18 @@ def create_go_annotation(
             {DB_SCHEMA}.go_annotation_seq.NEXTVAL, :go_no, :feature_no, :go_evidence, :annotation_type, :source
         )
     """)
-    session.execute(insert, {
-        "go_no": go_no,
-        "feature_no": feature_no,
-        "go_evidence": go_evidence,
-        "annotation_type": annotation_type,
-        "source": source,
-    })
-    return True
+    try:
+        with session.begin_nested():
+            session.execute(insert, {
+                "go_no": go_no,
+                "feature_no": feature_no,
+                "go_evidence": go_evidence,
+                "annotation_type": annotation_type,
+                "source": source,
+            })
+        return 'created'
+    except Exception:
+        return 'duplicate'
 
 
 def ensure_code(session, table_name: str, col_name: str, code_value: str, description: str, dry_run: bool = False) -> bool:
@@ -347,6 +357,8 @@ def load_go_annotations(
     logger.info(f"Found {total_go_terms} GO term assignments for {len(protein_go_terms)} proteins")
 
     annotations_loaded = 0
+    annotations_existed = 0
+    annotations_duplicate = 0
     proteins_found = 0
     proteins_not_found = 0
     go_terms_not_found = 0
@@ -367,7 +379,7 @@ def load_go_annotations(
                 go_terms_not_found += 1
                 continue
 
-            created = create_go_annotation(
+            result = create_go_annotation(
                 session,
                 go_no=go_no,
                 feature_no=feature_no,
@@ -376,8 +388,12 @@ def load_go_annotations(
                 source=SOURCE,
                 dry_run=dry_run
             )
-            if created:
+            if result == 'created':
                 annotations_loaded += 1
+            elif result == 'exists':
+                annotations_existed += 1
+            elif result == 'duplicate':
+                annotations_duplicate += 1
 
         if proteins_found % 500 == 0:
             logger.info(f"Processed {proteins_found} proteins...")
@@ -391,6 +407,8 @@ def load_go_annotations(
     logger.info(f"Proteins found in database: {proteins_found}")
     logger.info(f"Proteins not found: {proteins_not_found}")
     logger.info(f"GO annotations loaded: {annotations_loaded}")
+    logger.info(f"GO annotations already existed: {annotations_existed}")
+    logger.info(f"GO annotations skipped (duplicate): {annotations_duplicate}")
     logger.info(f"GO terms not found in GO table: {go_terms_not_found}")
 
 

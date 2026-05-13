@@ -3531,6 +3531,11 @@ JBROWSE_CONFIG = {
         "tracks": "DNA,TranscribedFeatures",
         "mini_tracks": "DNA,TranscribedFeatures",
     },
+    "Candida tropicalis MYA-3404": {
+        "assembly": "C_tropicalis_MYA3404",
+        "tracks": "DNA_ctrop,TranscribedFeatures_ctrop",
+        "mini_tracks": "DNA_ctrop,TranscribedFeatures_ctrop",
+    },
 }
 
 # JBrowse base URL - use settings for configurability

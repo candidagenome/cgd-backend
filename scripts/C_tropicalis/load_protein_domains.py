@@ -2,14 +2,20 @@
 """
 Load C. tropicalis protein domain data from InterProScan results.
 
-This script loads protein domains from InterProScan TSV output into the
+This script loads protein domains from InterProScan output into the
 protein_detail table, which is displayed on the Protein tab.
 
+Supports two input formats:
+1. GFF format (--gff): domains_by_gene_id.gff with CTRG gene IDs (preferred)
+2. TSV format (--tsv): InterProScan all_results.tsv (requires ID mapping)
+
 Usage:
-    python load_protein_domains.py --tsv FILE [--dry-run]
+    python load_protein_domains.py --gff FILE [--dry-run]
+    python load_protein_domains.py --tsv FILE [--mapping-gff FILE] [--dry-run]
 
 Data files needed:
-    - InterProScan all_results.tsv file
+    - domains_by_gene_id.gff (GFF format with CTRG IDs) - preferred
+    - OR InterProScan all_results.tsv file (TSV format)
 
 InterProScan TSV columns:
     0: Protein accession (e.g., EER30087.1)
@@ -144,6 +150,67 @@ def parse_gff_protein_mapping(gff_file: Path) -> Dict[str, str]:
                     protein_to_gene[protein_id] = gene_id
 
     return protein_to_gene
+
+
+def parse_domains_gff(gff_file: Path) -> List[Dict]:
+    """Parse domains GFF file with CTRG gene IDs.
+
+    GFF format:
+        CTRG_06251  CATH  CATH  1  162  5.0E-23  .  .  ID=G3DSA:3.10.110.10;Name=...;description=...;interpro=IPR016135
+    """
+    domains = []
+
+    with open(gff_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            line = line.strip()
+            if not line:
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            gene_id = fields[0]
+            analysis = fields[1]  # Database name (Pfam, CATH, etc.)
+            start = int(fields[3]) if fields[3].isdigit() else 0
+            end = int(fields[4]) if fields[4].isdigit() else 0
+            evalue = fields[5] if fields[5] != '.' else ''
+
+            # Parse attributes
+            attr_dict = {}
+            for attr in fields[8].split(';'):
+                if '=' in attr:
+                    key, value = attr.split('=', 1)
+                    attr_dict[key.strip()] = value.strip()
+
+            sig_accession = attr_dict.get('ID', attr_dict.get('Name', ''))
+            sig_description = attr_dict.get('description', '')
+            ipr_accession = attr_dict.get('interpro', '')
+            if ipr_accession == '-':
+                ipr_accession = ''
+
+            # Map analysis names (Gene3D uses CATH in GFF)
+            analysis_map = {'CATH': 'Gene3D'}
+            analysis = analysis_map.get(analysis, analysis)
+
+            if analysis not in DOMAIN_DATABASES:
+                continue
+
+            domains.append({
+                'protein_id': gene_id,  # Using gene_id directly
+                'analysis': analysis,
+                'sig_accession': sig_accession,
+                'sig_description': sig_description,
+                'start': start,
+                'end': end,
+                'evalue': evalue,
+                'ipr_accession': ipr_accession,
+                'ipr_description': '',
+            })
+
+    return domains
 
 
 def parse_iprscan_tsv(tsv_file: Path) -> List[Dict]:
@@ -347,23 +414,25 @@ def create_protein_detail(
 
 def load_protein_domains(
     session,
-    tsv_file: Path,
-    gff_file: Optional[Path] = None,
+    domains_gff: Optional[Path] = None,
+    tsv_file: Optional[Path] = None,
+    mapping_gff: Optional[Path] = None,
     dry_run: bool = False
 ):
-    """Load protein domains from InterProScan TSV into protein_detail table.
+    """Load protein domains from InterProScan into protein_detail table.
 
     Args:
         session: Database session
-        tsv_file: InterProScan TSV results file
-        gff_file: Optional GFF file for protein_id to gene_id mapping
+        domains_gff: GFF file with domains using CTRG gene IDs (preferred)
+        tsv_file: InterProScan TSV results file (alternative)
+        mapping_gff: GFF file for protein_id to gene_id mapping (for TSV input)
         dry_run: If True, don't make changes
     """
-    # Parse GFF for protein_id -> gene_id mapping if provided
+    # Parse mapping GFF for protein_id -> gene_id (only needed for TSV input)
     protein_to_gene = {}
-    if gff_file:
-        logger.info(f"Parsing GFF for protein mapping: {gff_file}")
-        protein_to_gene = parse_gff_protein_mapping(gff_file)
+    if mapping_gff and tsv_file:
+        logger.info(f"Parsing GFF for protein mapping: {mapping_gff}")
+        protein_to_gene = parse_gff_protein_mapping(mapping_gff)
         logger.info(f"Found {len(protein_to_gene)} protein-to-gene mappings")
 
     # Ensure code values exist for domain databases
@@ -378,8 +447,17 @@ def load_protein_domains(
             dry_run
         )
 
-    logger.info(f"Parsing InterProScan TSV: {tsv_file}")
-    domains = parse_iprscan_tsv(tsv_file)
+    # Parse domains from either GFF or TSV
+    if domains_gff:
+        logger.info(f"Parsing domains GFF: {domains_gff}")
+        domains = parse_domains_gff(domains_gff)
+    elif tsv_file:
+        logger.info(f"Parsing InterProScan TSV: {tsv_file}")
+        domains = parse_iprscan_tsv(tsv_file)
+    else:
+        logger.error("No input file provided")
+        return
+
     logger.info(f"Found {len(domains)} domain annotations")
 
     # Group by protein
@@ -453,8 +531,11 @@ def load_protein_domains(
 
 def main():
     parser = argparse.ArgumentParser(description="Load C. tropicalis protein domains")
-    parser.add_argument("--tsv", required=True, type=Path, help="InterProScan TSV results file")
-    parser.add_argument("--gff", type=Path, help="GFF file for protein_id to gene_id mapping")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--gff", type=Path, help="Domains GFF file with CTRG gene IDs (preferred)")
+    group.add_argument("--tsv", type=Path, help="InterProScan TSV results file")
+    parser.add_argument("--mapping-gff", type=Path,
+                        help="GFF file for protein_id to gene_id mapping (only for TSV input)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     args = parser.parse_args()
 
@@ -466,7 +547,13 @@ def main():
         logger.info("[DRY RUN MODE]")
 
     with SessionLocal() as session:
-        load_protein_domains(session, args.tsv, args.gff, args.dry_run)
+        load_protein_domains(
+            session,
+            domains_gff=args.gff,
+            tsv_file=args.tsv,
+            mapping_gff=args.mapping_gff,
+            dry_run=args.dry_run
+        )
 
     logger.info("Done!")
 
