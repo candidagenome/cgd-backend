@@ -777,22 +777,27 @@ def get_chromosome_inventory(
             .subquery()
         )
 
-        # Get chromosomes/contigs with their lengths from feat_location.stop_coord
-        # (matches the Perl logic which uses fl.stop_coord for chromosome length)
+        # Get chromosomes/contigs with their lengths
+        # Use FeatLocation.stop_coord if available, else fall back to Seq.seq_length
+        # (C. tropicalis contigs don't have FeatLocation records)
         # Support both "chromosome" and "contig" feature types for different assemblies
         chr_names_query = (
             db.query(
                 Feature.feature_no,
                 Feature.feature_name,
                 FeatLocation.stop_coord,
+                Seq.seq_length,
             )
-            .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+            .outerjoin(
+                FeatLocation,
+                (Feature.feature_no == FeatLocation.feature_no) &
+                (FeatLocation.is_loc_current == "Y")
+            )
             .filter(
                 Feature.organism_no == organism_no,
                 Feature.feature_type.in_(["chromosome", "contig"]),
-                FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
                 GenomeVersion.is_ver_current == "Y",
             )
@@ -801,12 +806,14 @@ def get_chromosome_inventory(
             .all()
         )
 
-        # Build chromosome length map
+        # Build chromosome length map - use FeatLocation.stop_coord if available,
+        # else use Seq.seq_length
         chr_length_map = {}
-        for chr_fno, chr_name, stop_coord in chr_names_query:
-            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": stop_coord or 0}
+        for chr_fno, chr_name, stop_coord, seq_length in chr_names_query:
+            length = stop_coord if stop_coord else (seq_length or 0)
+            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": length}
 
-        chromosomes_query = [(fno, name) for fno, name, _ in chr_names_query]
+        chromosomes_query = [(fno, name) for fno, name, _, _ in chr_names_query]
 
         if not chromosomes_query:
             return ChromosomeInventoryResponse(
