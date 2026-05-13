@@ -49,6 +49,10 @@ JBROWSE_CONFIG = {
         "assembly": "C_auris_B8441",
         "tracks": "DNA,TranscribedFeatures",
     },
+    "Candida tropicalis MYA-3404": {
+        "assembly": "C_tropicalis",
+        "tracks": "DNA,TranscribedFeatures",
+    },
 }
 
 # Flanking basepairs to add to JBrowse coordinates
