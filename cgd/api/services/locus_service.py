@@ -3418,6 +3418,23 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
         # Load phylogenetic tree if available
         # Use cluster_alignment_dbid (C. albicans dbxref_id) for tree/alignment files
         # Fall back to f.dbxref_id if no cluster alignment dbid found
+        #
+        # If cluster_alignment_dbid wasn't found via eager loading (can happen due to
+        # SQLAlchemy lazy loading issues), try to find it via explicit query
+        if cluster_alignment_dbid is None and ortholog_cluster is not None:
+            # Look for C. albicans SC5314 ortholog in the cluster to get its dbxref_id
+            for orth in ortholog_cluster.orthologs:
+                if orth.organism_name == 'Candida albicans SC5314' and not orth.is_query:
+                    # Query the database to get the dbxref_id
+                    cal_feat = (
+                        db.query(Feature.dbxref_id)
+                        .filter(Feature.feature_name == orth.feature_name)
+                        .first()
+                    )
+                    if cal_feat and cal_feat[0]:
+                        cluster_alignment_dbid = cal_feat[0]
+                        break
+
         alignment_dbid = cluster_alignment_dbid or f.dbxref_id
         phylogenetic_tree = _load_phylogenetic_tree(alignment_dbid) if alignment_dbid else None
 
