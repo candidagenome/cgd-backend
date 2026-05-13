@@ -777,8 +777,9 @@ def get_chromosome_inventory(
             .subquery()
         )
 
-        # Get chromosomes with their lengths from feat_location.stop_coord
+        # Get chromosomes/contigs with their lengths from feat_location.stop_coord
         # (matches the Perl logic which uses fl.stop_coord for chromosome length)
+        # Support both "chromosome" and "contig" feature types for different assemblies
         chr_names_query = (
             db.query(
                 Feature.feature_no,
@@ -790,7 +791,7 @@ def get_chromosome_inventory(
             .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
             .filter(
                 Feature.organism_no == organism_no,
-                Feature.feature_type == "chromosome",
+                Feature.feature_type.in_(["chromosome", "contig"]),
                 FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
                 GenomeVersion.is_ver_current == "Y",
