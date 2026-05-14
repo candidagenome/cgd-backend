@@ -11,12 +11,14 @@ from cgd.models.models import (
     Feature,
     FeatLocation,
     FeatHomology,
+    FeatRelationship,
     HomologyGroup,
     Seq,
     FeatAlias,
     Alias,
 )
 from cgd.schemas.synteny_schema import (
+    Exon,
     SyntenyGene,
     SyntenyRegion,
     OrthologConnection,
@@ -118,6 +120,53 @@ def _get_flanking_genes(
     end_idx = min(len(genes), center_idx + flanking_count + 1)
 
     return genes[start_idx:end_idx]
+
+
+def _get_exons_for_features(
+    db: Session,
+    feature_nos: list[int],
+) -> dict[int, list[Exon]]:
+    """
+    Get exon coordinates for a list of features.
+
+    Exons are stored as child features via FeatRelationship (rank=2).
+    Returns a dict mapping feature_no to list of Exon objects with chromosome coordinates.
+    """
+    if not feature_nos:
+        return {}
+
+    # Query exons for all features at once
+    # Exons are child features linked via FeatRelationship with rank=2
+    # and have feature_type containing 'exon' (e.g., 'exon', 'coding_exon', etc.)
+    exon_rows = (
+        db.query(
+            FeatRelationship.parent_feature_no,
+            FeatLocation.start_coord,
+            FeatLocation.stop_coord,
+        )
+        .join(Feature, Feature.feature_no == FeatRelationship.child_feature_no)
+        .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+        .filter(
+            FeatRelationship.parent_feature_no.in_(feature_nos),
+            FeatRelationship.rank == 2,  # rank 2 = subfeature
+            func.lower(Feature.feature_type).contains('exon'),
+            FeatLocation.is_loc_current == 'Y',
+        )
+        .order_by(
+            FeatRelationship.parent_feature_no,
+            FeatLocation.start_coord,
+        )
+        .all()
+    )
+
+    # Group by parent feature
+    exons_by_feature: dict[int, list[Exon]] = {}
+    for parent_no, start, stop in exon_rows:
+        if parent_no not in exons_by_feature:
+            exons_by_feature[parent_no] = []
+        exons_by_feature[parent_no].append(Exon(start=start, stop=stop))
+
+    return exons_by_feature
 
 
 def _get_cgob_cluster_for_feature(
@@ -488,6 +537,10 @@ def get_synteny_data(
             flanking_count,
         )
 
+        # Fetch exon data for all flanking genes at once
+        flanking_feature_nos = [f[0] for f in flanking]
+        exons_by_feature = _get_exons_for_features(db, flanking_feature_nos)
+
         # Build gene list
         genes = []
         for feat_no, feat_name, gene_name, start, stop, strand in flanking:
@@ -529,6 +582,9 @@ def get_synteny_data(
                                 ortholog_connections[ortholog_id].add(fh.feature.feature_name)
                                 feature_to_ortholog[fh.feature.feature_no] = ortholog_id
 
+            # Get exons for this gene (empty list if no introns)
+            gene_exons = exons_by_feature.get(feat_no, [])
+
             genes.append(SyntenyGene(
                 feature_name=feat_name,
                 gene_name=gene_name,
@@ -537,6 +593,7 @@ def get_synteny_data(
                 strand=strand,
                 is_query=is_query,
                 ortholog_id=ortholog_id,
+                exons=gene_exons,
             ))
 
         synteny_regions[species] = SyntenyRegion(
