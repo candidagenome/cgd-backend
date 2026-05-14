@@ -135,9 +135,9 @@ def _get_exons_for_features(
     if not feature_nos:
         return {}
 
-    # Query exons for all features at once
+    # Query exons (CDS regions) for all features at once
     # Exons are child features linked via FeatRelationship with rank=2
-    # and have feature_type containing 'exon' (e.g., 'exon', 'coding_exon', etc.)
+    # and have feature_type 'CDS' (Coding Sequence)
     exon_rows = (
         db.query(
             FeatRelationship.parent_feature_no,
@@ -149,7 +149,7 @@ def _get_exons_for_features(
         .filter(
             FeatRelationship.parent_feature_no.in_(feature_nos),
             FeatRelationship.rank == 2,  # rank 2 = subfeature
-            func.lower(Feature.feature_type).contains('exon'),
+            func.upper(Feature.feature_type) == 'CDS',
             FeatLocation.is_loc_current == 'Y',
         )
         .order_by(
