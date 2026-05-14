@@ -30,6 +30,7 @@ class ChromosomeOut(BaseModel):
     feature_type: str
     dbxref_id: str
     organism_name: str
+    organism_abbrev: str
     taxon_id: int
     headline: typing.Optional[str] = None
     start_coord: typing.Optional[int] = None

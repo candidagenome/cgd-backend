@@ -771,15 +771,27 @@ def get_chromosome_inventory(
         organism_no = organism.organism_no
 
         # Get the current genome version for this organism
-        # Only select the single current version to avoid showing multiple assemblies
-        current_version = (
-            db.query(GenomeVersion)
-            .filter(
-                GenomeVersion.organism_no == organism_no,
-                GenomeVersion.is_ver_current == "Y",
+        # For C. albicans, we want Assembly 22 specifically
+        # For other organisms, use is_ver_current='Y'
+        if organism_abbrev == "C_albicans_SC5314":
+            # Specifically look for Assembly 22 for C. albicans
+            current_version = (
+                db.query(GenomeVersion)
+                .filter(
+                    GenomeVersion.organism_no == organism_no,
+                    GenomeVersion.genome_version_name.ilike("%Assembly 22%"),
+                )
+                .first()
             )
-            .first()
-        )
+        else:
+            current_version = (
+                db.query(GenomeVersion)
+                .filter(
+                    GenomeVersion.organism_no == organism_no,
+                    GenomeVersion.is_ver_current == "Y",
+                )
+                .first()
+            )
 
         if not current_version:
             return ChromosomeInventoryResponse(
