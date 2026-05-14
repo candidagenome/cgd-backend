@@ -135,11 +135,12 @@ def _find_feature_with_homology(db: Session, gene_id: str) -> Optional[Feature]:
 def _get_ortholog_groups_for_feature(feature: Feature) -> list[HomologyGroup]:
     """
     Get all ortholog homology groups for a feature.
-    Prioritizes CGOB method over BLAST RBH.
+    Prioritizes CGOB method, then BLAST RBH, then BLAST.
     Feature must have been loaded with homology relationships.
     """
-    # Filter for ortholog type groups, prioritize CGOB
+    # Filter for ortholog type groups, prioritize by method
     cgob_groups = []
+    blast_rbh_groups = []
     blast_groups = []
     seen_groups = set()
 
@@ -156,10 +157,14 @@ def _get_ortholog_groups_for_feature(feature: Feature) -> list[HomologyGroup]:
             if hg.method == 'CGOB':
                 cgob_groups.append(hg)
             elif hg.method == 'BLAST RBH':
+                blast_rbh_groups.append(hg)
+            elif hg.method == 'BLAST':
                 blast_groups.append(hg)
 
-    # Return CGOB groups if available, else BLAST RBH
-    return cgob_groups if cgob_groups else blast_groups
+    # Return all groups in priority order: CGOB first, then BLAST RBH, then BLAST
+    # This allows fallback to BLAST if CGOB/BLAST RBH don't have target organism
+    all_groups = cgob_groups + blast_rbh_groups + blast_groups
+    return all_groups
 
 
 def _find_cgd_ortholog_in_group(
