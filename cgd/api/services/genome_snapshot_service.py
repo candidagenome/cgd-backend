@@ -1009,8 +1009,7 @@ def get_chromosome_inventory(
                 "mito" in chr_lower or
                 chr_lower.startswith("mt") or
                 "_mt" in chr_lower or
-                chr_lower == "chrm" or
-                chr_lower.startswith("chrm_") or
+                "chrm" in chr_lower or  # Catches chrM anywhere in name (e.g., Ca22chrM_...)
                 "mtdna" in chr_lower
             ):
                 mito_names.add(chr_name)
