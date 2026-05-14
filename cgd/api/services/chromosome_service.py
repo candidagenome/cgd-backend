@@ -37,17 +37,19 @@ from cgd.models.models import (
 )
 
 
-def _get_organism_info(feature) -> tuple[str, int]:
-    """Extract organism name and taxon_id from a feature."""
+def _get_organism_info(feature) -> tuple[str, str, int]:
+    """Extract organism name, abbrev, and taxon_id from a feature."""
     org = feature.organism
     organism_name = None
+    organism_abbrev = ""
     taxon_id = 0
     if org is not None:
         organism_name = getattr(org, "organism_name", None)
+        organism_abbrev = getattr(org, "organism_abbrev", "") or ""
         taxon_id = getattr(org, "taxon_id", 0) or 0
     if not organism_name:
         organism_name = str(feature.organism_no)
-    return organism_name, taxon_id
+    return organism_name, organism_abbrev, taxon_id
 
 
 def _get_chromosome_by_name(db: Session, name: str) -> Feature:
@@ -184,7 +186,7 @@ def get_chromosome(db: Session, name: str) -> ChromosomeResponse:
     """
     feature = _get_chromosome_by_name(db, name)
 
-    organism_name, taxon_id = _get_organism_info(feature)
+    organism_name, organism_abbrev, taxon_id = _get_organism_info(feature)
 
     # Get aliases
     aliases = []
@@ -211,6 +213,7 @@ def get_chromosome(db: Session, name: str) -> ChromosomeResponse:
         feature_type=feature.feature_type,
         dbxref_id=feature.dbxref_id,
         organism_name=organism_name,
+        organism_abbrev=organism_abbrev,
         taxon_id=taxon_id,
         headline=feature.headline,
         start_coord=start_coord,

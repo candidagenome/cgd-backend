@@ -374,8 +374,10 @@ def _get_chromosomes_for_organism(db: Session, organism_abbrev: str) -> List[str
     Get chromosomes for a specific organism.
 
     Filters for current sequence and genome version to match the Perl logic.
+    Includes both 'chromosome' and 'contig' feature types since some organisms
+    (e.g., C. parapsilosis, C. tropicalis) use 'contig' instead of 'chromosome'.
     """
-    # Get chromosome features with current sequence and genome version
+    # Get chromosome/contig features with current sequence and genome version
     chromosomes = (
         db.query(Feature.feature_name)
         .join(Organism, Feature.organism_no == Organism.organism_no)
@@ -383,7 +385,7 @@ def _get_chromosomes_for_organism(db: Session, organism_abbrev: str) -> List[str
         .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
         .filter(
             Organism.organism_abbrev == organism_abbrev,
-            Feature.feature_type == "chromosome",
+            Feature.feature_type.in_(["chromosome", "contig"]),
             Seq.is_seq_current == "Y",
             GenomeVersion.is_ver_current == "Y",
         )

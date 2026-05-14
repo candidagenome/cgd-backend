@@ -5,6 +5,12 @@ import typing
 from pydantic import BaseModel
 
 
+class Exon(BaseModel):
+    """An exon within a gene."""
+    start: int  # Chromosome coordinate
+    stop: int   # Chromosome coordinate
+
+
 class SyntenyGene(BaseModel):
     """A gene in a synteny region."""
     feature_name: str
@@ -14,6 +20,7 @@ class SyntenyGene(BaseModel):
     strand: str  # 'W' or 'C'
     is_query: bool = False
     ortholog_id: typing.Optional[str] = None  # CGOB cluster ID if part of an ortholog group
+    exons: list[Exon] = []  # Exon coordinates (empty list = no introns/single exon)
 
 
 class SyntenyRegion(BaseModel):
@@ -82,6 +89,7 @@ class GenomeGene(BaseModel):
     strand: str  # 'W' or 'C'
     ortholog_id: typing.Optional[str] = None  # CGOB cluster ID
     headline: typing.Optional[str] = None  # gene description
+    exons: list[Exon] = []  # Exon coordinates (empty list = no introns/single exon)
 
 
 class ChromosomeGenesResponse(BaseModel):

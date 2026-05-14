@@ -11,11 +11,13 @@ from cgd.schemas.genome_snapshot_schema import (
     GenomeSnapshotResponse,
     GenomeSnapshotListResponse,
     GoSlimDistributionResponse,
+    ChromosomeInventoryResponse,
 )
 from cgd.api.services.genome_snapshot_service import (
     get_available_organisms,
     get_genome_snapshot,
     get_go_slim_distribution,
+    get_chromosome_inventory,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,5 +91,35 @@ def get_go_slim(
         raise
     except Exception as e:
         logger.error(f"Error getting GO Slim distribution for {organism_abbrev}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{organism_abbrev}/chromosome-inventory", response_model=ChromosomeInventoryResponse)
+def get_chr_inventory(
+    organism_abbrev: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get chromosome feature inventory for genome snapshot.
+
+    Returns a table of feature counts (ORFs, tRNAs, etc.) per chromosome,
+    similar to the original Perl genomeSnapshot feature_inventory table.
+
+    Args:
+        organism_abbrev: Organism abbreviation (e.g., C_albicans_SC5314)
+
+    Returns:
+        Feature counts per chromosome with nuclear/mitochondrial totals.
+    """
+    try:
+        result = get_chromosome_inventory(db, organism_abbrev)
+        if not result.success:
+            raise HTTPException(status_code=404, detail=result.error)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chromosome inventory for {organism_abbrev}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))

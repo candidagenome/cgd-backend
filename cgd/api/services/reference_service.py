@@ -1027,7 +1027,7 @@ def get_references_with_datasets(db: Session) -> DatasetsResponse:
     Get references that have archived datasets (url_type = 'Reference Data').
 
     Returns references grouped by year in descending order, with links to
-    the dataset files.
+    the dataset files and any Reference supplement URLs.
     """
     # Query references that have a URL with type 'Reference Data'
     results = (
@@ -1039,6 +1039,23 @@ def get_references_with_datasets(db: Session) -> DatasetsResponse:
         .all()
     )
 
+    # Collect all reference_nos to batch query all URLs
+    ref_nos = list(set(ref.reference_no for ref, _ in results))
+
+    # Batch query all URLs for these references (including supplement URLs)
+    urls_by_ref = defaultdict(list)
+    if ref_nos:
+        all_urls = (
+            db.query(RefUrl.reference_no, RefUrl, Url)
+            .join(Url, RefUrl.url_no == Url.url_no)
+            .filter(RefUrl.reference_no.in_(ref_nos))
+            .all()
+        )
+        for ref_no, ref_url_obj, url_obj in all_urls:
+            if url_obj and url_obj.url:
+                ref_url_obj.url = url_obj
+                urls_by_ref[ref_no].append(ref_url_obj)
+
     # Build response
     references = []
     years_set = set()
@@ -1046,26 +1063,9 @@ def get_references_with_datasets(db: Session) -> DatasetsResponse:
     for ref, data_url in results:
         years_set.add(ref.year)
 
-        # Build citation links
-        links = []
-        if ref.dbxref_id:
-            links.append(CitationLink(
-                name='CGD Paper',
-                url=f'/reference/{ref.dbxref_id}',
-                link_type='internal',
-            ))
-        if ref.pubmed:
-            links.append(CitationLink(
-                name='PubMed',
-                url=f'https://pubmed.ncbi.nlm.nih.gov/{ref.pubmed}',
-                link_type='external',
-            ))
-        if data_url:
-            links.append(CitationLink(
-                name='Reference Data',
-                url=data_url,
-                link_type='external',
-            ))
+        # Build citation links using helper function (includes CGD Paper, PubMed,
+        # Reference Data, Reference Supplement, etc.)
+        links = _build_citation_links(ref, urls_by_ref.get(ref.reference_no, []))
 
         references.append(DatasetReferenceItem(
             reference_no=ref.reference_no,

@@ -33,6 +33,8 @@ from cgd.schemas.genome_snapshot_schema import (
     GoSlimCategory,
     GoSlimDistribution,
     GoSlimDistributionResponse,
+    ChromosomeInventoryResponse,
+    ChromosomeFeatureCounts,
 )
 
 logger = logging.getLogger(__name__)
@@ -726,6 +728,405 @@ def get_go_slim_distribution(
         import traceback
         logger.error(traceback.format_exc())
         return GoSlimDistributionResponse(
+            success=False,
+            organism_abbrev=organism_abbrev,
+            organism_name="",
+            error=str(e),
+        )
+
+
+def get_chromosome_inventory(
+    db: Session,
+    organism_abbrev: str,
+) -> ChromosomeInventoryResponse:
+    """
+    Get feature counts per chromosome for genome snapshot.
+
+    This replicates the Perl feature_inventory() function that creates
+    a table showing feature counts across chromosomes.
+
+    Args:
+        db: Database session
+        organism_abbrev: Organism abbreviation (e.g., C_albicans_SC5314)
+
+    Returns:
+        ChromosomeInventoryResponse with feature counts per chromosome
+    """
+    try:
+        # Get organism
+        organism = (
+            db.query(Organism)
+            .filter(Organism.organism_abbrev == organism_abbrev)
+            .first()
+        )
+
+        if not organism:
+            return ChromosomeInventoryResponse(
+                success=False,
+                organism_abbrev=organism_abbrev,
+                organism_name="",
+                error=f"Organism '{organism_abbrev}' not found",
+            )
+
+        organism_no = organism.organism_no
+
+        # Subquery: Get deleted feature_nos
+        deleted_subquery = (
+            db.query(FeatProperty.feature_no)
+            .filter(FeatProperty.property_value.like("Deleted%"))
+            .subquery()
+        )
+
+        # Get chromosomes/contigs with their lengths
+        # For C. albicans, filter by chromosome name pattern (Ca22 = Assembly 22)
+        # For other organisms, use is_ver_current='Y' and is_seq_current='Y'
+        if organism_abbrev == "C_albicans_SC5314":
+            # Filter by chromosome name starting with "Ca22" for Assembly 22
+            chr_names_query = (
+                db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    FeatLocation.stop_coord,
+                    Seq.seq_length,
+                )
+                .join(Seq, Feature.feature_no == Seq.feature_no)
+                .outerjoin(
+                    FeatLocation,
+                    (Feature.feature_no == FeatLocation.feature_no) &
+                    (FeatLocation.is_loc_current == "Y")
+                )
+                .filter(
+                    Feature.organism_no == organism_no,
+                    Feature.feature_type.in_(["chromosome", "contig"]),
+                    Feature.feature_name.ilike("Ca22%"),
+                    Seq.is_seq_current == "Y",
+                )
+                .order_by(Feature.feature_name)
+                .distinct()
+                .all()
+            )
+        else:
+            # For other organisms, use genome version filtering
+            current_version = (
+                db.query(GenomeVersion)
+                .filter(
+                    GenomeVersion.organism_no == organism_no,
+                    GenomeVersion.is_ver_current == "Y",
+                )
+                .first()
+            )
+
+            if not current_version:
+                return ChromosomeInventoryResponse(
+                    success=True,
+                    organism_abbrev=organism_abbrev,
+                    organism_name=organism.organism_name,
+                    chromosomes=[],
+                    feature_types=[],
+                    error="No current genome version found",
+                )
+
+            current_version_no = current_version.genome_version_no
+
+            chr_names_query = (
+                db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    FeatLocation.stop_coord,
+                    Seq.seq_length,
+                )
+                .join(Seq, Feature.feature_no == Seq.feature_no)
+                .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+                .outerjoin(
+                    FeatLocation,
+                    (Feature.feature_no == FeatLocation.feature_no) &
+                    (FeatLocation.is_loc_current == "Y")
+                )
+                .filter(
+                    Feature.organism_no == organism_no,
+                    Feature.feature_type.in_(["chromosome", "contig"]),
+                    Seq.is_seq_current == "Y",
+                    GenomeVersion.genome_version_no == current_version_no,
+                )
+                .order_by(Feature.feature_name)
+                .distinct()
+                .all()
+            )
+
+        # Build chromosome length map - use FeatLocation.stop_coord if available,
+        # else use Seq.seq_length
+        chr_length_map = {}
+        for chr_fno, chr_name, stop_coord, seq_length in chr_names_query:
+            length = stop_coord if stop_coord else (seq_length or 0)
+            chr_length_map[chr_name] = {"feature_no": chr_fno, "length": length}
+
+        chromosomes_query = [(fno, name) for fno, name, _, _ in chr_names_query]
+
+        if not chromosomes_query:
+            return ChromosomeInventoryResponse(
+                success=True,
+                organism_abbrev=organism_abbrev,
+                organism_name=organism.organism_name,
+                chromosomes=[],
+                feature_types=[],
+            )
+
+        # Build chromosome info dict using the length map
+        chr_info = {}
+        for chr_feature_no, chr_name in chromosomes_query:
+            chr_info[chr_name] = chr_length_map.get(chr_name, {"feature_no": chr_feature_no, "length": 0})
+
+        # Get list of chromosome feature_nos to filter features
+        chr_feature_nos = [info["feature_no"] for info in chr_info.values()]
+
+        # Get all features on the selected chromosomes with their qualifiers
+        # Join through feat_location -> seq (root_seq_no) -> chromosome feature
+        # Filter by chromosome feature_nos to get only features on selected chromosomes
+        features_query = (
+            db.query(
+                Feature.feature_no,
+                Feature.feature_name,
+                Feature.feature_type,
+                Seq.feature_no.label("chr_feature_no"),
+            )
+            .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+            .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+            .filter(
+                Feature.organism_no == organism_no,
+                FeatLocation.is_loc_current == "Y",
+                Seq.is_seq_current == "Y",
+                Seq.feature_no.in_(chr_feature_nos),
+                ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
+            )
+            .all()
+        )
+
+        # Build chr_feature_no to chr_name mapping
+        chr_feature_no_to_name = {}
+        for chr_name, info in chr_info.items():
+            chr_feature_no_to_name[info["feature_no"]] = chr_name
+
+        # Get ORF qualifiers
+        orf_feature_nos = [f[0] for f in features_query if f[2] == "ORF"]
+        orf_qualifiers = {}
+        if orf_feature_nos:
+            for i in range(0, len(orf_feature_nos), ORACLE_IN_LIMIT):
+                chunk = orf_feature_nos[i:i + ORACLE_IN_LIMIT]
+                quals = (
+                    db.query(FeatProperty.feature_no, FeatProperty.property_value)
+                    .filter(
+                        FeatProperty.feature_no.in_(chunk),
+                        FeatProperty.property_type == "feature_qualifier",
+                        FeatProperty.property_value.in_(["Verified", "Uncharacterized", "Dubious"]),
+                    )
+                    .all()
+                )
+                for fno, qual in quals:
+                    orf_qualifiers[fno] = qual
+
+        # Count features per chromosome
+        chr_counts = {chr_name: {
+            "total_orfs": 0,
+            "verified_orfs": 0,
+            "uncharacterized_orfs": 0,
+            "dubious_orfs": 0,
+            "trna": 0,
+            "snorna": 0,
+            "rrna": 0,
+            "ncrna": 0,
+            "pseudogene": 0,
+            "snrna": 0,
+            "ltr": 0,
+            "retrotransposon": 0,
+            "centromere": 0,
+            "repeat_region": 0,
+            "blocked_reading_frame": 0,
+            "total_features": 0,
+        } for chr_name in chr_info.keys()}
+
+        feature_types_present = set()
+
+        for feature_no, feature_name, feature_type, chr_feature_no in features_query:
+            chr_name = chr_feature_no_to_name.get(chr_feature_no)
+            if not chr_name or chr_name not in chr_counts:
+                continue
+
+            counts = chr_counts[chr_name]
+            counts["total_features"] += 1
+
+            if feature_type == "ORF":
+                counts["total_orfs"] += 1
+                qualifier = orf_qualifiers.get(feature_no)
+                if qualifier == "Verified":
+                    counts["verified_orfs"] += 1
+                    feature_types_present.add("Verified ORFs")
+                elif qualifier == "Uncharacterized":
+                    counts["uncharacterized_orfs"] += 1
+                    feature_types_present.add("Uncharacterized ORFs")
+                elif qualifier == "Dubious":
+                    counts["dubious_orfs"] += 1
+                    feature_types_present.add("Dubious ORFs")
+            elif feature_type == "tRNA":
+                counts["trna"] += 1
+                feature_types_present.add("tRNA")
+            elif feature_type == "snoRNA":
+                counts["snorna"] += 1
+                feature_types_present.add("snoRNA")
+            elif feature_type == "rRNA":
+                counts["rrna"] += 1
+                feature_types_present.add("rRNA")
+            elif feature_type == "ncRNA":
+                counts["ncrna"] += 1
+                feature_types_present.add("ncRNA")
+            elif feature_type == "pseudogene":
+                counts["pseudogene"] += 1
+                feature_types_present.add("Pseudogene")
+            elif feature_type == "snRNA":
+                counts["snrna"] += 1
+                feature_types_present.add("snRNA")
+            elif feature_type == "long_terminal_repeat":
+                counts["ltr"] += 1
+                feature_types_present.add("Long terminal repeat")
+            elif feature_type == "retrotransposon":
+                counts["retrotransposon"] += 1
+                feature_types_present.add("Retrotransposon")
+            elif feature_type == "centromere":
+                counts["centromere"] += 1
+                feature_types_present.add("Centromere")
+            elif feature_type == "repeat_region":
+                counts["repeat_region"] += 1
+                feature_types_present.add("Repeat region")
+            elif feature_type == "blocked_reading_frame":
+                counts["blocked_reading_frame"] += 1
+                feature_types_present.add("Blocked reading frame")
+
+        # Identify mitochondrial chromosomes
+        # Common naming patterns: "mito", "Mt", "chrM", "mtDNA"
+        mito_names = set()
+        for chr_name in chr_info.keys():
+            chr_lower = chr_name.lower()
+            if (
+                "mito" in chr_lower or
+                chr_lower.startswith("mt") or
+                "_mt" in chr_lower or
+                "chrm" in chr_lower or  # Catches chrM anywhere in name (e.g., Ca22chrM_...)
+                "mtdna" in chr_lower
+            ):
+                mito_names.add(chr_name)
+
+        # Build chromosome list and calculate totals
+        chromosome_list = []
+        nuclear_totals = {
+            "total_orfs": 0, "verified_orfs": 0, "uncharacterized_orfs": 0, "dubious_orfs": 0,
+            "trna": 0, "snorna": 0, "rrna": 0, "ncrna": 0, "pseudogene": 0,
+            "snrna": 0, "ltr": 0, "retrotransposon": 0, "centromere": 0,
+            "repeat_region": 0, "blocked_reading_frame": 0, "total_features": 0, "length_bp": 0,
+        }
+        mito_totals = {
+            "total_orfs": 0, "verified_orfs": 0, "uncharacterized_orfs": 0, "dubious_orfs": 0,
+            "trna": 0, "snorna": 0, "rrna": 0, "ncrna": 0, "pseudogene": 0,
+            "snrna": 0, "ltr": 0, "retrotransposon": 0, "centromere": 0,
+            "repeat_region": 0, "blocked_reading_frame": 0, "total_features": 0, "length_bp": 0,
+        }
+
+        # Sort chromosomes: nuclear first (sorted), then mitochondrial
+        nuclear_chr_names = sorted([n for n in chr_info.keys() if n not in mito_names])
+        mito_chr_names = sorted([n for n in chr_info.keys() if n in mito_names])
+
+        for chr_name in nuclear_chr_names + mito_chr_names:
+            counts = chr_counts[chr_name]
+            length = chr_info[chr_name]["length"]
+            is_mito = chr_name in mito_names
+
+            # Create display name (strip organism suffix if present)
+            display_name = chr_name
+            if is_mito:
+                display_name = "Mito"
+            elif "_" in chr_name:
+                # Try to extract a shorter display name
+                parts = chr_name.split("_")
+                # Common patterns: "Chr1_C_albicans_SC5314" -> "Chr1"
+                #                  "Ca22chr1A_C_albicans_SC5314" -> "1A"
+                if parts[0].lower().startswith("chr"):
+                    display_name = parts[0]
+                elif parts[0].lower().startswith("ca") and "chr" in parts[0].lower():
+                    # Extract chromosome part from Ca22chr1A
+                    import re
+                    match = re.search(r'chr(\w+)', parts[0], re.IGNORECASE)
+                    if match:
+                        display_name = match.group(1)
+                else:
+                    display_name = parts[0]
+
+            chr_data = ChromosomeFeatureCounts(
+                chromosome=chr_name,
+                chromosome_display=display_name,
+                length_bp=length,
+                total_orfs=counts["total_orfs"],
+                verified_orfs=counts["verified_orfs"],
+                uncharacterized_orfs=counts["uncharacterized_orfs"],
+                dubious_orfs=counts["dubious_orfs"],
+                trna=counts["trna"],
+                snorna=counts["snorna"],
+                rrna=counts["rrna"],
+                ncrna=counts["ncrna"],
+                pseudogene=counts["pseudogene"],
+                total_features=counts["total_features"],
+            )
+
+            # Add chromosome to list
+            chromosome_list.append(chr_data)
+
+            # Add to appropriate totals for tracking
+            if is_mito:
+                for key in mito_totals:
+                    if key == "length_bp":
+                        mito_totals[key] += length
+                    elif key in counts:
+                        mito_totals[key] += counts[key]
+            else:
+                for key in nuclear_totals:
+                    if key == "length_bp":
+                        nuclear_totals[key] += length
+                    elif key in counts:
+                        nuclear_totals[key] += counts[key]
+
+        # Calculate grand totals (sum of nuclear + mitochondrial)
+        grand_totals = {k: nuclear_totals[k] + mito_totals[k] for k in nuclear_totals}
+
+        # Build grand totals response
+        grand_counts = ChromosomeFeatureCounts(
+            chromosome="total",
+            chromosome_display="Total",
+            length_bp=grand_totals["length_bp"],
+            total_orfs=grand_totals["total_orfs"],
+            verified_orfs=grand_totals["verified_orfs"],
+            uncharacterized_orfs=grand_totals["uncharacterized_orfs"],
+            dubious_orfs=grand_totals["dubious_orfs"],
+            trna=grand_totals["trna"],
+            snorna=grand_totals["snorna"],
+            rrna=grand_totals["rrna"],
+            ncrna=grand_totals["ncrna"],
+            pseudogene=grand_totals["pseudogene"],
+            total_features=grand_totals["total_features"],
+        )
+
+        return ChromosomeInventoryResponse(
+            success=True,
+            organism_abbrev=organism_abbrev,
+            organism_name=organism.organism_name,
+            chromosomes=chromosome_list,
+            nuclear_totals=None,  # Removed - no longer showing separate nuclear column
+            mitochondrial=None,   # Mito is now included in chromosomes list
+            grand_totals=grand_counts,
+            feature_types=sorted(list(feature_types_present)),
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting chromosome inventory for {organism_abbrev}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return ChromosomeInventoryResponse(
             success=False,
             organism_abbrev=organism_abbrev,
             organism_name="",
