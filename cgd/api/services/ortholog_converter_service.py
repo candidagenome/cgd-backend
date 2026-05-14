@@ -39,18 +39,30 @@ def _get_organism_name(feature: Feature) -> Optional[str]:
     )
 
 
-def _find_feature_by_id(db: Session, gene_id: str) -> Optional[Feature]:
+def _find_feature_with_homology(db: Session, gene_id: str) -> Optional[Feature]:
     """
-    Find a feature by gene ID (gene_name, feature_name, or dbxref_id).
-    Returns the first matching feature.
+    Find a feature by gene ID with homology relationships eagerly loaded.
+    Returns the first matching feature with all homology data.
     """
     gene_id = gene_id.strip()
     if not gene_id:
         return None
 
+    # Load feature with homology relationships (same pattern as locus_service.py)
     feature = (
         db.query(Feature)
-        .options(joinedload(Feature.organism))
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.dbxref_homology)
+                .joinedload(DbxrefHomology.dbxref),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.feat_homology)
+                .joinedload(FeatHomology.feature)
+                .joinedload(Feature.organism),
+        )
         .filter(
             or_(
                 func.upper(Feature.gene_name) == func.upper(gene_id),
@@ -64,34 +76,27 @@ def _find_feature_by_id(db: Session, gene_id: str) -> Optional[Feature]:
     return feature
 
 
-def _get_ortholog_groups_for_feature(db: Session, feature: Feature) -> list[HomologyGroup]:
+def _get_ortholog_groups_for_feature(feature: Feature) -> list[HomologyGroup]:
     """
     Get all ortholog homology groups for a feature.
     Prioritizes CGOB method over BLAST RBH.
+    Feature must have been loaded with homology relationships.
     """
-    # Query homology groups with eager loading
-    feat_homologies = (
-        db.query(FeatHomology)
-        .options(
-            joinedload(FeatHomology.homology_group)
-            .joinedload(HomologyGroup.feat_homology)
-            .joinedload(FeatHomology.feature)
-            .joinedload(Feature.organism),
-            joinedload(FeatHomology.homology_group)
-            .joinedload(HomologyGroup.dbxref_homology)
-            .joinedload(DbxrefHomology.dbxref),
-        )
-        .filter(FeatHomology.feature_no == feature.feature_no)
-        .all()
-    )
-
     # Filter for ortholog type groups, prioritize CGOB
     cgob_groups = []
     blast_groups = []
+    seen_groups = set()
 
-    for fh in feat_homologies:
+    for fh in feature.feat_homology:
         hg = fh.homology_group
-        if hg and hg.homology_group_type == 'ortholog':
+        if hg is None:
+            continue
+        # Skip if already processed (avoid duplicates)
+        if hg.homology_group_no in seen_groups:
+            continue
+        seen_groups.add(hg.homology_group_no)
+
+        if hg.homology_group_type == 'ortholog':
             if hg.method == 'CGOB':
                 cgob_groups.append(hg)
             elif hg.method == 'BLAST RBH':
@@ -212,8 +217,8 @@ def convert_orthologs(
         if not gene_id:
             continue
 
-        # Find the input feature
-        feature = _find_feature_by_id(db, gene_id)
+        # Find the input feature with homology data
+        feature = _find_feature_with_homology(db, gene_id)
 
         if not feature:
             # Gene not found in CGD
@@ -247,7 +252,7 @@ def convert_orthologs(
             continue
 
         # Get ortholog groups
-        homology_groups = _get_ortholog_groups_for_feature(db, feature)
+        homology_groups = _get_ortholog_groups_for_feature(feature)
 
         if not homology_groups:
             results.append(OrthologResult(
