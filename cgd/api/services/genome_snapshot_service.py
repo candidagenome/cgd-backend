@@ -770,6 +770,29 @@ def get_chromosome_inventory(
 
         organism_no = organism.organism_no
 
+        # Get the current genome version for this organism
+        # Only select the single current version to avoid showing multiple assemblies
+        current_version = (
+            db.query(GenomeVersion)
+            .filter(
+                GenomeVersion.organism_no == organism_no,
+                GenomeVersion.is_ver_current == "Y",
+            )
+            .first()
+        )
+
+        if not current_version:
+            return ChromosomeInventoryResponse(
+                success=True,
+                organism_abbrev=organism_abbrev,
+                organism_name=organism.organism_name,
+                chromosomes=[],
+                feature_types=[],
+                error="No current genome version found",
+            )
+
+        current_version_no = current_version.genome_version_no
+
         # Subquery: Get deleted feature_nos
         deleted_subquery = (
             db.query(FeatProperty.feature_no)
@@ -781,6 +804,7 @@ def get_chromosome_inventory(
         # Use FeatLocation.stop_coord if available, else fall back to Seq.seq_length
         # (C. tropicalis contigs don't have FeatLocation records)
         # Support both "chromosome" and "contig" feature types for different assemblies
+        # Filter to only the current genome version to avoid showing multiple assemblies
         chr_names_query = (
             db.query(
                 Feature.feature_no,
@@ -799,7 +823,7 @@ def get_chromosome_inventory(
                 Feature.organism_no == organism_no,
                 Feature.feature_type.in_(["chromosome", "contig"]),
                 Seq.is_seq_current == "Y",
-                GenomeVersion.is_ver_current == "Y",
+                GenomeVersion.genome_version_no == current_version_no,
             )
             .order_by(Feature.feature_name)
             .distinct()
@@ -831,6 +855,7 @@ def get_chromosome_inventory(
 
         # Get all features on current chromosomes with their qualifiers
         # Join through feat_location -> seq (root_seq_no) -> chromosome feature
+        # Filter to only the current genome version
         features_query = (
             db.query(
                 Feature.feature_no,
@@ -845,7 +870,7 @@ def get_chromosome_inventory(
                 Feature.organism_no == organism_no,
                 FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
-                GenomeVersion.is_ver_current == "Y",
+                GenomeVersion.genome_version_no == current_version_no,
                 ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
             )
             .all()
@@ -950,11 +975,19 @@ def get_chromosome_inventory(
                 counts["blocked_reading_frame"] += 1
                 feature_types_present.add("Blocked reading frame")
 
-        # Identify mitochondrial chromosomes (typically contain "mito" or "Mt")
+        # Identify mitochondrial chromosomes
+        # Common naming patterns: "mito", "Mt", "chrM", "mtDNA"
         mito_names = set()
         for chr_name in chr_info.keys():
             chr_lower = chr_name.lower()
-            if "mito" in chr_lower or chr_lower.startswith("mt") or "_mt" in chr_lower:
+            if (
+                "mito" in chr_lower or
+                chr_lower.startswith("mt") or
+                "_mt" in chr_lower or
+                chr_lower == "chrm" or
+                chr_lower.startswith("chrm_") or
+                "mtdna" in chr_lower
+            ):
                 mito_names.add(chr_name)
 
         # Build chromosome list and calculate totals
@@ -972,13 +1005,20 @@ def get_chromosome_inventory(
             "repeat_region": 0, "blocked_reading_frame": 0, "total_features": 0, "length_bp": 0,
         }
 
-        for chr_name in sorted(chr_info.keys()):
+        # Sort chromosomes: nuclear first (sorted), then mitochondrial
+        nuclear_chr_names = sorted([n for n in chr_info.keys() if n not in mito_names])
+        mito_chr_names = sorted([n for n in chr_info.keys() if n in mito_names])
+
+        for chr_name in nuclear_chr_names + mito_chr_names:
             counts = chr_counts[chr_name]
             length = chr_info[chr_name]["length"]
+            is_mito = chr_name in mito_names
 
             # Create display name (strip organism suffix if present)
             display_name = chr_name
-            if "_" in chr_name:
+            if is_mito:
+                display_name = "Mito"
+            elif "_" in chr_name:
                 # Try to extract a shorter display name
                 parts = chr_name.split("_")
                 # Common patterns: "Chr1_C_albicans_SC5314" -> "Chr1"
@@ -1010,59 +1050,27 @@ def get_chromosome_inventory(
                 total_features=counts["total_features"],
             )
 
-            # Add to appropriate totals
-            if chr_name in mito_names:
+            # Add chromosome to list
+            chromosome_list.append(chr_data)
+
+            # Add to appropriate totals for tracking
+            if is_mito:
                 for key in mito_totals:
                     if key == "length_bp":
                         mito_totals[key] += length
                     elif key in counts:
                         mito_totals[key] += counts[key]
             else:
-                chromosome_list.append(chr_data)
                 for key in nuclear_totals:
                     if key == "length_bp":
                         nuclear_totals[key] += length
                     elif key in counts:
                         nuclear_totals[key] += counts[key]
 
-        # Calculate grand totals
+        # Calculate grand totals (sum of nuclear + mitochondrial)
         grand_totals = {k: nuclear_totals[k] + mito_totals[k] for k in nuclear_totals}
 
-        # Build response
-        nuclear_counts = ChromosomeFeatureCounts(
-            chromosome="nuclear",
-            chromosome_display="Nuclear genome",
-            length_bp=nuclear_totals["length_bp"],
-            total_orfs=nuclear_totals["total_orfs"],
-            verified_orfs=nuclear_totals["verified_orfs"],
-            uncharacterized_orfs=nuclear_totals["uncharacterized_orfs"],
-            dubious_orfs=nuclear_totals["dubious_orfs"],
-            trna=nuclear_totals["trna"],
-            snorna=nuclear_totals["snorna"],
-            rrna=nuclear_totals["rrna"],
-            ncrna=nuclear_totals["ncrna"],
-            pseudogene=nuclear_totals["pseudogene"],
-            total_features=nuclear_totals["total_features"],
-        )
-
-        mito_counts = None
-        if mito_totals["total_features"] > 0:
-            mito_counts = ChromosomeFeatureCounts(
-                chromosome="mitochondrial",
-                chromosome_display="Mitochondrial genome",
-                length_bp=mito_totals["length_bp"],
-                total_orfs=mito_totals["total_orfs"],
-                verified_orfs=mito_totals["verified_orfs"],
-                uncharacterized_orfs=mito_totals["uncharacterized_orfs"],
-                dubious_orfs=mito_totals["dubious_orfs"],
-                trna=mito_totals["trna"],
-                snorna=mito_totals["snorna"],
-                rrna=mito_totals["rrna"],
-                ncrna=mito_totals["ncrna"],
-                pseudogene=mito_totals["pseudogene"],
-                total_features=mito_totals["total_features"],
-            )
-
+        # Build grand totals response
         grand_counts = ChromosomeFeatureCounts(
             chromosome="total",
             chromosome_display="Total",
@@ -1084,8 +1092,8 @@ def get_chromosome_inventory(
             organism_abbrev=organism_abbrev,
             organism_name=organism.organism_name,
             chromosomes=chromosome_list,
-            nuclear_totals=nuclear_counts,
-            mitochondrial=mito_counts,
+            nuclear_totals=None,  # Removed - no longer showing separate nuclear column
+            mitochondrial=None,   # Mito is now included in chromosomes list
             grand_totals=grand_counts,
             feature_types=sorted(list(feature_types_present)),
         )
