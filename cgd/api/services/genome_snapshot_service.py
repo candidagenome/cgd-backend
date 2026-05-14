@@ -770,20 +770,43 @@ def get_chromosome_inventory(
 
         organism_no = organism.organism_no
 
-        # Get the current genome version for this organism
-        # For C. albicans, we want Assembly 22 specifically
-        # For other organisms, use is_ver_current='Y'
+        # Subquery: Get deleted feature_nos
+        deleted_subquery = (
+            db.query(FeatProperty.feature_no)
+            .filter(FeatProperty.property_value.like("Deleted%"))
+            .subquery()
+        )
+
+        # Get chromosomes/contigs with their lengths
+        # For C. albicans, filter by chromosome name pattern (Ca22 = Assembly 22)
+        # For other organisms, use is_ver_current='Y' and is_seq_current='Y'
         if organism_abbrev == "C_albicans_SC5314":
-            # Specifically look for Assembly 22 for C. albicans
-            current_version = (
-                db.query(GenomeVersion)
-                .filter(
-                    GenomeVersion.organism_no == organism_no,
-                    GenomeVersion.genome_version_name.ilike("%Assembly 22%"),
+            # Filter by chromosome name starting with "Ca22" for Assembly 22
+            chr_names_query = (
+                db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    FeatLocation.stop_coord,
+                    Seq.seq_length,
                 )
-                .first()
+                .join(Seq, Feature.feature_no == Seq.feature_no)
+                .outerjoin(
+                    FeatLocation,
+                    (Feature.feature_no == FeatLocation.feature_no) &
+                    (FeatLocation.is_loc_current == "Y")
+                )
+                .filter(
+                    Feature.organism_no == organism_no,
+                    Feature.feature_type.in_(["chromosome", "contig"]),
+                    Feature.feature_name.ilike("Ca22%"),
+                    Seq.is_seq_current == "Y",
+                )
+                .order_by(Feature.feature_name)
+                .distinct()
+                .all()
             )
         else:
+            # For other organisms, use genome version filtering
             current_version = (
                 db.query(GenomeVersion)
                 .filter(
@@ -793,54 +816,42 @@ def get_chromosome_inventory(
                 .first()
             )
 
-        if not current_version:
-            return ChromosomeInventoryResponse(
-                success=True,
-                organism_abbrev=organism_abbrev,
-                organism_name=organism.organism_name,
-                chromosomes=[],
-                feature_types=[],
-                error="No current genome version found",
-            )
+            if not current_version:
+                return ChromosomeInventoryResponse(
+                    success=True,
+                    organism_abbrev=organism_abbrev,
+                    organism_name=organism.organism_name,
+                    chromosomes=[],
+                    feature_types=[],
+                    error="No current genome version found",
+                )
 
-        current_version_no = current_version.genome_version_no
+            current_version_no = current_version.genome_version_no
 
-        # Subquery: Get deleted feature_nos
-        deleted_subquery = (
-            db.query(FeatProperty.feature_no)
-            .filter(FeatProperty.property_value.like("Deleted%"))
-            .subquery()
-        )
-
-        # Get chromosomes/contigs with their lengths
-        # Use FeatLocation.stop_coord if available, else fall back to Seq.seq_length
-        # (C. tropicalis contigs don't have FeatLocation records)
-        # Support both "chromosome" and "contig" feature types for different assemblies
-        # Filter to only the current genome version to avoid showing multiple assemblies
-        chr_names_query = (
-            db.query(
-                Feature.feature_no,
-                Feature.feature_name,
-                FeatLocation.stop_coord,
-                Seq.seq_length,
+            chr_names_query = (
+                db.query(
+                    Feature.feature_no,
+                    Feature.feature_name,
+                    FeatLocation.stop_coord,
+                    Seq.seq_length,
+                )
+                .join(Seq, Feature.feature_no == Seq.feature_no)
+                .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+                .outerjoin(
+                    FeatLocation,
+                    (Feature.feature_no == FeatLocation.feature_no) &
+                    (FeatLocation.is_loc_current == "Y")
+                )
+                .filter(
+                    Feature.organism_no == organism_no,
+                    Feature.feature_type.in_(["chromosome", "contig"]),
+                    Seq.is_seq_current == "Y",
+                    GenomeVersion.genome_version_no == current_version_no,
+                )
+                .order_by(Feature.feature_name)
+                .distinct()
+                .all()
             )
-            .join(Seq, Feature.feature_no == Seq.feature_no)
-            .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
-            .outerjoin(
-                FeatLocation,
-                (Feature.feature_no == FeatLocation.feature_no) &
-                (FeatLocation.is_loc_current == "Y")
-            )
-            .filter(
-                Feature.organism_no == organism_no,
-                Feature.feature_type.in_(["chromosome", "contig"]),
-                Seq.is_seq_current == "Y",
-                GenomeVersion.genome_version_no == current_version_no,
-            )
-            .order_by(Feature.feature_name)
-            .distinct()
-            .all()
-        )
 
         # Build chromosome length map - use FeatLocation.stop_coord if available,
         # else use Seq.seq_length
@@ -865,9 +876,12 @@ def get_chromosome_inventory(
         for chr_feature_no, chr_name in chromosomes_query:
             chr_info[chr_name] = chr_length_map.get(chr_name, {"feature_no": chr_feature_no, "length": 0})
 
-        # Get all features on current chromosomes with their qualifiers
+        # Get list of chromosome feature_nos to filter features
+        chr_feature_nos = [info["feature_no"] for info in chr_info.values()]
+
+        # Get all features on the selected chromosomes with their qualifiers
         # Join through feat_location -> seq (root_seq_no) -> chromosome feature
-        # Filter to only the current genome version
+        # Filter by chromosome feature_nos to get only features on selected chromosomes
         features_query = (
             db.query(
                 Feature.feature_no,
@@ -877,12 +891,11 @@ def get_chromosome_inventory(
             )
             .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
-            .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
             .filter(
                 Feature.organism_no == organism_no,
                 FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
-                GenomeVersion.genome_version_no == current_version_no,
+                Seq.feature_no.in_(chr_feature_nos),
                 ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
             )
             .all()
