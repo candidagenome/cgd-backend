@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from cgd.api.deps import get_db
+from cgd.db.deps import get_db
 from cgd.api.services import ortholog_converter_service
 from cgd.schemas.ortholog_converter_schema import (
     TargetOrganism,
