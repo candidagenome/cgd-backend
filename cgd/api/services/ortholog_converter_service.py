@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from cgd.models.models import (
     Feature,
     FeatHomology,
+    FeatRelationship,
     HomologyGroup,
     DbxrefHomology,
     Dbxref,
@@ -39,17 +40,55 @@ def _get_organism_name(feature: Feature) -> Optional[str]:
     )
 
 
+def _get_a21_exclusion_set(db: Session) -> set[int]:
+    """
+    Get set of feature_nos to exclude (Assembly 21 features with A22 equivalents).
+    Based on es_indexer.py pattern.
+    """
+    # Direct Assembly 21 features
+    direct_a21 = (
+        db.query(FeatRelationship.child_feature_no)
+        .filter(
+            FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+            FeatRelationship.rank == 3,
+        )
+        .all()
+    )
+    exclude_set = {r[0] for r in direct_a21}
+
+    # Alleles of Assembly 21 features - batch to avoid Oracle 1000-item IN clause limit
+    exclude_list = list(exclude_set)
+    batch_size = 900
+    for i in range(0, len(exclude_list), batch_size):
+        batch = exclude_list[i:i + batch_size]
+        alleles_of_a21 = (
+            db.query(FeatRelationship.child_feature_no)
+            .filter(
+                FeatRelationship.relationship_type == 'allele',
+                FeatRelationship.rank == 3,
+                FeatRelationship.parent_feature_no.in_(batch)
+            )
+            .all()
+        )
+        exclude_set.update(r[0] for r in alleles_of_a21)
+
+    return exclude_set
+
+
 def _find_feature_with_homology(db: Session, gene_id: str) -> Optional[Feature]:
     """
     Find a feature by gene ID with homology relationships eagerly loaded.
-    Returns the first matching feature with all homology data.
+    Filters out Assembly 21 features and prefers features with homology data.
     """
     gene_id = gene_id.strip()
     if not gene_id:
         return None
 
-    # Load feature with homology relationships (same pattern as locus_service.py)
-    feature = (
+    # Get Assembly 21 exclusion set
+    a21_exclude = _get_a21_exclusion_set(db)
+
+    # Load ALL matching features with homology relationships
+    features = (
         db.query(Feature)
         .options(
             joinedload(Feature.organism),
@@ -71,9 +110,26 @@ def _find_feature_with_homology(db: Session, gene_id: str) -> Optional[Feature]:
             )
         )
         .filter(func.lower(Feature.feature_type) != 'allele')
-        .first()
+        .all()
     )
-    return feature
+
+    if not features:
+        return None
+
+    # Filter out Assembly 21 features
+    valid_features = [f for f in features if f.feature_no not in a21_exclude]
+
+    if not valid_features:
+        # If all filtered out, fall back to original list
+        valid_features = features
+
+    # Prefer feature with homology data (has feat_homology entries)
+    for feat in valid_features:
+        if feat.feat_homology and len(feat.feat_homology) > 0:
+            return feat
+
+    # Fall back to first valid feature
+    return valid_features[0] if valid_features else None
 
 
 def _get_ortholog_groups_for_feature(feature: Feature) -> list[HomologyGroup]:
