@@ -15,11 +15,8 @@ class TargetOrganism(str, Enum):
     C_PARAPSILOSIS = "C_parapsilosis_CDC317"
     C_AURIS = "C_auris_B8441"
     C_GLABRATA = "C_glabrata_CBS138"
-    # External species
+    # External species (only S. cerevisiae has ortholog data)
     S_CEREVISIAE = "S_cerevisiae"
-    S_POMBE = "S_pombe"
-    A_NIDULANS = "A_nidulans"
-    N_CRASSA = "N_crassa"
 
 
 # Mapping from enum to display names used in the database
@@ -31,17 +28,11 @@ TARGET_ORGANISM_DISPLAY_NAMES = {
     TargetOrganism.C_AURIS: "Candida auris B8441",
     TargetOrganism.C_GLABRATA: "Candida glabrata CBS138",
     TargetOrganism.S_CEREVISIAE: "Saccharomyces cerevisiae",
-    TargetOrganism.S_POMBE: "Schizosaccharomyces pombe",
-    TargetOrganism.A_NIDULANS: "Aspergillus nidulans",
-    TargetOrganism.N_CRASSA: "Neurospora crassa",
 }
 
 # External organism sources (stored in DbxrefHomology)
 EXTERNAL_ORGANISM_SOURCES = {
     TargetOrganism.S_CEREVISIAE: "SGD",
-    TargetOrganism.S_POMBE: "POMBASE",
-    TargetOrganism.A_NIDULANS: "AspGD",
-    TargetOrganism.N_CRASSA: "BROAD_NEUROSPORA",
 }
 
 

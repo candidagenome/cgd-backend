@@ -445,12 +445,9 @@ def get_available_targets() -> AvailableTargetsResponse:
             is_external=False,
         ))
 
-    # External species
+    # External species (only S. cerevisiae has ortholog data in CGD)
     external_species = [
         TargetOrganism.S_CEREVISIAE,
-        TargetOrganism.S_POMBE,
-        TargetOrganism.A_NIDULANS,
-        TargetOrganism.N_CRASSA,
     ]
 
     for org in external_species:
