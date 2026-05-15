@@ -89,15 +89,15 @@ download_sra_run() {
 # Function to get SRA run IDs from BioProject
 get_runs_from_bioproject() {
     local bioproject="$1"
-    echo -e "${YELLOW}Fetching SRA runs for BioProject $bioproject...${NC}"
+    echo -e "${YELLOW}Fetching SRA runs for BioProject $bioproject...${NC}" >&2
 
     # Use esearch/efetch to get run IDs
     esearch -db sra -query "$bioproject[BioProject]" 2>/dev/null | \
         efetch -format runinfo 2>/dev/null | \
         cut -d',' -f1 | \
         grep -E "^[SED]RR" || {
-            echo -e "${RED}Error: Could not fetch runs for $bioproject${NC}"
-            echo "Make sure NCBI E-utilities (edirect) is installed"
+            echo -e "${RED}Error: Could not fetch runs for $bioproject${NC}" >&2
+            echo "Make sure NCBI E-utilities (edirect) is installed" >&2
             exit 1
         }
 }
@@ -105,7 +105,7 @@ get_runs_from_bioproject() {
 # Function to get SRA run IDs from GEO
 get_runs_from_geo() {
     local geo_id="$1"
-    echo -e "${YELLOW}Fetching SRA runs for GEO $geo_id...${NC}"
+    echo -e "${YELLOW}Fetching SRA runs for GEO $geo_id...${NC}" >&2
 
     # GEO to SRA mapping via NCBI
     esearch -db gds -query "$geo_id[Accession]" 2>/dev/null | \
@@ -115,10 +115,10 @@ get_runs_from_geo() {
         grep -E "^[SED]RR" || {
             # Alternative: try ffq if available
             if command -v ffq &> /dev/null; then
-                echo "  Trying ffq..."
+                echo "  Trying ffq..." >&2
                 ffq "$geo_id" 2>/dev/null | jq -r '.[].accession' | grep -E "^[SED]RR"
             else
-                echo -e "${RED}Error: Could not fetch runs for $geo_id${NC}"
+                echo -e "${RED}Error: Could not fetch runs for $geo_id${NC}" >&2
                 exit 1
             fi
         }
