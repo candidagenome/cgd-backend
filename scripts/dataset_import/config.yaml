@@ -1,0 +1,67 @@
+# CGD Dataset Import Configuration
+# Species genome references and paths
+
+# Base directories
+paths:
+  data_root: "/data"
+  hts_dir: "/data/HTS"
+  jbrowse_dir: "/data/jbrowse2"
+  genomes_dir: "/data/genomes"
+  temp_dir: "/data/tmp/dataset_import"
+  fastq_dir: "/data/tmp/dataset_import/fastq"
+
+# Species configurations
+species:
+  C_albicans_SC5314:
+    display_name: "Candida albicans SC5314"
+    genome_fasta: "/data/genomes/C_albicans_SC5314/C_albicans_SC5314_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_albicans_SC5314/C_albicans_SC5314_current_features.gff"
+    hisat2_index: "/data/genomes/C_albicans_SC5314/hisat2_index/C_albicans_SC5314"
+    output_dir: "/data/HTS/C_albicans_SC5314/bam"
+
+  C_auris_B8441:
+    display_name: "Candida auris B8441"
+    genome_fasta: "/data/genomes/C_auris_B8441/C_auris_B8441_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_auris_B8441/C_auris_B8441_current_features.gff"
+    hisat2_index: "/data/genomes/C_auris_B8441/hisat2_index/C_auris_B8441"
+    output_dir: "/data/HTS/C_auris_B8441/bam"
+
+  C_glabrata_CBS138:
+    display_name: "Candida glabrata CBS138"
+    genome_fasta: "/data/genomes/C_glabrata_CBS138/C_glabrata_CBS138_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_glabrata_CBS138/C_glabrata_CBS138_current_features.gff"
+    hisat2_index: "/data/genomes/C_glabrata_CBS138/hisat2_index/C_glabrata_CBS138"
+    output_dir: "/data/HTS/C_glabrata_CBS138/bam"
+
+  C_dubliniensis_CD36:
+    display_name: "Candida dubliniensis CD36"
+    genome_fasta: "/data/genomes/C_dubliniensis_CD36/C_dubliniensis_CD36_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_dubliniensis_CD36/C_dubliniensis_CD36_current_features.gff"
+    hisat2_index: "/data/genomes/C_dubliniensis_CD36/hisat2_index/C_dubliniensis_CD36"
+    output_dir: "/data/HTS/C_dubliniensis_CD36/bam"
+
+  C_parapsilosis_CDC317:
+    display_name: "Candida parapsilosis CDC317"
+    genome_fasta: "/data/genomes/C_parapsilosis_CDC317/C_parapsilosis_CDC317_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_parapsilosis_CDC317/C_parapsilosis_CDC317_current_features.gff"
+    hisat2_index: "/data/genomes/C_parapsilosis_CDC317/hisat2_index/C_parapsilosis_CDC317"
+    output_dir: "/data/HTS/C_parapsilosis_CDC317/bam"
+
+  C_tropicalis_MYA3404:
+    display_name: "Candida tropicalis MYA-3404"
+    genome_fasta: "/data/genomes/C_tropicalis_MYA3404/C_tropicalis_MYA3404_current_chromosomes.fasta"
+    genome_gff: "/data/genomes/C_tropicalis_MYA3404/C_tropicalis_MYA3404_current_features.gff"
+    hisat2_index: "/data/genomes/C_tropicalis_MYA3404/hisat2_index/C_tropicalis_MYA3404"
+    output_dir: "/data/HTS/C_tropicalis_MYA3404/bam"
+
+# Tool settings
+tools:
+  hisat2:
+    threads: 8
+    extra_args: "--dta"  # For downstream transcript assembly
+  samtools:
+    threads: 8
+  bamCoverage:
+    bin_size: 10
+    normalize: "CPM"  # Counts Per Million
+    extra_args: "--exactScaling"
