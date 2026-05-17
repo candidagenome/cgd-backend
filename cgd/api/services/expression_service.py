@@ -437,6 +437,32 @@ EXPRESSION_STUDIES = {
                 "SRR14758169": {"label": "Pyrvinium pamoate (rep 3b)", "bucket": "kill_candida"},
             },
         },
+        "Wang_2024": {
+            "category": "Biofilm",
+            "pmid": None,  # PRJNA1086003 - update when published
+            "ncbi_id": "PRJNA1086003",
+            "path_style": "direct",
+            "control": "SRR28790270",
+            "conditions": {
+                # AR0382 - In Vitro Biofilm (control)
+                "SRR28790270": {"label": "AR0382 In Vitro Biofilm (rep 1)", "bucket": "control"},
+                "SRR28790272": {"label": "AR0382 In Vitro Biofilm (rep 2)", "bucket": "control"},
+                "SRR28790274": {"label": "AR0382 In Vitro Biofilm (rep 3)", "bucket": "control"},
+                # AR0382 - In Vivo Catheter (experimental)
+                "SRR28791430": {"label": "AR0382 In Vivo Catheter (rep 1)", "bucket": "basic_biology"},
+                "SRR28791431": {"label": "AR0382 In Vivo Catheter (rep 2)", "bucket": "basic_biology"},
+                "SRR28791432": {"label": "AR0382 In Vivo Catheter (rep 3)", "bucket": "basic_biology"},
+                # AR0387 - In Vitro Biofilm (control)
+                "SRR28790276": {"label": "AR0387 In Vitro Biofilm (rep 1)", "bucket": "control"},
+                "SRR28790278": {"label": "AR0387 In Vitro Biofilm (rep 2)", "bucket": "control"},
+                "SRR28790280": {"label": "AR0387 In Vitro Biofilm (rep 3)", "bucket": "control"},
+                # AR0387 - In Vivo Catheter (experimental)
+                "SRR28791433": {"label": "AR0387 In Vivo Catheter (rep 1)", "bucket": "basic_biology"},
+                "SRR28791434": {"label": "AR0387 In Vivo Catheter (rep 2)", "bucket": "basic_biology"},
+                "SRR28791437": {"label": "AR0387 In Vivo Catheter (rep 3)", "bucket": "basic_biology"},
+                "SRR28791438": {"label": "AR0387 In Vivo Catheter (rep 4)", "bucket": "basic_biology"},
+            },
+        },
     },
     "C_glabrata_CBS138": {
         "Linde_2015": {
@@ -936,6 +962,25 @@ LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
             "SRR14758167": 24.73,
             "SRR14758168": 21.18,
             "SRR14758169": 24.78,
+        },
+        "Wang_2024": {
+            # AR0382 - In Vitro Biofilm
+            "SRR28790270": 73.0,
+            "SRR28790272": 83.0,
+            "SRR28790274": 73.43,
+            # AR0382 - In Vivo Catheter
+            "SRR28791430": 49.86,
+            "SRR28791431": 41.69,
+            "SRR28791432": 51.14,
+            # AR0387 - In Vitro Biofilm
+            "SRR28790276": 64.31,
+            "SRR28790278": 63.52,
+            "SRR28790280": 57.68,
+            # AR0387 - In Vivo Catheter
+            "SRR28791433": 52.47,
+            "SRR28791434": 42.40,
+            "SRR28791437": 43.19,
+            "SRR28791438": 50.38,
         },
     },
     "C_glabrata_CBS138": {
