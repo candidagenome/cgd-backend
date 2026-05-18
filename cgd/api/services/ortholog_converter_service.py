@@ -305,6 +305,7 @@ def convert_orthologs(
                 ortholog_id=feature.feature_name,
                 ortholog_gene_name=feature.gene_name,
                 ortholog_feature_name=feature.feature_name,
+                ortholog_description=feature.headline,
                 target_organism=target_display_name,
                 relationship="same_organism",
                 notes="Input gene is already in target organism",
@@ -342,6 +343,7 @@ def convert_orthologs(
                         'id': dbxref_id,
                         'gene_name': None,  # External orthologs don't have gene names in our DB
                         'feature_name': dbxref_id,
+                        'description': None,  # External orthologs don't have descriptions in our DB
                         'organism': org_name,
                         'url': url,
                         'cluster_id': cid,
@@ -357,6 +359,7 @@ def convert_orthologs(
                         'id': orth_feat.feature_name,
                         'gene_name': orth_feat.gene_name,
                         'feature_name': orth_feat.feature_name,
+                        'description': orth_feat.headline,
                         'organism': _get_organism_name(orth_feat),
                         'url': f"/locus/{orth_feat.feature_name}",
                         'cluster_id': cid,
@@ -407,6 +410,7 @@ def convert_orthologs(
             ortholog_id=first_orth['id'],
             ortholog_gene_name=first_orth['gene_name'],
             ortholog_feature_name=first_orth['feature_name'],
+            ortholog_description=first_orth['description'],
             target_organism=first_orth['organism'],
             relationship=relationship,
             cluster_id=first_orth['cluster_id'],

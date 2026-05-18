@@ -60,6 +60,7 @@ class OrthologResult(BaseModel):
     ortholog_id: Optional[str] = Field(None, description="Target ortholog ID")
     ortholog_gene_name: Optional[str] = Field(None, description="Target ortholog gene name")
     ortholog_feature_name: Optional[str] = Field(None, description="Target ortholog systematic name")
+    ortholog_description: Optional[str] = Field(None, description="Description/headline of the ortholog")
     target_organism: Optional[str] = Field(None, description="Target organism name")
     relationship: Optional[str] = Field(
         None,
