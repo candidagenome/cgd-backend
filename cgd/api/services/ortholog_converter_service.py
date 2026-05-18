@@ -13,6 +13,7 @@ from cgd.models.models import (
     FeatRelationship,
     HomologyGroup,
     DbxrefHomology,
+    DbxrefFeat,
     Dbxref,
 )
 from cgd.schemas.ortholog_converter_schema import (
@@ -260,126 +261,78 @@ def _determine_relationship(source_count: int, target_count: int) -> str:
         return "many:many"
 
 
-def _find_sgd_gene_homology_groups(
+def _find_cgd_feature_for_sgd_gene(
     db: Session,
     gene_id: str,
-) -> list[tuple[HomologyGroup, Dbxref, DbxrefHomology]]:
+) -> tuple[Optional[Feature], Optional[Dbxref]]:
     """
-    Find homology groups for an SGD gene ID.
-    Returns list of (HomologyGroup, Dbxref, DbxrefHomology) tuples.
+    Find CGD feature linked to an SGD gene via DbxrefFeat.
+    Returns (Feature, Dbxref) tuple or (None, None) if not found.
 
-    Searches DbxrefHomology entries that link to S. cerevisiae orthologs.
-    S. cerevisiae genes in CGOB are stored with systematic names (YFL039C),
-    so users should enter systematic names for best results.
+    SGD genes are stored in Dbxref with source='SGD':
+    - dbxref_id = systematic name (e.g., YFL039C)
+    - description = gene name (e.g., ACT1)
+
+    The link to CGD features is through DbxrefFeat.
     """
     gene_id = gene_id.strip().upper()
     if not gene_id:
-        return []
+        return None, None
 
-    dbxref_homologies = []
-
-    # Strategy 1: Match dbxref_id directly (systematic names like YFL039C)
-    # Source is typically "CGOB (Saccharomyces cerevisiae S288C)" for CGOB entries
-    dbxref_homologies = (
-        db.query(DbxrefHomology)
-        .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+    # Strategy 1: Match by systematic name (dbxref_id) with source='SGD'
+    result = (
+        db.query(Feature, Dbxref)
+        .select_from(Dbxref)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .join(Feature, DbxrefFeat.feature_no == Feature.feature_no)
         .options(
-            joinedload(DbxrefHomology.dbxref),
-            joinedload(DbxrefHomology.homology_group)
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.dbxref_homology)
+                .joinedload(DbxrefHomology.dbxref),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
                 .joinedload(HomologyGroup.feat_homology)
                 .joinedload(FeatHomology.feature)
                 .joinedload(Feature.organism),
         )
         .filter(
             func.upper(Dbxref.dbxref_id) == gene_id,
-            func.lower(Dbxref.source).contains('cerevisiae'),
+            func.upper(Dbxref.source) == 'SGD',
         )
-        .all()
+        .first()
     )
 
-    # Strategy 2: Match dbxref_id with source='SGD' (for SGD ortholog pairs)
-    if not dbxref_homologies:
-        dbxref_homologies = (
-            db.query(DbxrefHomology)
-            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
-            .options(
-                joinedload(DbxrefHomology.dbxref),
-                joinedload(DbxrefHomology.homology_group)
-                    .joinedload(HomologyGroup.feat_homology)
-                    .joinedload(FeatHomology.feature)
-                    .joinedload(Feature.organism),
-            )
-            .filter(
-                func.upper(Dbxref.dbxref_id) == gene_id,
-                func.upper(Dbxref.source) == 'SGD',
-            )
-            .all()
+    if result:
+        return result
+
+    # Strategy 2: Match by gene name (description) with source='SGD'
+    result = (
+        db.query(Feature, Dbxref)
+        .select_from(Dbxref)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .join(Feature, DbxrefFeat.feature_no == Feature.feature_no)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.dbxref_homology)
+                .joinedload(DbxrefHomology.dbxref),
+            joinedload(Feature.feat_homology)
+                .joinedload(FeatHomology.homology_group)
+                .joinedload(HomologyGroup.feat_homology)
+                .joinedload(FeatHomology.feature)
+                .joinedload(Feature.organism),
         )
-
-    # Strategy 3: Match description field (gene name might be stored there)
-    if not dbxref_homologies:
-        dbxref_homologies = (
-            db.query(DbxrefHomology)
-            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
-            .options(
-                joinedload(DbxrefHomology.dbxref),
-                joinedload(DbxrefHomology.homology_group)
-                    .joinedload(HomologyGroup.feat_homology)
-                    .joinedload(FeatHomology.feature)
-                    .joinedload(Feature.organism),
-            )
-            .filter(
-                func.upper(Dbxref.description) == gene_id,
-                func.lower(Dbxref.source).contains('cerevisiae'),
-            )
-            .all()
-        )
-
-    # Strategy 4: Match description with source='SGD'
-    if not dbxref_homologies:
-        dbxref_homologies = (
-            db.query(DbxrefHomology)
-            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
-            .options(
-                joinedload(DbxrefHomology.dbxref),
-                joinedload(DbxrefHomology.homology_group)
-                    .joinedload(HomologyGroup.feat_homology)
-                    .joinedload(FeatHomology.feature)
-                    .joinedload(Feature.organism),
-            )
-            .filter(
-                func.upper(Dbxref.description) == gene_id,
-                func.upper(Dbxref.source) == 'SGD',
-            )
-            .all()
-        )
-
-    results = []
-    for dh in dbxref_homologies:
-        if dh.homology_group and dh.homology_group.homology_group_type == 'ortholog':
-            results.append((dh.homology_group, dh.dbxref, dh))
-
-    return results
-
-
-def _count_sgd_genes_in_cluster(
-    db: Session,
-    homology_group: HomologyGroup,
-) -> int:
-    """Count how many S. cerevisiae genes are in this cluster."""
-    count = (
-        db.query(DbxrefHomology)
-        .join(Dbxref)
         .filter(
-            DbxrefHomology.homology_group_no == homology_group.homology_group_no,
-            or_(
-                func.upper(Dbxref.source) == 'SGD',
-                func.lower(Dbxref.source).contains('cerevisiae'),
-            ),
+            func.upper(Dbxref.description) == gene_id,
+            func.upper(Dbxref.source) == 'SGD',
         )
-        .count()
+        .first()
     )
-    return count
+
+    return result if result else (None, None)
 
 
 def convert_orthologs_from_sgd(
@@ -390,6 +343,10 @@ def convert_orthologs_from_sgd(
     """
     Convert a list of S. cerevisiae gene IDs to orthologs in a CGD organism.
     This is the reverse lookup: SGD → CGD.
+
+    The approach:
+    1. Find the CGD Feature linked to the SGD gene via DbxrefFeat
+    2. Use the CGD Feature's homology groups to find orthologs in the target organism
     """
     target_display_name = TARGET_ORGANISM_DISPLAY_NAMES.get(target_organism, str(target_organism))
     source_display_name = SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.S_CEREVISIAE]
@@ -415,66 +372,94 @@ def convert_orthologs_from_sgd(
     converted_count = 0
 
     for gene_id in gene_ids:
-        gene_id = gene_id.strip()
-        if not gene_id:
+        gene_id_stripped = gene_id.strip()
+        if not gene_id_stripped:
             continue
 
-        # Find homology groups for this SGD gene
-        hg_dbxref_pairs = _find_sgd_gene_homology_groups(db, gene_id)
+        # Find CGD feature linked to this SGD gene via DbxrefFeat
+        result = _find_cgd_feature_for_sgd_gene(db, gene_id_stripped)
+        if result == (None, None):
+            feature, dbxref = None, None
+        else:
+            feature, dbxref = result
 
-        if not hg_dbxref_pairs:
+        if not feature or not dbxref:
             results.append(OrthologResult(
-                input_id=gene_id,
+                input_id=gene_id_stripped,
                 input_organism="Saccharomyces cerevisiae",
                 found=False,
                 relationship="not_found",
-                notes="Gene not found. Please use systematic names (e.g., YFL039C, not ACT1)",
+                notes="Gene not found in SGD ortholog data",
             ))
             continue
 
         found_count += 1
-        dbxref = hg_dbxref_pairs[0][1]  # Get the matched Dbxref for input info
 
-        # Search for CGD orthologs in the target organism
+        # Get organism of the CGD feature we found
+        cgd_feature_org = _get_organism_name(feature)
+
+        # If the CGD feature is already in the target organism, return it
+        if cgd_feature_org == target_display_name:
+            converted_count += 1
+            results.append(OrthologResult(
+                input_id=gene_id_stripped,
+                input_gene_name=dbxref.description,  # SGD gene name
+                input_feature_name=dbxref.dbxref_id,  # SGD systematic name
+                input_organism="Saccharomyces cerevisiae",
+                found=True,
+                ortholog_id=feature.feature_name,
+                ortholog_gene_name=feature.gene_name,
+                ortholog_feature_name=feature.feature_name,
+                ortholog_description=feature.headline,
+                target_organism=cgd_feature_org,
+                relationship="1:1",
+                ortholog_url=f"/locus/{feature.feature_name}",
+                notes=None,
+            ))
+            continue
+
+        # Search for orthologs in target organism using the CGD feature's homology groups
         all_orthologs = []
         cluster_id = None
+        homology_groups = _get_ortholog_groups_for_feature(feature)
 
-        for hg, _, _ in hg_dbxref_pairs:
-            # Find CGD features in this homology group for the target organism
-            for fh in hg.feat_homology:
-                feat = fh.feature
-                if feat:
-                    org_name = _get_organism_name(feat)
-                    if org_name and org_name == target_display_name:
-                        all_orthologs.append({
-                            'id': feat.feature_name,
-                            'gene_name': feat.gene_name,
-                            'feature_name': feat.feature_name,
-                            'description': feat.headline,
-                            'organism': org_name,
-                            'url': f"/locus/{feat.feature_name}",
-                            'cluster_id': hg.homology_group_id,
-                        })
-                        cluster_id = hg.homology_group_id
+        for hg in homology_groups:
+            # Find features in this homology group for the target organism
+            cgd_orthologs = _find_cgd_ortholog_in_group(
+                hg, target_display_name, feature.feature_no
+            )
+            for orth_feat, cid in cgd_orthologs:
+                all_orthologs.append({
+                    'id': orth_feat.feature_name,
+                    'gene_name': orth_feat.gene_name,
+                    'feature_name': orth_feat.feature_name,
+                    'description': orth_feat.headline,
+                    'organism': _get_organism_name(orth_feat),
+                    'url': f"/locus/{orth_feat.feature_name}",
+                    'cluster_id': cid,
+                })
+                cluster_id = cid
 
             if all_orthologs:
                 break
 
         if not all_orthologs:
             results.append(OrthologResult(
-                input_id=gene_id,
-                input_gene_name=dbxref.description,  # SGD gene name might be in description
+                input_id=gene_id_stripped,
+                input_gene_name=dbxref.description,
                 input_feature_name=dbxref.dbxref_id,
                 input_organism="Saccharomyces cerevisiae",
                 found=True,
-                cluster_id=hg_dbxref_pairs[0][0].homology_group_id if hg_dbxref_pairs else None,
+                cluster_id=cluster_id or (homology_groups[0].homology_group_id if homology_groups else None),
                 relationship="no_ortholog",
                 notes=f"No ortholog found in {target_display_name}",
             ))
             continue
 
         # Determine relationship
-        source_count = _count_sgd_genes_in_cluster(db, hg_dbxref_pairs[0][0])
+        source_count = 1
+        if homology_groups:
+            source_count = _count_source_genes_in_cluster(homology_groups[0], cgd_feature_org)
         target_count = len(all_orthologs)
         relationship = _determine_relationship(source_count, target_count)
 
@@ -488,7 +473,7 @@ def convert_orthologs_from_sgd(
             notes = f"Multiple orthologs: {', '.join(other_ids)}"
 
         results.append(OrthologResult(
-            input_id=gene_id,
+            input_id=gene_id_stripped,
             input_gene_name=dbxref.description,
             input_feature_name=dbxref.dbxref_id,
             input_organism="Saccharomyces cerevisiae",
@@ -737,7 +722,7 @@ def get_available_targets() -> AvailableTargetsResponse:
     sources.append(SourceOrganismInfo(
         id=SourceOrganism.S_CEREVISIAE.value,
         name=SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.S_CEREVISIAE],
-        description="Enter S. cerevisiae systematic names (e.g., YFL039C, YNL055C)",
+        description="Enter S. cerevisiae gene names (e.g., ACT1, ERG11) or systematic names (e.g., YFL039C)",
     ))
 
     return AvailableTargetsResponse(targets=targets, sources=sources)
