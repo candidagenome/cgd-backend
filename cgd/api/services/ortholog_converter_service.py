@@ -197,10 +197,10 @@ def _find_external_ortholog_in_group(
     homology_group: HomologyGroup,
     target_organism_name: str,
     external_source: str,
-) -> list[tuple[str, str, str, str]]:
+) -> list[dict]:
     """
     Find external orthologs (SGD, POMBASE, etc.) in a homology group.
-    Returns list of (dbxref_id, organism_name, url, cluster_id) tuples.
+    Returns list of dicts with id, gene_name, description, organism, url, cluster_id.
     """
     results = []
     cluster_id = homology_group.homology_group_id
@@ -216,6 +216,8 @@ def _find_external_ortholog_in_group(
         # Check if this is the target organism
         if target_organism_name.lower() in ext_org.lower():
             dbxref_id = dbxref.dbxref_id
+            # For SGD: dbxref_id = systematic name (YFL039C), description = gene name (ACT1)
+            gene_name = dbxref.description if dbxref.description else None
 
             # Build URL based on source
             if external_source == 'SGD':
@@ -227,7 +229,15 @@ def _find_external_ortholog_in_group(
             else:
                 url = None
 
-            results.append((dbxref_id, ext_org, url, cluster_id))
+            results.append({
+                'id': dbxref_id,
+                'gene_name': gene_name,
+                'feature_name': dbxref_id,
+                'description': None,  # External DBs don't store descriptions in our DB
+                'organism': ext_org,
+                'url': url,
+                'cluster_id': cluster_id,
+            })
 
     return results
 
@@ -587,17 +597,9 @@ def convert_orthologs(
                 ext_orthologs = _find_external_ortholog_in_group(
                     hg, target_display_name, external_source
                 )
-                for dbxref_id, org_name, url, cid in ext_orthologs:
-                    all_orthologs.append({
-                        'id': dbxref_id,
-                        'gene_name': None,  # External orthologs don't have gene names in our DB
-                        'feature_name': dbxref_id,
-                        'description': None,  # External orthologs don't have descriptions in our DB
-                        'organism': org_name,
-                        'url': url,
-                        'cluster_id': cid,
-                    })
-                    cluster_id = cid
+                for orth in ext_orthologs:
+                    all_orthologs.append(orth)
+                    cluster_id = orth['cluster_id']
             else:
                 # Search CGD orthologs
                 cgd_orthologs = _find_cgd_ortholog_in_group(
