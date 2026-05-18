@@ -618,12 +618,16 @@ def convert_orthologs(
         cluster_id = None
 
         # For SGD target, try to get gene name from the input feature's DbxrefFeat
+        # and use the CGD feature's headline as the description
         sgd_gene_name = None
         sgd_description = None
         if is_external and external_source == 'SGD':
-            sgd_gene_name, sgd_description = _get_sgd_gene_info_from_feature(
+            sgd_gene_name, _ = _get_sgd_gene_info_from_feature(
                 db, feature.feature_no
             )
+            # Use the CGD feature's headline as the SGD ortholog description
+            # (the headline is derived from SGD ortholog annotations)
+            sgd_description = feature.headline
 
         for hg in homology_groups:
             if is_external:
