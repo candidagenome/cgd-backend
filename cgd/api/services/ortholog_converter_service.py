@@ -263,58 +263,61 @@ def _determine_relationship(source_count: int, target_count: int) -> str:
 def _find_sgd_gene_homology_groups(
     db: Session,
     gene_id: str,
-) -> list[tuple[HomologyGroup, Dbxref]]:
+) -> list[tuple[HomologyGroup, Dbxref, DbxrefHomology]]:
     """
     Find homology groups for an SGD gene ID.
-    Returns list of (HomologyGroup, Dbxref) tuples.
+    Returns list of (HomologyGroup, Dbxref, DbxrefHomology) tuples.
+
+    Searches DbxrefHomology entries that link to S. cerevisiae orthologs,
+    matching the dbxref_id against the input gene name.
     """
     gene_id = gene_id.strip()
     if not gene_id:
         return []
 
-    # Find Dbxref entries matching the SGD gene ID
-    # SGD genes can be found by gene name (like ACT1) or systematic name (like YFL039C)
-    dbxrefs = (
-        db.query(Dbxref)
+    # Search DbxrefHomology for S. cerevisiae entries matching the gene ID
+    # DbxrefHomology.name contains the organism name (e.g., "Saccharomyces cerevisiae")
+    # Dbxref.dbxref_id contains the gene identifier
+    dbxref_homologies = (
+        db.query(DbxrefHomology)
+        .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+        .options(
+            joinedload(DbxrefHomology.dbxref),
+            joinedload(DbxrefHomology.homology_group)
+                .joinedload(HomologyGroup.feat_homology)
+                .joinedload(FeatHomology.feature)
+                .joinedload(Feature.organism),
+        )
         .filter(
             func.upper(Dbxref.dbxref_id) == func.upper(gene_id),
-            Dbxref.source == 'SGD',
+            func.lower(DbxrefHomology.name).contains('saccharomyces cerevisiae'),
         )
         .all()
     )
 
-    if not dbxrefs:
-        # Try searching by description field which might have the gene name
-        dbxrefs = (
-            db.query(Dbxref)
-            .filter(
-                func.upper(Dbxref.description) == func.upper(gene_id),
-                Dbxref.source == 'SGD',
-            )
-            .all()
-        )
-
-    if not dbxrefs:
-        return []
-
-    # Get homology groups via DbxrefHomology
-    results = []
-    for dbxref in dbxrefs:
+    if not dbxref_homologies:
+        # Try searching by description (some entries might store gene name there)
         dbxref_homologies = (
             db.query(DbxrefHomology)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
             .options(
+                joinedload(DbxrefHomology.dbxref),
                 joinedload(DbxrefHomology.homology_group)
                     .joinedload(HomologyGroup.feat_homology)
                     .joinedload(FeatHomology.feature)
                     .joinedload(Feature.organism),
             )
-            .filter(DbxrefHomology.dbxref_no == dbxref.dbxref_no)
+            .filter(
+                func.upper(Dbxref.description) == func.upper(gene_id),
+                func.lower(DbxrefHomology.name).contains('saccharomyces cerevisiae'),
+            )
             .all()
         )
 
-        for dh in dbxref_homologies:
-            if dh.homology_group and dh.homology_group.homology_group_type == 'ortholog':
-                results.append((dh.homology_group, dbxref))
+    results = []
+    for dh in dbxref_homologies:
+        if dh.homology_group and dh.homology_group.homology_group_type == 'ortholog':
+            results.append((dh.homology_group, dh.dbxref, dh))
 
     return results
 
@@ -393,7 +396,7 @@ def convert_orthologs_from_sgd(
         all_orthologs = []
         cluster_id = None
 
-        for hg, _ in hg_dbxref_pairs:
+        for hg, _, _ in hg_dbxref_pairs:
             # Find CGD features in this homology group for the target organism
             for fh in hg.feat_homology:
                 feat = fh.feature
