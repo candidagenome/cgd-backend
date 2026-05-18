@@ -67,6 +67,7 @@ def convert_orthologs(
         db=db,
         gene_ids=request.gene_ids,
         target_organism=request.target_organism,
+        source_organism=request.source_organism,
     )
 
 
@@ -94,6 +95,7 @@ def download_ortholog_conversion(
         db=db,
         gene_ids=request.gene_ids,
         target_organism=request.target_organism,
+        source_organism=request.source_organism,
     )
 
     # Create output
@@ -174,6 +176,7 @@ def get_ortholog_ids_only(
         db=db,
         gene_ids=request.gene_ids,
         target_organism=request.target_organism,
+        source_organism=request.source_organism,
     )
 
     lines = []

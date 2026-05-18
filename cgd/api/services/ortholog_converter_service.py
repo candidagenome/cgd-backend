@@ -17,11 +17,14 @@ from cgd.models.models import (
 )
 from cgd.schemas.ortholog_converter_schema import (
     TargetOrganism,
+    SourceOrganism,
     TARGET_ORGANISM_DISPLAY_NAMES,
+    SOURCE_ORGANISM_DISPLAY_NAMES,
     EXTERNAL_ORGANISM_SOURCES,
     OrthologResult,
     OrthologConvertResponse,
     TargetOrganismInfo,
+    SourceOrganismInfo,
     AvailableTargetsResponse,
 )
 
@@ -257,15 +260,230 @@ def _determine_relationship(source_count: int, target_count: int) -> str:
         return "many:many"
 
 
-def convert_orthologs(
+def _find_sgd_gene_homology_groups(
+    db: Session,
+    gene_id: str,
+) -> list[tuple[HomologyGroup, Dbxref]]:
+    """
+    Find homology groups for an SGD gene ID.
+    Returns list of (HomologyGroup, Dbxref) tuples.
+    """
+    gene_id = gene_id.strip()
+    if not gene_id:
+        return []
+
+    # Find Dbxref entries matching the SGD gene ID
+    # SGD genes can be found by gene name (like ACT1) or systematic name (like YFL039C)
+    dbxrefs = (
+        db.query(Dbxref)
+        .filter(
+            func.upper(Dbxref.dbxref_id) == func.upper(gene_id),
+            Dbxref.source == 'SGD',
+        )
+        .all()
+    )
+
+    if not dbxrefs:
+        # Try searching by description field which might have the gene name
+        dbxrefs = (
+            db.query(Dbxref)
+            .filter(
+                func.upper(Dbxref.description) == func.upper(gene_id),
+                Dbxref.source == 'SGD',
+            )
+            .all()
+        )
+
+    if not dbxrefs:
+        return []
+
+    # Get homology groups via DbxrefHomology
+    results = []
+    for dbxref in dbxrefs:
+        dbxref_homologies = (
+            db.query(DbxrefHomology)
+            .options(
+                joinedload(DbxrefHomology.homology_group)
+                    .joinedload(HomologyGroup.feat_homology)
+                    .joinedload(FeatHomology.feature)
+                    .joinedload(Feature.organism),
+            )
+            .filter(DbxrefHomology.dbxref_no == dbxref.dbxref_no)
+            .all()
+        )
+
+        for dh in dbxref_homologies:
+            if dh.homology_group and dh.homology_group.homology_group_type == 'ortholog':
+                results.append((dh.homology_group, dbxref))
+
+    return results
+
+
+def _count_sgd_genes_in_cluster(
+    db: Session,
+    homology_group: HomologyGroup,
+) -> int:
+    """Count how many SGD genes are in this cluster."""
+    count = (
+        db.query(DbxrefHomology)
+        .join(Dbxref)
+        .filter(
+            DbxrefHomology.homology_group_no == homology_group.homology_group_no,
+            Dbxref.source == 'SGD',
+        )
+        .count()
+    )
+    return count
+
+
+def convert_orthologs_from_sgd(
     db: Session,
     gene_ids: list[str],
     target_organism: TargetOrganism,
 ) -> OrthologConvertResponse:
     """
-    Convert a list of gene IDs to orthologs in the target organism.
+    Convert a list of S. cerevisiae gene IDs to orthologs in a CGD organism.
+    This is the reverse lookup: SGD → CGD.
     """
     target_display_name = TARGET_ORGANISM_DISPLAY_NAMES.get(target_organism, str(target_organism))
+    source_display_name = SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.S_CEREVISIAE]
+
+    # S. cerevisiae can only be converted to CGD species
+    if target_organism in EXTERNAL_ORGANISM_SOURCES:
+        return OrthologConvertResponse(
+            source_organism=source_display_name,
+            target_organism=target_display_name,
+            total_input=len([g for g in gene_ids if g.strip()]),
+            found_count=0,
+            converted_count=0,
+            results=[OrthologResult(
+                input_id=gene_id,
+                found=False,
+                relationship="not_found",
+                notes="Cannot convert S. cerevisiae to another external organism",
+            ) for gene_id in gene_ids if gene_id.strip()],
+        )
+
+    results = []
+    found_count = 0
+    converted_count = 0
+
+    for gene_id in gene_ids:
+        gene_id = gene_id.strip()
+        if not gene_id:
+            continue
+
+        # Find homology groups for this SGD gene
+        hg_dbxref_pairs = _find_sgd_gene_homology_groups(db, gene_id)
+
+        if not hg_dbxref_pairs:
+            results.append(OrthologResult(
+                input_id=gene_id,
+                input_organism="Saccharomyces cerevisiae",
+                found=False,
+                relationship="not_found",
+                notes="Gene not found in SGD ortholog data",
+            ))
+            continue
+
+        found_count += 1
+        dbxref = hg_dbxref_pairs[0][1]  # Get the matched Dbxref for input info
+
+        # Search for CGD orthologs in the target organism
+        all_orthologs = []
+        cluster_id = None
+
+        for hg, _ in hg_dbxref_pairs:
+            # Find CGD features in this homology group for the target organism
+            for fh in hg.feat_homology:
+                feat = fh.feature
+                if feat:
+                    org_name = _get_organism_name(feat)
+                    if org_name and org_name == target_display_name:
+                        all_orthologs.append({
+                            'id': feat.feature_name,
+                            'gene_name': feat.gene_name,
+                            'feature_name': feat.feature_name,
+                            'description': feat.headline,
+                            'organism': org_name,
+                            'url': f"/locus/{feat.feature_name}",
+                            'cluster_id': hg.homology_group_id,
+                        })
+                        cluster_id = hg.homology_group_id
+
+            if all_orthologs:
+                break
+
+        if not all_orthologs:
+            results.append(OrthologResult(
+                input_id=gene_id,
+                input_gene_name=dbxref.description,  # SGD gene name might be in description
+                input_feature_name=dbxref.dbxref_id,
+                input_organism="Saccharomyces cerevisiae",
+                found=True,
+                cluster_id=hg_dbxref_pairs[0][0].homology_group_id if hg_dbxref_pairs else None,
+                relationship="no_ortholog",
+                notes=f"No ortholog found in {target_display_name}",
+            ))
+            continue
+
+        # Determine relationship
+        source_count = _count_sgd_genes_in_cluster(db, hg_dbxref_pairs[0][0])
+        target_count = len(all_orthologs)
+        relationship = _determine_relationship(source_count, target_count)
+
+        converted_count += 1
+
+        # If multiple orthologs, add the first one as main result with note
+        first_orth = all_orthologs[0]
+        notes = None
+        if len(all_orthologs) > 1:
+            other_ids = [o['id'] for o in all_orthologs[1:]]
+            notes = f"Multiple orthologs: {', '.join(other_ids)}"
+
+        results.append(OrthologResult(
+            input_id=gene_id,
+            input_gene_name=dbxref.description,
+            input_feature_name=dbxref.dbxref_id,
+            input_organism="Saccharomyces cerevisiae",
+            found=True,
+            ortholog_id=first_orth['id'],
+            ortholog_gene_name=first_orth['gene_name'],
+            ortholog_feature_name=first_orth['feature_name'],
+            ortholog_description=first_orth['description'],
+            target_organism=first_orth['organism'],
+            relationship=relationship,
+            cluster_id=first_orth['cluster_id'],
+            ortholog_url=first_orth['url'],
+            notes=notes,
+        ))
+
+    return OrthologConvertResponse(
+        source_organism=source_display_name,
+        target_organism=target_display_name,
+        total_input=len([g for g in gene_ids if g.strip()]),
+        found_count=found_count,
+        converted_count=converted_count,
+        results=results,
+    )
+
+
+def convert_orthologs(
+    db: Session,
+    gene_ids: list[str],
+    target_organism: TargetOrganism,
+    source_organism: SourceOrganism = SourceOrganism.CGD,
+) -> OrthologConvertResponse:
+    """
+    Convert a list of gene IDs to orthologs in the target organism.
+    Supports both CGD → target and S. cerevisiae → CGD conversions.
+    """
+    # Dispatch to reverse lookup if source is S. cerevisiae
+    if source_organism == SourceOrganism.S_CEREVISIAE:
+        return convert_orthologs_from_sgd(db, gene_ids, target_organism)
+
+    target_display_name = TARGET_ORGANISM_DISPLAY_NAMES.get(target_organism, str(target_organism))
+    source_display_name = SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.CGD]
     is_external = target_organism in EXTERNAL_ORGANISM_SOURCES
     external_source = EXTERNAL_ORGANISM_SOURCES.get(target_organism)
 
@@ -419,6 +637,7 @@ def convert_orthologs(
         ))
 
     return OrthologConvertResponse(
+        source_organism=source_display_name,
         target_organism=target_display_name,
         total_input=len([g for g in gene_ids if g.strip()]),
         found_count=found_count,
@@ -428,10 +647,11 @@ def convert_orthologs(
 
 
 def get_available_targets() -> AvailableTargetsResponse:
-    """Return list of available target organisms."""
+    """Return list of available target and source organisms."""
     targets = []
+    sources = []
 
-    # CGD species
+    # CGD species (can be both source and target)
     cgd_species = [
         TargetOrganism.C_ALBICANS,
         TargetOrganism.C_DUBLINIENSIS,
@@ -462,4 +682,16 @@ def get_available_targets() -> AvailableTargetsResponse:
             is_external=True,
         ))
 
-    return AvailableTargetsResponse(targets=targets)
+    # Source organisms
+    sources.append(SourceOrganismInfo(
+        id=SourceOrganism.CGD.value,
+        name=SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.CGD],
+        description="Enter CGD gene names, systematic names, or CGD IDs",
+    ))
+    sources.append(SourceOrganismInfo(
+        id=SourceOrganism.S_CEREVISIAE.value,
+        name=SOURCE_ORGANISM_DISPLAY_NAMES[SourceOrganism.S_CEREVISIAE],
+        description="Enter S. cerevisiae gene names (e.g., ACT1, ERG11)",
+    ))
+
+    return AvailableTargetsResponse(targets=targets, sources=sources)

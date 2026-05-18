@@ -19,6 +19,14 @@ class TargetOrganism(str, Enum):
     S_CEREVISIAE = "S_cerevisiae"
 
 
+class SourceOrganism(str, Enum):
+    """Available source organisms for ortholog conversion."""
+    # CGD species (default - any CGD species)
+    CGD = "CGD"
+    # External species that can be used as source
+    S_CEREVISIAE = "S_cerevisiae"
+
+
 # Mapping from enum to display names used in the database
 TARGET_ORGANISM_DISPLAY_NAMES = {
     TargetOrganism.C_ALBICANS: "Candida albicans SC5314",
@@ -28,6 +36,11 @@ TARGET_ORGANISM_DISPLAY_NAMES = {
     TargetOrganism.C_AURIS: "Candida auris B8441",
     TargetOrganism.C_GLABRATA: "Candida glabrata CBS138",
     TargetOrganism.S_CEREVISIAE: "Saccharomyces cerevisiae",
+}
+
+SOURCE_ORGANISM_DISPLAY_NAMES = {
+    SourceOrganism.CGD: "CGD Species",
+    SourceOrganism.S_CEREVISIAE: "Saccharomyces cerevisiae (SGD)",
 }
 
 # External organism sources (stored in DbxrefHomology)
@@ -47,6 +60,10 @@ class OrthologConvertRequest(BaseModel):
     target_organism: TargetOrganism = Field(
         ...,
         description="Target organism to convert orthologs to",
+    )
+    source_organism: Optional[SourceOrganism] = Field(
+        default=SourceOrganism.CGD,
+        description="Source organism of input genes (default: CGD species)",
     )
 
 
@@ -73,9 +90,10 @@ class OrthologResult(BaseModel):
 
 class OrthologConvertResponse(BaseModel):
     """Response for ortholog conversion."""
+    source_organism: Optional[str] = Field(None, description="Source organism display name")
     target_organism: str = Field(..., description="Target organism display name")
     total_input: int = Field(..., description="Total number of input genes")
-    found_count: int = Field(..., description="Number of input genes found in CGD")
+    found_count: int = Field(..., description="Number of input genes found")
     converted_count: int = Field(..., description="Number of genes with orthologs in target")
     results: list[OrthologResult] = Field(..., description="Conversion results")
 
@@ -88,6 +106,17 @@ class TargetOrganismInfo(BaseModel):
     is_external: bool = Field(..., description="Whether this is an external organism")
 
 
+class SourceOrganismInfo(BaseModel):
+    """Information about an available source organism."""
+    id: str = Field(..., description="Organism ID for API calls")
+    name: str = Field(..., description="Display name")
+    description: str = Field(..., description="Description of what genes to enter")
+
+
 class AvailableTargetsResponse(BaseModel):
     """Response listing available target organisms."""
     targets: list[TargetOrganismInfo] = Field(..., description="Available target organisms")
+    sources: list[SourceOrganismInfo] = Field(
+        default=[],
+        description="Available source organisms",
+    )
