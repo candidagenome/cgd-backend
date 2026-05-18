@@ -216,8 +216,9 @@ def _find_external_ortholog_in_group(
         # Check if this is the target organism
         if target_organism_name.lower() in ext_org.lower():
             dbxref_id = dbxref.dbxref_id
-            # For SGD: dbxref_id = systematic name (YFL039C), description = gene name (ACT1)
-            gene_name = dbxref.description if dbxref.description else None
+            # Note: For DbxrefHomology entries, dbxref.description contains the organism name,
+            # not the gene name. Gene name will be looked up separately from DbxrefFeat.
+            gene_name = None
 
             # Build URL based on source
             if external_source == 'SGD':
@@ -233,13 +234,38 @@ def _find_external_ortholog_in_group(
                 'id': dbxref_id,
                 'gene_name': gene_name,
                 'feature_name': dbxref_id,
-                'description': None,  # External DBs don't store descriptions in our DB
+                'description': None,  # Will be looked up from DbxrefFeat if available
                 'organism': ext_org,
                 'url': url,
                 'cluster_id': cluster_id,
             })
 
     return results
+
+
+def _get_sgd_gene_info_from_feature(
+    db: Session,
+    feature_no: int,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Get SGD gene name and description from a CGD feature's DbxrefFeat entries.
+    Returns (gene_name, description) tuple.
+    """
+    result = (
+        db.query(Dbxref)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .filter(
+            DbxrefFeat.feature_no == feature_no,
+            func.upper(Dbxref.source) == 'SGD',
+        )
+        .first()
+    )
+    if result:
+        # For SGD DbxrefFeat entries:
+        # - description contains the gene name (e.g., ACT1)
+        # - We don't have the SGD gene's functional description in our DB
+        return result.description, None
+    return None, None
 
 
 def _count_source_genes_in_cluster(
@@ -591,6 +617,14 @@ def convert_orthologs(
         all_orthologs = []
         cluster_id = None
 
+        # For SGD target, try to get gene name from the input feature's DbxrefFeat
+        sgd_gene_name = None
+        sgd_description = None
+        if is_external and external_source == 'SGD':
+            sgd_gene_name, sgd_description = _get_sgd_gene_info_from_feature(
+                db, feature.feature_no
+            )
+
         for hg in homology_groups:
             if is_external:
                 # Search external orthologs
@@ -598,6 +632,10 @@ def convert_orthologs(
                     hg, target_display_name, external_source
                 )
                 for orth in ext_orthologs:
+                    # Enrich with gene name from DbxrefFeat if available
+                    if external_source == 'SGD' and sgd_gene_name:
+                        orth['gene_name'] = sgd_gene_name
+                        orth['description'] = sgd_description
                     all_orthologs.append(orth)
                     cluster_id = orth['cluster_id']
             else:
