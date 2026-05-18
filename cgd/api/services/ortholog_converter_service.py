@@ -269,15 +269,15 @@ def _find_sgd_gene_homology_groups(
     Returns list of (HomologyGroup, Dbxref, DbxrefHomology) tuples.
 
     Searches DbxrefHomology entries that link to S. cerevisiae orthologs,
-    matching the dbxref_id against the input gene name.
+    matching the dbxref_id or description against the input gene name.
     """
-    gene_id = gene_id.strip()
+    gene_id = gene_id.strip().upper()
     if not gene_id:
         return []
 
-    # Search DbxrefHomology for S. cerevisiae entries matching the gene ID
-    # DbxrefHomology.name contains the organism name (e.g., "Saccharomyces cerevisiae")
-    # Dbxref.dbxref_id contains the gene identifier
+    # Try multiple search strategies to find the SGD gene
+
+    # Strategy 1: Search by dbxref_id with source='SGD'
     dbxref_homologies = (
         db.query(DbxrefHomology)
         .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
@@ -289,14 +289,14 @@ def _find_sgd_gene_homology_groups(
                 .joinedload(Feature.organism),
         )
         .filter(
-            func.upper(Dbxref.dbxref_id) == func.upper(gene_id),
-            func.lower(DbxrefHomology.name).contains('saccharomyces cerevisiae'),
+            func.upper(Dbxref.dbxref_id) == gene_id,
+            func.upper(Dbxref.source) == 'SGD',
         )
         .all()
     )
 
+    # Strategy 2: Search by dbxref_id matching DbxrefHomology.name containing "cerevisiae"
     if not dbxref_homologies:
-        # Try searching by description (some entries might store gene name there)
         dbxref_homologies = (
             db.query(DbxrefHomology)
             .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
@@ -308,8 +308,82 @@ def _find_sgd_gene_homology_groups(
                     .joinedload(Feature.organism),
             )
             .filter(
-                func.upper(Dbxref.description) == func.upper(gene_id),
-                func.lower(DbxrefHomology.name).contains('saccharomyces cerevisiae'),
+                func.upper(Dbxref.dbxref_id) == gene_id,
+                func.lower(DbxrefHomology.name).contains('cerevisiae'),
+            )
+            .all()
+        )
+
+    # Strategy 3: Search by description field
+    if not dbxref_homologies:
+        dbxref_homologies = (
+            db.query(DbxrefHomology)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .options(
+                joinedload(DbxrefHomology.dbxref),
+                joinedload(DbxrefHomology.homology_group)
+                    .joinedload(HomologyGroup.feat_homology)
+                    .joinedload(FeatHomology.feature)
+                    .joinedload(Feature.organism),
+            )
+            .filter(
+                func.upper(Dbxref.description) == gene_id,
+                func.lower(DbxrefHomology.name).contains('cerevisiae'),
+            )
+            .all()
+        )
+
+    # Strategy 4: Partial match in description (gene name might be part of description)
+    if not dbxref_homologies:
+        dbxref_homologies = (
+            db.query(DbxrefHomology)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .options(
+                joinedload(DbxrefHomology.dbxref),
+                joinedload(DbxrefHomology.homology_group)
+                    .joinedload(HomologyGroup.feat_homology)
+                    .joinedload(FeatHomology.feature)
+                    .joinedload(Feature.organism),
+            )
+            .filter(
+                func.upper(Dbxref.description).contains(gene_id),
+                func.lower(DbxrefHomology.name).contains('cerevisiae'),
+            )
+            .all()
+        )
+
+    # Strategy 5: DbxrefHomology.name might contain the gene name directly
+    if not dbxref_homologies:
+        dbxref_homologies = (
+            db.query(DbxrefHomology)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .options(
+                joinedload(DbxrefHomology.dbxref),
+                joinedload(DbxrefHomology.homology_group)
+                    .joinedload(HomologyGroup.feat_homology)
+                    .joinedload(FeatHomology.feature)
+                    .joinedload(Feature.organism),
+            )
+            .filter(
+                func.upper(DbxrefHomology.name) == gene_id,
+            )
+            .all()
+        )
+
+    # Strategy 6: DbxrefHomology.name contains gene name with organism
+    if not dbxref_homologies:
+        dbxref_homologies = (
+            db.query(DbxrefHomology)
+            .join(Dbxref, DbxrefHomology.dbxref_no == Dbxref.dbxref_no)
+            .options(
+                joinedload(DbxrefHomology.dbxref),
+                joinedload(DbxrefHomology.homology_group)
+                    .joinedload(HomologyGroup.feat_homology)
+                    .joinedload(FeatHomology.feature)
+                    .joinedload(Feature.organism),
+            )
+            .filter(
+                func.upper(DbxrefHomology.name).contains(gene_id),
             )
             .all()
         )
