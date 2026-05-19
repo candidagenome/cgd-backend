@@ -1573,11 +1573,14 @@ def get_gene_expression(
         conditions.sort(key=lambda x: x.fold_change, reverse=True)
 
         if conditions:
+            # Get human-readable control label
+            control_label = study_info["conditions"].get(control_id, {}).get("label", control_id)
             studies.append(ExpressionStudy(
                 study_id=study_id,
                 category=study_info["category"],
                 pmid=study_info.get("pmid"),
                 control_id=control_id,
+                control_label=control_label,
                 control_value=round(control_value, 2),
                 conditions=conditions
             ))
@@ -1757,11 +1760,14 @@ def _get_expression_for_organism(
         conditions.sort(key=lambda x: x.fold_change, reverse=True)
 
         if conditions:
+            # Get human-readable control label
+            control_label = study_info["conditions"].get(control_id, {}).get("label", control_id)
             studies.append(ExpressionStudy(
                 study_id=study_id,
                 category=study_info["category"],
                 pmid=study_info.get("pmid"),
                 control_id=control_id,
+                control_label=control_label,
                 control_value=round(control_value, 2),
                 conditions=conditions
             ))

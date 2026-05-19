@@ -22,6 +22,7 @@ class ExpressionStudy(BaseModel):
     category: str = Field(description="Study category (e.g., Stress Response)")
     pmid: Optional[str] = Field(None, description="PubMed ID")
     control_id: str = Field(description="Control condition identifier")
+    control_label: str = Field(description="Human-readable control description (e.g., 'Planktonic')")
     control_value: float = Field(description="Control expression value")
     conditions: List[ExpressionCondition] = Field(
         default_factory=list,
