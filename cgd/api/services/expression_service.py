@@ -61,7 +61,7 @@ EXPRESSION_STUDIES = {
     "C_albicans_SC5314": {
         "Bruno_2010": {
             "category": "Stress Response",
-            "pmid": "20543895",
+            "pmid": "20810668",
             "path_style": "old",
             "control": "nOxi",
             "conditions": {
@@ -80,7 +80,7 @@ EXPRESSION_STUDIES = {
         },
         "Desai_2013": {
             "category": "Biofilm",
-            "pmid": "24307631",
+            "pmid": "23572557",
             "path_style": "old",
             "control": "sc_plnk",
             "conditions": {
@@ -107,7 +107,7 @@ EXPRESSION_STUDIES = {
         },
         "Xie_2013": {
             "category": "Cell Type Switching",
-            "pmid": "23326225",
+            "pmid": "23555196",
             "path_style": "old",
             "control": "CY110wh",
             "conditions": {
@@ -157,7 +157,7 @@ EXPRESSION_STUDIES = {
         },
         "Zhang_2024": {
             "category": "DNA Damage Response",
-            "pmid": "35886903",
+            "pmid": "38921373",
             "path_style": "new",
             "control": "SRR18188695",
             "conditions": {
@@ -624,7 +624,7 @@ EXPRESSION_STUDIES = {
     "C_parapsilosis_CDC317": {
         "Holland_2014": {
             "category": "Biofilm/Transcription Factors",
-            "pmid": "24586159",
+            "pmid": "25233198",
             "path_style": "old_direct",  # old style without HapA subdirectory
             "control": "wt_plnk_1",
             "conditions": {
