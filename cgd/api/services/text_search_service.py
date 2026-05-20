@@ -505,12 +505,19 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     Search genes/loci by gene_name, feature_name, dbxref_id, or aliases.
     Returns TextSearchResult list with category="genes".
 
+    Results are sorted with exact gene_name matches first, then by organism
+    priority (C. albicans first), then alphabetically by name.
+
     Note: Filters out Assembly 21 features that have Assembly 22 equivalents
     to avoid duplicate results for the same gene.
     """
-    results = []
+    # Store results as tuples: (match_type, result_data_dict)
+    # match_type: 0=exact gene_name, 1=exact feature_name, 2=exact alias/partial, 3=partial alias
+    results_with_priority = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
+    # Clean query for exact matching (remove wildcards)
+    clean_query = query.strip().replace('*', '').replace('%', '').upper()
 
     # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
     a21_subq = _get_a21_exclusion_subquery(db)
@@ -538,20 +545,33 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     for feat in feature_query:
         found_feature_nos.add(feat.feature_no)
         display_name = feat.gene_name or feat.feature_name
-        results.append(TextSearchResult(
-            category="genes",
-            id=feat.dbxref_id,
-            name=display_name,
-            description=feat.headline,
-            link=f"/locus/{feat.gene_name or feat.feature_name}",
-            organism=_get_organism_name(feat.organism),
-            highlighted_name=_highlight_text(display_name, query),
-            highlighted_description=_highlight_text(feat.headline, query),
+        organism_name = _get_organism_name(feat.organism)
+        # Determine match type for sorting:
+        # 0 = exact gene_name match, 1 = exact feature_name match, 2 = partial match
+        match_type = 2
+        if feat.gene_name and feat.gene_name.upper() == clean_query:
+            match_type = 0
+        elif feat.feature_name and feat.feature_name.upper() == clean_query:
+            match_type = 1
+        results_with_priority.append((
+            match_type,
+            _get_organism_priority(organism_name),
+            display_name or '',
+            {
+                "category": "genes",
+                "id": feat.dbxref_id,
+                "name": display_name,
+                "description": feat.headline,
+                "link": f"/locus/{feat.gene_name or feat.feature_name}",
+                "organism": organism_name,
+                "highlighted_name": _highlight_text(display_name, query),
+                "highlighted_description": _highlight_text(feat.headline, query),
+            }
         ))
 
     # Search aliases if we need more results
     # Filter by valid gene feature types
-    remaining = limit - len(results)
+    remaining = limit - len(results_with_priority)
     if remaining > 0:
         alias_query = (
             db.query(Feature, Alias)
@@ -570,25 +590,36 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             if feat.feature_no not in found_feature_nos:
                 found_feature_nos.add(feat.feature_no)
                 display_name = feat.gene_name or feat.feature_name
+                organism_name = _get_organism_name(feat.organism)
                 description = f"Alias: {alias.alias_name}"
                 if feat.headline:
                     description += f" - {feat.headline}"
-                results.append(TextSearchResult(
-                    category="genes",
-                    id=feat.dbxref_id,
-                    name=display_name,
-                    description=description,
-                    link=f"/locus/{feat.gene_name or feat.feature_name}",
-                    organism=_get_organism_name(feat.organism),
-                    highlighted_name=_highlight_text(display_name, query),
-                    highlighted_description=_highlight_text(description, query),
+                # Alias matches have lower priority (match_type=3)
+                # But exact alias match gets slightly higher priority (match_type=2)
+                match_type = 2 if alias.alias_name.upper() == clean_query else 3
+                results_with_priority.append((
+                    match_type,
+                    _get_organism_priority(organism_name),
+                    display_name or '',
+                    {
+                        "category": "genes",
+                        "id": feat.dbxref_id,
+                        "name": display_name,
+                        "description": description,
+                        "link": f"/locus/{feat.gene_name or feat.feature_name}",
+                        "organism": organism_name,
+                        "highlighted_name": _highlight_text(display_name, query),
+                        "highlighted_description": _highlight_text(description, query),
+                    }
                 ))
-                if len(results) >= limit:
+                if len(results_with_priority) >= limit:
                     break
 
-    # Sort by organism priority (C. albicans first), then by name
-    results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
-    return results
+    # Sort by: match_type, organism priority, then name
+    results_with_priority.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    # Convert to TextSearchResult objects
+    return [TextSearchResult(**item[3]) for item in results_with_priority]
 
 
 def search_cgdid(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
