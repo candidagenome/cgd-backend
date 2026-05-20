@@ -87,10 +87,10 @@ MIN_FEATURES = {
     "orf_genomic_1000": 100,
     "orf_trans_all": 100,
     "orf_plus_intergenic": 100,
-    "other_features_genomic": 10,
-    "other_features_genomic_1000": 10,
-    "other_features_no_introns": 10,
-    "other_features_plus_intergenic": 10,
+    "other_features_genomic": 0,  # Some organisms have no ncRNA/tRNA annotations
+    "other_features_genomic_1000": 0,
+    "other_features_no_introns": 0,
+    "other_features_plus_intergenic": 0,
     "not_feature": 50,
     "default_coding": 100,
     "default_genomic": 100,
@@ -101,10 +101,10 @@ MIN_FEATURES = {
     "orf_genomic_1000_haploid": 100,
     "orf_trans_all_haploid": 100,
     "orf_plus_intergenic_haploid": 100,
-    "other_features_genomic_haploid": 10,
-    "other_features_genomic_1000_haploid": 10,
-    "other_features_no_introns_haploid": 10,
-    "other_features_plus_intergenic_haploid": 10,
+    "other_features_genomic_haploid": 0,
+    "other_features_genomic_1000_haploid": 0,
+    "other_features_no_introns_haploid": 0,
+    "other_features_plus_intergenic_haploid": 0,
 }
 MAX_FEATURE_CHANGE_PERCENT = 10.0
 
