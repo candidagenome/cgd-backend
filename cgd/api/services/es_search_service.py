@@ -85,21 +85,26 @@ def _is_assembly22_link(link: Optional[str]) -> bool:
     return '_' in feature_name and not feature_name.lower().startswith('orf')
 
 
-def _deduplicate_assembly_results(results: list[SearchResult]) -> list[SearchResult]:
+def _deduplicate_assembly_results(results: list) -> list:
     """
     Deduplicate gene results that have both Assembly 21 and Assembly 22 versions.
 
     When the same gene name appears multiple times for the same organism,
     keep only the Assembly 22 version (preferred).
 
+    Works with both SearchResult and TextSearchResult objects (duck typing).
+
     Args:
-        results: List of SearchResult objects
+        results: List of SearchResult or TextSearchResult objects
 
     Returns:
         Deduplicated list with Assembly 22 preferred over Assembly 21
     """
+    if not results:
+        return results
+
     # Group by (name, organism)
-    grouped: dict[tuple, list[SearchResult]] = {}
+    grouped: dict[tuple, list] = {}
     for result in results:
         key = (result.name, result.organism)
         if key not in grouped:
@@ -2289,6 +2294,12 @@ def text_search(
             counts_by_category.pop(cat, None)
             results_by_category.pop(cat, None)
 
+        # Deduplicate genes and descriptions: when both Assembly 21 (orf19.*) and
+        # Assembly 22 (C*_*) exist for the same gene name, keep only Assembly 22
+        for cat in ["genes", "descriptions"]:
+            if cat in results_by_category and results_by_category[cat]:
+                results_by_category[cat] = _deduplicate_assembly_results(results_by_category[cat])
+
         # Sort gene-related categories by organism priority
         for cat in ["genes", "descriptions", "paragraphs", "notes", "external_ids", "orthologs", "name_descriptions"]:
             if cat in results_by_category and results_by_category[cat]:
@@ -2583,6 +2594,11 @@ def text_search_category(
     for hit in response["hits"]["hits"]:
         result = _parse_text_search_result(hit, query, category)
         results.append(result)
+
+    # Deduplicate genes and descriptions: when both Assembly 21 (orf19.*) and
+    # Assembly 22 (C*_*) exist for the same gene name, keep only Assembly 22
+    if category in ["genes", "descriptions"]:
+        results = _deduplicate_assembly_results(results)
 
     # Sort genes/descriptions by organism priority
     if category in ["genes", "descriptions"]:
