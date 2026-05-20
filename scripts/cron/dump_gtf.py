@@ -231,7 +231,7 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
         SELECT f.feature_no, f.feature_name, f.gene_name,
                fp.property_value as feature_qualifier,
                fl.strand, root_feat.feature_name as chr_name,
-               f.feature_type
+               f.feature_type, fl.start_coord, fl.stop_coord
         FROM {DB_SCHEMA}.feature f
         JOIN {DB_SCHEMA}.feat_location fl
             ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
@@ -259,6 +259,12 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
             # ORF allele names are like C1_00010W_B where the _A version is the ORF
             pass  # Include all alleles for now, they should have CDS subfeatures
 
+        # Normalize start/stop coordinates (start should be less than stop)
+        start_coord = row[7]
+        stop_coord = row[8]
+        if start_coord > stop_coord:
+            start_coord, stop_coord = stop_coord, start_coord
+
         features.append({
             "feature_no": row[0],
             "feature_name": row[1],
@@ -266,6 +272,8 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
             "strand": "-" if row[4] == "C" else "+",
             "chr_name": row[5],
             "feature_type": feature_type,
+            "start": start_coord,
+            "end": stop_coord,
         })
 
     return features
@@ -355,8 +363,9 @@ def dump_gtf(
         # Get subfeatures (CDS segments)
         subfeatures = subfeature_map.get(feat["feature_no"], [])
 
+        # For intronless genes, use the ORF's own location as the CDS
         if not subfeatures:
-            continue
+            subfeatures = [{"start": feat["start"], "end": feat["end"]}]
 
         # Sort by position
         subfeatures = sorted(subfeatures, key=lambda x: x["start"])

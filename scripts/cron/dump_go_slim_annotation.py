@@ -99,7 +99,7 @@ STRAIN_CONFIGS = {
         "taxon_id": "578454",
     },
     "C_tropicalis": {
-        "seq_source": "C. tropicalis",
+        "seq_source": "C. tropicalis MYA-3404",
         "taxon_id": "294747",
     },
 }

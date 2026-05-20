@@ -257,29 +257,30 @@ def get_chromosome_sequence(session, chr_name: str, seq_source: str) -> str | No
     return result[0] if result else None
 
 
-def get_chromosome_orfs(session, chr_name: str) -> list[dict]:
+def get_chromosome_orfs(session, chr_name: str, seq_source: str) -> list[dict]:
     """Get ORF and allele features for a chromosome.
 
     Note: B-alleles in diploid genomes (e.g., C. albicans) are stored as
     feature_type='allele' rather than 'ORF', so we include both types.
+
+    Uses feat_location to find features on chromosome (not feat_relationship)
+    for compatibility with all organisms including C. tropicalis.
     """
     query = text(f"""
-        SELECT f1.feature_no, f1.feature_name, f1.dbxref_id, f1.gene_name, f1.headline
-        FROM {DB_SCHEMA}.feature f1
-        JOIN {DB_SCHEMA}.feat_relationship fr ON (f1.feature_no = fr.child_feature_no
-            AND fr.rank = 1 AND fr.relationship_type = 'part of')
-        JOIN {DB_SCHEMA}.feature f2 ON (fr.parent_feature_no = f2.feature_no
-            AND f2.feature_name = :chr_name)
-        WHERE f1.feature_type IN ('ORF', 'allele')
-        AND f1.feature_no NOT IN (
-            SELECT feature_no
-            FROM {DB_SCHEMA}.feat_property
-            WHERE property_value LIKE 'Deleted%')
-        ORDER BY f1.feature_name
+        SELECT f.feature_no, f.feature_name, f.dbxref_id, f.gene_name, f.headline
+        FROM {DB_SCHEMA}.feature f
+        JOIN {DB_SCHEMA}.feat_location fl ON (f.feature_no = fl.feature_no AND fl.is_loc_current = 'Y')
+        JOIN {DB_SCHEMA}.seq s ON (fl.root_seq_no = s.seq_no AND s.is_seq_current = 'Y' AND s.source = :seq_source)
+        JOIN {DB_SCHEMA}.feature root_feat ON s.feature_no = root_feat.feature_no
+        LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
+        WHERE root_feat.feature_name = :chr_name
+        AND f.feature_type IN ('ORF', 'allele')
+        AND (fp.property_value IS NULL OR fp.property_value NOT LIKE 'Deleted%')
+        ORDER BY fl.start_coord
     """)
 
     orfs = []
-    for row in session.execute(query, {"chr_name": chr_name}).fetchall():
+    for row in session.execute(query, {"chr_name": chr_name, "seq_source": seq_source}).fetchall():
         orfs.append({
             "feature_no": row[0],
             "feature_name": row[1],
@@ -465,7 +466,7 @@ def write_embl_file(
         return 0
 
     # Get ORFs
-    orfs = get_chromosome_orfs(session, chr_name)
+    orfs = get_chromosome_orfs(session, chr_name, seq_source)
 
     # Write to temp file first
     temp_file = output_file.with_suffix(".embl.temp")
