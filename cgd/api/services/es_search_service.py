@@ -67,6 +67,58 @@ def _highlight_text(text: Optional[str], query: str) -> Optional[str]:
     return pattern.sub(replacer, text)
 
 
+def _is_assembly22_link(link: Optional[str]) -> bool:
+    """
+    Check if a locus link points to an Assembly 22 feature.
+
+    Assembly 22 feature names are like C5_01745W_B (start with C/letter + number + underscore).
+    Assembly 21 feature names are like orf19.10713 (start with orf19.).
+    """
+    if not link:
+        return False
+    # Extract feature name from link like "/locus/C5_01745W_B"
+    parts = link.rstrip('/').split('/')
+    if len(parts) < 2:
+        return False
+    feature_name = parts[-1]
+    # Assembly 22 names contain underscore and don't start with "orf"
+    return '_' in feature_name and not feature_name.lower().startswith('orf')
+
+
+def _deduplicate_assembly_results(results: list[SearchResult]) -> list[SearchResult]:
+    """
+    Deduplicate gene results that have both Assembly 21 and Assembly 22 versions.
+
+    When the same gene name appears multiple times for the same organism,
+    keep only the Assembly 22 version (preferred).
+
+    Args:
+        results: List of SearchResult objects
+
+    Returns:
+        Deduplicated list with Assembly 22 preferred over Assembly 21
+    """
+    # Group by (name, organism)
+    grouped: dict[tuple, list[SearchResult]] = {}
+    for result in results:
+        key = (result.name, result.organism)
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(result)
+
+    # Deduplicate: prefer Assembly 22
+    deduplicated = []
+    for key, group in grouped.items():
+        if len(group) == 1:
+            deduplicated.append(group[0])
+        else:
+            # Sort: Assembly 22 first (is_a22=True -> not is_a22=False sorts first)
+            group.sort(key=lambda r: (not _is_assembly22_link(r.link), r.id or ''))
+            deduplicated.append(group[0])
+
+    return deduplicated
+
+
 def _build_reference_links(
     dbxref_id: Optional[str],
     pubmed: Optional[str],
@@ -1244,6 +1296,11 @@ def search_category(
         result = _parse_hit(hit, query)
         if result:
             results.append(result)
+
+    # Deduplicate genes: when both Assembly 21 (orf19.*) and Assembly 22 (C*_*) exist
+    # for the same gene name, keep only Assembly 22
+    if category in ("genes", "descriptions"):
+        results = _deduplicate_assembly_results(results)
 
     # Sort genes, descriptions, and orthologs by organism priority
     if category in ("genes", "descriptions", "orthologs"):

@@ -500,6 +500,16 @@ def _get_a21_exclusion_subquery(db: Session):
     return direct_a21.union(alleles_of_a21).subquery()
 
 
+def _is_assembly22_feature(feature_name: str) -> bool:
+    """Check if feature_name is Assembly 22 format (e.g., C5_01745W_B)."""
+    if not feature_name:
+        return False
+    # Assembly 22 names start with C or other letter followed by number and underscore
+    # e.g., C5_01745W_B, C1_00340W_A
+    # Assembly 21 names are like orf19.10713
+    return '_' in feature_name and not feature_name.startswith('orf')
+
+
 def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
     """
     Search genes/loci by gene_name, feature_name, dbxref_id, or aliases.
@@ -508,22 +518,18 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
     Results are sorted with exact gene_name matches first, then by organism
     priority (C. albicans first), then alphabetically by name.
 
-    Note: Filters out Assembly 21 features that have Assembly 22 equivalents
-    to avoid duplicate results for the same gene.
+    When both Assembly 21 (orf19.*) and Assembly 22 (C*_*) versions exist
+    for the same gene_name, only the Assembly 22 version is returned.
     """
-    # Store results as tuples: (match_type, result_data_dict)
-    # match_type: 0=exact gene_name, 1=exact feature_name, 2=exact alias/partial, 3=partial alias
-    results_with_priority = []
     like_pattern = _get_like_pattern(query)
     upper_pattern = like_pattern.upper()
     # Clean query for exact matching (remove wildcards)
     clean_query = query.strip().replace('*', '').replace('%', '').upper()
 
-    # Subquery to get Assembly 21 feature_nos to exclude (includes alleles)
-    a21_subq = _get_a21_exclusion_subquery(db)
+    # Fetch more results than needed to allow for deduplication
+    fetch_limit = limit * 3
 
     # Search in Feature table: gene_name, feature_name, dbxref_id
-    # Exclude Assembly 21 features directly in SQL
     # Filter by valid gene feature types to exclude proteins, polypeptides, etc.
     feature_query = (
         db.query(Feature)
@@ -535,25 +541,31 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 func.upper(Feature.feature_name).like(upper_pattern),
                 func.upper(Feature.dbxref_id).like(upper_pattern),
             ),
-            ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
         )
-        .limit(limit)
+        .limit(fetch_limit)
     )
 
-    # Collect features from direct match
+    # Collect all matching features, tracking by (gene_name, organism) for deduplication
+    # Key: (gene_name, organism_no) -> list of (is_a22, feature_data)
+    gene_matches = {}
     found_feature_nos = set()
+
     for feat in feature_query:
         found_feature_nos.add(feat.feature_no)
         display_name = feat.gene_name or feat.feature_name
         organism_name = _get_organism_name(feat.organism)
-        # Determine match type for sorting:
-        # 0 = exact gene_name match, 1 = exact feature_name match, 2 = partial match
+        is_a22 = _is_assembly22_feature(feat.feature_name)
+
+        # Determine match type for sorting
         match_type = 2
         if feat.gene_name and feat.gene_name.upper() == clean_query:
             match_type = 0
         elif feat.feature_name and feat.feature_name.upper() == clean_query:
             match_type = 1
-        results_with_priority.append((
+
+        key = (feat.gene_name, feat.organism_no) if feat.gene_name else (feat.feature_name, feat.organism_no)
+        entry = (
+            is_a22,
             match_type,
             _get_organism_priority(organism_name),
             display_name or '',
@@ -567,10 +579,22 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
                 "highlighted_name": _highlight_text(display_name, query),
                 "highlighted_description": _highlight_text(feat.headline, query),
             }
-        ))
+        )
+
+        if key not in gene_matches:
+            gene_matches[key] = []
+        gene_matches[key].append(entry)
+
+    # Deduplicate: for each (gene_name, organism), prefer Assembly 22 version
+    results_with_priority = []
+    for key, entries in gene_matches.items():
+        # Sort entries: Assembly 22 first (is_a22=True sorts after False, so negate)
+        entries.sort(key=lambda x: (not x[0], x[1]))
+        # Take the first one (Assembly 22 if available)
+        best = entries[0]
+        results_with_priority.append((best[1], best[2], best[3], best[4]))
 
     # Search aliases if we need more results
-    # Filter by valid gene feature types
     remaining = limit - len(results_with_priority)
     if remaining > 0:
         alias_query = (
@@ -581,45 +605,61 @@ def search_genes(db: Session, query: str, limit: int = 20) -> list[TextSearchRes
             .filter(
                 Feature.feature_type.in_(GENE_FEATURE_TYPES),
                 func.upper(Alias.alias_name).like(upper_pattern),
-                ~Feature.feature_no.in_(db.query(a21_subq.c.feature_no))
             )
-            .limit(remaining + len(found_feature_nos))  # Extra to account for duplicates
+            .limit(fetch_limit)
         )
 
+        alias_matches = {}
         for feat, alias in alias_query:
-            if feat.feature_no not in found_feature_nos:
-                found_feature_nos.add(feat.feature_no)
-                display_name = feat.gene_name or feat.feature_name
-                organism_name = _get_organism_name(feat.organism)
-                description = f"Alias: {alias.alias_name}"
-                if feat.headline:
-                    description += f" - {feat.headline}"
-                # Alias matches have lower priority (match_type=3)
-                # But exact alias match gets slightly higher priority (match_type=2)
-                match_type = 2 if alias.alias_name.upper() == clean_query else 3
-                results_with_priority.append((
-                    match_type,
-                    _get_organism_priority(organism_name),
-                    display_name or '',
-                    {
-                        "category": "genes",
-                        "id": feat.dbxref_id,
-                        "name": display_name,
-                        "description": description,
-                        "link": f"/locus/{feat.gene_name or feat.feature_name}",
-                        "organism": organism_name,
-                        "highlighted_name": _highlight_text(display_name, query),
-                        "highlighted_description": _highlight_text(description, query),
-                    }
-                ))
-                if len(results_with_priority) >= limit:
-                    break
+            if feat.feature_no in found_feature_nos:
+                continue  # Skip if already found via direct match
+
+            display_name = feat.gene_name or feat.feature_name
+            organism_name = _get_organism_name(feat.organism)
+            is_a22 = _is_assembly22_feature(feat.feature_name)
+            description = f"Alias: {alias.alias_name}"
+            if feat.headline:
+                description += f" - {feat.headline}"
+            match_type = 2 if alias.alias_name.upper() == clean_query else 3
+
+            key = (feat.gene_name, feat.organism_no) if feat.gene_name else (feat.feature_name, feat.organism_no)
+
+            # Skip if we already have this gene from direct match
+            if key in gene_matches:
+                continue
+
+            entry = (
+                is_a22,
+                match_type,
+                _get_organism_priority(organism_name),
+                display_name or '',
+                {
+                    "category": "genes",
+                    "id": feat.dbxref_id,
+                    "name": display_name,
+                    "description": description,
+                    "link": f"/locus/{feat.gene_name or feat.feature_name}",
+                    "organism": organism_name,
+                    "highlighted_name": _highlight_text(display_name, query),
+                    "highlighted_description": _highlight_text(description, query),
+                }
+            )
+
+            if key not in alias_matches:
+                alias_matches[key] = []
+            alias_matches[key].append(entry)
+
+        # Deduplicate alias matches
+        for key, entries in alias_matches.items():
+            entries.sort(key=lambda x: (not x[0], x[1]))
+            best = entries[0]
+            results_with_priority.append((best[1], best[2], best[3], best[4]))
 
     # Sort by: match_type, organism priority, then name
     results_with_priority.sort(key=lambda x: (x[0], x[1], x[2]))
 
-    # Convert to TextSearchResult objects
-    return [TextSearchResult(**item[3]) for item in results_with_priority]
+    # Convert to TextSearchResult objects, limited to requested count
+    return [TextSearchResult(**item[3]) for item in results_with_priority[:limit]]
 
 
 def search_cgdid(db: Session, query: str, limit: int = 20) -> list[TextSearchResult]:
