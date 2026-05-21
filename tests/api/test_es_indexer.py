@@ -145,6 +145,9 @@ class MockQuery:
     def all(self):
         return self._results
 
+    def first(self):
+        return self._results[0] if self._results else None
+
 
 @pytest.fixture
 def mock_db():
@@ -392,10 +395,12 @@ class TestGeneratePhenotypeDocs:
 class TestGenerateReferenceDocs:
     """Tests for _generate_reference_docs."""
 
-    def test_generates_reference_document(self, mock_db, sample_reference):
+    @patch('cgd.api.services.es_indexer._get_full_text_url')
+    def test_generates_reference_document(self, mock_get_url, mock_db, sample_reference):
         """Should generate reference document with correct fields."""
         # Query returns tuples of (Reference, abstract_text)
         mock_db.query.return_value = MockQuery([(sample_reference, None)])
+        mock_get_url.return_value = None
 
         docs = list(_generate_reference_docs(mock_db))
 
@@ -406,15 +411,18 @@ class TestGenerateReferenceDocs:
         assert doc["_source"]["type"] == "reference"
         assert doc["_source"]["pubmed"] == 12345678
 
-    def test_uses_pmid_as_display_name(self, mock_db, sample_reference):
+    @patch('cgd.api.services.es_indexer._get_full_text_url')
+    def test_uses_pmid_as_display_name(self, mock_get_url, mock_db, sample_reference):
         """Should use PMID as display name when available."""
         mock_db.query.return_value = MockQuery([(sample_reference, None)])
+        mock_get_url.return_value = None
 
         docs = list(_generate_reference_docs(mock_db))
 
         assert docs[0]["_source"]["name"] == "PMID:12345678"
 
-    def test_uses_dbxref_when_no_pmid(self, mock_db):
+    @patch('cgd.api.services.es_indexer._get_full_text_url')
+    def test_uses_dbxref_when_no_pmid(self, mock_get_url, mock_db):
         """Should use dbxref_id when no PMID."""
         ref = MockReference(
             reference_no=1,
@@ -422,6 +430,7 @@ class TestGenerateReferenceDocs:
             pubmed=None,
         )
         mock_db.query.return_value = MockQuery([(ref, None)])
+        mock_get_url.return_value = None
 
         docs = list(_generate_reference_docs(mock_db))
 

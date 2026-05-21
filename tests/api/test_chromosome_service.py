@@ -311,8 +311,8 @@ class TestGetOrganismInfo:
     """Tests for _get_organism_info."""
 
     def test_returns_organism_name_and_taxon(self, sample_chromosome):
-        """Should return organism name and taxon_id."""
-        name, taxon = _get_organism_info(sample_chromosome)
+        """Should return organism name, abbrev, and taxon_id."""
+        name, abbrev, taxon = _get_organism_info(sample_chromosome)
 
         assert name == "Candida albicans SC5314"
         assert taxon == 5476
@@ -322,7 +322,7 @@ class TestGetOrganismInfo:
         org = MockOrganism(1, None)
         feature = MockFeature(1, "Chr1", organism=org)
 
-        name, taxon = _get_organism_info(feature)
+        name, abbrev, taxon = _get_organism_info(feature)
 
         assert name == "1"
 
@@ -330,7 +330,7 @@ class TestGetOrganismInfo:
         """Should handle feature with no organism."""
         feature = MockFeature(1, "Chr1", organism=None)
 
-        name, taxon = _get_organism_info(feature)
+        name, abbrev, taxon = _get_organism_info(feature)
 
         assert taxon == 0
 
