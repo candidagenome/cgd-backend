@@ -1383,38 +1383,77 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
 
         # Get Candida orthologs (internal CGD species via CGOB or BLAST RBH method)
         # This matches the synteny viewer which only uses these methods
+        # Uses transitive lookup: if A->B via BLAST RBH, and B->C via CGOB, then A->C
         candida_orthologs = []
         seen_orthologs = set()  # Track seen feature_nos to avoid duplicates
+        seen_organisms = set()  # Track organisms to limit to one per species
+        processed_clusters = set()  # Track processed homology group nos
+
+        def add_orthologs_from_cluster(hg_no: int, exclude_feature_no: int):
+            """Add orthologs from a homology group, returns list of found feature_nos."""
+            if hg_no in processed_clusters:
+                return []
+            processed_clusters.add(hg_no)
+
+            found_features = []
+            other_members = (
+                db.query(FeatHomology)
+                .filter(
+                    FeatHomology.homology_group_no == hg_no,
+                    FeatHomology.feature_no != exclude_feature_no,
+                )
+                .all()
+            )
+            for om in other_members:
+                if om.feature_no in seen_orthologs:
+                    continue
+                other_feat = (
+                    db.query(Feature)
+                    .options(joinedload(Feature.organism))
+                    .filter(Feature.feature_no == om.feature_no)
+                    .first()
+                )
+                if other_feat:
+                    other_org_name, _ = _get_organism_info(other_feat)
+                    # Only include one ortholog per organism
+                    if other_org_name in seen_organisms:
+                        found_features.append(om.feature_no)
+                        continue
+                    seen_organisms.add(other_org_name)
+                    seen_orthologs.add(om.feature_no)
+                    found_features.append(om.feature_no)
+                    candida_orthologs.append(CandidaOrthologOut(
+                        feature_name=other_feat.feature_name,
+                        gene_name=other_feat.gene_name,
+                        organism_name=other_org_name,
+                        dbxref_id=other_feat.dbxref_id,
+                    ))
+            return found_features
+
+        # First pass: get direct orthologs from query gene's clusters
+        direct_ortholog_features = []
         for fh in f.feat_homology:
             hg = fh.homology_group
             if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
-                # Get other features in same homology group
-                other_members = (
-                    db.query(FeatHomology)
-                    .filter(
-                        FeatHomology.homology_group_no == hg.homology_group_no,
-                        FeatHomology.feature_no != f.feature_no,
-                    )
-                    .all()
+                found = add_orthologs_from_cluster(hg.homology_group_no, f.feature_no)
+                direct_ortholog_features.extend(found)
+
+        # Second pass: transitive lookup - check if direct orthologs have additional clusters
+        # This handles C. auris -> C. tropicalis (BLAST RBH) -> other species (CGOB)
+        for feat_no in direct_ortholog_features:
+            # Get all ortholog clusters for this feature
+            additional_clusters = (
+                db.query(HomologyGroup)
+                .join(FeatHomology, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+                .filter(
+                    FeatHomology.feature_no == feat_no,
+                    HomologyGroup.homology_group_type == 'ortholog',
+                    HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
                 )
-                for om in other_members:
-                    if om.feature_no in seen_orthologs:
-                        continue
-                    seen_orthologs.add(om.feature_no)
-                    other_feat = (
-                        db.query(Feature)
-                        .options(joinedload(Feature.organism))
-                        .filter(Feature.feature_no == om.feature_no)
-                        .first()
-                    )
-                    if other_feat:
-                        other_org_name, _ = _get_organism_info(other_feat)
-                        candida_orthologs.append(CandidaOrthologOut(
-                            feature_name=other_feat.feature_name,
-                            gene_name=other_feat.gene_name,
-                            organism_name=other_org_name,
-                            dbxref_id=other_feat.dbxref_id,
-                        ))
+                .all()
+            )
+            for add_hg in additional_clusters:
+                add_orthologs_from_cluster(add_hg.homology_group_no, f.feature_no)
 
         # Get external orthologs (non-CGD species)
         external_orthologs = []
