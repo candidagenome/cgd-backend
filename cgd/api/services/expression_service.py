@@ -203,6 +203,28 @@ EXPRESSION_STUDIES = {
                 "ERR8278363": {"label": "zcf26Δ (rep 3)", "bucket": "basic_biology"},
             },
         },
+        "Iracane_2024_longRNA": {
+            "category": "Mutation Comparison",
+            "pmid": "38625945",
+            "path_style": "direct",
+            "control": "SRR27942832",
+            "conditions": {
+                "SRR27912204": {"label": "Iracane et al long RNA strain ago1-K361E (biol rep 1)", "bucket": "mutation"},
+                "SRR27912324": {"label": "Iracane et al long RNA strain ago1-K361E (biol rep 2)", "bucket": "mutation"},
+                "SRR27912626": {"label": "Iracane et al long RNA strain ago1-K361E (biol rep 3)", "bucket": "mutation"},
+                "SRR27959451": {"label": "Iracane et al long RNA strain ago1 null mutant (biol rep 1)", "bucket": "mutation"},
+                "SRR27959445": {"label": "Iracane et al long RNA strain ago1 null mutant (biol rep 2)", "bucket": "mutation"},
+                "SRR27959444": {"label": "Iracane et al long RNA strain ago1 null mutant (biol rep 3)", "bucket": "mutation"},
+                "SRR27926874": {"label": "Iracane et al long RNA strain ago1 null mutant (biol rep 4)", "bucket": "mutation"},
+                "SRR27927865": {"label": "Iracane et al long RNA strain ago1 null mutant (biol rep 5)", "bucket": "mutation"},
+                "SRR27942832": {"label": "Iracane et al long RNA control (biol rep 1)", "bucket": "control"},
+                "SRR27959447": {"label": "Iracane et al long RNA control (biol rep 2)", "bucket": "control"},
+                "SRR27959457": {"label": "Iracane et al long RNA control (biol rep 3)", "bucket": "control"},
+                "SRR27928088": {"label": "Iracane et al long RNA control (biol rep 4)", "bucket": "control"},
+                "SRR27928186": {"label": "Iracane et al long RNA control (biol rep 5)", "bucket": "control"},
+                "SRR27928389": {"label": "Iracane et al long RNA control (biol rep 6)", "bucket": "control"},
+            },
+        },
     },
     "C_auris_B8441": {
         "Shivarathri_2022": {
