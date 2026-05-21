@@ -189,15 +189,22 @@ def _format_fasta_header(
     end: Optional[int] = None,
     strand: Optional[str] = None,
     headline: Optional[str] = None,
+    use_systematic_name: bool = False,
 ) -> str:
     """Format a FASTA header line."""
     parts = []
 
-    # Primary identifier
-    if gene_name:
-        parts.append(gene_name)
-    elif feature_name:
-        parts.append(feature_name)
+    # Primary identifier - prefer systematic name if requested
+    if use_systematic_name:
+        if feature_name:
+            parts.append(feature_name)
+        elif gene_name:
+            parts.append(gene_name)
+    else:
+        if gene_name:
+            parts.append(gene_name)
+        elif feature_name:
+            parts.append(feature_name)
 
     # CGDID
     if dbxref_id:
@@ -237,6 +244,7 @@ def get_sequence_by_feature(
     flank_left: int = 0,
     flank_right: int = 0,
     reverse_complement: bool = False,
+    use_systematic_name: bool = False,
 ) -> Optional[SequenceResponse]:
     """
     Retrieve sequence for a feature by name or identifier.
@@ -420,6 +428,7 @@ def get_sequence_by_feature(
         end=end_coord,
         strand=strand,
         headline=feature.headline,
+        use_systematic_name=use_systematic_name,
     )
 
     return SequenceResponse(

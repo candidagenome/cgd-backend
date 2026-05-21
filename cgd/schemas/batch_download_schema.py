@@ -57,6 +57,10 @@ class BatchDownloadRequest(BaseModel):
         True,
         description="Gzip compress the output"
     )
+    use_systematic_names: bool = Field(
+        False,
+        description="Use systematic names (e.g., orf19.5007) instead of gene names (e.g., ACT1) in FASTA headers"
+    )
 
     class Config:
         json_schema_extra = {

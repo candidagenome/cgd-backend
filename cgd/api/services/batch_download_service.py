@@ -233,6 +233,7 @@ def generate_genomic_fasta(
     features: List[ResolvedFeature],
     flank_left: int = 0,
     flank_right: int = 0,
+    use_systematic_name: bool = False,
 ) -> str:
     """Generate FASTA content for genomic sequences."""
     lines = []
@@ -244,6 +245,7 @@ def generate_genomic_fasta(
             seq_type=SeqType.GENOMIC,
             flank_left=flank_left,
             flank_right=flank_right,
+            use_systematic_name=use_systematic_name,
         )
         if result:
             fasta = format_as_fasta(result.fasta_header, result.sequence)
@@ -255,6 +257,7 @@ def generate_genomic_fasta(
 def generate_protein_fasta(
     db: Session,
     features: List[ResolvedFeature],
+    use_systematic_name: bool = False,
 ) -> str:
     """Generate FASTA content for protein sequences."""
     lines = []
@@ -264,6 +267,7 @@ def generate_protein_fasta(
             db=db,
             query=feat.feature_name,
             seq_type=SeqType.PROTEIN,
+            use_systematic_name=use_systematic_name,
         )
         if result:
             fasta = format_as_fasta(result.fasta_header, result.sequence)
@@ -275,6 +279,7 @@ def generate_protein_fasta(
 def generate_coding_fasta(
     db: Session,
     features: List[ResolvedFeature],
+    use_systematic_name: bool = False,
 ) -> str:
     """Generate FASTA content for coding sequences (CDS)."""
     lines = []
@@ -284,6 +289,7 @@ def generate_coding_fasta(
             db=db,
             query=feat.feature_name,
             seq_type=SeqType.CODING,
+            use_systematic_name=use_systematic_name,
         )
         if result:
             fasta = format_as_fasta(result.fasta_header, result.sequence)
@@ -598,7 +604,10 @@ def process_batch_download(
             if has_regions:
                 content = generate_region_fasta(db, request.regions)
             else:
-                content = generate_genomic_fasta(db, features)
+                content = generate_genomic_fasta(
+                    db, features,
+                    use_systematic_name=request.use_systematic_names
+                )
             filename_base = "genomic_sequences"
 
         elif data_type == DataType.GENOMIC_FLANKING:
@@ -609,20 +618,27 @@ def process_batch_download(
                 content = generate_genomic_fasta(
                     db, features,
                     flank_left=request.flank_left,
-                    flank_right=request.flank_right
+                    flank_right=request.flank_right,
+                    use_systematic_name=request.use_systematic_names
                 )
             filename_base = "genomic_flanking_sequences"
 
         elif data_type == DataType.CODING:
             # Coding sequences only available for gene-based queries
             if not has_regions:
-                content = generate_coding_fasta(db, features)
+                content = generate_coding_fasta(
+                    db, features,
+                    use_systematic_name=request.use_systematic_names
+                )
             filename_base = "coding_sequences"
 
         elif data_type == DataType.PROTEIN:
             # Protein sequences only available for gene-based queries
             if not has_regions:
-                content = generate_protein_fasta(db, features)
+                content = generate_protein_fasta(
+                    db, features,
+                    use_systematic_name=request.use_systematic_names
+                )
             filename_base = "protein_sequences"
 
         elif data_type == DataType.COORDS:
