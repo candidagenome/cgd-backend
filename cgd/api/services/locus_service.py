@@ -1420,7 +1420,9 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
 
         # Fallback: If no CGOB orthologs, also include "best hit" relationships
         # This handles organisms like C. auris that may not have CGOB ortholog data
+        # Only include one best hit per organism to match synteny viewer behavior
         if not has_cgob_orthologs:
+            seen_organisms = set()  # Track organisms to limit to one per species
             for fh in f.feat_homology:
                 hg = fh.homology_group
                 # Look for "best hit for X" type relationships
@@ -1436,7 +1438,6 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     for om in other_members:
                         if om.feature_no in seen_orthologs:
                             continue
-                        seen_orthologs.add(om.feature_no)
                         other_feat = (
                             db.query(Feature)
                             .options(joinedload(Feature.organism))
@@ -1445,6 +1446,11 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                         )
                         if other_feat:
                             other_org_name, _ = _get_organism_info(other_feat)
+                            # Only include one ortholog per organism
+                            if other_org_name in seen_organisms:
+                                continue
+                            seen_organisms.add(other_org_name)
+                            seen_orthologs.add(om.feature_no)
                             candida_orthologs.append(CandidaOrthologOut(
                                 feature_name=other_feat.feature_name,
                                 gene_name=other_feat.gene_name,
