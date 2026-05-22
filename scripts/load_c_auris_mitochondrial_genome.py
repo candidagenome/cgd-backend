@@ -668,7 +668,7 @@ def main():
                 db.query(Seq)
                 .filter(
                     Seq.feature_no == mito_feature_no,
-                    Seq.seq_type == "Genomic",
+                    Seq.seq_type == "genomic",
                 )
                 .first()
             )
