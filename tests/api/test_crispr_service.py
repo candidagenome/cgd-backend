@@ -32,6 +32,7 @@ from cgd.api.services.crispr_service import (
     _calculate_efficiency_score,
     _find_pam_sites,
     _filter_target_region,
+    _validate_pam_at_position,
     design_guides,
 )
 
@@ -234,6 +235,91 @@ class TestPAMSiteFinding:
         # Should find a guide starting after TTTA
         assert len(guides) >= 1
 
+    def test_forward_ngg_position_is_guide_start(self):
+        """Forward 3' PAM position should be the guide start."""
+        guide = "ATGCATGCATGCATGCATGC"
+        sequence = f"{guide}AGG"
+
+        guides = _find_pam_sites(sequence, PAMType.NGG, guide_length=20)
+
+        assert (guide, "AGG", 1, "+") in guides
+
+    def test_reverse_ngg_position_is_input_coordinate(self):
+        """Reverse 3' PAM position should be converted to input coordinates."""
+        guide = "ATGCATGCATGCATGCATGC"
+        reverse_oriented_target = f"{guide}AGG"
+        sequence = _reverse_complement(reverse_oriented_target)
+
+        guides = _find_pam_sites(sequence, PAMType.NGG, guide_length=20)
+
+        assert (guide, "AGG", 4, "-") in guides
+
+    def test_forward_tttv_position_is_guide_start_not_pam_start(self):
+        """Forward 5' PAM position should report the guide start."""
+        guide = "ATGCATGCATGCATGCATGC"
+        sequence = f"TTTA{guide}"
+
+        guides = _find_pam_sites(sequence, PAMType.TTTV, guide_length=20)
+
+        assert (guide, "TTTA", 5, "+") in guides
+
+    def test_reverse_tttv_position_is_input_coordinate(self):
+        """Reverse 5' PAM position should be converted to input coordinates."""
+        guide = "ATGCATGCATGCATGCATGC"
+        reverse_oriented_target = f"TTTA{guide}"
+        sequence = _reverse_complement(reverse_oriented_target)
+
+        guides = _find_pam_sites(sequence, PAMType.TTTV, guide_length=20)
+
+        assert (guide, "TTTA", 1, "-") in guides
+
+
+class TestPAMValidation:
+    """Tests for validating PAMs adjacent to off-target hits."""
+
+    def test_validates_plus_strand_3prime_pam(self):
+        chromosome = "ATGCATGCATGCATGCATGCAGG"
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=0,
+            hit_end=20,
+            strand="+",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam == "AGG"
+
+    def test_rejects_missing_plus_strand_3prime_pam(self):
+        chromosome = "ATGCATGCATGCATGCATGCAAA"
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=0,
+            hit_end=20,
+            strand="+",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam is None
+
+    def test_validates_minus_strand_3prime_pam(self):
+        guide = "ATGCATGCATGCATGCATGC"
+        chromosome = _reverse_complement(f"{guide}AGG")
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=3,
+            hit_end=23,
+            strand="-",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam == "AGG"
+
 
 class TestTargetRegionFiltering:
     """Tests for target region filtering."""
@@ -371,6 +457,46 @@ class TestDesignGuidesIntegration:
 
         assert result.success is False
         assert "too short" in result.error
+
+    def test_warns_for_unimplemented_request_options(self, mock_db):
+        """Accepted-but-unimplemented options should be explicit warnings."""
+        request = CrisprDesignRequest(
+            sequence="ATGCATGCATGCATGCATGCAGG",
+            organism="C_albicans_SC5314_A22",
+            offtarget_genomes=["C_auris_B8441"],
+            include_homology_arms=True,
+            check_offtargets=False,
+        )
+
+        result = design_guides(mock_db, request)
+
+        assert result.success is True
+        assert any("Additional off-target genomes" in w for w in result.warnings)
+        assert any("Homology arm design" in w for w in result.warnings)
+
+    def test_offtarget_checked_marks_only_searched_guides(self, mock_db):
+        """Guides beyond the off-target search limit should not look checked."""
+        test_sequence = "A" + ("ATGCATGCATGCATGCATGCAGG" * 20)
+        request = CrisprDesignRequest(
+            sequence=test_sequence,
+            organism="C_albicans_SC5314_A22",
+            pam=PAMType.NGG,
+            guide_length=20,
+            max_guides=20,
+            check_offtargets=True,
+        )
+
+        with patch(
+            "cgd.api.services.crispr_service._search_offtargets_blast",
+            side_effect=lambda *args, **kwargs: kwargs["status"].update({"performed": True}) or [],
+        ) as search_mock:
+            result = design_guides(mock_db, request)
+
+        assert result.success is True
+        assert search_mock.call_count == 14
+        assert sum(1 for guide in result.guides if guide.offtarget_checked) == 14
+        assert any(not guide.offtarget_checked for guide in result.guides)
+        assert any("top 14 guides only" in w for w in result.warnings)
 
 
 # =============================================================================

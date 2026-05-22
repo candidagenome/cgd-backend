@@ -340,6 +340,19 @@ def _generate_guide_jbrowse_url(
     return _generate_jbrowse_url(organism_tag, chromosome, guide_start, guide_end, flank=100)
 
 
+def _guide_genomic_strand(gene_strand: Optional[str], guide_strand: str) -> str:
+    """
+    Convert guide strand from target-sequence orientation to genomic strand.
+
+    Gene target sequences are in coding/transcript orientation. For genes on
+    the minus genomic strand, guide strands are therefore inverted relative to
+    chromosome coordinates.
+    """
+    if gene_strand != "-":
+        return guide_strand
+    return "-" if guide_strand == "+" else "+"
+
+
 # ============================================================================
 # Database Functions
 # ============================================================================
@@ -809,7 +822,9 @@ def _find_pam_sites(
     Find all PAM sites in a sequence and extract guide sequences.
 
     Returns list of (guide_sequence, pam_sequence, position, strand) tuples.
-    Position is 1-based, relative to the input sequence.
+    Position is the 1-based leftmost coordinate of the guide/protospacer in
+    the input sequence. For reverse-strand guides, this is still reported in
+    input-sequence coordinates, not reverse-complement coordinates.
     """
     pam_config = PAM_PATTERNS[pam_type]
     pattern = pam_config["pattern"]
@@ -841,7 +856,7 @@ def _find_pam_sites(
             guide_end = pam_end + guide_length
             if guide_end <= len(sequence):
                 guide_seq = sequence[guide_start:guide_end]
-                position = pam_start + 1  # 1-based
+                position = guide_start + 1  # 1-based
                 guides.append((guide_seq, pam_seq, position, "+"))
 
     # Search reverse strand
@@ -858,15 +873,15 @@ def _find_pam_sites(
             guide_end = pam_start
             if guide_start >= 0:
                 guide_seq = rev_sequence[guide_start:guide_end]
-                # Convert position back to forward strand coordinates
-                fwd_position = seq_len - pam_end + 1  # 1-based
+                # Convert guide start back to input-sequence coordinates.
+                fwd_position = seq_len - guide_end + 1  # 1-based
                 guides.append((guide_seq, pam_seq, fwd_position, "-"))
         else:
             guide_start = pam_end
             guide_end = pam_end + guide_length
             if guide_end <= len(rev_sequence):
                 guide_seq = rev_sequence[guide_start:guide_end]
-                fwd_position = seq_len - pam_end + 1
+                fwd_position = seq_len - guide_end + 1
                 guides.append((guide_seq, pam_seq, fwd_position, "-"))
 
     return guides
@@ -1019,6 +1034,7 @@ def _count_mismatches(seq1: str, seq2: str) -> Tuple[int, List[int]]:
 
 def _validate_pam_at_position(
     chromosome_seq: str,
+    hit_start: int,
     hit_end: int,
     strand: str,
     pam_type: PAMType,
@@ -1027,8 +1043,11 @@ def _validate_pam_at_position(
     """
     Check if a valid PAM exists adjacent to the off-target hit.
 
-    For 3' PAM systems (NGG, NAG, NNGRRT): PAM is immediately after guide.
-    For 5' PAM systems (TTTV): PAM is immediately before guide.
+    Coordinates are 0-based half-open genomic coordinates for the guide
+    protospacer on the forward chromosome sequence. For 3' PAM systems
+    (NGG, NAG, NNGRRT), PAM is downstream of the guide on plus-strand hits
+    and upstream of the guide on minus-strand hits. 5' PAM systems are the
+    opposite.
 
     Returns the PAM sequence if valid, None otherwise.
     """
@@ -1051,7 +1070,7 @@ def _validate_pam_at_position(
                 pam_end = hit_end + pam_len
             else:
                 # PAM is 5' of guide (before hit_start)
-                pam_end = hit_end - guide_length
+                pam_end = hit_start
                 pam_start = pam_end - pam_len
 
             if pam_start < 0 or pam_end > len(chromosome_seq):
@@ -1062,7 +1081,7 @@ def _validate_pam_at_position(
             # Minus strand - need reverse complement
             if is_3prime:
                 # For minus strand with 3' PAM, PAM is upstream in genomic coords
-                pam_end = hit_end - guide_length
+                pam_end = hit_start
                 pam_start = pam_end - pam_len
             else:
                 # For minus strand with 5' PAM, PAM is downstream in genomic coords
@@ -1119,6 +1138,24 @@ def _get_chromosome_seq_no(
     )
 
     return seq_record.seq_no if seq_record else None
+
+
+def _get_chromosome_sequence(
+    db: Session,
+    chromosome_name: str,
+    organism_tag: str
+) -> Optional[str]:
+    """Get current genomic sequence residues for a chromosome name."""
+    root_seq_no = _get_chromosome_seq_no(db, chromosome_name, organism_tag)
+    if not root_seq_no:
+        return None
+
+    seq_record = db.query(Seq).filter(
+        Seq.seq_no == root_seq_no,
+        Seq.is_seq_current == "Y"
+    ).first()
+
+    return seq_record.residues.upper() if seq_record and seq_record.residues else None
 
 
 def _map_position_to_gene(
@@ -1215,6 +1252,7 @@ def _search_offtargets_blast(
     guide_cds_position: Optional[int] = None,
     warnings: Optional[List[str]] = None,
     related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
 ) -> List[OffTargetHit]:
     """
     Search for off-targets using BLAST.
@@ -1238,7 +1276,11 @@ def _search_offtargets_blast(
     """
     from cgd.core.settings import settings
 
+    if status is not None:
+        status["performed"] = False
+
     offtargets = []
+    chromosome_cache: Dict[str, Optional[str]] = {}
 
     # Build genome database name for this organism
     # Try multiple naming conventions (A22 uses "default_genomic_", older assemblies use "genomic_")
@@ -1317,6 +1359,9 @@ def _search_offtargets_blast(
                     warnings.append(msg)
                 return []
 
+            if status is not None:
+                status["performed"] = True
+
             # Parse BLAST tabular output
             # Fields: sseqid sstart send sstrand qseq sseq
             for line in result.stdout.strip().split("\n"):
@@ -1336,6 +1381,10 @@ def _search_offtargets_blast(
 
                 # Convert strand
                 strand = "+" if strand_str == "plus" else "-"
+                hit_start = min(start, end)
+                hit_end = max(start, end)
+                hit_start_0 = hit_start - 1
+                hit_end_0 = hit_end
 
                 # Remove gaps for mismatch counting first (needed for exclusion check)
                 query_ungapped = query_aln.replace("-", "")
@@ -1370,9 +1419,9 @@ def _search_offtargets_blast(
                 # it's very likely the on-target (or allelic copy at same position)
                 if guide_cds_position and mm_count == 0:
                     # Allow small tolerance for position matching (e.g., +/- 5bp)
-                    if abs(start - guide_cds_position) <= 5:
+                    if abs(hit_start - guide_cds_position) <= 5:
                         logger.debug(
-                            f"Excluding on-target by CDS position: {chromosome}:{start} "
+                            f"Excluding on-target by CDS position: {chromosome}:{hit_start} "
                             f"(guide at CDS pos {guide_cds_position})"
                         )
                         continue
@@ -1387,14 +1436,14 @@ def _search_offtargets_blast(
                     is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
 
                     # Check if position is similar (within tolerance)
-                    is_similar_position = abs(start - exc_pos) < 100
+                    is_similar_position = abs(hit_start - exc_pos) < 100
                     is_same_strand = strand == exc_strand
 
                     # For exact matches (0 mismatches), check by position alone
                     # This handles chromosome naming mismatches between DB and BLAST
                     if mm_count == 0 and is_similar_position and is_same_strand:
                         logger.debug(
-                            f"Excluding exact match at similar position: {chromosome}:{start} "
+                            f"Excluding exact match at similar position: {chromosome}:{hit_start} "
                             f"(exclude: {exc_chr}:{exc_pos})"
                         )
                         continue
@@ -1402,22 +1451,37 @@ def _search_offtargets_blast(
                     # For hits with mismatches, require chromosome match
                     if is_same_or_allelic and is_similar_position and is_same_strand:
                         logger.debug(
-                            f"Excluding on-target/allelic hit: {chromosome}:{start} "
+                            f"Excluding on-target/allelic hit: {chromosome}:{hit_start} "
                             f"(exclude: {exc_chr}:{exc_pos})"
                         )
                         continue
 
-                # Get chromosome sequence for PAM validation
-                # For now, skip PAM validation if we can't get the sequence
-                # (This would require loading chromosome sequences)
-                # In production, we'd validate PAM here
+                # Validate that a compatible PAM is adjacent to the BLAST hit.
+                # If chromosome sequence cannot be resolved from the DB name,
+                # keep the hit rather than hiding potential off-targets.
+                if chromosome not in chromosome_cache:
+                    chromosome_cache[chromosome] = _get_chromosome_sequence(
+                        db, chromosome, organism_tag
+                    )
+                chromosome_seq = chromosome_cache[chromosome]
+                if chromosome_seq:
+                    pam_seq = _validate_pam_at_position(
+                        chromosome_seq,
+                        hit_start_0,
+                        hit_end_0,
+                        strand,
+                        pam_type,
+                        guide_length=len(guide),
+                    )
+                    if not pam_seq:
+                        continue
 
                 # Calculate CFD score
                 cfd = _calculate_cfd_score(guide, subject_ungapped[:len(guide)])
 
                 # Map position to gene
                 gene_name, gene_region = _map_position_to_gene(
-                    db, chromosome, start, strand, organism_tag
+                    db, chromosome, hit_start, strand, organism_tag
                 )
 
                 # Check if hit is in a related gene (paralog/ortholog)
@@ -1436,7 +1500,7 @@ def _search_offtargets_blast(
 
                 offtargets.append(OffTargetHit(
                     chromosome=chromosome,
-                    position=start,
+                    position=hit_start,
                     strand=strand,
                     sequence=subject_ungapped[:len(guide)],
                     mismatches=mm_count,
@@ -1645,6 +1709,15 @@ def design_guides(
             guide_length=request.guide_length,
         )
 
+    if request.pam not in PAM_PATTERNS:
+        return CrisprDesignResponse(
+            success=False,
+            error=f"Unsupported PAM sequence: {request.pam.value}",
+            organism=request.organism,
+            pam=request.pam.value,
+            guide_length=request.guide_length,
+        )
+
     # Enforce limits
     max_guides = min(request.max_guides, MAX_GUIDES_PER_REQUEST)
     if request.max_guides > MAX_GUIDES_PER_REQUEST:
@@ -1653,6 +1726,17 @@ def design_guides(
     if len(request.offtarget_genomes) > MAX_OFFTARGET_GENOMES:
         warnings.append(f"offtarget_genomes limited to {MAX_OFFTARGET_GENOMES}")
         request.offtarget_genomes = request.offtarget_genomes[:MAX_OFFTARGET_GENOMES]
+
+    if request.offtarget_genomes:
+        warnings.append(
+            "Additional off-target genomes are not implemented yet; "
+            "checking the selected organism only"
+        )
+
+    if request.include_homology_arms:
+        warnings.append(
+            "Homology arm design is not implemented yet; returning guide results only"
+        )
 
     # Get target sequence
     gene_info = None
@@ -1827,6 +1911,7 @@ def design_guides(
             efficiency_score=round(efficiency_score, 1),
             specificity_score=round(specificity_score, 1),
             combined_score=round(combined_score, 1),
+            offtarget_checked=False,
             offtarget_count=len(offtargets),
             offtarget_0mm=ot_0mm,
             offtarget_1mm=ot_1mm,
@@ -1856,7 +1941,11 @@ def design_guides(
             # Build exclude position to skip the on-target site
             exclude_pos = None
             if guide.chromosome and guide.genomic_start:
-                exclude_pos = (guide.chromosome, guide.genomic_start, guide.strand)
+                genomic_strand = _guide_genomic_strand(
+                    gene_info.strand if gene_info else None,
+                    guide.strand,
+                )
+                exclude_pos = (guide.chromosome, guide.genomic_start, genomic_strand)
                 logger.debug(
                     f"Guide {guide.rank} exclude_pos: {exclude_pos}"
                 )
@@ -1868,6 +1957,7 @@ def design_guides(
 
             # Search for off-targets (pass warnings only for first guide to avoid duplicates)
             offtarget_warnings = [] if guide == guides_for_offtarget[0] else None
+            offtarget_status = {}
             offtargets = _search_offtargets_blast(
                 db=db,
                 guide=guide.sequence,
@@ -1878,11 +1968,13 @@ def design_guides(
                 guide_cds_position=guide.position,  # Position within CDS for on-target detection
                 warnings=offtarget_warnings,
                 related_genes=related_genes,  # For flagging paralog/ortholog hits
+                status=offtarget_status,
             )
             if offtarget_warnings:
                 warnings.extend(offtarget_warnings)
 
             # Update guide with off-target information
+            guide.offtarget_checked = bool(offtarget_status.get("performed"))
             guide.offtargets = offtargets[:10]  # Limit stored hits
             guide.offtarget_count = len(offtargets)
             guide.offtarget_0mm = sum(1 for ot in offtargets if ot.mismatches == 0)
@@ -1897,8 +1989,11 @@ def design_guides(
                 guide.offtarget_in_paralogs > 0 or guide.offtarget_in_orthologs > 0
             )
 
-            # Recalculate specificity score based on actual off-targets
-            guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
+            # Recalculate specificity score based on actual off-targets only
+            # when the search completed. If BLAST is unavailable, leave the
+            # optimistic default in place but expose offtarget_checked=False.
+            if guide.offtarget_checked:
+                guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
 
             # Recalculate combined score
             guide.combined_score = round(
@@ -1907,7 +2002,10 @@ def design_guides(
             )
 
         # Re-sort after updating scores
-        guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+        guide_results.sort(
+            key=lambda g: (g.offtarget_checked, g.combined_score),
+            reverse=True
+        )
 
         if len(guides_for_offtarget) < len(guide_results):
             warnings.append(

@@ -13,7 +13,6 @@ class PAMType(str, Enum):
     NGG = "NGG"          # SpCas9 (most common)
     NAG = "NAG"          # SpCas9 (lower efficiency)
     NNGRRT = "NNGRRT"    # SaCas9
-    NNNNGATT = "NNNNGATT"  # NmeCas9
     TTTV = "TTTV"        # Cas12a/Cpf1
 
 
@@ -164,6 +163,10 @@ class GuideResult(BaseModel):
     combined_score: float = Field(description="Combined ranking score (0-100)")
 
     # Off-target summary
+    offtarget_checked: bool = Field(
+        False,
+        description="Whether off-target analysis was completed for this guide"
+    )
     offtarget_count: int = Field(0, description="Number of potential off-targets")
     offtarget_0mm: int = Field(0, description="Off-targets with 0 mismatches (exact)")
     offtarget_1mm: int = Field(0, description="Off-targets with 1 mismatch")
