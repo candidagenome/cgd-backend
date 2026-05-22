@@ -74,7 +74,8 @@ MITO_DISPLAY_NAME = "Mito"
 GENBANK_ACCESSION = "MT849287.1"
 PMID = "33193142"
 SEQ_LENGTH = 28212
-SOURCE = "CGD"  # Source for CGD-curated data
+SOURCE = "CGD"  # Source for CGD-curated Feature data
+SEQ_SOURCE = "C. auris B8441"  # Source for Seq records (must match code table)
 
 # Default GenBank file URL
 GENBANK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=MT849287.1&rettype=gb"
@@ -297,8 +298,8 @@ def create_mito_chromosome(
         feature_no=feature_no,
         genome_version_no=genome_version_no,
         seq_version=datetime.now(),
-        seq_type="Genomic",
-        source=SOURCE,
+        seq_type="genomic",
+        source=SEQ_SOURCE,
         is_seq_current="Y",
         date_created=datetime.now(),
         seq_length=len(sequence),
@@ -509,7 +510,7 @@ def create_gene_features(
                 genome_version_no=genome_version_no,
                 seq_version=datetime.now(),
                 seq_type="Protein",
-                source=SOURCE,
+                source=SEQ_SOURCE,
                 is_seq_current="Y",
                 date_created=datetime.now(),
                 seq_length=len(protein_seq),
