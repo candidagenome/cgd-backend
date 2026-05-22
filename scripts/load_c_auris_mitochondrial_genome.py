@@ -550,6 +550,11 @@ def main():
         action="store_true",
         help="Only parse the GenBank file without connecting to database",
     )
+    parser.add_argument(
+        "--add-genes-only",
+        action="store_true",
+        help="Only add gene features to existing chromosome (skip chromosome creation)",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -641,10 +646,59 @@ def main():
 
         # Check for existing mitochondrial chromosome
         existing_mito = check_existing_mito_chromosome(db, organism.organism_no)
-        if existing_mito:
+        if existing_mito and not args.add_genes_only:
             logger.warning(f"Mitochondrial chromosome already exists: {existing_mito.feature_name}")
-            logger.warning("To re-import, first delete the existing records")
+            logger.warning("Use --add-genes-only to add gene features to existing chromosome")
             sys.exit(1)
+
+        # Handle --add-genes-only mode
+        if args.add_genes_only:
+            if not existing_mito:
+                logger.error("No existing mitochondrial chromosome found. Run without --add-genes-only first.")
+                sys.exit(1)
+
+            logger.info(f"Adding genes to existing chromosome: {existing_mito.feature_name}")
+
+            # Get the existing genome version and seq
+            mito_seq = (
+                db.query(Seq)
+                .filter(
+                    Seq.feature_no == existing_mito.feature_no,
+                    Seq.seq_type == "genomic",
+                )
+                .first()
+            )
+
+            if not mito_seq:
+                logger.error("No sequence record found for existing chromosome")
+                sys.exit(1)
+
+            genome_version_no = mito_seq.genome_version_no
+            logger.info(f"Using genome_version_no: {genome_version_no}, seq_no: {mito_seq.seq_no}")
+
+            # Create gene features
+            counts = create_gene_features(
+                db=db,
+                genbank_record=genbank_record,
+                organism_no=organism.organism_no,
+                genome_version_no=genome_version_no,
+                mito_seq_no=mito_seq.seq_no,
+                dry_run=args.dry_run,
+            )
+
+            if args.dry_run:
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("DRY RUN COMPLETE - No changes made to database")
+                logger.info("=" * 60)
+                db.rollback()
+            else:
+                db.commit()
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("GENE FEATURES ADDED - Changes committed to database")
+                logger.info("=" * 60)
+            sys.exit(0)
 
         # Create genome version
         genome_version_no = create_genome_version(
