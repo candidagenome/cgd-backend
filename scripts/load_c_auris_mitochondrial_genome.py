@@ -42,10 +42,14 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker, Session
+
+# Load environment variables from .env file
+load_dotenv()
 
 from cgd.models.models import (
     Organism,
@@ -78,8 +82,8 @@ GENBANK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucc
 
 def get_database_url() -> str:
     """Get database URL from environment or config."""
-    # Try environment variable first
-    db_url = os.environ.get("CGD_DATABASE_URL")
+    # Try environment variables first
+    db_url = os.environ.get("CGD_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if db_url:
         return db_url
 
