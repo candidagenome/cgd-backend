@@ -807,16 +807,17 @@ def get_chromosome_inventory(
             )
         else:
             # For other organisms, use genome version filtering
-            current_version = (
-                db.query(GenomeVersion)
+            # Get ALL current genome versions (there may be multiple, e.g., nuclear + mito)
+            current_versions = (
+                db.query(GenomeVersion.genome_version_no)
                 .filter(
                     GenomeVersion.organism_no == organism_no,
                     GenomeVersion.is_ver_current == "Y",
                 )
-                .first()
+                .all()
             )
 
-            if not current_version:
+            if not current_versions:
                 return ChromosomeInventoryResponse(
                     success=True,
                     organism_abbrev=organism_abbrev,
@@ -826,7 +827,7 @@ def get_chromosome_inventory(
                     error="No current genome version found",
                 )
 
-            current_version_no = current_version.genome_version_no
+            current_version_nos = [v[0] for v in current_versions]
 
             chr_names_query = (
                 db.query(
@@ -846,7 +847,7 @@ def get_chromosome_inventory(
                     Feature.organism_no == organism_no,
                     Feature.feature_type.in_(["chromosome", "contig"]),
                     Seq.is_seq_current == "Y",
-                    GenomeVersion.genome_version_no == current_version_no,
+                    GenomeVersion.genome_version_no.in_(current_version_nos),
                 )
                 .order_by(Feature.feature_name)
                 .distinct()
