@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker, Session
 
 # Load environment variables from .env file
@@ -111,7 +111,7 @@ def get_next_sequence_value(db: Session, sequence_name: str) -> int:
         Next sequence value
     """
     result = db.execute(
-        f"SELECT {sequence_name}.NEXTVAL FROM DUAL"
+        text(f"SELECT {sequence_name}.NEXTVAL FROM DUAL")
     ).scalar()
     return result
 
