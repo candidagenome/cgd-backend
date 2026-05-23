@@ -161,6 +161,10 @@ class GuideResult(BaseModel):
     efficiency_score: float = Field(description="Predicted efficiency (0-100)")
     specificity_score: float = Field(description="Off-target specificity (0-100, higher = better)")
     combined_score: float = Field(description="Combined ranking score (0-100)")
+    chopchop_penalty: float = Field(
+        0,
+        description="CHOPCHOP-style ranking penalty (lower = better)"
+    )
 
     # Off-target summary
     offtarget_checked: bool = Field(
@@ -185,6 +189,10 @@ class GuideResult(BaseModel):
 
     # Sequence features
     has_poly_t: bool = Field(False, description="Contains TTTT (Pol III terminator)")
+    self_complementarity: int = Field(
+        0,
+        description="Number of potential self-complementary 4bp guide stems"
+    )
     restriction_sites: List[RestrictionSite] = Field(
         default_factory=list,
         description="Restriction sites within guide"

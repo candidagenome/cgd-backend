@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Update CRISPR test fixtures with CRISPOR guide sequences.
+Update CRISPR test fixtures with CHOPCHOP guide sequences.
 
 This script reads the fixture JSON file (after you've added expected guides)
 and generates Python code to paste into test_crispr_service.py.
@@ -79,7 +79,7 @@ def main():
                 print(f'            "{guide}",')
             print('        ],')
         else:
-            print('        "expected_guides_5prime": [],  # TODO: Add from CRISPOR')
+            print('        "expected_guides_5prime": [],  # TODO: Add from CHOPCHOP')
 
         print("    },")
 

@@ -160,6 +160,32 @@ def _has_poly_t(seq: str) -> bool:
     return "TTTT" in seq.upper()
 
 
+def _calculate_self_complementarity(seq: str, stem_length: int = 4) -> int:
+    """
+    Count potential guide self-complementarity stems.
+
+    CHOPCHOP penalizes guides with self-complementarity longer than 3nt.
+    We count non-overlapping 4nt windows that can pair with another 4nt
+    window in the same guide.
+    """
+    seq = seq.upper()
+    if len(seq) < stem_length * 2:
+        return 0
+
+    stems = set()
+    for i in range(0, len(seq) - stem_length + 1):
+        left = seq[i:i + stem_length]
+        if not re.match(r"^[ACGT]+$", left):
+            continue
+
+        for j in range(i + stem_length, len(seq) - stem_length + 1):
+            right = seq[j:j + stem_length]
+            if left == _reverse_complement(right):
+                stems.add((i, j))
+
+    return len(stems)
+
+
 def _find_restriction_sites(seq: str) -> List[RestrictionSite]:
     """Find restriction enzyme sites within a sequence."""
     sites = []
@@ -246,6 +272,61 @@ def _calculate_cfd_score(guide: str, offtarget: str) -> float:
                 score *= 0.7  # Non-seed mismatch
 
     return score
+
+
+CHOPCHOP_OFFTARGET_PENALTIES = {
+    0: 1000,
+    1: 800,
+    2: 600,
+    3: 400,
+}
+
+
+def _calculate_chopchop_penalty(
+    guide: str,
+    efficiency_score: float,
+    offtargets: List[OffTargetHit],
+    gc_content: Optional[float] = None,
+) -> float:
+    """
+    Calculate a CHOPCHOP-style rank penalty.
+
+    CHOPCHOP ranks guides by a penalty model: off-target burden dominates,
+    guides outside the preferred GC range are penalized, self-complementarity
+    is penalized, and predicted efficiency lowers the penalty.
+    Lower values are better.
+    """
+    guide = guide.upper()
+    gc = _calculate_gc_content(guide) if gc_content is None else gc_content
+
+    penalty = 0.0
+
+    if len(offtargets) > 100:
+        penalty += 20000
+
+    for offtarget in offtargets:
+        penalty += CHOPCHOP_OFFTARGET_PENALTIES.get(offtarget.mismatches, 0)
+
+    if gc < 40 or gc > 70:
+        penalty += 500
+
+    penalty += _calculate_self_complementarity(guide)
+
+    # CHOPCHOP lowers the rank penalty by the efficiency score. Our
+    # efficiency score is already scaled to 0-100.
+    penalty -= efficiency_score
+
+    return round(penalty, 3)
+
+
+def _chopchop_penalty_to_display_score(penalty: float) -> float:
+    """
+    Convert lower-is-better CHOPCHOP penalty to the existing 0-100 UI score.
+
+    One strong off-target or GC penalty should visibly move the guide out of
+    the "high" band, while excellent low-penalty guides remain near 100.
+    """
+    return round(max(0.0, min(100.0, 100.0 - max(penalty, 0.0) / 10.0)), 1)
 
 
 def _generate_cloning_primers(
@@ -1835,7 +1916,8 @@ def design_guides(
             warnings=warnings + [f"No {request.pam.value} PAM sites found in target region"],
         )
 
-    # Score and rank guides (first pass - efficiency only)
+    # Score and rank guides with a CHOPCHOP-style penalty. Before
+    # off-target analysis, the penalty uses sequence-intrinsic features only.
     guide_results = []
     pam_config = PAM_PATTERNS[request.pam]
 
@@ -1852,8 +1934,14 @@ def design_guides(
         specificity_score = 100.0
         offtargets = []
 
-        # Combined score (weighted average) - initially based on efficiency only
-        combined_score = (efficiency_score * 0.5) + (specificity_score * 0.5)
+        chopchop_penalty = _calculate_chopchop_penalty(
+            guide_seq,
+            efficiency_score,
+            offtargets,
+            gc_content,
+        )
+        combined_score = _chopchop_penalty_to_display_score(chopchop_penalty)
+        self_complementarity = _calculate_self_complementarity(guide_seq)
 
         # Build full target sequence (PAM is already captured from _find_pam_sites)
         if pam_config["position"] == "3prime":
@@ -1911,6 +1999,7 @@ def design_guides(
             efficiency_score=round(efficiency_score, 1),
             specificity_score=round(specificity_score, 1),
             combined_score=round(combined_score, 1),
+            chopchop_penalty=round(chopchop_penalty, 3),
             offtarget_checked=False,
             offtarget_count=len(offtargets),
             offtarget_0mm=ot_0mm,
@@ -1919,6 +2008,7 @@ def design_guides(
             offtarget_3mm=ot_3mm,
             offtargets=offtargets[:10],  # Limit for response size
             has_poly_t=_has_poly_t(guide_seq),
+            self_complementarity=self_complementarity,
             restriction_sites=restriction_sites,
             primers=primers,
             homology_arms=None,  # TODO: Implement if requested
@@ -1927,8 +2017,9 @@ def design_guides(
             ),
         ))
 
-    # Sort by combined score (descending) for initial ranking
-    guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+    # CHOPCHOP ranks lower penalties first. Position is used as a stable
+    # tie-breaker so equally scoring knockout guides favor the 5' end.
+    guide_results.sort(key=lambda g: (g.chopchop_penalty, g.position))
 
     # Perform off-target search for top guides (limited for performance)
     if request.check_offtargets:
@@ -1995,16 +2086,25 @@ def design_guides(
             if guide.offtarget_checked:
                 guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
 
-            # Recalculate combined score
-            guide.combined_score = round(
-                (guide.efficiency_score * 0.5) + (guide.specificity_score * 0.5),
-                1
+            # Recalculate CHOPCHOP-style penalty after off-target analysis.
+            guide.chopchop_penalty = _calculate_chopchop_penalty(
+                guide.sequence,
+                guide.efficiency_score,
+                offtargets,
+                guide.gc_content,
+            )
+            guide.combined_score = _chopchop_penalty_to_display_score(
+                guide.chopchop_penalty
             )
 
-        # Re-sort after updating scores
+        # Re-sort after updating scores. Checked guides sort ahead of
+        # unchecked guides because their off-target penalty is evidence-based.
         guide_results.sort(
-            key=lambda g: (g.offtarget_checked, g.combined_score),
-            reverse=True
+            key=lambda g: (
+                not g.offtarget_checked,
+                g.chopchop_penalty,
+                g.position,
+            )
         )
 
         if len(guides_for_offtarget) < len(guide_results):
@@ -2077,7 +2177,7 @@ def generate_download(
 
     headers = [
         "Rank", "Guide_Sequence", "PAM", "Position", "Strand",
-        "GC%", "Efficiency", "Specificity", "Combined_Score",
+        "GC%", "Efficiency", "Specificity", "Combined_Score", "CHOPCHOP_Penalty",
         "Off-targets", "Poly-T", "Restriction_Sites"
     ]
     if include_primers:
@@ -2098,6 +2198,7 @@ def generate_download(
             f"{guide.efficiency_score:.1f}",
             f"{guide.specificity_score:.1f}",
             f"{guide.combined_score:.1f}",
+            f"{guide.chopchop_penalty:.3f}",
             str(guide.offtarget_count),
             "Yes" if guide.has_poly_t else "No",
             ";".join(rs.enzyme for rs in guide.restriction_sites) or "None",

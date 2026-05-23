@@ -7,10 +7,10 @@ Tests cover:
 - GC content calculation
 - Efficiency scoring
 - Target region filtering
-- Comparison with CRISPOR expected guides for 20 genes
+- Comparison with CHOPCHOP expected guides for 20 genes
 
 The test fixtures contain expected guide sequences validated against
-CRISPOR (crispor.tefor.net) for C. albicans SC5314 Assembly 22.
+CHOPCHOP (chopchop.cbu.uib.no) for C. albicans SC5314 Assembly 22.
 """
 import json
 from pathlib import Path
@@ -23,13 +23,17 @@ from cgd.schemas.crispr_schema import (
     TargetRegion,
     CrisprDesignRequest,
     GuideResult,
+    OffTargetHit,
 )
 from cgd.api.services.crispr_service import (
     _reverse_complement,
     _calculate_gc_content,
     _has_poly_t,
+    _calculate_self_complementarity,
     _find_restriction_sites,
     _calculate_efficiency_score,
+    _calculate_chopchop_penalty,
+    _chopchop_penalty_to_display_score,
     _find_pam_sites,
     _filter_target_region,
     _validate_pam_at_position,
@@ -179,6 +183,87 @@ class TestEfficiencyScore:
         all_gc = _calculate_efficiency_score("GGGGGGGGGGGGGGGGGGGG")
         balanced = _calculate_efficiency_score("ATGCATGCATGCATGCATGC")
         assert all_gc < balanced
+
+
+class TestCHOPCHOPScoring:
+    """Tests for CHOPCHOP-style guide ranking penalties."""
+
+    def _offtarget(self, mismatches: int) -> OffTargetHit:
+        return OffTargetHit(
+            chromosome="chr1",
+            position=100,
+            strand="+",
+            sequence="ATGCATGCATGCATGCATGC",
+            mismatches=mismatches,
+            mismatch_positions=list(range(mismatches)),
+            cfd_score=1.0,
+        )
+
+    def test_self_complementarity_counts_four_base_stems(self):
+        """Potential 4bp self-complementary stems should be counted."""
+        assert _calculate_self_complementarity("AAAACCCCGGGGTTTT") > 0
+        assert _calculate_self_complementarity("AAAAAAAAAAAAAAAAAAAA") == 0
+
+    def test_gc_outside_chopchop_range_is_penalized(self):
+        """CHOPCHOP-style penalty should prefer 40-70% GC guides."""
+        balanced = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=50,
+        )
+        high_gc = _calculate_chopchop_penalty(
+            "GGGGGGGGGGGGGGGGGGGG",
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=100,
+        )
+
+        assert high_gc > balanced
+
+    def test_offtargets_dominate_chopchop_penalty(self):
+        """Fewer and weaker off-targets should rank better."""
+        no_hits = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=50,
+        )
+        one_three_mm = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[self._offtarget(3)],
+            gc_content=50,
+        )
+        one_zero_mm = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[self._offtarget(0)],
+            gc_content=50,
+        )
+
+        assert no_hits < one_three_mm < one_zero_mm
+
+    def test_efficiency_lowers_chopchop_penalty(self):
+        """Higher predicted efficiency should reduce the rank penalty."""
+        low_efficiency = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=20,
+            offtargets=[],
+            gc_content=50,
+        )
+        high_efficiency = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=80,
+            offtargets=[],
+            gc_content=50,
+        )
+
+        assert high_efficiency < low_efficiency
+
+    def test_display_score_drops_as_penalty_increases(self):
+        """Existing high-is-good UI score should invert the penalty."""
+        assert _chopchop_penalty_to_display_score(0) > _chopchop_penalty_to_display_score(500)
 
 
 # =============================================================================
@@ -500,18 +585,18 @@ class TestDesignGuidesIntegration:
 
 
 # =============================================================================
-# CRISPOR Validation Tests
+# CHOPCHOP Validation Tests
 # =============================================================================
 #
-# These tests compare our guide predictions against CRISPOR results.
-# They verify that guides found by CRISPOR are also found by our tool.
+# These tests compare our guide predictions against CHOPCHOP results.
+# They verify that guides found by CHOPCHOP are also found by our tool.
 #
-# Note: Our tool may find additional guides not reported by CRISPOR
-# (different filtering criteria), but CRISPOR guides should be present.
+# Note: Our tool may find additional guides not reported by CHOPCHOP
+# (different filtering criteria), but CHOPCHOP guides should be present.
 # =============================================================================
 
-class TestCRISPORValidation:
-    """Validate guide predictions against CRISPOR results."""
+class TestCHOPCHOPValidation:
+    """Validate guide predictions against CHOPCHOP results."""
 
     @pytest.fixture
     def mock_db(self):
@@ -519,14 +604,14 @@ class TestCRISPORValidation:
         return MagicMock()
 
     @pytest.mark.parametrize("gene_data", CRISPR_TEST_GENES, ids=lambda g: g["gene_name"])
-    def test_finds_crispor_guides(self, mock_db, gene_data):
+    def test_finds_chopchop_guides(self, mock_db, gene_data):
         """
-        Verify that guides found by CRISPOR are also found by our tool.
+        Verify that guides found by CHOPCHOP are also found by our tool.
 
         This test:
         1. Takes the CDS sequence for each gene
         2. Runs our CRISPR designer
-        3. Verifies that CRISPOR's top guides are in our results
+        3. Verifies that CHOPCHOP's top guides are in our results
         """
         if not gene_data["cds_first_500bp"]:
             pytest.skip(f"CDS sequence not populated for {gene_data['gene_name']}")
@@ -550,7 +635,7 @@ class TestCRISPORValidation:
         # Get our guide sequences
         our_guides = {guide.sequence for guide in result.guides}
 
-        # Check that CRISPOR guides are found
+        # Check that CHOPCHOP guides are found
         missing_guides = []
         for expected_guide in gene_data["expected_guides_5prime"]:
             if expected_guide not in our_guides:
@@ -561,7 +646,7 @@ class TestCRISPORValidation:
 
         if missing_guides:
             pytest.fail(
-                f"Gene {gene_data['gene_name']}: Missing CRISPOR guides: {missing_guides}"
+                f"Gene {gene_data['gene_name']}: Missing CHOPCHOP guides: {missing_guides}"
             )
 
 
@@ -585,11 +670,11 @@ def fetch_fixture_data():
     """
     print("To populate test fixtures:")
     print("1. Export CDS sequences for each gene from CGD")
-    print("2. Submit each sequence to CRISPOR (https://crispor.tefor.net/)")
+    print("2. Submit each sequence to CHOPCHOP (https://chopchop.cbu.uib.no/)")
     print("3. Copy the top 10 guide sequences for each gene")
     print("4. Update CRISPR_TEST_GENES fixture with:")
     print("   - cds_first_500bp: First 500bp of CDS")
-    print("   - expected_guides_5prime: List of guide sequences from CRISPOR")
+    print("   - expected_guides_5prime: List of guide sequences from CHOPCHOP")
     print("")
     print("Genes to process:")
     for gene in CRISPR_TEST_GENES:

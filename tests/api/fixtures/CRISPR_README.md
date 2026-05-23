@@ -1,6 +1,6 @@
 # CRISPR Guide Designer Test Suite
 
-This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against established tools like CRISPOR and CHOPCHOP.
+This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against CHOPCHOP reference guides.
 
 ## Overview
 
@@ -9,12 +9,11 @@ The CRISPR test suite provides:
 - **Integration tests** for the full guide design pipeline
 - **Validation tests** comparing our results against external tool predictions
 
-### External Validation Tools
+### External Validation Tool
 
 | Tool | URL | Status |
 |------|-----|--------|
-| **CRISPOR** | https://crispor.tefor.net/ | Primary (may have downtime) |
-| **CHOPCHOP** | https://chopchop.cbu.uib.no/ | Alternative |
+| **CHOPCHOP** | https://chopchop.cbu.uib.no/ | Reference source |
 
 ## Directory Structure
 
@@ -24,7 +23,7 @@ tests/api/
 ├── fixtures/
 │   ├── README.md               # This file
 │   ├── crispr_test_genes.json  # Gene sequences and expected guides
-│   └── crispr_test_sequences.fasta  # FASTA for CRISPOR submission
+│   └── crispr_test_sequences.fasta  # FASTA for CHOPCHOP submission
 ```
 
 ## Running Tests
@@ -36,8 +35,8 @@ source .venv/bin/activate  # or 'venv/bin/activate' on server
 # Run all CRISPR tests
 pytest tests/api/test_crispr_service.py -v
 
-# Run only unit tests (skip CRISPOR validation)
-pytest tests/api/test_crispr_service.py -v -k "not CRISPOR"
+# Run only unit tests (skip CHOPCHOP validation)
+pytest tests/api/test_crispr_service.py -v -k "not CHOPCHOP"
 
 # Run with coverage
 pytest tests/api/test_crispr_service.py --cov=cgd.api.services.crispr_service
@@ -68,11 +67,11 @@ pytest tests/api/test_crispr_service.py --cov=cgd.api.services.crispr_service
 |------------|-------------|-------|
 | `TestDesignGuidesIntegration` | Full pipeline with mock DB | 3 |
 
-### 4. CRISPOR Validation Tests
+### 4. CHOPCHOP Validation Tests
 
 | Test Class | Description | Tests |
 |------------|-------------|-------|
-| `TestCRISPORValidation` | Compare against CRISPOR results | 20 (skipped until populated) |
+| `TestCHOPCHOPValidation` | Compare against CHOPCHOP results | 20 |
 
 ## Test Genes
 
@@ -128,21 +127,7 @@ We selected 20 well-characterized *C. albicans* genes representing diverse funct
 
 ## Populating Validation Fixtures
 
-The validation tests require expected guide sequences from an external CRISPR design tool. You can use either CRISPOR or CHOPCHOP.
-
-### Option A: Using CRISPOR (Primary)
-
-1. Go to https://crispor.tefor.net/
-2. For each gene, paste the sequence from `crispr_test_sequences.fasta`
-3. Settings:
-   - **PAM**: NGG (SpCas9)
-   - **Genome**: Select "No genome" or paste sequence
-4. Click "Submit"
-5. Copy the top 5-10 guide sequences (20bp, without PAM)
-
-### Option B: Using CHOPCHOP (Alternative)
-
-If CRISPOR is unavailable, use CHOPCHOP:
+The validation tests use expected guide sequences from CHOPCHOP.
 
 1. Go to https://chopchop.cbu.uib.no/
 2. Select **"Target"** tab → **"Paste your own sequence"**
@@ -153,8 +138,6 @@ If CRISPOR is unavailable, use CHOPCHOP:
    - **For**: Knock-out
 5. Click "Find Target Sites"
 6. Copy the top 5-10 guide sequences from the results table (20bp, without PAM)
-
-**Note**: CHOPCHOP and CRISPOR may return slightly different rankings due to different scoring algorithms, but the guide sequences themselves should overlap significantly.
 
 ### Step 2: Update the JSON Fixture
 
@@ -189,19 +172,18 @@ This validates the fixtures and generates Python code for the test file.
 ### Step 4: Run Validation Tests
 
 ```bash
-# Remove the skip decorator from TestCRISPORValidation, then:
-pytest tests/api/test_crispr_service.py::TestCRISPORValidation -v
+pytest tests/api/test_crispr_service.py::TestCHOPCHOPValidation -v
 ```
 
 ## What the Validation Tests Check
 
-The CRISPOR validation tests verify that:
+The CHOPCHOP validation tests verify that:
 
-1. **Guide Discovery**: Guides found by CRISPOR are also found by our tool
+1. **Guide Discovery**: Guides found by CHOPCHOP are also found by our tool
 2. **Sequence Accuracy**: Guide sequences match exactly (or reverse complement)
 3. **Position Validity**: Guides are in the correct target region (5' first 20%)
 
-**Note**: Our tool may find additional guides not reported by CRISPOR due to different filtering criteria. The tests verify that CRISPOR's guides are a subset of ours.
+**Note**: Our tool may find additional guides not reported by CHOPCHOP due to different filtering criteria. The tests verify that CHOPCHOP's guides are a subset of ours.
 
 ## Adding New Test Genes
 
@@ -217,7 +199,7 @@ To add a new gene to the test suite:
    python scripts/fetch_crispr_test_fixtures.py
    ```
 
-3. Submit the new sequence to CRISPOR or CHOPCHOP and collect expected guides
+3. Submit the new sequence to CHOPCHOP and collect expected guides
 
 4. Update `crispr_test_genes.json` with the expected guides
 
@@ -231,20 +213,17 @@ To add a new gene to the test suite:
 source .venv/bin/activate  # or venv/bin/activate
 ```
 
-### CRISPOR validation tests are skipped
-The tests are skipped by default until fixtures are populated. After adding expected guides:
-1. Remove `@pytest.mark.skip` from `TestCRISPORValidation`
-2. Or run with: `pytest -k "CRISPOR" --runskipped`
+### CHOPCHOP validation tests are skipped
+The tests are skipped only if fixtures are missing required sequences or expected guides.
 
 ### Guide not found in our results
-If a CRISPOR guide isn't found by our tool:
+If a CHOPCHOP guide isn't found by our tool:
 1. Check if it's in a filtered region (outside 5' 20%)
 2. Verify the PAM sequence is valid NGG
 3. Check for sequence errors in the fixture
 
 ## References
 
-- **CRISPOR**: Concordet & Haeussler, 2018. https://crispor.tefor.net/
 - **CHOPCHOP**: Labun et al., 2019. https://chopchop.cbu.uib.no/
 - **Rule Set 2**: Doench et al., 2016. Optimized sgRNA design.
 - **CFD Score**: Doench et al., 2016. Off-target scoring.
@@ -254,5 +233,5 @@ If a CRISPOR guide isn't found by our tool:
 | Task | Frequency | Script |
 |------|-----------|--------|
 | Fetch new gene sequences | As needed | `fetch_crispr_test_fixtures.py` |
-| Update expected guides | After CRISPOR submission | Manual edit of JSON |
+| Update expected guides | After CHOPCHOP submission | Manual edit of JSON |
 | Validate fixture format | Before commit | `update_crispr_test_fixtures.py` |

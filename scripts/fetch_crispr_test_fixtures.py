@@ -5,7 +5,7 @@ Fetch CDS sequences for CRISPR test genes and generate fixture data.
 This script:
 1. Fetches the coding sequence for each test gene from the database
 2. Outputs the first 500bp (for 5' region CRISPR targeting)
-3. Generates a FASTA file for batch submission to CRISPOR
+3. Generates a FASTA file for CHOPCHOP submission
 4. Creates a JSON fixture file for updating the test
 
 Usage:
@@ -20,7 +20,7 @@ Usage:
     python scripts/fetch_crispr_test_fixtures.py
 
 After running:
-1. Submit the generated FASTA file to CRISPOR (https://crispor.tefor.net/)
+1. Submit the generated FASTA file to CHOPCHOP (https://chopchop.cbu.uib.no/)
 2. Download the results for each gene
 3. Update the fixture file with expected guide sequences
 4. Copy the fixture data to tests/api/test_crispr_service.py
@@ -193,7 +193,7 @@ def main():
                     "description": gene["description"],
                     "cds_length": len(sequence),
                     "cds_first_500bp": cds_first_500bp,
-                    "expected_guides_5prime": [],  # To be filled from CRISPOR
+                    "expected_guides_5prime": [],  # To be filled from CHOPCHOP
                 })
 
                 # Add to FASTA
@@ -221,7 +221,7 @@ def main():
             json.dump(results, f, indent=2)
         logger.info(f"Wrote JSON fixture: {json_file}")
 
-        # Write FASTA file for CRISPOR submission
+        # Write FASTA file for CHOPCHOP submission
         fasta_file = OUTPUT_DIR / "crispr_test_sequences.fasta"
         with open(fasta_file, "w") as f:
             f.write("\n".join(fasta_lines))
@@ -241,13 +241,13 @@ def main():
         print("NEXT STEPS:")
         print("-"*60)
         print("""
-1. Go to https://crispor.tefor.net/
+1. Go to https://chopchop.cbu.uib.no/
 
 2. For each gene in the FASTA file:
    a. Paste the sequence
-   b. Select "NGG (SpCas9)" as PAM
-   c. Select "Other" genome (paste sequence is used)
-   d. Click "Submit"
+   b. Select "Using: SpCas9"
+   c. Select "For: Knock-out"
+   d. Click "Find Target Sites"
    e. Download results or copy top 10 guide sequences
 
 3. Update the JSON fixture file with expected guides:
@@ -257,13 +257,9 @@ def main():
 4. Run the update script to copy fixtures to test file:
    python scripts/update_crispr_test_fixtures.py
 
-Alternative - CRISPOR Batch Mode:
-   - Submit the FASTA file directly to CRISPOR
-   - Download all results at once
-   - Parse and update fixtures automatically
 """)
 
-        # Also print a quick reference of sequences for manual CRISPOR submission
+        # Also print a quick reference of sequences for manual CHOPCHOP submission
         print("\n" + "-"*60)
         print("QUICK REFERENCE - First 100bp of each gene:")
         print("-"*60)
