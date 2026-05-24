@@ -2066,6 +2066,7 @@ def _search_offtargets_bowtie(
         # -c: Read sequence directly from command line
         # -v: Allow up to N mismatches (in entire read, not just seed)
         # -a: Report all alignments (not just best)
+        # -S: Output in SAM format (required for --sam-nohead)
         # --sam-nohead: Output SAM without header for easier parsing
         # -p 1: Use 1 thread (for stability)
         bowtie_cmd = [
@@ -2074,6 +2075,7 @@ def _search_offtargets_bowtie(
             "-c", guide,
             "-v", str(max_mismatches),
             "-a",
+            "-S",
             "--sam-nohead",
             "-p", "1",
         ]
