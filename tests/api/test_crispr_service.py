@@ -38,6 +38,8 @@ from cgd.api.services.crispr_service import (
     _filter_target_region,
     _validate_pam_at_position,
     _search_offtargets_bruteforce,
+    _search_offtargets_bowtie,
+    _parse_md_tag_mismatches,
     _count_mismatches,
     design_guides,
 )
@@ -582,6 +584,81 @@ class TestBruteForceOfftargetSearch:
             mm, _ = _count_mismatches(guide, seq)
             assert mm == expected_mm
             assert mm > 3, f"Expected {seq} to be skipped (mm={mm})"
+
+
+class TestBowtieOfftargetSearch:
+    """Tests for Bowtie off-target search functionality."""
+
+    def test_parse_md_tag_simple_mismatches(self):
+        """MD tag with simple mismatches should return correct positions."""
+        # 5A10T3 means: 5 matches, mismatch at pos 5, 10 matches, mismatch at pos 16, 3 matches
+        positions = _parse_md_tag_mismatches("5A10T3")
+        assert positions == [5, 16]
+
+    def test_parse_md_tag_no_mismatches(self):
+        """MD tag with no mismatches should return empty list."""
+        # 20 means 20 matches, no mismatches
+        positions = _parse_md_tag_mismatches("20")
+        assert positions == []
+
+    def test_parse_md_tag_leading_mismatch(self):
+        """MD tag with mismatch at start should return position 0."""
+        # A19 means: mismatch at pos 0, then 19 matches
+        positions = _parse_md_tag_mismatches("A19")
+        assert positions == [0]
+
+    def test_parse_md_tag_trailing_mismatch(self):
+        """MD tag with mismatch at end should return correct position."""
+        # 19A means: 19 matches, mismatch at pos 19
+        positions = _parse_md_tag_mismatches("19A")
+        assert positions == [19]
+
+    def test_parse_md_tag_consecutive_mismatches(self):
+        """MD tag with consecutive mismatches should handle correctly."""
+        # 5AT10 means: 5 matches, mismatch at 5, mismatch at 6, 10 matches
+        positions = _parse_md_tag_mismatches("5AT10")
+        assert positions == [5, 6]
+
+    def test_parse_md_tag_with_deletion(self):
+        """MD tag with deletion (^) should skip deletion bases."""
+        # 10^AC5 means: 10 matches, deletion of AC, 5 matches (no mismatches)
+        positions = _parse_md_tag_mismatches("10^AC5")
+        assert positions == []
+
+    def test_parse_md_tag_complex(self):
+        """MD tag with mixed elements should parse correctly."""
+        # 3A5^TT2G4 means: 3 matches, mismatch at 3, 5 matches, del TT, 2 matches, mismatch, 4 matches
+        positions = _parse_md_tag_mismatches("3A5^TT2G4")
+        assert positions == [3, 11]  # pos 3 and pos 3+1+5+2=11
+
+    def test_parse_md_tag_empty(self):
+        """Empty MD tag should return empty list."""
+        positions = _parse_md_tag_mismatches("")
+        assert positions == []
+
+    def test_parse_md_tag_all_mismatches(self):
+        """MD tag with all mismatches should return all positions."""
+        # ACGT means 4 consecutive mismatches at positions 0,1,2,3
+        positions = _parse_md_tag_mismatches("ACGT")
+        assert positions == [0, 1, 2, 3]
+
+    def test_bowtie_search_missing_index(self):
+        """Should return empty list and warning when bowtie index is missing."""
+        mock_db = MagicMock()
+        warnings = []
+
+        result = _search_offtargets_bowtie(
+            db=mock_db,
+            guide="ATGCATGCATGCATGCATGC",
+            pam_type=PAMType.NGG,
+            organism_tag="nonexistent_organism",
+            max_mismatches=3,
+            warnings=warnings,
+        )
+
+        assert result == []
+        assert len(warnings) == 1
+        assert "not found" in warnings[0].lower()
 
 
 # =============================================================================
