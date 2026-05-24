@@ -29,6 +29,7 @@ class OffTargetMethod(str, Enum):
     """Off-target search method."""
     BLAST = "blast"             # BLAST-based search (faster, may miss some)
     BRUTEFORCE = "bruteforce"   # Brute-force genome scan (slower, guaranteed complete)
+    BOWTIE = "bowtie"           # Bowtie-based search (fast short-read aligner)
     AUTO = "auto"               # Auto-select based on genome size
 
 
@@ -75,7 +76,7 @@ class CrisprDesignRequest(BaseModel):
     )
     offtarget_method: OffTargetMethod = Field(
         OffTargetMethod.AUTO,
-        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), or 'auto' (auto-select based on genome size)"
+        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), 'bowtie' (fast short-read aligner), or 'auto' (auto-select based on genome size)"
     )
     offtarget_genomes: List[str] = Field(
         default_factory=list,

@@ -90,6 +90,16 @@ class Settings(BaseSettings):
         description="Path to external blast_clade.conf file"
     )
 
+    # Bowtie configuration (for CRISPR off-target search)
+    bowtie_bin_path: str = Field(
+        default="/usr/local/bin/",
+        validation_alias="BOWTIE_BIN"
+    )
+    bowtie_index_path: str = Field(
+        default="",
+        validation_alias="BOWTIE_INDEX_DIR"
+    )
+
     # JBrowse configuration
     jbrowse_base_url: str = Field(
         default="/jbrowse2/",
@@ -102,11 +112,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def set_data_dir_defaults(self) -> "Settings":
-        """Set blast_db_path and fasta_dir defaults based on cgd_data_dir."""
+        """Set blast_db_path, fasta_dir, and bowtie_index_path defaults based on cgd_data_dir."""
         if not self.blast_db_path:
             self.blast_db_path = f"{self.cgd_data_dir}/blast_datasets/"
         if not self.fasta_dir:
             self.fasta_dir = f"{self.cgd_data_dir}/fasta_files/"
+        if not self.bowtie_index_path:
+            self.bowtie_index_path = f"{self.cgd_data_dir}/HTS/bowtie_indices/"
         return self
 
 

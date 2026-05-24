@@ -1990,6 +1990,295 @@ def _search_offtargets_blast(
     return offtargets
 
 
+def _search_offtargets_bowtie(
+    db: Session,
+    guide: str,
+    pam_type: PAMType,
+    organism_tag: str,
+    max_mismatches: int = 3,
+    exclude_position: Optional[Tuple[str, int, str]] = None,
+    guide_cds_position: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
+) -> List[OffTargetHit]:
+    """
+    Search for off-targets using Bowtie short-read aligner.
+
+    Bowtie is well-suited for aligning short sequences (20bp guides) and offers
+    a good balance between speed and sensitivity.
+
+    Args:
+        db: Database session for gene mapping
+        guide: Guide RNA sequence (20bp)
+        pam_type: PAM type for validation
+        organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
+        max_mismatches: Maximum allowed mismatches (0-3)
+        exclude_position: (chromosome, position, strand) to exclude (the on-target site)
+        guide_cds_position: Position of guide within CDS (1-based) for on-target exclusion
+        warnings: Optional list to append warning messages to
+        related_genes: Dict mapping gene_name -> relationship ('paralog'/'ortholog')
+            for flagging off-targets in related genes
+        status: Optional dict to set {"performed": True/False}
+
+    Returns:
+        List of OffTargetHit objects sorted by mismatches (ascending)
+    """
+    from cgd.core.settings import settings
+
+    if status is not None:
+        status["performed"] = False
+
+    offtargets = []
+    chromosome_cache: Dict[str, Optional[str]] = {}
+
+    # Determine bowtie index path for this organism
+    index_path = os.path.join(settings.bowtie_index_path, organism_tag)
+
+    # Check if bowtie index exists (look for .1.ebwt or .1.ebwtl file)
+    index_exists = (
+        os.path.exists(index_path + ".1.ebwt") or
+        os.path.exists(index_path + ".1.ebwtl")
+    )
+
+    if not index_exists:
+        msg = (
+            f"Off-target search unavailable: Bowtie index not found for {organism_tag}. "
+            f"Checked: {index_path}"
+        )
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    # Check bowtie binary exists
+    bowtie_bin = os.path.join(settings.bowtie_bin_path, "bowtie")
+    if not os.path.exists(bowtie_bin):
+        msg = f"Bowtie binary not found at {bowtie_bin}"
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    try:
+        # Build bowtie command
+        # -x: Index base name
+        # -c: Read sequence directly from command line
+        # -v: Allow up to N mismatches (in entire read, not just seed)
+        # -a: Report all alignments (not just best)
+        # --sam-nohead: Output SAM without header for easier parsing
+        # -p 1: Use 1 thread (for stability)
+        bowtie_cmd = [
+            bowtie_bin,
+            "-x", index_path,
+            "-c", guide,
+            "-v", str(max_mismatches),
+            "-a",
+            "--sam-nohead",
+            "-p", "1",
+        ]
+
+        logger.debug(f"Running Bowtie for off-targets: {' '.join(bowtie_cmd)}")
+
+        result = subprocess.run(
+            bowtie_cmd,
+            capture_output=True,
+            text=True,
+            timeout=CRISPR_TIMEOUT,
+        )
+
+        if result.returncode != 0:
+            # Bowtie returns non-zero if no alignments found, check stderr
+            if "No alignments" in result.stderr or not result.stderr.strip():
+                # No alignments is OK, just means no off-targets
+                if status is not None:
+                    status["performed"] = True
+                return []
+            msg = f"Bowtie off-target search failed: {result.stderr}"
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+            return []
+
+        if status is not None:
+            status["performed"] = True
+
+        # Parse SAM output
+        # SAM columns: QNAME FLAG RNAME POS MAPQ CIGAR RNEXT PNEXT TLEN SEQ QUAL [TAGS...]
+        # Relevant columns:
+        #   - RNAME (col 2, 0-indexed): chromosome
+        #   - POS (col 3): 1-based position
+        #   - FLAG (col 1): strand info (bit 16 = reverse)
+        #   - Tags: NM:i:N for edit distance, MD:Z for mismatch details
+        is_diploid = any(org in organism_tag for org in DIPLOID_ORGANISMS)
+        guide_len = len(guide)
+
+        for line in result.stdout.strip().split("\n"):
+            if not line or line.startswith("@"):
+                continue
+
+            fields = line.split("\t")
+            if len(fields) < 11:
+                continue
+
+            flag = int(fields[1])
+            chromosome = fields[2]
+            position = int(fields[3])  # 1-based
+            seq = fields[9]
+
+            # Skip unmapped reads
+            if chromosome == "*" or flag & 4:
+                continue
+
+            # Determine strand from FLAG
+            strand = "-" if flag & 16 else "+"
+
+            # Extract mismatch count from NM tag
+            mm_count = 0
+            for tag in fields[11:]:
+                if tag.startswith("NM:i:"):
+                    mm_count = int(tag[5:])
+                    break
+
+            # Skip if exceeds max mismatches
+            if mm_count > max_mismatches:
+                continue
+
+            # Calculate mismatch positions from MD tag or sequence comparison
+            mm_positions = []
+            md_tag = None
+            for tag in fields[11:]:
+                if tag.startswith("MD:Z:"):
+                    md_tag = tag[5:]
+                    break
+
+            if md_tag:
+                mm_positions = _parse_md_tag_mismatches(md_tag)
+            else:
+                # Fall back to sequence comparison
+                if strand == "+":
+                    mm_count, mm_positions = _count_mismatches(guide, seq)
+                else:
+                    # For reverse strand, bowtie reports reverse complement
+                    mm_count, mm_positions = _count_mismatches(guide, seq)
+
+            # Check exclusions (on-target site)
+            if _should_exclude_offtarget(
+                chromosome, position, strand, mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            # Validate PAM at position
+            hit_start_0 = position - 1  # 0-based
+            hit_end_0 = hit_start_0 + guide_len
+
+            if chromosome not in chromosome_cache:
+                chromosome_cache[chromosome] = _get_chromosome_sequence(
+                    db, chromosome, organism_tag
+                )
+            chromosome_seq = chromosome_cache[chromosome]
+
+            if chromosome_seq:
+                pam_seq = _validate_pam_at_position(
+                    chromosome_seq,
+                    hit_start_0,
+                    hit_end_0,
+                    strand,
+                    pam_type,
+                    guide_length=guide_len,
+                )
+                if not pam_seq:
+                    continue
+
+            # Calculate CFD score
+            target_seq = seq if len(seq) == guide_len else seq[:guide_len]
+            cfd = _calculate_cfd_score(guide, target_seq)
+
+            # Map position to gene
+            gene_name, gene_region = _map_position_to_gene(
+                db, chromosome, position, strand, organism_tag
+            )
+
+            # Check if hit is in a related gene
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chromosome,
+                position=position,
+                strand=strand,
+                sequence=target_seq,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Bowtie off-target search timed out for guide: {guide[:10]}...")
+        return []
+    except Exception as e:
+        logger.error(f"Error in Bowtie off-target search: {e}")
+        return []
+
+    # For diploid organisms, exclude allelic pairs
+    if any(org in organism_tag for org in DIPLOID_ORGANISMS):
+        offtargets = _exclude_allelic_pairs(offtargets)
+
+    # Sort by mismatches (ascending), then by CFD score (descending)
+    offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
+
+    logger.info(
+        f"Bowtie off-target search: {len(offtargets)} off-targets found "
+        f"for guide {guide[:10]}..."
+    )
+
+    return offtargets
+
+
+def _parse_md_tag_mismatches(md_tag: str) -> List[int]:
+    """
+    Parse MD tag from SAM format to extract mismatch positions.
+
+    MD tag format: numbers indicate matching bases, letters indicate mismatches.
+    Example: "5A10T3" means 5 matches, mismatch at pos 5, 10 matches, mismatch at pos 16, 3 matches.
+
+    Returns list of 0-indexed mismatch positions.
+    """
+    positions = []
+    current_pos = 0
+
+    i = 0
+    while i < len(md_tag):
+        # Check for number (matching bases)
+        if md_tag[i].isdigit():
+            num_str = ""
+            while i < len(md_tag) and md_tag[i].isdigit():
+                num_str += md_tag[i]
+                i += 1
+            current_pos += int(num_str)
+        # Check for deletion (^) - skip
+        elif md_tag[i] == "^":
+            i += 1
+            while i < len(md_tag) and md_tag[i].isalpha():
+                i += 1
+        # Letter indicates mismatch
+        elif md_tag[i].isalpha():
+            positions.append(current_pos)
+            current_pos += 1
+            i += 1
+        else:
+            i += 1
+
+    return positions
+
+
 def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]:
     """
     Exclude allelic pairs from off-target list for diploid organisms.
@@ -2411,6 +2700,8 @@ def design_guides(
         # Limit: 15 Mb (C. glabrata ~12Mb, C. albicans ~30Mb)
         MAX_BRUTEFORCE_GENOME_SIZE = 15_000_000
 
+        # Check for explicit method selection
+        use_bowtie = request.offtarget_method == OffTargetMethod.BOWTIE
         use_bruteforce = request.offtarget_method == OffTargetMethod.BRUTEFORCE
         if request.offtarget_method == OffTargetMethod.AUTO:
             use_bruteforce = True  # Default to brute-force, will check size below
@@ -2444,7 +2735,7 @@ def design_guides(
                             "may be slow. Consider using 'blast' or 'auto' method."
                         )
 
-        method_name = "brute-force" if use_bruteforce else "BLAST"
+        method_name = "bowtie" if use_bowtie else ("brute-force" if use_bruteforce else "BLAST")
         logger.info(
             f"Running {method_name} off-target search for "
             f"{len(guides_for_offtarget)} guides"
@@ -2472,7 +2763,20 @@ def design_guides(
             offtarget_warnings = [] if guide == guides_for_offtarget[0] else None
             offtarget_status = {}
 
-            if use_bruteforce:
+            if use_bowtie:
+                offtargets = _search_offtargets_bowtie(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                )
+            elif use_bruteforce:
                 offtargets = _search_offtargets_bruteforce(
                     db=db,
                     guide=guide.sequence,
