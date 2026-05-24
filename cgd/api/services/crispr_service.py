@@ -2407,30 +2407,48 @@ def design_guides(
         guides_for_offtarget = guide_results[:MAX_GUIDES_FOR_OFFTARGET]
 
         # Determine which search method to use
+        # Brute-force is accurate but slow for large genomes
+        # Limit: 15 Mb (C. glabrata ~12Mb, C. albicans ~30Mb)
+        MAX_BRUTEFORCE_GENOME_SIZE = 15_000_000
+
         use_bruteforce = request.offtarget_method == OffTargetMethod.BRUTEFORCE
         if request.offtarget_method == OffTargetMethod.AUTO:
-            # Auto-select: use brute-force for smaller genomes (< 50Mb)
-            # This is a reasonable threshold for performance
-            use_bruteforce = True  # Default to brute-force for accuracy
-
-        method_name = "brute-force" if use_bruteforce else "BLAST"
-        logger.info(
-            f"Running {method_name} off-target search for "
-            f"{len(guides_for_offtarget)} guides"
-        )
+            use_bruteforce = True  # Default to brute-force, will check size below
 
         # Pre-load chromosome sequences for brute-force (reused across guides)
         chromosome_cache = None
         if use_bruteforce:
             chromosome_cache = _get_all_chromosome_sequences(db, request.organism)
             if not chromosome_cache:
-                # Fall back to BLAST if no chromosomes found
                 use_bruteforce = False
-                method_name = "BLAST"
                 warnings.append(
                     "Brute-force search unavailable: no chromosome sequences found. "
                     "Falling back to BLAST."
                 )
+            else:
+                # Check genome size
+                genome_size = sum(len(seq) for seq in chromosome_cache.values())
+                if genome_size > MAX_BRUTEFORCE_GENOME_SIZE:
+                    if request.offtarget_method == OffTargetMethod.AUTO:
+                        # Auto mode: fall back to BLAST for large genomes
+                        use_bruteforce = False
+                        warnings.append(
+                            f"Genome size ({genome_size:,} bp) exceeds brute-force limit "
+                            f"({MAX_BRUTEFORCE_GENOME_SIZE:,} bp). Using BLAST instead."
+                        )
+                        chromosome_cache = None  # Free memory
+                    else:
+                        # Explicit brute-force requested: warn but proceed
+                        warnings.append(
+                            f"Brute-force search on large genome ({genome_size:,} bp) "
+                            "may be slow. Consider using 'blast' or 'auto' method."
+                        )
+
+        method_name = "brute-force" if use_bruteforce else "BLAST"
+        logger.info(
+            f"Running {method_name} off-target search for "
+            f"{len(guides_for_offtarget)} guides"
+        )
 
         for guide in guides_for_offtarget:
             # Build exclude position to skip the on-target site

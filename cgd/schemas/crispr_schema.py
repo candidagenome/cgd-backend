@@ -74,8 +74,8 @@ class CrisprDesignRequest(BaseModel):
         description="Whether to perform off-target analysis"
     )
     offtarget_method: OffTargetMethod = Field(
-        OffTargetMethod.BRUTEFORCE,
-        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), or 'auto'"
+        OffTargetMethod.AUTO,
+        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), or 'auto' (auto-select based on genome size)"
     )
     offtarget_genomes: List[str] = Field(
         default_factory=list,
