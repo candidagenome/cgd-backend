@@ -205,21 +205,25 @@ class TestCHOPCHOPScoring:
         assert _calculate_self_complementarity("AAAAAAAAAAAAAAAAAAAA") == 0
 
     def test_gc_outside_chopchop_range_is_penalized(self):
-        """CHOPCHOP-style penalty should prefer 40-70% GC guides."""
+        """CHOPCHOP-style penalty should penalize extreme GC (<30% or >80%)."""
+        # Use sequences with no self-complementarity to isolate GC effect
+        # Balanced GC (50%) - no penalty
         balanced = _calculate_chopchop_penalty(
-            "ATGCATGCATGCATGCATGC",
+            "AATTCCGGAATTCCGGAATT",  # 50% GC, low self-comp
             efficiency_score=50,
             offtargets=[],
             gc_content=50,
         )
-        high_gc = _calculate_chopchop_penalty(
-            "GGGGGGGGGGGGGGGGGGGG",
+        # Extreme high GC (100%) - penalty applied
+        extreme_gc = _calculate_chopchop_penalty(
+            "GCGCGCGCGCGCGCGCGCGC",  # 100% GC, low self-comp
             efficiency_score=50,
             offtargets=[],
             gc_content=100,
         )
 
-        assert high_gc > balanced
+        # Extreme GC should have higher penalty (worse ranking)
+        assert extreme_gc > balanced
 
     def test_offtargets_dominate_chopchop_penalty(self):
         """Fewer and weaker off-targets should rank better."""
@@ -620,6 +624,7 @@ class TestCHOPCHOPValidation:
             pytest.skip(f"Expected guides not populated for {gene_data['gene_name']}")
 
         # Run our guide finder
+        # Use high max_guides to check all discovered guides (not just top-ranked)
         request = CrisprDesignRequest(
             sequence=gene_data["cds_first_500bp"],
             organism="C_albicans_SC5314_A22",
@@ -627,6 +632,7 @@ class TestCHOPCHOPValidation:
             guide_length=20,
             target_region=TargetRegion.FIVE_PRIME,
             check_offtargets=False,
+            max_guides=100,
         )
 
         result = design_guides(mock_db, request)

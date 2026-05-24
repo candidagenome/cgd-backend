@@ -291,9 +291,12 @@ def _calculate_chopchop_penalty(
     """
     Calculate a CHOPCHOP-style rank penalty.
 
-    CHOPCHOP ranks guides by a penalty model: off-target burden dominates,
-    guides outside the preferred GC range are penalized, self-complementarity
-    is penalized, and predicted efficiency lowers the penalty.
+    CHOPCHOP ranks guides by a penalty model where:
+    - Off-target burden dominates (fewer/weaker off-targets = lower penalty)
+    - GC outside 40-70% range is penalized
+    - Self-complementarity is penalized
+    - Higher efficiency lowers the penalty
+
     Lower values are better.
     """
     guide = guide.upper()
@@ -301,19 +304,21 @@ def _calculate_chopchop_penalty(
 
     penalty = 0.0
 
+    # Off-target penalties dominate the ranking
     if len(offtargets) > 100:
         penalty += 20000
 
     for offtarget in offtargets:
         penalty += CHOPCHOP_OFFTARGET_PENALTIES.get(offtarget.mismatches, 0)
 
+    # GC penalty for guides outside optimal 40-70% range
     if gc < 40 or gc > 70:
         penalty += 500
 
+    # Self-complementarity can cause hairpin formation
     penalty += _calculate_self_complementarity(guide)
 
-    # CHOPCHOP lowers the rank penalty by the efficiency score. Our
-    # efficiency score is already scaled to 0-100.
+    # Efficiency lowers the penalty (higher efficiency = lower penalty)
     penalty -= efficiency_score
 
     return round(penalty, 3)
@@ -915,11 +920,14 @@ def _find_pam_sites(
     guides = []
     sequence = sequence.upper()
 
+    # Use lookahead pattern to find overlapping PAM sites (e.g., "TGGG" contains both TGG and GGG)
+    lookahead_pattern = f"(?=({pattern}))"
+
     # Search forward strand
-    for match in re.finditer(pattern, sequence):
+    for match in re.finditer(lookahead_pattern, sequence):
         pam_start = match.start()
-        pam_end = match.end()
-        pam_seq = sequence[pam_start:pam_end]
+        pam_seq = match.group(1)  # The actual PAM is in capture group 1
+        pam_end = pam_start + len(pam_seq)
 
         if is_3prime:
             # PAM is 3' of guide (SpCas9 style)
@@ -944,10 +952,10 @@ def _find_pam_sites(
     rev_sequence = _reverse_complement(sequence)
     seq_len = len(sequence)
 
-    for match in re.finditer(pattern, rev_sequence):
+    for match in re.finditer(lookahead_pattern, rev_sequence):
         pam_start = match.start()
-        pam_end = match.end()
-        pam_seq = rev_sequence[pam_start:pam_end]  # PAM as it appears on reverse strand
+        pam_seq = match.group(1)  # The actual PAM is in capture group 1
+        pam_end = pam_start + len(pam_seq)
 
         if is_3prime:
             guide_start = pam_start - guide_length
