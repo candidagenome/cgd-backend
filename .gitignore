@@ -12,3 +12,6 @@ data/*
 !data/.gitkeep
 logs/*
 !logs/.gitkeep
+
+# CHOPCHOP debugging screenshots
+tests/api/fixtures/chopchop_*.png
