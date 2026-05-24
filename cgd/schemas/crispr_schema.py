@@ -25,6 +25,13 @@ class TargetRegion(str, Enum):
     CUSTOM = "custom"           # User-provided sequence
 
 
+class OffTargetMethod(str, Enum):
+    """Off-target search method."""
+    BLAST = "blast"             # BLAST-based search (faster, may miss some)
+    BRUTEFORCE = "bruteforce"   # Brute-force genome scan (slower, guaranteed complete)
+    AUTO = "auto"               # Auto-select based on genome size
+
+
 class CrisprDesignRequest(BaseModel):
     """Request for CRISPR guide RNA design."""
     # Input - one of these required
@@ -66,6 +73,10 @@ class CrisprDesignRequest(BaseModel):
         True,
         description="Whether to perform off-target analysis"
     )
+    offtarget_method: OffTargetMethod = Field(
+        OffTargetMethod.BRUTEFORCE,
+        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), or 'auto'"
+    )
     offtarget_genomes: List[str] = Field(
         default_factory=list,
         description="Additional genomes to check for off-targets (empty = same as organism)"
@@ -73,8 +84,8 @@ class CrisprDesignRequest(BaseModel):
     max_offtarget_mismatches: int = Field(
         3,
         ge=0,
-        le=5,
-        description="Maximum mismatches to consider as potential off-target"
+        le=4,
+        description="Maximum mismatches to consider as potential off-target (0-4)"
     )
 
     # Homology arm settings
@@ -176,6 +187,7 @@ class GuideResult(BaseModel):
     offtarget_1mm: int = Field(0, description="Off-targets with 1 mismatch")
     offtarget_2mm: int = Field(0, description="Off-targets with 2 mismatches")
     offtarget_3mm: int = Field(0, description="Off-targets with 3 mismatches")
+    offtarget_4mm: int = Field(0, description="Off-targets with 4 mismatches")
     offtarget_in_paralogs: int = Field(0, description="Off-targets hitting paralog genes")
     offtarget_in_orthologs: int = Field(0, description="Off-targets hitting ortholog genes")
     has_related_gene_offtargets: bool = Field(

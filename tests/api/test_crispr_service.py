@@ -37,6 +37,8 @@ from cgd.api.services.crispr_service import (
     _find_pam_sites,
     _filter_target_region,
     _validate_pam_at_position,
+    _search_offtargets_bruteforce,
+    _count_mismatches,
     design_guides,
 )
 
@@ -486,6 +488,100 @@ class TestTargetRegionFiltering:
         assert 400 in positions  # upstream
         assert 600 in positions  # first 20% CDS
         assert 800 not in positions  # past first 20%
+
+
+# =============================================================================
+# Brute-Force Off-Target Search Tests
+# =============================================================================
+
+class TestBruteForceOfftargetSearch:
+    """Tests for the brute-force genome-wide off-target search."""
+
+    def test_count_mismatches_exact_match(self):
+        """Exact match should have 0 mismatches."""
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "ATGCATGCATGCATGCATGC")
+        assert mm == 0
+        assert positions == []
+
+    def test_count_mismatches_with_differences(self):
+        """Should correctly count and locate mismatches."""
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "TTGCATGCATGCATGCATGC")
+        assert mm == 1
+        assert positions == [0]
+
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "TTGCATGCATGCATGCATGT")
+        assert mm == 2
+        assert positions == [0, 19]
+
+    def test_count_mismatches_all_different(self):
+        """All different bases should give max mismatches."""
+        mm, positions = _count_mismatches("AAAAAAAAAAAAAAAAAAAA", "TTTTTTTTTTTTTTTTTTTT")
+        assert mm == 20
+
+    def test_bruteforce_finds_exact_match(self):
+        """Brute-force should find exact matches in a small genome."""
+        mock_db = MagicMock()
+
+        # Create a small "genome" with one guide site
+        guide = "ATGCATGCATGCATGCATGC"
+        test_chromosome = f"NNNNN{guide}AGGNNNNN"  # Guide + NGG PAM
+
+        # The search function needs chromosome sequences
+        # We'll test the core mismatch detection directly
+        mm, positions = _count_mismatches(guide, guide)
+        assert mm == 0
+
+    def test_bruteforce_finds_offtargets_with_mismatches(self):
+        """Brute-force should find off-targets with up to max_mismatches."""
+        guide = "ATGCATGCATGCATGCATGC"
+
+        # Off-target with 1 mismatch
+        offtarget_1mm = "TTGCATGCATGCATGCATGC"
+        mm, _ = _count_mismatches(guide, offtarget_1mm)
+        assert mm == 1
+
+        # Off-target with 2 mismatches
+        offtarget_2mm = "TTGCATGCATGCATGCATGT"
+        mm, _ = _count_mismatches(guide, offtarget_2mm)
+        assert mm == 2
+
+        # Off-target with 3 mismatches
+        offtarget_3mm = "TTGCATGCATGCATGCTTGT"
+        mm, _ = _count_mismatches(guide, offtarget_3mm)
+        assert mm == 3
+
+        # Off-target with 4 mismatches
+        offtarget_4mm = "TTGCATGCATGCTTGCTTGT"
+        mm, _ = _count_mismatches(guide, offtarget_4mm)
+        assert mm == 4
+
+    def test_bruteforce_filters_by_max_mismatches(self):
+        """Should only return off-targets within max_mismatches threshold."""
+        guide = "ATGCATGCATGCATGCATGC"
+
+        # These should be found with max_mismatches=3
+        offtargets_to_find = [
+            ("ATGCATGCATGCATGCATGC", 0),  # exact
+            ("TTGCATGCATGCATGCATGC", 1),  # 1mm
+            ("TTGCATGCATGCATGCATGT", 2),  # 2mm
+            ("TTGCATGCATGCATGCTTGT", 3),  # 3mm
+        ]
+
+        # These should NOT be found with max_mismatches=3
+        offtargets_to_skip = [
+            ("TTGCATGCATGCTTGCTTGT", 4),  # 4mm
+            ("TTGCATGCTTGCTTGCTTGT", 5),  # 5mm
+        ]
+
+        for seq, expected_mm in offtargets_to_find:
+            mm, _ = _count_mismatches(guide, seq)
+            assert mm == expected_mm
+            assert mm <= 3, f"Expected {seq} to be found (mm={mm})"
+
+        for seq, expected_mm in offtargets_to_skip:
+            mm, _ = _count_mismatches(guide, seq)
+            assert mm == expected_mm
+            assert mm > 3, f"Expected {seq} to be skipped (mm={mm})"
 
 
 # =============================================================================

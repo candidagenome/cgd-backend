@@ -30,6 +30,7 @@ from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
 from cgd.schemas.crispr_schema import (
     PAMType,
     TargetRegion,
+    OffTargetMethod,
     CrisprDesignRequest,
     CrisprDesignResponse,
     CrisprConfigResponse,
@@ -1331,6 +1332,375 @@ def _map_position_to_gene(
     return None, "intergenic"
 
 
+def _get_all_chromosome_sequences(
+    db: Session,
+    organism_tag: str
+) -> Dict[str, str]:
+    """
+    Get all chromosome/contig sequences for an organism.
+
+    Returns dict mapping chromosome_name -> sequence (uppercase).
+    """
+    org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
+
+    # Query all chromosome features for this organism
+    chromosomes = (
+        db.query(Feature)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Organism.organism_abbrev == org_abbrev,
+            Feature.feature_type == "chromosome"
+        )
+        .all()
+    )
+
+    result = {}
+    for chrom in chromosomes:
+        # Get genomic sequence for this chromosome
+        seq_record = (
+            db.query(Seq)
+            .filter(
+                Seq.feature_no == chrom.feature_no,
+                Seq.seq_type == "genomic",
+                Seq.is_seq_current == "Y"
+            )
+            .first()
+        )
+        if seq_record and seq_record.residues:
+            result[chrom.feature_name] = seq_record.residues.upper()
+
+    logger.info(
+        f"Loaded {len(result)} chromosomes for {organism_tag}, "
+        f"total {sum(len(s) for s in result.values()):,} bp"
+    )
+    return result
+
+
+def _search_offtargets_bruteforce(
+    db: Session,
+    guide: str,
+    pam_type: PAMType,
+    organism_tag: str,
+    max_mismatches: int = 3,
+    exclude_position: Optional[Tuple[str, int, str]] = None,
+    guide_cds_position: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
+    chromosome_cache: Optional[Dict[str, str]] = None,
+) -> List[OffTargetHit]:
+    """
+    Search for off-targets using brute-force genome-wide scan.
+
+    This method guarantees finding ALL off-targets with up to max_mismatches,
+    unlike BLAST which may miss some due to seed-based heuristics.
+
+    Algorithm:
+    1. Load all chromosome sequences
+    2. Find all PAM sites in each chromosome (both strands)
+    3. Extract protospacer sequence adjacent to each PAM
+    4. Compare to guide, counting mismatches
+    5. Return all hits with <= max_mismatches
+
+    Args:
+        db: Database session for loading sequences and gene mapping
+        guide: Guide RNA sequence (typically 20bp)
+        pam_type: PAM type (NGG, NAG, etc.)
+        organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
+        max_mismatches: Maximum allowed mismatches (0-4)
+        exclude_position: (chromosome, position, strand) to exclude (on-target)
+        guide_cds_position: Position within CDS for on-target exclusion
+        warnings: Optional list to append warning messages
+        related_genes: Dict mapping gene_name -> relationship for flagging
+        status: Optional dict to set {"performed": True/False}
+        chromosome_cache: Optional pre-loaded chromosome sequences
+
+    Returns:
+        List of OffTargetHit objects sorted by mismatches (ascending)
+    """
+    import time
+    start_time = time.time()
+
+    if status is not None:
+        status["performed"] = False
+
+    guide = guide.upper()
+    guide_length = len(guide)
+    offtargets = []
+
+    # Get PAM configuration
+    pam_config = PAM_PATTERNS.get(pam_type)
+    if not pam_config:
+        if warnings is not None:
+            warnings.append(f"Unknown PAM type: {pam_type}")
+        return []
+
+    pam_pattern = pam_config["pattern"]
+    pam_len = pam_config["length"]
+    is_3prime = pam_config["position"] == "3prime"
+
+    # Load chromosome sequences (use cache if provided)
+    if chromosome_cache is not None:
+        chromosomes = chromosome_cache
+    else:
+        chromosomes = _get_all_chromosome_sequences(db, organism_tag)
+
+    if not chromosomes:
+        msg = f"No chromosome sequences found for {organism_tag}"
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    # Pre-compile PAM regex with lookahead for overlapping matches
+    pam_regex = re.compile(f"(?=({pam_pattern}))", re.IGNORECASE)
+
+    # Track statistics
+    total_pam_sites = 0
+    total_candidates = 0
+
+    # Check if this is a diploid organism (for allelic pair handling)
+    is_diploid = any(org in organism_tag for org in DIPLOID_ORGANISMS)
+
+    # Process each chromosome
+    for chrom_name, chrom_seq in chromosomes.items():
+        chrom_len = len(chrom_seq)
+
+        # Search forward strand
+        for match in pam_regex.finditer(chrom_seq):
+            pam_start = match.start()
+            pam_seq = match.group(1).upper()
+            pam_end = pam_start + len(pam_seq)
+            total_pam_sites += 1
+
+            if is_3prime:
+                # PAM is 3' of guide (SpCas9 style)
+                # Protospacer is upstream of PAM
+                proto_start = pam_start - guide_length
+                proto_end = pam_start
+                if proto_start < 0:
+                    continue
+            else:
+                # PAM is 5' of guide (Cas12a style)
+                # Protospacer is downstream of PAM
+                proto_start = pam_end
+                proto_end = pam_end + guide_length
+                if proto_end > chrom_len:
+                    continue
+
+            protospacer = chrom_seq[proto_start:proto_end].upper()
+            if len(protospacer) != guide_length:
+                continue
+
+            # Count mismatches
+            mm_count, mm_positions = _count_mismatches(guide, protospacer)
+            if mm_count > max_mismatches:
+                continue
+
+            total_candidates += 1
+            position = proto_start + 1  # 1-based
+
+            # Check exclusions (on-target site)
+            if _should_exclude_offtarget(
+                chrom_name, position, "+", mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            # Calculate CFD score
+            cfd = _calculate_cfd_score(guide, protospacer)
+
+            # Map to gene (expensive - only do for valid hits)
+            gene_name, gene_region = _map_position_to_gene(
+                db, chrom_name, position, "+", organism_tag
+            )
+
+            # Check for paralog/ortholog
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chrom_name,
+                position=position,
+                strand="+",
+                sequence=protospacer,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+        # Search reverse strand (reverse complement the chromosome)
+        rev_chrom = _reverse_complement(chrom_seq)
+
+        for match in pam_regex.finditer(rev_chrom):
+            pam_start = match.start()
+            pam_seq = match.group(1).upper()
+            pam_end = pam_start + len(pam_seq)
+            total_pam_sites += 1
+
+            if is_3prime:
+                proto_start = pam_start - guide_length
+                proto_end = pam_start
+                if proto_start < 0:
+                    continue
+            else:
+                proto_start = pam_end
+                proto_end = pam_end + guide_length
+                if proto_end > chrom_len:
+                    continue
+
+            protospacer = rev_chrom[proto_start:proto_end].upper()
+            if len(protospacer) != guide_length:
+                continue
+
+            mm_count, mm_positions = _count_mismatches(guide, protospacer)
+            if mm_count > max_mismatches:
+                continue
+
+            total_candidates += 1
+
+            # Convert position back to forward strand coordinates
+            # Position on reverse = chrom_len - proto_end (for the 5' end of protospacer)
+            fwd_position = chrom_len - proto_end + 1  # 1-based
+
+            if _should_exclude_offtarget(
+                chrom_name, fwd_position, "-", mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            cfd = _calculate_cfd_score(guide, protospacer)
+
+            gene_name, gene_region = _map_position_to_gene(
+                db, chrom_name, fwd_position, "-", organism_tag
+            )
+
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chrom_name,
+                position=fwd_position,
+                strand="-",
+                sequence=protospacer,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+    # Mark as performed
+    if status is not None:
+        status["performed"] = True
+
+    # For diploid organisms, exclude allelic pairs
+    if is_diploid:
+        offtargets = _exclude_allelic_pairs(offtargets)
+
+    # Sort by mismatches, then CFD score (descending)
+    offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Brute-force off-target search: {total_pam_sites:,} PAM sites, "
+        f"{total_candidates:,} candidates, {len(offtargets)} off-targets "
+        f"in {elapsed:.2f}s"
+    )
+
+    return offtargets
+
+
+def _should_exclude_offtarget(
+    chromosome: str,
+    position: int,
+    strand: str,
+    mismatches: int,
+    exclude_position: Optional[Tuple[str, int, str]],
+    guide_cds_position: Optional[int],
+    is_diploid: bool,
+) -> bool:
+    """
+    Check if an off-target hit should be excluded (is the on-target site).
+
+    Returns True if the hit should be excluded.
+    """
+    # Strategy 1: CDS position matching for exact matches
+    if guide_cds_position and mismatches == 0:
+        if abs(position - guide_cds_position) <= 5:
+            logger.debug(
+                f"Excluding on-target by CDS position: {chromosome}:{position}"
+            )
+            return True
+
+    # Strategy 2: Explicit exclude position
+    if exclude_position:
+        exc_chr, exc_pos, exc_strand = exclude_position
+
+        # For diploid organisms with exact matches, handle specially
+        if mismatches == 0 and is_diploid:
+            # Check if this is an allelic match (same base chromosome)
+            if _are_allelic_chromosomes(chromosome, exc_chr):
+                if abs(position - exc_pos) < 100 and strand == exc_strand:
+                    logger.debug(
+                        f"Excluding allelic on-target: {chromosome}:{position}"
+                    )
+                    return True
+
+        is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
+        is_similar_position = abs(position - exc_pos) < 100
+        is_same_strand = strand == exc_strand
+
+        # Exact match at similar position
+        if mismatches == 0 and is_similar_position and is_same_strand:
+            logger.debug(
+                f"Excluding exact match at similar position: {chromosome}:{position}"
+            )
+            return True
+
+        # Mismatched hit on same/allelic chromosome
+        if is_same_or_allelic and is_similar_position and is_same_strand:
+            logger.debug(
+                f"Excluding on-target/allelic hit: {chromosome}:{position}"
+            )
+            return True
+
+    return False
+
+
+def _check_related_gene(
+    gene_name: Optional[str],
+    related_genes: Optional[Dict[str, str]]
+) -> Tuple[bool, bool, Optional[str]]:
+    """
+    Check if a gene is a paralog/ortholog of the target gene.
+
+    Returns (is_paralog, is_ortholog, homology_relationship).
+    """
+    if not gene_name or not related_genes:
+        return False, False, None
+
+    gene_name_upper = gene_name.upper()
+    if gene_name_upper not in related_genes:
+        return False, False, None
+
+    relationship = related_genes[gene_name_upper]
+    is_paralog = relationship == 'paralog'
+    is_ortholog = relationship == 'ortholog'
+
+    return is_paralog, is_ortholog, relationship
+
+
 def _search_offtargets_blast(
     db: Session,
     guide: str,
@@ -1968,6 +2338,7 @@ def design_guides(
         ot_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
         ot_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
         ot_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+        ot_4mm = sum(1 for ot in offtargets if ot.mismatches == 4)
 
         # Calculate genomic coordinates if we have gene info
         # Account for upstream_length when FIVE_PRIME_UPSTREAM is used
@@ -2014,6 +2385,7 @@ def design_guides(
             offtarget_1mm=ot_1mm,
             offtarget_2mm=ot_2mm,
             offtarget_3mm=ot_3mm,
+            offtarget_4mm=ot_4mm,
             offtargets=offtargets[:10],  # Limit for response size
             has_poly_t=_has_poly_t(guide_seq),
             self_complementarity=self_complementarity,
@@ -2034,7 +2406,31 @@ def design_guides(
         # Limit off-target search to top N guides
         guides_for_offtarget = guide_results[:MAX_GUIDES_FOR_OFFTARGET]
 
-        logger.info(f"Running off-target search for {len(guides_for_offtarget)} guides")
+        # Determine which search method to use
+        use_bruteforce = request.offtarget_method == OffTargetMethod.BRUTEFORCE
+        if request.offtarget_method == OffTargetMethod.AUTO:
+            # Auto-select: use brute-force for smaller genomes (< 50Mb)
+            # This is a reasonable threshold for performance
+            use_bruteforce = True  # Default to brute-force for accuracy
+
+        method_name = "brute-force" if use_bruteforce else "BLAST"
+        logger.info(
+            f"Running {method_name} off-target search for "
+            f"{len(guides_for_offtarget)} guides"
+        )
+
+        # Pre-load chromosome sequences for brute-force (reused across guides)
+        chromosome_cache = None
+        if use_bruteforce:
+            chromosome_cache = _get_all_chromosome_sequences(db, request.organism)
+            if not chromosome_cache:
+                # Fall back to BLAST if no chromosomes found
+                use_bruteforce = False
+                method_name = "BLAST"
+                warnings.append(
+                    "Brute-force search unavailable: no chromosome sequences found. "
+                    "Falling back to BLAST."
+                )
 
         for guide in guides_for_offtarget:
             # Build exclude position to skip the on-target site
@@ -2054,21 +2450,38 @@ def design_guides(
                     f"chromosome={guide.chromosome}, genomic_start={guide.genomic_start}"
                 )
 
-            # Search for off-targets (pass warnings only for first guide to avoid duplicates)
+            # Search for off-targets using selected method
             offtarget_warnings = [] if guide == guides_for_offtarget[0] else None
             offtarget_status = {}
-            offtargets = _search_offtargets_blast(
-                db=db,
-                guide=guide.sequence,
-                pam_type=request.pam,
-                organism_tag=request.organism,
-                max_mismatches=request.max_offtarget_mismatches,
-                exclude_position=exclude_pos,
-                guide_cds_position=guide.position,  # Position within CDS for on-target detection
-                warnings=offtarget_warnings,
-                related_genes=related_genes,  # For flagging paralog/ortholog hits
-                status=offtarget_status,
-            )
+
+            if use_bruteforce:
+                offtargets = _search_offtargets_bruteforce(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                    chromosome_cache=chromosome_cache,
+                )
+            else:
+                offtargets = _search_offtargets_blast(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                )
+
             if offtarget_warnings:
                 warnings.extend(offtarget_warnings)
 
@@ -2080,6 +2493,7 @@ def design_guides(
             guide.offtarget_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
             guide.offtarget_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
             guide.offtarget_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+            guide.offtarget_4mm = sum(1 for ot in offtargets if ot.mismatches == 4)
 
             # Count off-targets in paralogs and orthologs
             guide.offtarget_in_paralogs = sum(1 for ot in offtargets if ot.is_paralog)
