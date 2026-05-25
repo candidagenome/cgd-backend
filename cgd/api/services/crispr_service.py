@@ -1003,8 +1003,10 @@ def _filter_target_region(
     # upstream_length indicates where CDS starts
     cds_length = sequence_length - upstream_length
 
-    # Calculate region boundaries (20% of CDS)
-    region_size = int(cds_length * 0.2)
+    # Calculate region boundaries (50% of CDS)
+    # CHOPCHOP's "5' region" includes guides in approximately the first half
+    # of the CDS, not just the first 20%
+    region_size = int(cds_length * 0.5)
 
     if target_region == TargetRegion.FIVE_PRIME:
         # First 20% of CDS (positions 1 to region_size, no upstream)

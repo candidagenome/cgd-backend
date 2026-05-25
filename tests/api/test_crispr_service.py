@@ -430,7 +430,7 @@ class TestTargetRegionFiltering:
         ]
 
     def test_five_prime_filter(self, sample_guides):
-        """5' prime should only include first 20%."""
+        """5' prime should only include first 50%."""
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -438,12 +438,12 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # First 20% = positions <= 200
+        # First 50% = positions <= 500
         for pos in positions:
-            assert pos <= 200
+            assert pos <= 500
 
     def test_three_prime_filter(self, sample_guides):
-        """3' prime should only include last 20%."""
+        """3' prime should only include last 50%."""
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -451,9 +451,9 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # Last 20% = positions >= 800
+        # Last 50% = positions >= 500
         for pos in positions:
-            assert pos >= 800
+            assert pos >= 500
 
     def test_full_cds_no_filter(self, sample_guides):
         """Full CDS should include all guides."""
@@ -466,14 +466,14 @@ class TestTargetRegionFiltering:
         assert len(filtered) == len(sample_guides)
 
     def test_five_prime_upstream_filter(self):
-        """5' prime upstream should include upstream + first 20% of CDS."""
+        """5' prime upstream should include upstream + first 50% of CDS."""
         # Simulate 500bp upstream + 1000bp CDS
         guides = [
             ("GUIDE1", "NGG", 100, "+"),   # In upstream region
             ("GUIDE2", "NGG", 400, "+"),   # In upstream region
-            ("GUIDE3", "NGG", 600, "+"),   # In first 20% of CDS (500-700)
-            ("GUIDE4", "NGG", 800, "+"),   # Past first 20% of CDS
-            ("GUIDE5", "NGG", 1200, "+"),  # Way past
+            ("GUIDE3", "NGG", 600, "+"),   # In first 50% of CDS (500-1000)
+            ("GUIDE4", "NGG", 800, "+"),   # In first 50% of CDS
+            ("GUIDE5", "NGG", 1200, "+"),  # Past first 50% of CDS
         ]
 
         filtered = _filter_target_region(
@@ -483,13 +483,14 @@ class TestTargetRegionFiltering:
             upstream_length=500
         )
 
-        # Should include upstream (1-500) + first 20% of CDS (501-700)
-        # Max position = 500 + 200 = 700
+        # Should include upstream (1-500) + first 50% of CDS (501-1000)
+        # Max position = 500 + 500 = 1000
         positions = [pos for _, _, pos, _ in filtered]
         assert 100 in positions  # upstream
         assert 400 in positions  # upstream
-        assert 600 in positions  # first 20% CDS
-        assert 800 not in positions  # past first 20%
+        assert 600 in positions  # first 50% CDS
+        assert 800 in positions  # first 50% CDS
+        assert 1200 not in positions  # past first 50%
 
 
 # =============================================================================
