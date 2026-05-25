@@ -80,49 +80,49 @@ We selected 20 well-characterized *C. albicans* genes representing diverse funct
 ### Virulence & Adhesion (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| ALS1 | C1_13700C_A | Agglutinin-like sequence protein |
-| ALS3 | C6_01030W_A | Agglutinin-like protein, invasion |
-| HWP1 | C1_06250C_A | Hyphal wall protein 1 |
-| ECE1 | C3_05610W_A | Candidalysin precursor |
+| ALS1 | C6_03700W_A | Agglutinin-like sequence protein |
+| ALS3 | CR_07070C_A | Agglutinin-like protein, invasion |
+| HWP1 | C4_03570W_A | Hyphal wall protein 1 |
+| ECE1 | C4_03470C_A | Candidalysin precursor |
 
 ### Secreted Proteases (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| SAP1 | C6_02460W_A | Secreted aspartyl protease 1 |
-| SAP2 | C6_02480W_A | Secreted aspartyl protease 2 |
+| SAP1 | C6_03490C_A | Secreted aspartyl protease 1 |
+| SAP2 | CR_07800W_A | Secreted aspartyl protease 2 |
 
 ### Transcription Factors (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
 | EFG1 | CR_07890W_A | bHLH transcription factor |
-| CPH1 | C4_03540C_A | Mating/filamentation regulator |
-| WOR1 | C1_11000C_A | White-opaque switching master regulator |
-| BCR1 | C3_04800W_A | Biofilm transcription factor |
+| CPH1 | C1_07370C_A | Mating/filamentation regulator |
+| WOR1 | C1_10150W_A | White-opaque switching master regulator |
+| BCR1 | CR_06440C_A | Biofilm transcription factor |
 
 ### Signaling Pathway (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| HOG1 | C1_05270W_A | MAP kinase, stress response |
-| RAS1 | C2_05700W_A | Ras-family GTPase |
-| CDC42 | C5_02460C_A | Rho-type GTPase |
-| CEK1 | C2_00410C_A | MAP kinase |
+| HOG1 | C2_03330C_A | MAP kinase, stress response |
+| RAS1 | C2_10210C_A | Ras-family GTPase |
+| CDC42 | C1_08450C_A | Rho-type GTPase |
+| CEK1 | C4_06480C_A | MAP kinase |
 
 ### Housekeeping (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| ACT1 | C1_06310W_A | Actin |
-| TUB1 | CR_02550C_A | Alpha-tubulin |
+| ACT1 | C1_13700W_A | Actin |
+| TUB1 | CR_09120C_A | Alpha-tubulin |
 
 ### Cell Wall (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| PHR1 | C5_01020C_A | pH-responsive glycosidase |
-| CHT2 | C1_04170C_A | Chitinase |
+| PHR1 | C4_04530C_A | pH-responsive glycosidase |
+| CHT2 | C5_04130C_A | Chitinase |
 
 ### Drug Resistance (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| CDR1 | C3_02280C_A | ABC transporter, azole resistance |
+| CDR1 | C3_05220W_A | ABC transporter, azole resistance |
 | ERG11 | C5_00660C_A | Lanosterol 14-alpha-demethylase |
 
 ## Populating Validation Fixtures

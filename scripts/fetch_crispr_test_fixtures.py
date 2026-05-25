@@ -55,31 +55,31 @@ OUTPUT_DIR = Path(__file__).parent.parent / "tests" / "api" / "fixtures"
 # Test genes - same list as in test_crispr_service.py
 TEST_GENES = [
     # Virulence/Adhesion genes
-    {"gene_name": "ALS1", "feature_name": "C1_13700C_A", "description": "Agglutinin-like sequence protein"},
-    {"gene_name": "ALS3", "feature_name": "C6_01030W_A", "description": "Agglutinin-like protein"},
-    {"gene_name": "HWP1", "feature_name": "C1_06250C_A", "description": "Hyphal wall protein 1"},
-    {"gene_name": "ECE1", "feature_name": "C3_05610W_A", "description": "Candidalysin precursor"},
+    {"gene_name": "ALS1", "feature_name": "C6_03700W_A", "description": "Agglutinin-like sequence protein"},
+    {"gene_name": "ALS3", "feature_name": "CR_07070C_A", "description": "Agglutinin-like protein"},
+    {"gene_name": "HWP1", "feature_name": "C4_03570W_A", "description": "Hyphal wall protein 1"},
+    {"gene_name": "ECE1", "feature_name": "C4_03470C_A", "description": "Candidalysin precursor"},
     # Secreted aspartyl proteases
-    {"gene_name": "SAP1", "feature_name": "C6_02460W_A", "description": "Secreted aspartyl protease 1"},
-    {"gene_name": "SAP2", "feature_name": "C6_02480W_A", "description": "Secreted aspartyl protease 2"},
+    {"gene_name": "SAP1", "feature_name": "C6_03490C_A", "description": "Secreted aspartyl protease 1"},
+    {"gene_name": "SAP2", "feature_name": "CR_07800W_A", "description": "Secreted aspartyl protease 2"},
     # Transcription factors
     {"gene_name": "EFG1", "feature_name": "CR_07890W_A", "description": "bHLH transcription factor"},
-    {"gene_name": "CPH1", "feature_name": "C4_03540C_A", "description": "Transcription factor for mating/filamentation"},
-    {"gene_name": "WOR1", "feature_name": "C1_11000C_A", "description": "Master regulator of white-opaque switching"},
-    {"gene_name": "BCR1", "feature_name": "C3_04800W_A", "description": "Biofilm transcription factor"},
+    {"gene_name": "CPH1", "feature_name": "C1_07370C_A", "description": "Transcription factor for mating/filamentation"},
+    {"gene_name": "WOR1", "feature_name": "C1_10150W_A", "description": "Master regulator of white-opaque switching"},
+    {"gene_name": "BCR1", "feature_name": "CR_06440C_A", "description": "Biofilm transcription factor"},
     # Signaling pathway genes
-    {"gene_name": "HOG1", "feature_name": "C1_05270W_A", "description": "MAP kinase, stress response"},
-    {"gene_name": "RAS1", "feature_name": "C2_05700W_A", "description": "Ras-family GTPase"},
-    {"gene_name": "CDC42", "feature_name": "C5_02460C_A", "description": "Rho-type GTPase"},
-    {"gene_name": "CEK1", "feature_name": "C2_00410C_A", "description": "MAP kinase"},
+    {"gene_name": "HOG1", "feature_name": "C2_03330C_A", "description": "MAP kinase, stress response"},
+    {"gene_name": "RAS1", "feature_name": "C2_10210C_A", "description": "Ras-family GTPase"},
+    {"gene_name": "CDC42", "feature_name": "C1_08450C_A", "description": "Rho-type GTPase"},
+    {"gene_name": "CEK1", "feature_name": "C4_06480C_A", "description": "MAP kinase"},
     # Housekeeping genes
-    {"gene_name": "ACT1", "feature_name": "C1_06310W_A", "description": "Actin"},
-    {"gene_name": "TUB1", "feature_name": "CR_02550C_A", "description": "Alpha-tubulin"},
+    {"gene_name": "ACT1", "feature_name": "C1_13700W_A", "description": "Actin"},
+    {"gene_name": "TUB1", "feature_name": "CR_09120C_A", "description": "Alpha-tubulin"},
     # Cell wall genes
-    {"gene_name": "PHR1", "feature_name": "C5_01020C_A", "description": "pH-responsive glycosidase"},
-    {"gene_name": "CHT2", "feature_name": "C1_04170C_A", "description": "Chitinase"},
+    {"gene_name": "PHR1", "feature_name": "C4_04530C_A", "description": "pH-responsive glycosidase"},
+    {"gene_name": "CHT2", "feature_name": "C5_04130C_A", "description": "Chitinase"},
     # Drug resistance
-    {"gene_name": "CDR1", "feature_name": "C3_02280C_A", "description": "ABC transporter, azole resistance"},
+    {"gene_name": "CDR1", "feature_name": "C3_05220W_A", "description": "ABC transporter, azole resistance"},
     {"gene_name": "ERG11", "feature_name": "C5_00660C_A", "description": "Lanosterol 14-alpha-demethylase"},
 ]
 
