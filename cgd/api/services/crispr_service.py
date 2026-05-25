@@ -241,9 +241,9 @@ def _calculate_efficiency_score(guide: str) -> float:
     if len(guide) >= 3 and guide[2] == "C":
         score += 3
 
-    # GG motif at positions 19-20 is favorable
-    if len(guide) >= 20 and guide[-2:] == "GG":
-        score += 5
+    # Note: GG motif bonus removed - it was over-weighting TGG endings
+    # compared to actual Doench 2016 model, causing poor correlation
+    # with CHOPCHOP rankings.
 
     # Clamp to 0-100
     return max(0, min(100, score))
@@ -288,6 +288,9 @@ def _calculate_chopchop_penalty(
     efficiency_score: float,
     offtargets: List[OffTargetHit],
     gc_content: Optional[float] = None,
+    position: Optional[int] = None,
+    cds_length: Optional[int] = None,
+    target_region: Optional[str] = None,
 ) -> float:
     """
     Calculate a CHOPCHOP-style rank penalty.
@@ -297,6 +300,7 @@ def _calculate_chopchop_penalty(
     - GC outside 40-70% range is penalized
     - Self-complementarity is penalized
     - Higher efficiency lowers the penalty
+    - For knockout targeting, 5' positions are favored
 
     Lower values are better.
     """
@@ -321,6 +325,26 @@ def _calculate_chopchop_penalty(
 
     # Efficiency lowers the penalty (higher efficiency = lower penalty)
     penalty -= efficiency_score
+
+    # Position bonus for 5' targeting (knockout mode)
+    # CHOPCHOP ranks guides at 5' positions higher for knockout experiments
+    # because early frameshifts are more likely to produce null alleles.
+    if (
+        position is not None
+        and cds_length is not None
+        and cds_length > 0
+        and target_region in ("5_prime", "five_prime", TargetRegion.FIVE_PRIME)
+    ):
+        pct = position / cds_length
+        if pct <= 0.10:
+            # First 10% of CDS: strong bonus
+            penalty -= 8
+        elif pct <= 0.25:
+            # 10-25% of CDS: moderate bonus
+            penalty -= 5
+        elif pct <= 0.50:
+            # 25-50% of CDS: small bonus
+            penalty -= 2
 
     return round(penalty, 3)
 
@@ -2610,6 +2634,9 @@ def design_guides(
             efficiency_score,
             offtargets,
             gc_content,
+            position=position,
+            cds_length=len(target_sequence) - upstream_length,
+            target_region=request.target_region,
         )
         combined_score = _chopchop_penalty_to_display_score(chopchop_penalty)
         self_complementarity = _calculate_self_complementarity(guide_seq)
@@ -2840,6 +2867,9 @@ def design_guides(
                 guide.efficiency_score,
                 offtargets,
                 guide.gc_content,
+                position=guide.position,
+                cds_length=len(target_sequence) - upstream_length,
+                target_region=request.target_region,
             )
             guide.combined_score = _chopchop_penalty_to_display_score(
                 guide.chopchop_penalty
