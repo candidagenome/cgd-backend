@@ -1,0 +1,2142 @@
+[
+  {
+    "gene_name": "ALS1",
+    "feature_name": "C6_03700W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GAAAGCATAATTAGCAGCAT",
+        "position": 98,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "CTGCTAATTATGCTTTCAAA",
+        "position": 124,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 44.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 3,
+        "sequence": "AACTGTACCAAATGCCTTAA",
+        "position": 362,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 29.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "CGCTTTGAAATCATCCATTA",
+        "position": 368,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 37.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "CACTTGCAATTGACAAATAT",
+        "position": 27,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 6,
+        "sequence": "GCTGCTAATTATGCTTTCAA",
+        "position": 123,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 40.0,
+        "offtarget_count": 5
+      },
+      {
+        "rank": 7,
+        "sequence": "AATTATGCTTTCAAAGGGCC",
+        "position": 129,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 8,
+        "sequence": "ATTGGCACTGGTACCATCTA",
+        "position": 164,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 9,
+        "sequence": "AACAGGTTCATCAACTGATT",
+        "position": 434,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 29.0,
+        "offtarget_count": 9
+      },
+      {
+        "rank": 10,
+        "sequence": "ATCATTAAATGTGACTGTAT",
+        "position": 464,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 7
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "ALS3",
+    "feature_name": "CR_07070C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "TGCTGCTACGTATAATTATA",
+        "position": 122,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 22.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "GCTGCTACGTATAATTATAA",
+        "position": 123,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "ACGTATAATTATAAGGGACC",
+        "position": 129,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 61.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "AGATGGTACTAGTGCAAGTC",
+        "position": 188,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "ATATGCTACATGTCAATTTC",
+        "position": 296,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 27.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "GCTACATGTCAATTTCAGGC",
+        "position": 300,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 59.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 7,
+        "sequence": "GCATTCCAAGTTGGGGTTCC",
+        "position": 127,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 33.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 8,
+        "sequence": "CAAAACAGCATTCCAAGTTG",
+        "position": 134,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 9,
+        "sequence": "AGGGACCAGGAACCCCAACT",
+        "position": 142,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 56.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 10,
+        "sequence": "TACTTTGACTCCATCTATTA",
+        "position": 368,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 21.0,
+        "offtarget_count": 4
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "HWP1",
+    "feature_name": "C4_03570W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "CTTATTACATGTTATCAATT",
+        "position": 55,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 2,
+        "sequence": "ACCGTCTACCTGTGGGACAG",
+        "position": 59,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 67.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "CACCTTGACCGTCTACCTGT",
+        "position": 66,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "TCACCTTGACCGTCTACCTG",
+        "position": 67,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "AATTGGGGCCACTGTCCCAC",
+        "position": 71,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "GCCACTGTCCCACAGGTAGA",
+        "position": 78,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "GTCCCACAGGTAGACGGTCA",
+        "position": 84,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 63.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "AGACGGTCAAGGTGAAACAG",
+        "position": 95,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 68.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "TGTTGTGGGTAATCATCACA",
+        "position": 139,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 61.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "TCATCAGGCTGATCAGGTTG",
+        "position": 472,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "ECE1",
+    "feature_name": "C4_03470C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AACAGTAGCACAGGCAATTT",
+        "position": 11,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 19.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "TAAAGCAAAAACAGTAGCAC",
+        "position": 20,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "TGTTGAATTCTGGAGCATGG",
+        "position": 63,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 74.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "TCATGTTGAATTCTGGAGCA",
+        "position": 66,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 5,
+        "sequence": "TCTCTCTTCATGTTGAATTC",
+        "position": 73,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 27.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "GTGCAGGAACAGTAGGTGCT",
+        "position": 129,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "TCTTGAGGTGCAGGAACAGT",
+        "position": 136,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 8,
+        "sequence": "GTATTGAATTCTTGAGGTGC",
+        "position": 145,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "GGAATTATTATGGGTATTCT",
+        "position": 213,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 35.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 10,
+        "sequence": "GGTAGAAGCAACAGAAGTCA",
+        "position": 350,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 2
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "SAP1",
+    "feature_name": "C6_03490C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GTCTAAAGTGACAAAACCTG",
+        "position": 71,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 69.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "AGTCTAAAGTGACAAAACCT",
+        "position": 72,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 62.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "AAGTCTAAAGTGACAAAACC",
+        "position": 73,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 4
+      },
+      {
+        "rank": 4,
+        "sequence": "GTTAATGCTACTGGTCAAGA",
+        "position": 135,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 63.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 5,
+        "sequence": "CATTATTTAAAGTAACTGGG",
+        "position": 156,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "TCACAAGTAACAGAAGCATC",
+        "position": 271,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 7,
+        "sequence": "TCTGCTGATTGACCAGGACG",
+        "position": 298,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "ACTTGTGATAAACCTCGTCC",
+        "position": 306,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 53.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "CAATCAGCAGATTTCTGTAA",
+        "position": 330,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 10,
+        "sequence": "AATCAGCAGATTTCTGTAAA",
+        "position": 331,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 44.0,
+        "offtarget_count": 1
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "SAP2",
+    "feature_name": "CR_07800W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AACGAAACCAGCTGATCTTT",
+        "position": 68,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 29.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "ACAACAACCAAAAGATCAGC",
+        "position": 81,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "TTAGTAACTGGGAATGCTTT",
+        "position": 118,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "CTTCTTGACCATTAGTAACT",
+        "position": 129,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 40.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "CCTTCTTGACCATTAGTAAC",
+        "position": 130,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 6,
+        "sequence": "CCAGTTACTAATGGTCAAGA",
+        "position": 150,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 60.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 7,
+        "sequence": "CACTGGGACAGCTTGTCTTT",
+        "position": 161,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 29.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "GTTCATTGTGTAAAGTCACT",
+        "position": 177,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 65.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "TGTTCATTGTGTAAAGTCAC",
+        "position": 178,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 10,
+        "sequence": "CAGATTTCTGTAAACAAAAG",
+        "position": 355,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 60.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "EFG1",
+    "feature_name": "CR_07890W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "TTGGCTGCAGTTGTTTGCTG",
+        "position": 61,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 2,
+        "sequence": "ATTGGCTGCAGTTGTTTGCT",
+        "position": 62,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 3,
+        "sequence": "GATTGGCTGCAGTTGTTTGC",
+        "position": 63,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 27.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 4,
+        "sequence": "CTGAGGAAAAGCCTGTTGAT",
+        "position": 80,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "AACAACTGCAGCCAATCAAC",
+        "position": 89,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 6,
+        "sequence": "GCAACAGCAAGCAGCTGCTA",
+        "position": 161,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 7,
+        "sequence": "TGATAGAACATGTAGTTATA",
+        "position": 187,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 34.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "GTCTGTCCAGTCTGTTGACC",
+        "position": 223,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 43.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "GGACAACCAGGTCAACAGAC",
+        "position": 237,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "CAACAGACTGGACAGACAGC",
+        "position": 249,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 63.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "CPH1",
+    "feature_name": "C1_07370C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GATTCTTTTACCAGTTGAGT",
+        "position": 46,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 2,
+        "sequence": "ATCACTTGTACCAACTCAAC",
+        "position": 56,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "TTGCCAATTTGCTGGAGCAG",
+        "position": 104,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "TGATTCTCTTGCCAATTTGC",
+        "position": 112,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 23.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 5,
+        "sequence": "TAGCCACTGCTCCAGCAAAT",
+        "position": 121,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 37.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "AACTGACAAAACCTTCATCG",
+        "position": 159,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 71.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 7,
+        "sequence": "TACTATTTAAACCACGATGA",
+        "position": 168,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 8,
+        "sequence": "GTTTTGTCAGTTGTGTTTAT",
+        "position": 190,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 19.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "AATAACTTATATTTTATCAC",
+        "position": 213,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 50.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "ATAAATTTGAACATTTTGGA",
+        "position": 262,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 3
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "WOR1",
+    "feature_name": "C1_10150W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GAATATACCCATTATATGTA",
+        "position": 21,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "TGAATATACCCATTATATGT",
+        "position": 22,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "AGTATAGTCCCTACATATAA",
+        "position": 33,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 26.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "GTATAGTCCCTACATATAAT",
+        "position": 34,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 41.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "TTCACGTTCATGGGGTCTTC",
+        "position": 107,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 25.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "ACGCCTCGTTCACGTTCATG",
+        "position": 115,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 66.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "CACGCCTCGTTCACGTTCAT",
+        "position": 116,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 38.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "GCACGCCTCGTTCACGTTCA",
+        "position": 117,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "AGACCCCATGAACGTGAACG",
+        "position": 132,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 72.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 10,
+        "sequence": "CGAGGCGTGCTTATAGTTTC",
+        "position": 150,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 24.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "BCR1",
+    "feature_name": "CR_06440C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AGATGCGTGCTGTGATTGAT",
+        "position": 35,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 50.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "TAGATGCGTGCTGTGATTGA",
+        "position": 36,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "TCAATCACAGCACGCATCTA",
+        "position": 59,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "GGTGGTGGTGGATACATCAT",
+        "position": 79,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 6
+      },
+      {
+        "rank": 5,
+        "sequence": "GGAGCAGGTATTGGTGGCAA",
+        "position": 139,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "AAAGATGGAGCAGGTATTGG",
+        "position": 145,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 7,
+        "sequence": "TTTGATATAGGAGGTAAAGA",
+        "position": 160,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 8,
+        "sequence": "TGGTGCACGTAAAGGAGGCA",
+        "position": 296,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 65.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "GGAGGTGGTGCACGTAAAGG",
+        "position": 301,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 59.0,
+        "offtarget_count": 4
+      },
+      {
+        "rank": 10,
+        "sequence": "AATGGAGGTGGTGCACGTAA",
+        "position": 304,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 3
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "HOG1",
+    "feature_name": "C2_03330C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AAAAACAGTCCCAAATATCT",
+        "position": 29,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 42.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 2,
+        "sequence": "CAAAAACAGTCCCAAATATC",
+        "position": 30,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "TTTACAAGAACCCAGATATT",
+        "position": 39,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 20.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "ATTTAGCTCAGTGTATCTAT",
+        "position": 59,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 5,
+        "sequence": "CCAAATGCTCCCATTCCCAC",
+        "position": 82,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 61.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "ACCAAATGCTCCCATTCCCA",
+        "position": 83,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 60.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "ATACACTGAGCTAAATCCCG",
+        "position": 86,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 67.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "TACACTGAGCTAAATCCCGT",
+        "position": 87,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 63.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "TGAGCTAAATCCCGTGGGAA",
+        "position": 92,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 10,
+        "sequence": "GAGCTAAATCCCGTGGGAAT",
+        "position": 93,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 44.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "RAS1",
+    "feature_name": "C2_10210C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AATCAATTGAATGGTTAAAG",
+        "position": 53,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "GGTCATATTCATCAACAAAA",
+        "position": 81,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 32.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 3,
+        "sequence": "TGAATATGACCCAACTATTG",
+        "position": 113,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 4
+      },
+      {
+        "rank": 4,
+        "sequence": "TGCTGGACAAGAAGAATATC",
+        "position": 197,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 36.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "TCTCATATATTGTTCTCTCA",
+        "position": 200,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "AACTAATAAAAACCCTTCAC",
+        "position": 224,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 59.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 7,
+        "sequence": "AGAGAACAATATATGAGAAC",
+        "position": 225,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 51.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "AATGTTCCAGTTTTAGTTGT",
+        "position": 345,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 35.0,
+        "offtarget_count": 9
+      },
+      {
+        "rank": 9,
+        "sequence": "TAATAAATGTGATTTAGAAA",
+        "position": 368,
+        "strand": "+",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 40.0,
+        "offtarget_count": 5
+      },
+      {
+        "rank": 10,
+        "sequence": "TTAGCAGAAGTTTCTAAAAA",
+        "position": 424,
+        "strand": "-",
+        "mit_specificity_score": 99.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 2
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "CDC42",
+    "feature_name": "C1_08450C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "ATCAGCTGGAAATTTACTAG",
+        "position": 71,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 61.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "ACAGTAGGAACATAATCAGC",
+        "position": 85,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 4
+      },
+      {
+        "rank": 3,
+        "sequence": "TGGTTCGTCTCCTATCATCA",
+        "position": 128,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 71.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "TATGCTGTAACCGTGATGAT",
+        "position": 138,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "TCAAATAATCCCAAGGTAAA",
+        "position": 148,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 35.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 6,
+        "sequence": "AGGAGACGAACCATTTACCT",
+        "position": 158,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "GGAGACGAACCATTTACCTT",
+        "position": 159,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 8,
+        "sequence": "AAGAAGATTACGACAGATTA",
+        "position": 202,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 37.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "TCAGTCGATGGATATGACAA",
+        "position": 205,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 71.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 10,
+        "sequence": "ACAAGGAATACATCAGTCGA",
+        "position": 217,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "CEK1",
+    "feature_name": "C4_06480C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AATGTTACAACAACAAGCTC",
+        "position": 68,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 50.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 2,
+        "sequence": "AGCGTTAGCTGCTGCGGCTG",
+        "position": 131,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 3,
+        "sequence": "AGCTGCAGCGTTAGCTGCTG",
+        "position": 137,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "GTTGAATGAAACTTGACGAG",
+        "position": 176,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 72.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "CGTTGAATGAAACTTGACGA",
+        "position": 177,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 71.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "ACGTTGAATGAAACTTGACG",
+        "position": 178,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 75.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "ATTGTTGGAGAAGGAGCATA",
+        "position": 246,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 8,
+        "sequence": "TTGTTGTGATGGTTTATGAA",
+        "position": 263,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 50.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 9,
+        "sequence": "ATGGCAACTTTTTGTTGTGA",
+        "position": 274,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 99.0,
+        "doench_efficiency_score": 44.0,
+        "offtarget_count": 4
+      },
+      {
+        "rank": 10,
+        "sequence": "CATAACATACTTCTTTCAAA",
+        "position": 310,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 1
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "ACT1",
+    "feature_name": "C1_13700W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "ATTGGTTTCAATATGACAAA",
+        "position": 78,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 37.0,
+        "offtarget_count": 3
+      },
+      {
+        "rank": 2,
+        "sequence": "TTTCAATATGACAAATGGGT",
+        "position": 83,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 53.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "AATATGACAAATGGGTAGGG",
+        "position": 87,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 4,
+        "sequence": "ATATGACAAATGGGTAGGGT",
+        "position": 88,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 59.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "TCGACATAATATTTCTCGTT",
+        "position": 149,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 31.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "CGACATAATATTTCTCGTTT",
+        "position": 150,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 32.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "AGATATGTTGTGACGATCAA",
+        "position": 233,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 41.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "GTTGTGACGATCAATGGAAA",
+        "position": 239,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "ATTGATTGATCTGTCGGCAG",
+        "position": 320,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "TGATAGGATTACTCACCGAA",
+        "position": 331,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "TUB1",
+    "feature_name": "CR_09120C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GGATTGAAAACACTAAGATC",
+        "position": 104,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 53.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "ACACTAAGATCCGGTTTTTT",
+        "position": 113,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 19.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 3,
+        "sequence": "GGCTGCTTACTAATGAAGCT",
+        "position": 139,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "GCGTTTAAGATGGATTGTTA",
+        "position": 160,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "CGGCTTGACCAACTATACAA",
+        "position": 229,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 60.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "TACTAACGCCATTGTATAGT",
+        "position": 241,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 42.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "GGCGTTACCAATTTGACACC",
+        "position": 249,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "CATTGTATAGTTGGTCAAGC",
+        "position": 250,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 51.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 9,
+        "sequence": "ATTGTATAGTTGGTCAAGCC",
+        "position": 251,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 10,
+        "sequence": "GGTCAAGCCGGGTGTCAAAT",
+        "position": 262,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 39.0,
+        "offtarget_count": 1
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "PHR1",
+    "feature_name": "C4_04530C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "TAAAGTTAATGAAAAGAGTG",
+        "position": 35,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 2,
+        "sequence": "GCCCGCGGCATCTTGCTGAT",
+        "position": 152,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "CGCCTATCAGCAAGATGCCG",
+        "position": 170,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "GCCTATCAGCAAGATGCCGC",
+        "position": 171,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "ATTAGGATCGGCGTCGTAAC",
+        "position": 185,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 43.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "CAAGCGTCAGCATCGGCTAA",
+        "position": 223,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 55.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "ACGTTTACAAGCGTCAGCAT",
+        "position": 230,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 66.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "AGCATAAACTCTCAAAGTAT",
+        "position": 281,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 53.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 9,
+        "sequence": "ACTCTTCATGATCCTTATCT",
+        "position": 309,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 47.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 10,
+        "sequence": "CACTCTTCATGATCCTTATC",
+        "position": 310,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 23.0,
+        "offtarget_count": 1
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "CHT2",
+    "feature_name": "C5_04130C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AATCAAGTTGCTCTTTACTG",
+        "position": 87,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 62.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "TGCTGGTGGTCAAGAAAGAT",
+        "position": 119,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 3,
+        "sequence": "AAAAGTGTTACCACATTGGT",
+        "position": 206,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 52.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 4,
+        "sequence": "ATTCAAAAGTGTTACCACAT",
+        "position": 210,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 56.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 5,
+        "sequence": "GTTAATTTTGCCAACCAATG",
+        "position": 216,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 6,
+        "sequence": "TGTGGTAACACTTTTGAATC",
+        "position": 234,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 37.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 7,
+        "sequence": "TTGTTACACTGTTCTCAAAT",
+        "position": 258,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 35.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 8,
+        "sequence": "CAAGGTGTCTGCGAATTTAG",
+        "position": 356,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "AGCACCGAATTTGTTCCACA",
+        "position": 374,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 64.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "CTAAATTCGCAGACACCTTG",
+        "position": 379,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 54.0,
+        "offtarget_count": 0
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "CDR1",
+    "feature_name": "C3_05220W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "AAACCCGTGGTATTCATTAA",
+        "position": 83,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 27.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "TTGTATGGGCATCAAACCCG",
+        "position": 96,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 70.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "ATTCCATTAATGAATACCAC",
+        "position": 100,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 59.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 4,
+        "sequence": "CTGAATGTTTTCACTTGTAT",
+        "position": 110,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 35.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 5,
+        "sequence": "TCTGAATGTTTTCACTTGTA",
+        "position": 111,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 28.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "AGAATCATGAGTGAAAGTTC",
+        "position": 140,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "TTCAAAGATGACTCGTCAGC",
+        "position": 183,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "CCCGGGCACTTCTGACATAT",
+        "position": 203,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 43.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 9,
+        "sequence": "CCCCGGGCACTTCTGACATA",
+        "position": 204,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 30.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 10,
+        "sequence": "TGTTCATATGGATTGACCCC",
+        "position": 220,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 58.0,
+        "offtarget_count": 1
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  },
+  {
+    "gene_name": "ERG11",
+    "feature_name": "C5_00660C_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GATCTGTTGTGTAACACTAA",
+        "position": 47,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 57.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 2,
+        "sequence": "TGATCTGTTGTGTAACACTA",
+        "position": 48,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 48.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 3,
+        "sequence": "ACAGATCAGTATATTATTAG",
+        "position": 83,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 56.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 4,
+        "sequence": "GGAATCCAATAAAACACTAA",
+        "position": 145,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 49.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 5,
+        "sequence": "GAGCTCCATTAGTGTTTTAT",
+        "position": 160,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 16.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 6,
+        "sequence": "GAAGCTGCAGAACCAAACCA",
+        "position": 166,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 73.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 7,
+        "sequence": "TTTGGTTCTGCAGCTTCATA",
+        "position": 192,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 36.0,
+        "offtarget_count": 0
+      },
+      {
+        "rank": 8,
+        "sequence": "CATGATTCGAAAAATTCATA",
+        "position": 202,
+        "strand": "-",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 45.0,
+        "offtarget_count": 2
+      },
+      {
+        "rank": 9,
+        "sequence": "GAATCATGTCGTCAAAAGTA",
+        "position": 237,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 1
+      },
+      {
+        "rank": 10,
+        "sequence": "GTTATTAGGGAAAATTATGA",
+        "position": 278,
+        "strand": "+",
+        "mit_specificity_score": 100.0,
+        "cfd_score": 100.0,
+        "doench_efficiency_score": 46.0,
+        "offtarget_count": 2
+      }
+    ],
+    "notes": "Collected via CRISPOR web (batch)"
+  }
+]
