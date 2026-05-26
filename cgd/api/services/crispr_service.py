@@ -30,6 +30,7 @@ from cgd.schemas.virulence_schema import VIRULENCE_CATEGORIES
 from cgd.schemas.crispr_schema import (
     PAMType,
     TargetRegion,
+    OffTargetMethod,
     CrisprDesignRequest,
     CrisprDesignResponse,
     CrisprConfigResponse,
@@ -160,6 +161,32 @@ def _has_poly_t(seq: str) -> bool:
     return "TTTT" in seq.upper()
 
 
+def _calculate_self_complementarity(seq: str, stem_length: int = 4) -> int:
+    """
+    Count potential guide self-complementarity stems.
+
+    CHOPCHOP penalizes guides with self-complementarity longer than 3nt.
+    We count non-overlapping 4nt windows that can pair with another 4nt
+    window in the same guide.
+    """
+    seq = seq.upper()
+    if len(seq) < stem_length * 2:
+        return 0
+
+    stems = set()
+    for i in range(0, len(seq) - stem_length + 1):
+        left = seq[i:i + stem_length]
+        if not re.match(r"^[ACGT]+$", left):
+            continue
+
+        for j in range(i + stem_length, len(seq) - stem_length + 1):
+            right = seq[j:j + stem_length]
+            if left == _reverse_complement(right):
+                stems.add((i, j))
+
+    return len(stems)
+
+
 def _find_restriction_sites(seq: str) -> List[RestrictionSite]:
     """Find restriction enzyme sites within a sequence."""
     sites = []
@@ -214,9 +241,9 @@ def _calculate_efficiency_score(guide: str) -> float:
     if len(guide) >= 3 and guide[2] == "C":
         score += 3
 
-    # GG motif at positions 19-20 is favorable
-    if len(guide) >= 20 and guide[-2:] == "GG":
-        score += 5
+    # Note: GG motif bonus removed - it was over-weighting TGG endings
+    # compared to actual Doench 2016 model, causing poor correlation
+    # with CHOPCHOP rankings.
 
     # Clamp to 0-100
     return max(0, min(100, score))
@@ -246,6 +273,104 @@ def _calculate_cfd_score(guide: str, offtarget: str) -> float:
                 score *= 0.7  # Non-seed mismatch
 
     return score
+
+
+CHOPCHOP_OFFTARGET_PENALTIES = {
+    0: 1000,
+    1: 800,
+    2: 600,
+    3: 400,
+}
+
+
+def _calculate_chopchop_penalty(
+    guide: str,
+    efficiency_score: float,
+    offtargets: List[OffTargetHit],
+    gc_content: Optional[float] = None,
+    position: Optional[int] = None,
+    cds_length: Optional[int] = None,
+    target_region: Optional[str] = None,
+) -> float:
+    """
+    Calculate a CHOPCHOP-style rank penalty.
+
+    CHOPCHOP ranks guides by a penalty model where:
+    - Off-target burden dominates (fewer/weaker off-targets = lower penalty)
+    - GC outside 40-70% range is penalized
+    - Self-complementarity is penalized
+    - Higher efficiency lowers the penalty
+    - For knockout targeting, 5' positions are favored
+
+    Lower values are better.
+    """
+    guide = guide.upper()
+    gc = _calculate_gc_content(guide) if gc_content is None else gc_content
+
+    penalty = 0.0
+
+    # Off-target penalties dominate the ranking
+    if len(offtargets) > 100:
+        penalty += 20000
+
+    for offtarget in offtargets:
+        penalty += CHOPCHOP_OFFTARGET_PENALTIES.get(offtarget.mismatches, 0)
+
+    # GC penalty for guides outside optimal 40-70% range
+    if gc < 40 or gc > 70:
+        penalty += 500
+
+    # Self-complementarity can cause hairpin formation
+    penalty += _calculate_self_complementarity(guide)
+
+    # Efficiency lowers the penalty (higher efficiency = lower penalty)
+    # Scale by 100 to match CHOPCHOP's actual weighting where efficiency
+    # competes meaningfully with off-target penalties (which are 400-1000 each)
+    penalty -= efficiency_score * 100
+
+    # Position bonus for 5' targeting (knockout mode)
+    # CHOPCHOP uses position primarily as a tie-breaker, so we keep these
+    # values small relative to efficiency (0-10000) and off-targets (400-1000 each).
+    # These serve as minor tie-breakers when other factors are equal.
+    if (
+        position is not None
+        and cds_length is not None
+        and cds_length > 0
+        and target_region in ("5_prime", "five_prime", TargetRegion.FIVE_PRIME)
+    ):
+        pct = position / cds_length
+        if pct <= 0.10:
+            # First 10% of CDS: minor tie-breaker bonus
+            penalty -= 3
+        elif pct <= 0.25:
+            # 10-25% of CDS: smaller tie-breaker
+            penalty -= 2
+        elif pct <= 0.50:
+            # 25-50% of CDS: minimal tie-breaker
+            penalty -= 1
+
+    return round(penalty, 3)
+
+
+def _chopchop_penalty_to_display_score(penalty: float) -> float:
+    """
+    Convert lower-is-better CHOPCHOP penalty to the existing 0-100 UI score.
+
+    With efficiency scaled by 100, penalties typically range from:
+    - Excellent guides: -10,000 to -5,000 (high efficiency, few off-targets)
+    - Good guides: -5,000 to 0
+    - Poor guides: 0 to +5,000 (low efficiency or many off-targets)
+    - Very poor: +5,000 to +20,000+
+
+    We map this to 0-100 where:
+    - Penalty <= -8000: score = 100
+    - Penalty >= +2000: score = 0
+    - Linear interpolation between
+    """
+    # Map penalty range [-8000, +2000] to score range [100, 0]
+    # Score = 100 - (penalty + 8000) / 100
+    score = 100.0 - (penalty + 8000) / 100.0
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 def _generate_cloning_primers(
@@ -338,6 +463,19 @@ def _generate_guide_jbrowse_url(
     Uses a smaller flanking region (100bp) to zoom in on the guide.
     """
     return _generate_jbrowse_url(organism_tag, chromosome, guide_start, guide_end, flank=100)
+
+
+def _guide_genomic_strand(gene_strand: Optional[str], guide_strand: str) -> str:
+    """
+    Convert guide strand from target-sequence orientation to genomic strand.
+
+    Gene target sequences are in coding/transcript orientation. For genes on
+    the minus genomic strand, guide strands are therefore inverted relative to
+    chromosome coordinates.
+    """
+    if gene_strand != "-":
+        return guide_strand
+    return "-" if guide_strand == "+" else "+"
 
 
 # ============================================================================
@@ -809,7 +947,9 @@ def _find_pam_sites(
     Find all PAM sites in a sequence and extract guide sequences.
 
     Returns list of (guide_sequence, pam_sequence, position, strand) tuples.
-    Position is 1-based, relative to the input sequence.
+    Position is the 1-based leftmost coordinate of the guide/protospacer in
+    the input sequence. For reverse-strand guides, this is still reported in
+    input-sequence coordinates, not reverse-complement coordinates.
     """
     pam_config = PAM_PATTERNS[pam_type]
     pattern = pam_config["pattern"]
@@ -819,11 +959,14 @@ def _find_pam_sites(
     guides = []
     sequence = sequence.upper()
 
+    # Use lookahead pattern to find overlapping PAM sites (e.g., "TGGG" contains both TGG and GGG)
+    lookahead_pattern = f"(?=({pattern}))"
+
     # Search forward strand
-    for match in re.finditer(pattern, sequence):
+    for match in re.finditer(lookahead_pattern, sequence):
         pam_start = match.start()
-        pam_end = match.end()
-        pam_seq = sequence[pam_start:pam_end]
+        pam_seq = match.group(1)  # The actual PAM is in capture group 1
+        pam_end = pam_start + len(pam_seq)
 
         if is_3prime:
             # PAM is 3' of guide (SpCas9 style)
@@ -841,32 +984,32 @@ def _find_pam_sites(
             guide_end = pam_end + guide_length
             if guide_end <= len(sequence):
                 guide_seq = sequence[guide_start:guide_end]
-                position = pam_start + 1  # 1-based
+                position = guide_start + 1  # 1-based
                 guides.append((guide_seq, pam_seq, position, "+"))
 
     # Search reverse strand
     rev_sequence = _reverse_complement(sequence)
     seq_len = len(sequence)
 
-    for match in re.finditer(pattern, rev_sequence):
+    for match in re.finditer(lookahead_pattern, rev_sequence):
         pam_start = match.start()
-        pam_end = match.end()
-        pam_seq = rev_sequence[pam_start:pam_end]  # PAM as it appears on reverse strand
+        pam_seq = match.group(1)  # The actual PAM is in capture group 1
+        pam_end = pam_start + len(pam_seq)
 
         if is_3prime:
             guide_start = pam_start - guide_length
             guide_end = pam_start
             if guide_start >= 0:
                 guide_seq = rev_sequence[guide_start:guide_end]
-                # Convert position back to forward strand coordinates
-                fwd_position = seq_len - pam_end + 1  # 1-based
+                # Convert guide start back to input-sequence coordinates.
+                fwd_position = seq_len - guide_end + 1  # 1-based
                 guides.append((guide_seq, pam_seq, fwd_position, "-"))
         else:
             guide_start = pam_end
             guide_end = pam_end + guide_length
             if guide_end <= len(rev_sequence):
                 guide_seq = rev_sequence[guide_start:guide_end]
-                fwd_position = seq_len - pam_end + 1
+                fwd_position = seq_len - guide_end + 1
                 guides.append((guide_seq, pam_seq, fwd_position, "-"))
 
     return guides
@@ -898,8 +1041,10 @@ def _filter_target_region(
     # upstream_length indicates where CDS starts
     cds_length = sequence_length - upstream_length
 
-    # Calculate region boundaries (20% of CDS)
-    region_size = int(cds_length * 0.2)
+    # Calculate region boundaries (50% of CDS)
+    # CHOPCHOP's "5' region" includes guides in approximately the first half
+    # of the CDS, not just the first 20%
+    region_size = int(cds_length * 0.5)
 
     if target_region == TargetRegion.FIVE_PRIME:
         # First 20% of CDS (positions 1 to region_size, no upstream)
@@ -1019,6 +1164,7 @@ def _count_mismatches(seq1: str, seq2: str) -> Tuple[int, List[int]]:
 
 def _validate_pam_at_position(
     chromosome_seq: str,
+    hit_start: int,
     hit_end: int,
     strand: str,
     pam_type: PAMType,
@@ -1027,8 +1173,11 @@ def _validate_pam_at_position(
     """
     Check if a valid PAM exists adjacent to the off-target hit.
 
-    For 3' PAM systems (NGG, NAG, NNGRRT): PAM is immediately after guide.
-    For 5' PAM systems (TTTV): PAM is immediately before guide.
+    Coordinates are 0-based half-open genomic coordinates for the guide
+    protospacer on the forward chromosome sequence. For 3' PAM systems
+    (NGG, NAG, NNGRRT), PAM is downstream of the guide on plus-strand hits
+    and upstream of the guide on minus-strand hits. 5' PAM systems are the
+    opposite.
 
     Returns the PAM sequence if valid, None otherwise.
     """
@@ -1051,7 +1200,7 @@ def _validate_pam_at_position(
                 pam_end = hit_end + pam_len
             else:
                 # PAM is 5' of guide (before hit_start)
-                pam_end = hit_end - guide_length
+                pam_end = hit_start
                 pam_start = pam_end - pam_len
 
             if pam_start < 0 or pam_end > len(chromosome_seq):
@@ -1062,7 +1211,7 @@ def _validate_pam_at_position(
             # Minus strand - need reverse complement
             if is_3prime:
                 # For minus strand with 3' PAM, PAM is upstream in genomic coords
-                pam_end = hit_end - guide_length
+                pam_end = hit_start
                 pam_start = pam_end - pam_len
             else:
                 # For minus strand with 5' PAM, PAM is downstream in genomic coords
@@ -1119,6 +1268,24 @@ def _get_chromosome_seq_no(
     )
 
     return seq_record.seq_no if seq_record else None
+
+
+def _get_chromosome_sequence(
+    db: Session,
+    chromosome_name: str,
+    organism_tag: str
+) -> Optional[str]:
+    """Get current genomic sequence residues for a chromosome name."""
+    root_seq_no = _get_chromosome_seq_no(db, chromosome_name, organism_tag)
+    if not root_seq_no:
+        return None
+
+    seq_record = db.query(Seq).filter(
+        Seq.seq_no == root_seq_no,
+        Seq.is_seq_current == "Y"
+    ).first()
+
+    return seq_record.residues.upper() if seq_record and seq_record.residues else None
 
 
 def _map_position_to_gene(
@@ -1205,6 +1372,375 @@ def _map_position_to_gene(
     return None, "intergenic"
 
 
+def _get_all_chromosome_sequences(
+    db: Session,
+    organism_tag: str
+) -> Dict[str, str]:
+    """
+    Get all chromosome/contig sequences for an organism.
+
+    Returns dict mapping chromosome_name -> sequence (uppercase).
+    """
+    org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
+
+    # Query all chromosome features for this organism
+    chromosomes = (
+        db.query(Feature)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
+        .filter(
+            Organism.organism_abbrev == org_abbrev,
+            Feature.feature_type == "chromosome"
+        )
+        .all()
+    )
+
+    result = {}
+    for chrom in chromosomes:
+        # Get genomic sequence for this chromosome
+        seq_record = (
+            db.query(Seq)
+            .filter(
+                Seq.feature_no == chrom.feature_no,
+                Seq.seq_type == "genomic",
+                Seq.is_seq_current == "Y"
+            )
+            .first()
+        )
+        if seq_record and seq_record.residues:
+            result[chrom.feature_name] = seq_record.residues.upper()
+
+    logger.info(
+        f"Loaded {len(result)} chromosomes for {organism_tag}, "
+        f"total {sum(len(s) for s in result.values()):,} bp"
+    )
+    return result
+
+
+def _search_offtargets_bruteforce(
+    db: Session,
+    guide: str,
+    pam_type: PAMType,
+    organism_tag: str,
+    max_mismatches: int = 3,
+    exclude_position: Optional[Tuple[str, int, str]] = None,
+    guide_cds_position: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
+    chromosome_cache: Optional[Dict[str, str]] = None,
+) -> List[OffTargetHit]:
+    """
+    Search for off-targets using brute-force genome-wide scan.
+
+    This method guarantees finding ALL off-targets with up to max_mismatches,
+    unlike BLAST which may miss some due to seed-based heuristics.
+
+    Algorithm:
+    1. Load all chromosome sequences
+    2. Find all PAM sites in each chromosome (both strands)
+    3. Extract protospacer sequence adjacent to each PAM
+    4. Compare to guide, counting mismatches
+    5. Return all hits with <= max_mismatches
+
+    Args:
+        db: Database session for loading sequences and gene mapping
+        guide: Guide RNA sequence (typically 20bp)
+        pam_type: PAM type (NGG, NAG, etc.)
+        organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
+        max_mismatches: Maximum allowed mismatches (0-4)
+        exclude_position: (chromosome, position, strand) to exclude (on-target)
+        guide_cds_position: Position within CDS for on-target exclusion
+        warnings: Optional list to append warning messages
+        related_genes: Dict mapping gene_name -> relationship for flagging
+        status: Optional dict to set {"performed": True/False}
+        chromosome_cache: Optional pre-loaded chromosome sequences
+
+    Returns:
+        List of OffTargetHit objects sorted by mismatches (ascending)
+    """
+    import time
+    start_time = time.time()
+
+    if status is not None:
+        status["performed"] = False
+
+    guide = guide.upper()
+    guide_length = len(guide)
+    offtargets = []
+
+    # Get PAM configuration
+    pam_config = PAM_PATTERNS.get(pam_type)
+    if not pam_config:
+        if warnings is not None:
+            warnings.append(f"Unknown PAM type: {pam_type}")
+        return []
+
+    pam_pattern = pam_config["pattern"]
+    pam_len = pam_config["length"]
+    is_3prime = pam_config["position"] == "3prime"
+
+    # Load chromosome sequences (use cache if provided)
+    if chromosome_cache is not None:
+        chromosomes = chromosome_cache
+    else:
+        chromosomes = _get_all_chromosome_sequences(db, organism_tag)
+
+    if not chromosomes:
+        msg = f"No chromosome sequences found for {organism_tag}"
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    # Pre-compile PAM regex with lookahead for overlapping matches
+    pam_regex = re.compile(f"(?=({pam_pattern}))", re.IGNORECASE)
+
+    # Track statistics
+    total_pam_sites = 0
+    total_candidates = 0
+
+    # Check if this is a diploid organism (for allelic pair handling)
+    is_diploid = any(org in organism_tag for org in DIPLOID_ORGANISMS)
+
+    # Process each chromosome
+    for chrom_name, chrom_seq in chromosomes.items():
+        chrom_len = len(chrom_seq)
+
+        # Search forward strand
+        for match in pam_regex.finditer(chrom_seq):
+            pam_start = match.start()
+            pam_seq = match.group(1).upper()
+            pam_end = pam_start + len(pam_seq)
+            total_pam_sites += 1
+
+            if is_3prime:
+                # PAM is 3' of guide (SpCas9 style)
+                # Protospacer is upstream of PAM
+                proto_start = pam_start - guide_length
+                proto_end = pam_start
+                if proto_start < 0:
+                    continue
+            else:
+                # PAM is 5' of guide (Cas12a style)
+                # Protospacer is downstream of PAM
+                proto_start = pam_end
+                proto_end = pam_end + guide_length
+                if proto_end > chrom_len:
+                    continue
+
+            protospacer = chrom_seq[proto_start:proto_end].upper()
+            if len(protospacer) != guide_length:
+                continue
+
+            # Count mismatches
+            mm_count, mm_positions = _count_mismatches(guide, protospacer)
+            if mm_count > max_mismatches:
+                continue
+
+            total_candidates += 1
+            position = proto_start + 1  # 1-based
+
+            # Check exclusions (on-target site)
+            if _should_exclude_offtarget(
+                chrom_name, position, "+", mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            # Calculate CFD score
+            cfd = _calculate_cfd_score(guide, protospacer)
+
+            # Map to gene (expensive - only do for valid hits)
+            gene_name, gene_region = _map_position_to_gene(
+                db, chrom_name, position, "+", organism_tag
+            )
+
+            # Check for paralog/ortholog
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chrom_name,
+                position=position,
+                strand="+",
+                sequence=protospacer,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+        # Search reverse strand (reverse complement the chromosome)
+        rev_chrom = _reverse_complement(chrom_seq)
+
+        for match in pam_regex.finditer(rev_chrom):
+            pam_start = match.start()
+            pam_seq = match.group(1).upper()
+            pam_end = pam_start + len(pam_seq)
+            total_pam_sites += 1
+
+            if is_3prime:
+                proto_start = pam_start - guide_length
+                proto_end = pam_start
+                if proto_start < 0:
+                    continue
+            else:
+                proto_start = pam_end
+                proto_end = pam_end + guide_length
+                if proto_end > chrom_len:
+                    continue
+
+            protospacer = rev_chrom[proto_start:proto_end].upper()
+            if len(protospacer) != guide_length:
+                continue
+
+            mm_count, mm_positions = _count_mismatches(guide, protospacer)
+            if mm_count > max_mismatches:
+                continue
+
+            total_candidates += 1
+
+            # Convert position back to forward strand coordinates
+            # Position on reverse = chrom_len - proto_end (for the 5' end of protospacer)
+            fwd_position = chrom_len - proto_end + 1  # 1-based
+
+            if _should_exclude_offtarget(
+                chrom_name, fwd_position, "-", mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            cfd = _calculate_cfd_score(guide, protospacer)
+
+            gene_name, gene_region = _map_position_to_gene(
+                db, chrom_name, fwd_position, "-", organism_tag
+            )
+
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chrom_name,
+                position=fwd_position,
+                strand="-",
+                sequence=protospacer,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+    # Mark as performed
+    if status is not None:
+        status["performed"] = True
+
+    # For diploid organisms, exclude allelic pairs
+    if is_diploid:
+        offtargets = _exclude_allelic_pairs(offtargets)
+
+    # Sort by mismatches, then CFD score (descending)
+    offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Brute-force off-target search: {total_pam_sites:,} PAM sites, "
+        f"{total_candidates:,} candidates, {len(offtargets)} off-targets "
+        f"in {elapsed:.2f}s"
+    )
+
+    return offtargets
+
+
+def _should_exclude_offtarget(
+    chromosome: str,
+    position: int,
+    strand: str,
+    mismatches: int,
+    exclude_position: Optional[Tuple[str, int, str]],
+    guide_cds_position: Optional[int],
+    is_diploid: bool,
+) -> bool:
+    """
+    Check if an off-target hit should be excluded (is the on-target site).
+
+    Returns True if the hit should be excluded.
+    """
+    # Strategy 1: CDS position matching for exact matches
+    if guide_cds_position and mismatches == 0:
+        if abs(position - guide_cds_position) <= 5:
+            logger.debug(
+                f"Excluding on-target by CDS position: {chromosome}:{position}"
+            )
+            return True
+
+    # Strategy 2: Explicit exclude position
+    if exclude_position:
+        exc_chr, exc_pos, exc_strand = exclude_position
+
+        # For diploid organisms with exact matches, handle specially
+        if mismatches == 0 and is_diploid:
+            # Check if this is an allelic match (same base chromosome)
+            if _are_allelic_chromosomes(chromosome, exc_chr):
+                if abs(position - exc_pos) < 100 and strand == exc_strand:
+                    logger.debug(
+                        f"Excluding allelic on-target: {chromosome}:{position}"
+                    )
+                    return True
+
+        is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
+        is_similar_position = abs(position - exc_pos) < 100
+        is_same_strand = strand == exc_strand
+
+        # Exact match at similar position
+        if mismatches == 0 and is_similar_position and is_same_strand:
+            logger.debug(
+                f"Excluding exact match at similar position: {chromosome}:{position}"
+            )
+            return True
+
+        # Mismatched hit on same/allelic chromosome
+        if is_same_or_allelic and is_similar_position and is_same_strand:
+            logger.debug(
+                f"Excluding on-target/allelic hit: {chromosome}:{position}"
+            )
+            return True
+
+    return False
+
+
+def _check_related_gene(
+    gene_name: Optional[str],
+    related_genes: Optional[Dict[str, str]]
+) -> Tuple[bool, bool, Optional[str]]:
+    """
+    Check if a gene is a paralog/ortholog of the target gene.
+
+    Returns (is_paralog, is_ortholog, homology_relationship).
+    """
+    if not gene_name or not related_genes:
+        return False, False, None
+
+    gene_name_upper = gene_name.upper()
+    if gene_name_upper not in related_genes:
+        return False, False, None
+
+    relationship = related_genes[gene_name_upper]
+    is_paralog = relationship == 'paralog'
+    is_ortholog = relationship == 'ortholog'
+
+    return is_paralog, is_ortholog, relationship
+
+
 def _search_offtargets_blast(
     db: Session,
     guide: str,
@@ -1215,6 +1751,7 @@ def _search_offtargets_blast(
     guide_cds_position: Optional[int] = None,
     warnings: Optional[List[str]] = None,
     related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
 ) -> List[OffTargetHit]:
     """
     Search for off-targets using BLAST.
@@ -1238,7 +1775,11 @@ def _search_offtargets_blast(
     """
     from cgd.core.settings import settings
 
+    if status is not None:
+        status["performed"] = False
+
     offtargets = []
+    chromosome_cache: Dict[str, Optional[str]] = {}
 
     # Build genome database name for this organism
     # Try multiple naming conventions (A22 uses "default_genomic_", older assemblies use "genomic_")
@@ -1317,6 +1858,9 @@ def _search_offtargets_blast(
                     warnings.append(msg)
                 return []
 
+            if status is not None:
+                status["performed"] = True
+
             # Parse BLAST tabular output
             # Fields: sseqid sstart send sstrand qseq sseq
             for line in result.stdout.strip().split("\n"):
@@ -1336,6 +1880,10 @@ def _search_offtargets_blast(
 
                 # Convert strand
                 strand = "+" if strand_str == "plus" else "-"
+                hit_start = min(start, end)
+                hit_end = max(start, end)
+                hit_start_0 = hit_start - 1
+                hit_end_0 = hit_end
 
                 # Remove gaps for mismatch counting first (needed for exclusion check)
                 query_ungapped = query_aln.replace("-", "")
@@ -1370,9 +1918,9 @@ def _search_offtargets_blast(
                 # it's very likely the on-target (or allelic copy at same position)
                 if guide_cds_position and mm_count == 0:
                     # Allow small tolerance for position matching (e.g., +/- 5bp)
-                    if abs(start - guide_cds_position) <= 5:
+                    if abs(hit_start - guide_cds_position) <= 5:
                         logger.debug(
-                            f"Excluding on-target by CDS position: {chromosome}:{start} "
+                            f"Excluding on-target by CDS position: {chromosome}:{hit_start} "
                             f"(guide at CDS pos {guide_cds_position})"
                         )
                         continue
@@ -1387,14 +1935,14 @@ def _search_offtargets_blast(
                     is_same_or_allelic = _are_allelic_chromosomes(chromosome, exc_chr)
 
                     # Check if position is similar (within tolerance)
-                    is_similar_position = abs(start - exc_pos) < 100
+                    is_similar_position = abs(hit_start - exc_pos) < 100
                     is_same_strand = strand == exc_strand
 
                     # For exact matches (0 mismatches), check by position alone
                     # This handles chromosome naming mismatches between DB and BLAST
                     if mm_count == 0 and is_similar_position and is_same_strand:
                         logger.debug(
-                            f"Excluding exact match at similar position: {chromosome}:{start} "
+                            f"Excluding exact match at similar position: {chromosome}:{hit_start} "
                             f"(exclude: {exc_chr}:{exc_pos})"
                         )
                         continue
@@ -1402,22 +1950,37 @@ def _search_offtargets_blast(
                     # For hits with mismatches, require chromosome match
                     if is_same_or_allelic and is_similar_position and is_same_strand:
                         logger.debug(
-                            f"Excluding on-target/allelic hit: {chromosome}:{start} "
+                            f"Excluding on-target/allelic hit: {chromosome}:{hit_start} "
                             f"(exclude: {exc_chr}:{exc_pos})"
                         )
                         continue
 
-                # Get chromosome sequence for PAM validation
-                # For now, skip PAM validation if we can't get the sequence
-                # (This would require loading chromosome sequences)
-                # In production, we'd validate PAM here
+                # Validate that a compatible PAM is adjacent to the BLAST hit.
+                # If chromosome sequence cannot be resolved from the DB name,
+                # keep the hit rather than hiding potential off-targets.
+                if chromosome not in chromosome_cache:
+                    chromosome_cache[chromosome] = _get_chromosome_sequence(
+                        db, chromosome, organism_tag
+                    )
+                chromosome_seq = chromosome_cache[chromosome]
+                if chromosome_seq:
+                    pam_seq = _validate_pam_at_position(
+                        chromosome_seq,
+                        hit_start_0,
+                        hit_end_0,
+                        strand,
+                        pam_type,
+                        guide_length=len(guide),
+                    )
+                    if not pam_seq:
+                        continue
 
                 # Calculate CFD score
                 cfd = _calculate_cfd_score(guide, subject_ungapped[:len(guide)])
 
                 # Map position to gene
                 gene_name, gene_region = _map_position_to_gene(
-                    db, chromosome, start, strand, organism_tag
+                    db, chromosome, hit_start, strand, organism_tag
                 )
 
                 # Check if hit is in a related gene (paralog/ortholog)
@@ -1436,7 +1999,7 @@ def _search_offtargets_blast(
 
                 offtargets.append(OffTargetHit(
                     chromosome=chromosome,
-                    position=start,
+                    position=hit_start,
                     strand=strand,
                     sequence=subject_ungapped[:len(guide)],
                     mismatches=mm_count,
@@ -1465,6 +2028,297 @@ def _search_offtargets_blast(
     offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
 
     return offtargets
+
+
+def _search_offtargets_bowtie(
+    db: Session,
+    guide: str,
+    pam_type: PAMType,
+    organism_tag: str,
+    max_mismatches: int = 3,
+    exclude_position: Optional[Tuple[str, int, str]] = None,
+    guide_cds_position: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    related_genes: Optional[Dict[str, str]] = None,
+    status: Optional[Dict[str, bool]] = None,
+) -> List[OffTargetHit]:
+    """
+    Search for off-targets using Bowtie short-read aligner.
+
+    Bowtie is well-suited for aligning short sequences (20bp guides) and offers
+    a good balance between speed and sensitivity.
+
+    Args:
+        db: Database session for gene mapping
+        guide: Guide RNA sequence (20bp)
+        pam_type: PAM type for validation
+        organism_tag: Organism tag (e.g., "C_albicans_SC5314_A22")
+        max_mismatches: Maximum allowed mismatches (0-3)
+        exclude_position: (chromosome, position, strand) to exclude (the on-target site)
+        guide_cds_position: Position of guide within CDS (1-based) for on-target exclusion
+        warnings: Optional list to append warning messages to
+        related_genes: Dict mapping gene_name -> relationship ('paralog'/'ortholog')
+            for flagging off-targets in related genes
+        status: Optional dict to set {"performed": True/False}
+
+    Returns:
+        List of OffTargetHit objects sorted by mismatches (ascending)
+    """
+    from cgd.core.settings import settings
+
+    if status is not None:
+        status["performed"] = False
+
+    offtargets = []
+    chromosome_cache: Dict[str, Optional[str]] = {}
+
+    # Determine bowtie index path for this organism
+    index_path = os.path.join(settings.bowtie_index_path, organism_tag)
+
+    # Check if bowtie index exists (look for .1.ebwt or .1.ebwtl file)
+    index_exists = (
+        os.path.exists(index_path + ".1.ebwt") or
+        os.path.exists(index_path + ".1.ebwtl")
+    )
+
+    if not index_exists:
+        msg = (
+            f"Off-target search unavailable: Bowtie index not found for {organism_tag}. "
+            f"Checked: {index_path}"
+        )
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    # Check bowtie binary exists
+    bowtie_bin = os.path.join(settings.bowtie_bin_path, "bowtie")
+    if not os.path.exists(bowtie_bin):
+        msg = f"Bowtie binary not found at {bowtie_bin}"
+        logger.warning(msg)
+        if warnings is not None:
+            warnings.append(msg)
+        return []
+
+    try:
+        # Build bowtie command
+        # -x: Index base name
+        # -c: Read sequence directly from command line
+        # -v: Allow up to N mismatches (in entire read, not just seed)
+        # -a: Report all alignments (not just best)
+        # -S: Output in SAM format (required for --sam-nohead)
+        # --sam-nohead: Output SAM without header for easier parsing
+        # -p 1: Use 1 thread (for stability)
+        bowtie_cmd = [
+            bowtie_bin,
+            "-x", index_path,
+            "-c", guide,
+            "-v", str(max_mismatches),
+            "-a",
+            "-S",
+            "--sam-nohead",
+            "-p", "1",
+        ]
+
+        logger.debug(f"Running Bowtie for off-targets: {' '.join(bowtie_cmd)}")
+
+        result = subprocess.run(
+            bowtie_cmd,
+            capture_output=True,
+            text=True,
+            timeout=CRISPR_TIMEOUT,
+        )
+
+        if result.returncode != 0:
+            # Bowtie returns non-zero if no alignments found, check stderr
+            if "No alignments" in result.stderr or not result.stderr.strip():
+                # No alignments is OK, just means no off-targets
+                if status is not None:
+                    status["performed"] = True
+                return []
+            msg = f"Bowtie off-target search failed: {result.stderr}"
+            logger.warning(msg)
+            if warnings is not None:
+                warnings.append(msg)
+            return []
+
+        if status is not None:
+            status["performed"] = True
+
+        # Parse SAM output
+        # SAM columns: QNAME FLAG RNAME POS MAPQ CIGAR RNEXT PNEXT TLEN SEQ QUAL [TAGS...]
+        # Relevant columns:
+        #   - RNAME (col 2, 0-indexed): chromosome
+        #   - POS (col 3): 1-based position
+        #   - FLAG (col 1): strand info (bit 16 = reverse)
+        #   - Tags: NM:i:N for edit distance, MD:Z for mismatch details
+        is_diploid = any(org in organism_tag for org in DIPLOID_ORGANISMS)
+        guide_len = len(guide)
+
+        for line in result.stdout.strip().split("\n"):
+            if not line or line.startswith("@"):
+                continue
+
+            fields = line.split("\t")
+            if len(fields) < 11:
+                continue
+
+            flag = int(fields[1])
+            chromosome = fields[2]
+            position = int(fields[3])  # 1-based
+            seq = fields[9]
+
+            # Skip unmapped reads
+            if chromosome == "*" or flag & 4:
+                continue
+
+            # Determine strand from FLAG
+            strand = "-" if flag & 16 else "+"
+
+            # Extract mismatch count from NM tag
+            mm_count = 0
+            for tag in fields[11:]:
+                if tag.startswith("NM:i:"):
+                    mm_count = int(tag[5:])
+                    break
+
+            # Skip if exceeds max mismatches
+            if mm_count > max_mismatches:
+                continue
+
+            # Calculate mismatch positions from MD tag or sequence comparison
+            mm_positions = []
+            md_tag = None
+            for tag in fields[11:]:
+                if tag.startswith("MD:Z:"):
+                    md_tag = tag[5:]
+                    break
+
+            if md_tag:
+                mm_positions = _parse_md_tag_mismatches(md_tag)
+            else:
+                # Fall back to sequence comparison
+                if strand == "+":
+                    mm_count, mm_positions = _count_mismatches(guide, seq)
+                else:
+                    # For reverse strand, bowtie reports reverse complement
+                    mm_count, mm_positions = _count_mismatches(guide, seq)
+
+            # Check exclusions (on-target site)
+            if _should_exclude_offtarget(
+                chromosome, position, strand, mm_count,
+                exclude_position, guide_cds_position, is_diploid
+            ):
+                continue
+
+            # Validate PAM at position
+            hit_start_0 = position - 1  # 0-based
+            hit_end_0 = hit_start_0 + guide_len
+
+            if chromosome not in chromosome_cache:
+                chromosome_cache[chromosome] = _get_chromosome_sequence(
+                    db, chromosome, organism_tag
+                )
+            chromosome_seq = chromosome_cache[chromosome]
+
+            if chromosome_seq:
+                pam_seq = _validate_pam_at_position(
+                    chromosome_seq,
+                    hit_start_0,
+                    hit_end_0,
+                    strand,
+                    pam_type,
+                    guide_length=guide_len,
+                )
+                if not pam_seq:
+                    continue
+
+            # Calculate CFD score
+            target_seq = seq if len(seq) == guide_len else seq[:guide_len]
+            cfd = _calculate_cfd_score(guide, target_seq)
+
+            # Map position to gene
+            gene_name, gene_region = _map_position_to_gene(
+                db, chromosome, position, strand, organism_tag
+            )
+
+            # Check if hit is in a related gene
+            is_paralog, is_ortholog, homology_rel = _check_related_gene(
+                gene_name, related_genes
+            )
+
+            offtargets.append(OffTargetHit(
+                chromosome=chromosome,
+                position=position,
+                strand=strand,
+                sequence=target_seq,
+                mismatches=mm_count,
+                mismatch_positions=mm_positions,
+                gene_name=gene_name,
+                gene_region=gene_region,
+                cfd_score=cfd,
+                is_paralog=is_paralog,
+                is_ortholog=is_ortholog,
+                homology_relationship=homology_rel,
+            ))
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Bowtie off-target search timed out for guide: {guide[:10]}...")
+        return []
+    except Exception as e:
+        logger.error(f"Error in Bowtie off-target search: {e}")
+        return []
+
+    # For diploid organisms, exclude allelic pairs
+    if any(org in organism_tag for org in DIPLOID_ORGANISMS):
+        offtargets = _exclude_allelic_pairs(offtargets)
+
+    # Sort by mismatches (ascending), then by CFD score (descending)
+    offtargets.sort(key=lambda x: (x.mismatches, -x.cfd_score))
+
+    logger.info(
+        f"Bowtie off-target search: {len(offtargets)} off-targets found "
+        f"for guide {guide[:10]}..."
+    )
+
+    return offtargets
+
+
+def _parse_md_tag_mismatches(md_tag: str) -> List[int]:
+    """
+    Parse MD tag from SAM format to extract mismatch positions.
+
+    MD tag format: numbers indicate matching bases, letters indicate mismatches.
+    Example: "5A10T3" means 5 matches, mismatch at pos 5, 10 matches, mismatch at pos 16, 3 matches.
+
+    Returns list of 0-indexed mismatch positions.
+    """
+    positions = []
+    current_pos = 0
+
+    i = 0
+    while i < len(md_tag):
+        # Check for number (matching bases)
+        if md_tag[i].isdigit():
+            num_str = ""
+            while i < len(md_tag) and md_tag[i].isdigit():
+                num_str += md_tag[i]
+                i += 1
+            current_pos += int(num_str)
+        # Check for deletion (^) - skip
+        elif md_tag[i] == "^":
+            i += 1
+            while i < len(md_tag) and md_tag[i].isalpha():
+                i += 1
+        # Letter indicates mismatch
+        elif md_tag[i].isalpha():
+            positions.append(current_pos)
+            current_pos += 1
+            i += 1
+        else:
+            i += 1
+
+    return positions
 
 
 def _exclude_allelic_pairs(offtargets: List[OffTargetHit]) -> List[OffTargetHit]:
@@ -1645,6 +2499,15 @@ def design_guides(
             guide_length=request.guide_length,
         )
 
+    if request.pam not in PAM_PATTERNS:
+        return CrisprDesignResponse(
+            success=False,
+            error=f"Unsupported PAM sequence: {request.pam.value}",
+            organism=request.organism,
+            pam=request.pam.value,
+            guide_length=request.guide_length,
+        )
+
     # Enforce limits
     max_guides = min(request.max_guides, MAX_GUIDES_PER_REQUEST)
     if request.max_guides > MAX_GUIDES_PER_REQUEST:
@@ -1653,6 +2516,17 @@ def design_guides(
     if len(request.offtarget_genomes) > MAX_OFFTARGET_GENOMES:
         warnings.append(f"offtarget_genomes limited to {MAX_OFFTARGET_GENOMES}")
         request.offtarget_genomes = request.offtarget_genomes[:MAX_OFFTARGET_GENOMES]
+
+    if request.offtarget_genomes:
+        warnings.append(
+            "Additional off-target genomes are not implemented yet; "
+            "checking the selected organism only"
+        )
+
+    if request.include_homology_arms:
+        warnings.append(
+            "Homology arm design is not implemented yet; returning guide results only"
+        )
 
     # Get target sequence
     gene_info = None
@@ -1751,7 +2625,8 @@ def design_guides(
             warnings=warnings + [f"No {request.pam.value} PAM sites found in target region"],
         )
 
-    # Score and rank guides (first pass - efficiency only)
+    # Score and rank guides with a CHOPCHOP-style penalty. Before
+    # off-target analysis, the penalty uses sequence-intrinsic features only.
     guide_results = []
     pam_config = PAM_PATTERNS[request.pam]
 
@@ -1768,8 +2643,17 @@ def design_guides(
         specificity_score = 100.0
         offtargets = []
 
-        # Combined score (weighted average) - initially based on efficiency only
-        combined_score = (efficiency_score * 0.5) + (specificity_score * 0.5)
+        chopchop_penalty = _calculate_chopchop_penalty(
+            guide_seq,
+            efficiency_score,
+            offtargets,
+            gc_content,
+            position=position,
+            cds_length=len(target_sequence) - upstream_length,
+            target_region=request.target_region,
+        )
+        combined_score = _chopchop_penalty_to_display_score(chopchop_penalty)
+        self_complementarity = _calculate_self_complementarity(guide_seq)
 
         # Build full target sequence (PAM is already captured from _find_pam_sites)
         if pam_config["position"] == "3prime":
@@ -1788,6 +2672,7 @@ def design_guides(
         ot_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
         ot_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
         ot_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+        ot_4mm = sum(1 for ot in offtargets if ot.mismatches == 4)
 
         # Calculate genomic coordinates if we have gene info
         # Account for upstream_length when FIVE_PRIME_UPSTREAM is used
@@ -1827,13 +2712,17 @@ def design_guides(
             efficiency_score=round(efficiency_score, 1),
             specificity_score=round(specificity_score, 1),
             combined_score=round(combined_score, 1),
+            chopchop_penalty=round(chopchop_penalty, 3),
+            offtarget_checked=False,
             offtarget_count=len(offtargets),
             offtarget_0mm=ot_0mm,
             offtarget_1mm=ot_1mm,
             offtarget_2mm=ot_2mm,
             offtarget_3mm=ot_3mm,
+            offtarget_4mm=ot_4mm,
             offtargets=offtargets[:10],  # Limit for response size
             has_poly_t=_has_poly_t(guide_seq),
+            self_complementarity=self_complementarity,
             restriction_sites=restriction_sites,
             primers=primers,
             homology_arms=None,  # TODO: Implement if requested
@@ -1842,21 +2731,70 @@ def design_guides(
             ),
         ))
 
-    # Sort by combined score (descending) for initial ranking
-    guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+    # CHOPCHOP ranks lower penalties first. Position is used as a stable
+    # tie-breaker so equally scoring knockout guides favor the 5' end.
+    guide_results.sort(key=lambda g: (g.chopchop_penalty, g.position))
 
     # Perform off-target search for top guides (limited for performance)
     if request.check_offtargets:
         # Limit off-target search to top N guides
         guides_for_offtarget = guide_results[:MAX_GUIDES_FOR_OFFTARGET]
 
-        logger.info(f"Running off-target search for {len(guides_for_offtarget)} guides")
+        # Determine which search method to use
+        # Brute-force is accurate but slow for large genomes
+        # Limit: 15 Mb (C. glabrata ~12Mb, C. albicans ~30Mb)
+        MAX_BRUTEFORCE_GENOME_SIZE = 15_000_000
+
+        # Check for explicit method selection
+        use_bowtie = request.offtarget_method == OffTargetMethod.BOWTIE
+        use_bruteforce = request.offtarget_method == OffTargetMethod.BRUTEFORCE
+        if request.offtarget_method == OffTargetMethod.AUTO:
+            use_bruteforce = True  # Default to brute-force, will check size below
+
+        # Pre-load chromosome sequences for brute-force (reused across guides)
+        chromosome_cache = None
+        if use_bruteforce:
+            chromosome_cache = _get_all_chromosome_sequences(db, request.organism)
+            if not chromosome_cache:
+                use_bruteforce = False
+                warnings.append(
+                    "Brute-force search unavailable: no chromosome sequences found. "
+                    "Falling back to BLAST."
+                )
+            else:
+                # Check genome size
+                genome_size = sum(len(seq) for seq in chromosome_cache.values())
+                if genome_size > MAX_BRUTEFORCE_GENOME_SIZE:
+                    if request.offtarget_method == OffTargetMethod.AUTO:
+                        # Auto mode: fall back to BLAST for large genomes
+                        use_bruteforce = False
+                        warnings.append(
+                            f"Genome size ({genome_size:,} bp) exceeds brute-force limit "
+                            f"({MAX_BRUTEFORCE_GENOME_SIZE:,} bp). Using BLAST instead."
+                        )
+                        chromosome_cache = None  # Free memory
+                    else:
+                        # Explicit brute-force requested: warn but proceed
+                        warnings.append(
+                            f"Brute-force search on large genome ({genome_size:,} bp) "
+                            "may be slow. Consider using 'blast' or 'auto' method."
+                        )
+
+        method_name = "bowtie" if use_bowtie else ("brute-force" if use_bruteforce else "BLAST")
+        logger.info(
+            f"Running {method_name} off-target search for "
+            f"{len(guides_for_offtarget)} guides"
+        )
 
         for guide in guides_for_offtarget:
             # Build exclude position to skip the on-target site
             exclude_pos = None
             if guide.chromosome and guide.genomic_start:
-                exclude_pos = (guide.chromosome, guide.genomic_start, guide.strand)
+                genomic_strand = _guide_genomic_strand(
+                    gene_info.strand if gene_info else None,
+                    guide.strand,
+                )
+                exclude_pos = (guide.chromosome, guide.genomic_start, genomic_strand)
                 logger.debug(
                     f"Guide {guide.rank} exclude_pos: {exclude_pos}"
                 )
@@ -1866,29 +2804,63 @@ def design_guides(
                     f"chromosome={guide.chromosome}, genomic_start={guide.genomic_start}"
                 )
 
-            # Search for off-targets (pass warnings only for first guide to avoid duplicates)
+            # Search for off-targets using selected method
             offtarget_warnings = [] if guide == guides_for_offtarget[0] else None
-            offtargets = _search_offtargets_blast(
-                db=db,
-                guide=guide.sequence,
-                pam_type=request.pam,
-                organism_tag=request.organism,
-                max_mismatches=request.max_offtarget_mismatches,
-                exclude_position=exclude_pos,
-                guide_cds_position=guide.position,  # Position within CDS for on-target detection
-                warnings=offtarget_warnings,
-                related_genes=related_genes,  # For flagging paralog/ortholog hits
-            )
+            offtarget_status = {}
+
+            if use_bowtie:
+                offtargets = _search_offtargets_bowtie(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                )
+            elif use_bruteforce:
+                offtargets = _search_offtargets_bruteforce(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                    chromosome_cache=chromosome_cache,
+                )
+            else:
+                offtargets = _search_offtargets_blast(
+                    db=db,
+                    guide=guide.sequence,
+                    pam_type=request.pam,
+                    organism_tag=request.organism,
+                    max_mismatches=request.max_offtarget_mismatches,
+                    exclude_position=exclude_pos,
+                    guide_cds_position=guide.position,
+                    warnings=offtarget_warnings,
+                    related_genes=related_genes,
+                    status=offtarget_status,
+                )
+
             if offtarget_warnings:
                 warnings.extend(offtarget_warnings)
 
             # Update guide with off-target information
+            guide.offtarget_checked = bool(offtarget_status.get("performed"))
             guide.offtargets = offtargets[:10]  # Limit stored hits
             guide.offtarget_count = len(offtargets)
             guide.offtarget_0mm = sum(1 for ot in offtargets if ot.mismatches == 0)
             guide.offtarget_1mm = sum(1 for ot in offtargets if ot.mismatches == 1)
             guide.offtarget_2mm = sum(1 for ot in offtargets if ot.mismatches == 2)
             guide.offtarget_3mm = sum(1 for ot in offtargets if ot.mismatches == 3)
+            guide.offtarget_4mm = sum(1 for ot in offtargets if ot.mismatches == 4)
 
             # Count off-targets in paralogs and orthologs
             guide.offtarget_in_paralogs = sum(1 for ot in offtargets if ot.is_paralog)
@@ -1897,17 +2869,35 @@ def design_guides(
                 guide.offtarget_in_paralogs > 0 or guide.offtarget_in_orthologs > 0
             )
 
-            # Recalculate specificity score based on actual off-targets
-            guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
+            # Recalculate specificity score based on actual off-targets only
+            # when the search completed. If BLAST is unavailable, leave the
+            # optimistic default in place but expose offtarget_checked=False.
+            if guide.offtarget_checked:
+                guide.specificity_score = round(_calculate_specificity_score(offtargets), 1)
 
-            # Recalculate combined score
-            guide.combined_score = round(
-                (guide.efficiency_score * 0.5) + (guide.specificity_score * 0.5),
-                1
+            # Recalculate CHOPCHOP-style penalty after off-target analysis.
+            guide.chopchop_penalty = _calculate_chopchop_penalty(
+                guide.sequence,
+                guide.efficiency_score,
+                offtargets,
+                guide.gc_content,
+                position=guide.position,
+                cds_length=len(target_sequence) - upstream_length,
+                target_region=request.target_region,
+            )
+            guide.combined_score = _chopchop_penalty_to_display_score(
+                guide.chopchop_penalty
             )
 
-        # Re-sort after updating scores
-        guide_results.sort(key=lambda g: g.combined_score, reverse=True)
+        # Re-sort after updating scores. Checked guides sort ahead of
+        # unchecked guides because their off-target penalty is evidence-based.
+        guide_results.sort(
+            key=lambda g: (
+                not g.offtarget_checked,
+                g.chopchop_penalty,
+                g.position,
+            )
+        )
 
         if len(guides_for_offtarget) < len(guide_results):
             warnings.append(
@@ -1979,7 +2969,7 @@ def generate_download(
 
     headers = [
         "Rank", "Guide_Sequence", "PAM", "Position", "Strand",
-        "GC%", "Efficiency", "Specificity", "Combined_Score",
+        "GC%", "Efficiency", "Specificity", "Combined_Score", "CHOPCHOP_Penalty",
         "Off-targets", "Poly-T", "Restriction_Sites"
     ]
     if include_primers:
@@ -2000,6 +2990,7 @@ def generate_download(
             f"{guide.efficiency_score:.1f}",
             f"{guide.specificity_score:.1f}",
             f"{guide.combined_score:.1f}",
+            f"{guide.chopchop_penalty:.3f}",
             str(guide.offtarget_count),
             "Yes" if guide.has_poly_t else "No",
             ";".join(rs.enzyme for rs in guide.restriction_sites) or "None",

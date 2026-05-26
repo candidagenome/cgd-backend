@@ -1,6 +1,6 @@
 # CRISPR Guide Designer Test Suite
 
-This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against established tools like CRISPOR and CHOPCHOP.
+This directory contains test fixtures and documentation for validating the CGD CRISPR Guide RNA Designer against CHOPCHOP reference guides.
 
 ## Overview
 
@@ -9,12 +9,11 @@ The CRISPR test suite provides:
 - **Integration tests** for the full guide design pipeline
 - **Validation tests** comparing our results against external tool predictions
 
-### External Validation Tools
+### External Validation Tool
 
 | Tool | URL | Status |
 |------|-----|--------|
-| **CRISPOR** | https://crispor.tefor.net/ | Primary (may have downtime) |
-| **CHOPCHOP** | https://chopchop.cbu.uib.no/ | Alternative |
+| **CHOPCHOP** | https://chopchop.cbu.uib.no/ | Reference source |
 
 ## Directory Structure
 
@@ -24,7 +23,7 @@ tests/api/
 ├── fixtures/
 │   ├── README.md               # This file
 │   ├── crispr_test_genes.json  # Gene sequences and expected guides
-│   └── crispr_test_sequences.fasta  # FASTA for CRISPOR submission
+│   └── crispr_test_sequences.fasta  # FASTA for CHOPCHOP submission
 ```
 
 ## Running Tests
@@ -36,8 +35,8 @@ source .venv/bin/activate  # or 'venv/bin/activate' on server
 # Run all CRISPR tests
 pytest tests/api/test_crispr_service.py -v
 
-# Run only unit tests (skip CRISPOR validation)
-pytest tests/api/test_crispr_service.py -v -k "not CRISPOR"
+# Run only unit tests (skip CHOPCHOP validation)
+pytest tests/api/test_crispr_service.py -v -k "not CHOPCHOP"
 
 # Run with coverage
 pytest tests/api/test_crispr_service.py --cov=cgd.api.services.crispr_service
@@ -68,11 +67,11 @@ pytest tests/api/test_crispr_service.py --cov=cgd.api.services.crispr_service
 |------------|-------------|-------|
 | `TestDesignGuidesIntegration` | Full pipeline with mock DB | 3 |
 
-### 4. CRISPOR Validation Tests
+### 4. CHOPCHOP Validation Tests
 
 | Test Class | Description | Tests |
 |------------|-------------|-------|
-| `TestCRISPORValidation` | Compare against CRISPOR results | 20 (skipped until populated) |
+| `TestCHOPCHOPValidation` | Compare against CHOPCHOP results | 20 |
 
 ## Test Genes
 
@@ -81,68 +80,54 @@ We selected 20 well-characterized *C. albicans* genes representing diverse funct
 ### Virulence & Adhesion (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| ALS1 | C1_13700C_A | Agglutinin-like sequence protein |
-| ALS3 | C6_01030W_A | Agglutinin-like protein, invasion |
-| HWP1 | C1_06250C_A | Hyphal wall protein 1 |
-| ECE1 | C3_05610W_A | Candidalysin precursor |
+| ALS1 | C6_03700W_A | Agglutinin-like sequence protein |
+| ALS3 | CR_07070C_A | Agglutinin-like protein, invasion |
+| HWP1 | C4_03570W_A | Hyphal wall protein 1 |
+| ECE1 | C4_03470C_A | Candidalysin precursor |
 
 ### Secreted Proteases (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| SAP1 | C6_02460W_A | Secreted aspartyl protease 1 |
-| SAP2 | C6_02480W_A | Secreted aspartyl protease 2 |
+| SAP1 | C6_03490C_A | Secreted aspartyl protease 1 |
+| SAP2 | CR_07800W_A | Secreted aspartyl protease 2 |
 
 ### Transcription Factors (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
 | EFG1 | CR_07890W_A | bHLH transcription factor |
-| CPH1 | C4_03540C_A | Mating/filamentation regulator |
-| WOR1 | C1_11000C_A | White-opaque switching master regulator |
-| BCR1 | C3_04800W_A | Biofilm transcription factor |
+| CPH1 | C1_07370C_A | Mating/filamentation regulator |
+| WOR1 | C1_10150W_A | White-opaque switching master regulator |
+| BCR1 | CR_06440C_A | Biofilm transcription factor |
 
 ### Signaling Pathway (4 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| HOG1 | C1_05270W_A | MAP kinase, stress response |
-| RAS1 | C2_05700W_A | Ras-family GTPase |
-| CDC42 | C5_02460C_A | Rho-type GTPase |
-| CEK1 | C2_00410C_A | MAP kinase |
+| HOG1 | C2_03330C_A | MAP kinase, stress response |
+| RAS1 | C2_10210C_A | Ras-family GTPase |
+| CDC42 | C1_08450C_A | Rho-type GTPase |
+| CEK1 | C4_06480C_A | MAP kinase |
 
 ### Housekeeping (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| ACT1 | C1_06310W_A | Actin |
-| TUB1 | CR_02550C_A | Alpha-tubulin |
+| ACT1 | C1_13700W_A | Actin |
+| TUB1 | CR_09120C_A | Alpha-tubulin |
 
 ### Cell Wall (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| PHR1 | C5_01020C_A | pH-responsive glycosidase |
-| CHT2 | C1_04170C_A | Chitinase |
+| PHR1 | C4_04530C_A | pH-responsive glycosidase |
+| CHT2 | C5_04130C_A | Chitinase |
 
 ### Drug Resistance (2 genes)
 | Gene | ORF | Description |
 |------|-----|-------------|
-| CDR1 | C3_02280C_A | ABC transporter, azole resistance |
+| CDR1 | C3_05220W_A | ABC transporter, azole resistance |
 | ERG11 | C5_00660C_A | Lanosterol 14-alpha-demethylase |
 
 ## Populating Validation Fixtures
 
-The validation tests require expected guide sequences from an external CRISPR design tool. You can use either CRISPOR or CHOPCHOP.
-
-### Option A: Using CRISPOR (Primary)
-
-1. Go to https://crispor.tefor.net/
-2. For each gene, paste the sequence from `crispr_test_sequences.fasta`
-3. Settings:
-   - **PAM**: NGG (SpCas9)
-   - **Genome**: Select "No genome" or paste sequence
-4. Click "Submit"
-5. Copy the top 5-10 guide sequences (20bp, without PAM)
-
-### Option B: Using CHOPCHOP (Alternative)
-
-If CRISPOR is unavailable, use CHOPCHOP:
+The validation tests use expected guide sequences from CHOPCHOP.
 
 1. Go to https://chopchop.cbu.uib.no/
 2. Select **"Target"** tab → **"Paste your own sequence"**
@@ -153,8 +138,6 @@ If CRISPOR is unavailable, use CHOPCHOP:
    - **For**: Knock-out
 5. Click "Find Target Sites"
 6. Copy the top 5-10 guide sequences from the results table (20bp, without PAM)
-
-**Note**: CHOPCHOP and CRISPOR may return slightly different rankings due to different scoring algorithms, but the guide sequences themselves should overlap significantly.
 
 ### Step 2: Update the JSON Fixture
 
@@ -189,19 +172,18 @@ This validates the fixtures and generates Python code for the test file.
 ### Step 4: Run Validation Tests
 
 ```bash
-# Remove the skip decorator from TestCRISPORValidation, then:
-pytest tests/api/test_crispr_service.py::TestCRISPORValidation -v
+pytest tests/api/test_crispr_service.py::TestCHOPCHOPValidation -v
 ```
 
 ## What the Validation Tests Check
 
-The CRISPOR validation tests verify that:
+The CHOPCHOP validation tests verify that:
 
-1. **Guide Discovery**: Guides found by CRISPOR are also found by our tool
+1. **Guide Discovery**: Guides found by CHOPCHOP are also found by our tool
 2. **Sequence Accuracy**: Guide sequences match exactly (or reverse complement)
 3. **Position Validity**: Guides are in the correct target region (5' first 20%)
 
-**Note**: Our tool may find additional guides not reported by CRISPOR due to different filtering criteria. The tests verify that CRISPOR's guides are a subset of ours.
+**Note**: Our tool may find additional guides not reported by CHOPCHOP due to different filtering criteria. The tests verify that CHOPCHOP's guides are a subset of ours.
 
 ## Adding New Test Genes
 
@@ -217,7 +199,7 @@ To add a new gene to the test suite:
    python scripts/fetch_crispr_test_fixtures.py
    ```
 
-3. Submit the new sequence to CRISPOR or CHOPCHOP and collect expected guides
+3. Submit the new sequence to CHOPCHOP and collect expected guides
 
 4. Update `crispr_test_genes.json` with the expected guides
 
@@ -231,20 +213,17 @@ To add a new gene to the test suite:
 source .venv/bin/activate  # or venv/bin/activate
 ```
 
-### CRISPOR validation tests are skipped
-The tests are skipped by default until fixtures are populated. After adding expected guides:
-1. Remove `@pytest.mark.skip` from `TestCRISPORValidation`
-2. Or run with: `pytest -k "CRISPOR" --runskipped`
+### CHOPCHOP validation tests are skipped
+The tests are skipped only if fixtures are missing required sequences or expected guides.
 
 ### Guide not found in our results
-If a CRISPOR guide isn't found by our tool:
+If a CHOPCHOP guide isn't found by our tool:
 1. Check if it's in a filtered region (outside 5' 20%)
 2. Verify the PAM sequence is valid NGG
 3. Check for sequence errors in the fixture
 
 ## References
 
-- **CRISPOR**: Concordet & Haeussler, 2018. https://crispor.tefor.net/
 - **CHOPCHOP**: Labun et al., 2019. https://chopchop.cbu.uib.no/
 - **Rule Set 2**: Doench et al., 2016. Optimized sgRNA design.
 - **CFD Score**: Doench et al., 2016. Off-target scoring.
@@ -254,5 +233,5 @@ If a CRISPOR guide isn't found by our tool:
 | Task | Frequency | Script |
 |------|-----------|--------|
 | Fetch new gene sequences | As needed | `fetch_crispr_test_fixtures.py` |
-| Update expected guides | After CRISPOR submission | Manual edit of JSON |
+| Update expected guides | After CHOPCHOP submission | Manual edit of JSON |
 | Validate fixture format | Before commit | `update_crispr_test_fixtures.py` |

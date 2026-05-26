@@ -5,7 +5,7 @@ Fetch CDS sequences for CRISPR test genes and generate fixture data.
 This script:
 1. Fetches the coding sequence for each test gene from the database
 2. Outputs the first 500bp (for 5' region CRISPR targeting)
-3. Generates a FASTA file for batch submission to CRISPOR
+3. Generates a FASTA file for CHOPCHOP submission
 4. Creates a JSON fixture file for updating the test
 
 Usage:
@@ -20,7 +20,7 @@ Usage:
     python scripts/fetch_crispr_test_fixtures.py
 
 After running:
-1. Submit the generated FASTA file to CRISPOR (https://crispor.tefor.net/)
+1. Submit the generated FASTA file to CHOPCHOP (https://chopchop.cbu.uib.no/)
 2. Download the results for each gene
 3. Update the fixture file with expected guide sequences
 4. Copy the fixture data to tests/api/test_crispr_service.py
@@ -55,31 +55,31 @@ OUTPUT_DIR = Path(__file__).parent.parent / "tests" / "api" / "fixtures"
 # Test genes - same list as in test_crispr_service.py
 TEST_GENES = [
     # Virulence/Adhesion genes
-    {"gene_name": "ALS1", "feature_name": "C1_13700C_A", "description": "Agglutinin-like sequence protein"},
-    {"gene_name": "ALS3", "feature_name": "C6_01030W_A", "description": "Agglutinin-like protein"},
-    {"gene_name": "HWP1", "feature_name": "C1_06250C_A", "description": "Hyphal wall protein 1"},
-    {"gene_name": "ECE1", "feature_name": "C3_05610W_A", "description": "Candidalysin precursor"},
+    {"gene_name": "ALS1", "feature_name": "C6_03700W_A", "description": "Agglutinin-like sequence protein"},
+    {"gene_name": "ALS3", "feature_name": "CR_07070C_A", "description": "Agglutinin-like protein"},
+    {"gene_name": "HWP1", "feature_name": "C4_03570W_A", "description": "Hyphal wall protein 1"},
+    {"gene_name": "ECE1", "feature_name": "C4_03470C_A", "description": "Candidalysin precursor"},
     # Secreted aspartyl proteases
-    {"gene_name": "SAP1", "feature_name": "C6_02460W_A", "description": "Secreted aspartyl protease 1"},
-    {"gene_name": "SAP2", "feature_name": "C6_02480W_A", "description": "Secreted aspartyl protease 2"},
+    {"gene_name": "SAP1", "feature_name": "C6_03490C_A", "description": "Secreted aspartyl protease 1"},
+    {"gene_name": "SAP2", "feature_name": "CR_07800W_A", "description": "Secreted aspartyl protease 2"},
     # Transcription factors
     {"gene_name": "EFG1", "feature_name": "CR_07890W_A", "description": "bHLH transcription factor"},
-    {"gene_name": "CPH1", "feature_name": "C4_03540C_A", "description": "Transcription factor for mating/filamentation"},
-    {"gene_name": "WOR1", "feature_name": "C1_11000C_A", "description": "Master regulator of white-opaque switching"},
-    {"gene_name": "BCR1", "feature_name": "C3_04800W_A", "description": "Biofilm transcription factor"},
+    {"gene_name": "CPH1", "feature_name": "C1_07370C_A", "description": "Transcription factor for mating/filamentation"},
+    {"gene_name": "WOR1", "feature_name": "C1_10150W_A", "description": "Master regulator of white-opaque switching"},
+    {"gene_name": "BCR1", "feature_name": "CR_06440C_A", "description": "Biofilm transcription factor"},
     # Signaling pathway genes
-    {"gene_name": "HOG1", "feature_name": "C1_05270W_A", "description": "MAP kinase, stress response"},
-    {"gene_name": "RAS1", "feature_name": "C2_05700W_A", "description": "Ras-family GTPase"},
-    {"gene_name": "CDC42", "feature_name": "C5_02460C_A", "description": "Rho-type GTPase"},
-    {"gene_name": "CEK1", "feature_name": "C2_00410C_A", "description": "MAP kinase"},
+    {"gene_name": "HOG1", "feature_name": "C2_03330C_A", "description": "MAP kinase, stress response"},
+    {"gene_name": "RAS1", "feature_name": "C2_10210C_A", "description": "Ras-family GTPase"},
+    {"gene_name": "CDC42", "feature_name": "C1_08450C_A", "description": "Rho-type GTPase"},
+    {"gene_name": "CEK1", "feature_name": "C4_06480C_A", "description": "MAP kinase"},
     # Housekeeping genes
-    {"gene_name": "ACT1", "feature_name": "C1_06310W_A", "description": "Actin"},
-    {"gene_name": "TUB1", "feature_name": "CR_02550C_A", "description": "Alpha-tubulin"},
+    {"gene_name": "ACT1", "feature_name": "C1_13700W_A", "description": "Actin"},
+    {"gene_name": "TUB1", "feature_name": "CR_09120C_A", "description": "Alpha-tubulin"},
     # Cell wall genes
-    {"gene_name": "PHR1", "feature_name": "C5_01020C_A", "description": "pH-responsive glycosidase"},
-    {"gene_name": "CHT2", "feature_name": "C1_04170C_A", "description": "Chitinase"},
+    {"gene_name": "PHR1", "feature_name": "C4_04530C_A", "description": "pH-responsive glycosidase"},
+    {"gene_name": "CHT2", "feature_name": "C5_04130C_A", "description": "Chitinase"},
     # Drug resistance
-    {"gene_name": "CDR1", "feature_name": "C3_02280C_A", "description": "ABC transporter, azole resistance"},
+    {"gene_name": "CDR1", "feature_name": "C3_05220W_A", "description": "ABC transporter, azole resistance"},
     {"gene_name": "ERG11", "feature_name": "C5_00660C_A", "description": "Lanosterol 14-alpha-demethylase"},
 ]
 
@@ -193,7 +193,7 @@ def main():
                     "description": gene["description"],
                     "cds_length": len(sequence),
                     "cds_first_500bp": cds_first_500bp,
-                    "expected_guides_5prime": [],  # To be filled from CRISPOR
+                    "expected_guides_5prime": [],  # To be filled from CHOPCHOP
                 })
 
                 # Add to FASTA
@@ -221,7 +221,7 @@ def main():
             json.dump(results, f, indent=2)
         logger.info(f"Wrote JSON fixture: {json_file}")
 
-        # Write FASTA file for CRISPOR submission
+        # Write FASTA file for CHOPCHOP submission
         fasta_file = OUTPUT_DIR / "crispr_test_sequences.fasta"
         with open(fasta_file, "w") as f:
             f.write("\n".join(fasta_lines))
@@ -241,13 +241,13 @@ def main():
         print("NEXT STEPS:")
         print("-"*60)
         print("""
-1. Go to https://crispor.tefor.net/
+1. Go to https://chopchop.cbu.uib.no/
 
 2. For each gene in the FASTA file:
    a. Paste the sequence
-   b. Select "NGG (SpCas9)" as PAM
-   c. Select "Other" genome (paste sequence is used)
-   d. Click "Submit"
+   b. Select "Using: SpCas9"
+   c. Select "For: Knock-out"
+   d. Click "Find Target Sites"
    e. Download results or copy top 10 guide sequences
 
 3. Update the JSON fixture file with expected guides:
@@ -257,13 +257,9 @@ def main():
 4. Run the update script to copy fixtures to test file:
    python scripts/update_crispr_test_fixtures.py
 
-Alternative - CRISPOR Batch Mode:
-   - Submit the FASTA file directly to CRISPOR
-   - Download all results at once
-   - Parse and update fixtures automatically
 """)
 
-        # Also print a quick reference of sequences for manual CRISPOR submission
+        # Also print a quick reference of sequences for manual CHOPCHOP submission
         print("\n" + "-"*60)
         print("QUICK REFERENCE - First 100bp of each gene:")
         print("-"*60)

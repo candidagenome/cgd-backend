@@ -13,7 +13,6 @@ class PAMType(str, Enum):
     NGG = "NGG"          # SpCas9 (most common)
     NAG = "NAG"          # SpCas9 (lower efficiency)
     NNGRRT = "NNGRRT"    # SaCas9
-    NNNNGATT = "NNNNGATT"  # NmeCas9
     TTTV = "TTTV"        # Cas12a/Cpf1
 
 
@@ -24,6 +23,14 @@ class TargetRegion(str, Enum):
     THREE_PRIME = "3_prime"     # Last 20% of CDS
     FULL_CDS = "full_cds"       # Entire coding sequence
     CUSTOM = "custom"           # User-provided sequence
+
+
+class OffTargetMethod(str, Enum):
+    """Off-target search method."""
+    BLAST = "blast"             # BLAST-based search (faster, may miss some)
+    BRUTEFORCE = "bruteforce"   # Brute-force genome scan (slower, guaranteed complete)
+    BOWTIE = "bowtie"           # Bowtie-based search (fast short-read aligner)
+    AUTO = "auto"               # Auto-select based on genome size
 
 
 class CrisprDesignRequest(BaseModel):
@@ -67,6 +74,10 @@ class CrisprDesignRequest(BaseModel):
         True,
         description="Whether to perform off-target analysis"
     )
+    offtarget_method: OffTargetMethod = Field(
+        OffTargetMethod.AUTO,
+        description="Off-target search method: 'blast' (fast), 'bruteforce' (complete), 'bowtie' (fast short-read aligner), or 'auto' (auto-select based on genome size)"
+    )
     offtarget_genomes: List[str] = Field(
         default_factory=list,
         description="Additional genomes to check for off-targets (empty = same as organism)"
@@ -74,8 +85,8 @@ class CrisprDesignRequest(BaseModel):
     max_offtarget_mismatches: int = Field(
         3,
         ge=0,
-        le=5,
-        description="Maximum mismatches to consider as potential off-target"
+        le=4,
+        description="Maximum mismatches to consider as potential off-target (0-4)"
     )
 
     # Homology arm settings
@@ -162,13 +173,22 @@ class GuideResult(BaseModel):
     efficiency_score: float = Field(description="Predicted efficiency (0-100)")
     specificity_score: float = Field(description="Off-target specificity (0-100, higher = better)")
     combined_score: float = Field(description="Combined ranking score (0-100)")
+    chopchop_penalty: float = Field(
+        0,
+        description="CHOPCHOP-style ranking penalty (lower = better)"
+    )
 
     # Off-target summary
+    offtarget_checked: bool = Field(
+        False,
+        description="Whether off-target analysis was completed for this guide"
+    )
     offtarget_count: int = Field(0, description="Number of potential off-targets")
     offtarget_0mm: int = Field(0, description="Off-targets with 0 mismatches (exact)")
     offtarget_1mm: int = Field(0, description="Off-targets with 1 mismatch")
     offtarget_2mm: int = Field(0, description="Off-targets with 2 mismatches")
     offtarget_3mm: int = Field(0, description="Off-targets with 3 mismatches")
+    offtarget_4mm: int = Field(0, description="Off-targets with 4 mismatches")
     offtarget_in_paralogs: int = Field(0, description="Off-targets hitting paralog genes")
     offtarget_in_orthologs: int = Field(0, description="Off-targets hitting ortholog genes")
     has_related_gene_offtargets: bool = Field(
@@ -182,6 +202,10 @@ class GuideResult(BaseModel):
 
     # Sequence features
     has_poly_t: bool = Field(False, description="Contains TTTT (Pol III terminator)")
+    self_complementarity: int = Field(
+        0,
+        description="Number of potential self-complementary 4bp guide stems"
+    )
     restriction_sites: List[RestrictionSite] = Field(
         default_factory=list,
         description="Restriction sites within guide"

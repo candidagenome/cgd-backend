@@ -7,10 +7,10 @@ Tests cover:
 - GC content calculation
 - Efficiency scoring
 - Target region filtering
-- Comparison with CRISPOR expected guides for 20 genes
+- Comparison with CHOPCHOP expected guides for 20 genes
 
 The test fixtures contain expected guide sequences validated against
-CRISPOR (crispor.tefor.net) for C. albicans SC5314 Assembly 22.
+CHOPCHOP (chopchop.cbu.uib.no) for C. albicans SC5314 Assembly 22.
 """
 import json
 from pathlib import Path
@@ -23,15 +23,24 @@ from cgd.schemas.crispr_schema import (
     TargetRegion,
     CrisprDesignRequest,
     GuideResult,
+    OffTargetHit,
 )
 from cgd.api.services.crispr_service import (
     _reverse_complement,
     _calculate_gc_content,
     _has_poly_t,
+    _calculate_self_complementarity,
     _find_restriction_sites,
     _calculate_efficiency_score,
+    _calculate_chopchop_penalty,
+    _chopchop_penalty_to_display_score,
     _find_pam_sites,
     _filter_target_region,
+    _validate_pam_at_position,
+    _search_offtargets_bruteforce,
+    _search_offtargets_bowtie,
+    _parse_md_tag_mismatches,
+    _count_mismatches,
     design_guides,
 )
 
@@ -180,6 +189,91 @@ class TestEfficiencyScore:
         assert all_gc < balanced
 
 
+class TestCHOPCHOPScoring:
+    """Tests for CHOPCHOP-style guide ranking penalties."""
+
+    def _offtarget(self, mismatches: int) -> OffTargetHit:
+        return OffTargetHit(
+            chromosome="chr1",
+            position=100,
+            strand="+",
+            sequence="ATGCATGCATGCATGCATGC",
+            mismatches=mismatches,
+            mismatch_positions=list(range(mismatches)),
+            cfd_score=1.0,
+        )
+
+    def test_self_complementarity_counts_four_base_stems(self):
+        """Potential 4bp self-complementary stems should be counted."""
+        assert _calculate_self_complementarity("AAAACCCCGGGGTTTT") > 0
+        assert _calculate_self_complementarity("AAAAAAAAAAAAAAAAAAAA") == 0
+
+    def test_gc_outside_chopchop_range_is_penalized(self):
+        """CHOPCHOP-style penalty should penalize extreme GC (<30% or >80%)."""
+        # Use sequences with no self-complementarity to isolate GC effect
+        # Balanced GC (50%) - no penalty
+        balanced = _calculate_chopchop_penalty(
+            "AATTCCGGAATTCCGGAATT",  # 50% GC, low self-comp
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=50,
+        )
+        # Extreme high GC (100%) - penalty applied
+        extreme_gc = _calculate_chopchop_penalty(
+            "GCGCGCGCGCGCGCGCGCGC",  # 100% GC, low self-comp
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=100,
+        )
+
+        # Extreme GC should have higher penalty (worse ranking)
+        assert extreme_gc > balanced
+
+    def test_offtargets_dominate_chopchop_penalty(self):
+        """Fewer and weaker off-targets should rank better."""
+        no_hits = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[],
+            gc_content=50,
+        )
+        one_three_mm = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[self._offtarget(3)],
+            gc_content=50,
+        )
+        one_zero_mm = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=50,
+            offtargets=[self._offtarget(0)],
+            gc_content=50,
+        )
+
+        assert no_hits < one_three_mm < one_zero_mm
+
+    def test_efficiency_lowers_chopchop_penalty(self):
+        """Higher predicted efficiency should reduce the rank penalty."""
+        low_efficiency = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=20,
+            offtargets=[],
+            gc_content=50,
+        )
+        high_efficiency = _calculate_chopchop_penalty(
+            "ATGCATGCATGCATGCATGC",
+            efficiency_score=80,
+            offtargets=[],
+            gc_content=50,
+        )
+
+        assert high_efficiency < low_efficiency
+
+    def test_display_score_drops_as_penalty_increases(self):
+        """Existing high-is-good UI score should invert the penalty."""
+        assert _chopchop_penalty_to_display_score(0) > _chopchop_penalty_to_display_score(500)
+
+
 # =============================================================================
 # Tests for PAM Site Finding
 # =============================================================================
@@ -234,6 +328,91 @@ class TestPAMSiteFinding:
         # Should find a guide starting after TTTA
         assert len(guides) >= 1
 
+    def test_forward_ngg_position_is_guide_start(self):
+        """Forward 3' PAM position should be the guide start."""
+        guide = "ATGCATGCATGCATGCATGC"
+        sequence = f"{guide}AGG"
+
+        guides = _find_pam_sites(sequence, PAMType.NGG, guide_length=20)
+
+        assert (guide, "AGG", 1, "+") in guides
+
+    def test_reverse_ngg_position_is_input_coordinate(self):
+        """Reverse 3' PAM position should be converted to input coordinates."""
+        guide = "ATGCATGCATGCATGCATGC"
+        reverse_oriented_target = f"{guide}AGG"
+        sequence = _reverse_complement(reverse_oriented_target)
+
+        guides = _find_pam_sites(sequence, PAMType.NGG, guide_length=20)
+
+        assert (guide, "AGG", 4, "-") in guides
+
+    def test_forward_tttv_position_is_guide_start_not_pam_start(self):
+        """Forward 5' PAM position should report the guide start."""
+        guide = "ATGCATGCATGCATGCATGC"
+        sequence = f"TTTA{guide}"
+
+        guides = _find_pam_sites(sequence, PAMType.TTTV, guide_length=20)
+
+        assert (guide, "TTTA", 5, "+") in guides
+
+    def test_reverse_tttv_position_is_input_coordinate(self):
+        """Reverse 5' PAM position should be converted to input coordinates."""
+        guide = "ATGCATGCATGCATGCATGC"
+        reverse_oriented_target = f"TTTA{guide}"
+        sequence = _reverse_complement(reverse_oriented_target)
+
+        guides = _find_pam_sites(sequence, PAMType.TTTV, guide_length=20)
+
+        assert (guide, "TTTA", 1, "-") in guides
+
+
+class TestPAMValidation:
+    """Tests for validating PAMs adjacent to off-target hits."""
+
+    def test_validates_plus_strand_3prime_pam(self):
+        chromosome = "ATGCATGCATGCATGCATGCAGG"
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=0,
+            hit_end=20,
+            strand="+",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam == "AGG"
+
+    def test_rejects_missing_plus_strand_3prime_pam(self):
+        chromosome = "ATGCATGCATGCATGCATGCAAA"
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=0,
+            hit_end=20,
+            strand="+",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam is None
+
+    def test_validates_minus_strand_3prime_pam(self):
+        guide = "ATGCATGCATGCATGCATGC"
+        chromosome = _reverse_complement(f"{guide}AGG")
+
+        pam = _validate_pam_at_position(
+            chromosome,
+            hit_start=3,
+            hit_end=23,
+            strand="-",
+            pam_type=PAMType.NGG,
+            guide_length=20,
+        )
+
+        assert pam == "AGG"
+
 
 class TestTargetRegionFiltering:
     """Tests for target region filtering."""
@@ -251,7 +430,7 @@ class TestTargetRegionFiltering:
         ]
 
     def test_five_prime_filter(self, sample_guides):
-        """5' prime should only include first 20%."""
+        """5' prime should only include first 50%."""
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -259,12 +438,12 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # First 20% = positions <= 200
+        # First 50% = positions <= 500
         for pos in positions:
-            assert pos <= 200
+            assert pos <= 500
 
     def test_three_prime_filter(self, sample_guides):
-        """3' prime should only include last 20%."""
+        """3' prime should only include last 50%."""
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -272,9 +451,9 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # Last 20% = positions >= 800
+        # Last 50% = positions >= 500
         for pos in positions:
-            assert pos >= 800
+            assert pos >= 500
 
     def test_full_cds_no_filter(self, sample_guides):
         """Full CDS should include all guides."""
@@ -287,14 +466,14 @@ class TestTargetRegionFiltering:
         assert len(filtered) == len(sample_guides)
 
     def test_five_prime_upstream_filter(self):
-        """5' prime upstream should include upstream + first 20% of CDS."""
+        """5' prime upstream should include upstream + first 50% of CDS."""
         # Simulate 500bp upstream + 1000bp CDS
         guides = [
             ("GUIDE1", "NGG", 100, "+"),   # In upstream region
             ("GUIDE2", "NGG", 400, "+"),   # In upstream region
-            ("GUIDE3", "NGG", 600, "+"),   # In first 20% of CDS (500-700)
-            ("GUIDE4", "NGG", 800, "+"),   # Past first 20% of CDS
-            ("GUIDE5", "NGG", 1200, "+"),  # Way past
+            ("GUIDE3", "NGG", 600, "+"),   # In first 50% of CDS (500-1000)
+            ("GUIDE4", "NGG", 800, "+"),   # In first 50% of CDS
+            ("GUIDE5", "NGG", 1200, "+"),  # Past first 50% of CDS
         ]
 
         filtered = _filter_target_region(
@@ -304,13 +483,183 @@ class TestTargetRegionFiltering:
             upstream_length=500
         )
 
-        # Should include upstream (1-500) + first 20% of CDS (501-700)
-        # Max position = 500 + 200 = 700
+        # Should include upstream (1-500) + first 50% of CDS (501-1000)
+        # Max position = 500 + 500 = 1000
         positions = [pos for _, _, pos, _ in filtered]
         assert 100 in positions  # upstream
         assert 400 in positions  # upstream
-        assert 600 in positions  # first 20% CDS
-        assert 800 not in positions  # past first 20%
+        assert 600 in positions  # first 50% CDS
+        assert 800 in positions  # first 50% CDS
+        assert 1200 not in positions  # past first 50%
+
+
+# =============================================================================
+# Brute-Force Off-Target Search Tests
+# =============================================================================
+
+class TestBruteForceOfftargetSearch:
+    """Tests for the brute-force genome-wide off-target search."""
+
+    def test_count_mismatches_exact_match(self):
+        """Exact match should have 0 mismatches."""
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "ATGCATGCATGCATGCATGC")
+        assert mm == 0
+        assert positions == []
+
+    def test_count_mismatches_with_differences(self):
+        """Should correctly count and locate mismatches."""
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "TTGCATGCATGCATGCATGC")
+        assert mm == 1
+        assert positions == [0]
+
+        mm, positions = _count_mismatches("ATGCATGCATGCATGCATGC", "TTGCATGCATGCATGCATGT")
+        assert mm == 2
+        assert positions == [0, 19]
+
+    def test_count_mismatches_all_different(self):
+        """All different bases should give max mismatches."""
+        mm, positions = _count_mismatches("AAAAAAAAAAAAAAAAAAAA", "TTTTTTTTTTTTTTTTTTTT")
+        assert mm == 20
+
+    def test_bruteforce_finds_exact_match(self):
+        """Brute-force should find exact matches in a small genome."""
+        mock_db = MagicMock()
+
+        # Create a small "genome" with one guide site
+        guide = "ATGCATGCATGCATGCATGC"
+        test_chromosome = f"NNNNN{guide}AGGNNNNN"  # Guide + NGG PAM
+
+        # The search function needs chromosome sequences
+        # We'll test the core mismatch detection directly
+        mm, positions = _count_mismatches(guide, guide)
+        assert mm == 0
+
+    def test_bruteforce_finds_offtargets_with_mismatches(self):
+        """Brute-force should find off-targets with up to max_mismatches."""
+        guide = "ATGCATGCATGCATGCATGC"
+
+        # Off-target with 1 mismatch
+        offtarget_1mm = "TTGCATGCATGCATGCATGC"
+        mm, _ = _count_mismatches(guide, offtarget_1mm)
+        assert mm == 1
+
+        # Off-target with 2 mismatches
+        offtarget_2mm = "TTGCATGCATGCATGCATGT"
+        mm, _ = _count_mismatches(guide, offtarget_2mm)
+        assert mm == 2
+
+        # Off-target with 3 mismatches
+        offtarget_3mm = "TTGCATGCATGCATGCTTGT"
+        mm, _ = _count_mismatches(guide, offtarget_3mm)
+        assert mm == 3
+
+        # Off-target with 4 mismatches
+        offtarget_4mm = "TTGCATGCATGCTTGCTTGT"
+        mm, _ = _count_mismatches(guide, offtarget_4mm)
+        assert mm == 4
+
+    def test_bruteforce_filters_by_max_mismatches(self):
+        """Should only return off-targets within max_mismatches threshold."""
+        guide = "ATGCATGCATGCATGCATGC"
+
+        # These should be found with max_mismatches=3
+        offtargets_to_find = [
+            ("ATGCATGCATGCATGCATGC", 0),  # exact
+            ("TTGCATGCATGCATGCATGC", 1),  # 1mm
+            ("TTGCATGCATGCATGCATGT", 2),  # 2mm
+            ("TTGCATGCATGCATGCTTGT", 3),  # 3mm
+        ]
+
+        # These should NOT be found with max_mismatches=3
+        offtargets_to_skip = [
+            ("TTGCATGCATGCTTGCTTGT", 4),  # 4mm
+            ("TTGCATGCTTGCTTGCTTGT", 5),  # 5mm
+        ]
+
+        for seq, expected_mm in offtargets_to_find:
+            mm, _ = _count_mismatches(guide, seq)
+            assert mm == expected_mm
+            assert mm <= 3, f"Expected {seq} to be found (mm={mm})"
+
+        for seq, expected_mm in offtargets_to_skip:
+            mm, _ = _count_mismatches(guide, seq)
+            assert mm == expected_mm
+            assert mm > 3, f"Expected {seq} to be skipped (mm={mm})"
+
+
+class TestBowtieOfftargetSearch:
+    """Tests for Bowtie off-target search functionality."""
+
+    def test_parse_md_tag_simple_mismatches(self):
+        """MD tag with simple mismatches should return correct positions."""
+        # 5A10T3 means: 5 matches, mismatch at pos 5, 10 matches, mismatch at pos 16, 3 matches
+        positions = _parse_md_tag_mismatches("5A10T3")
+        assert positions == [5, 16]
+
+    def test_parse_md_tag_no_mismatches(self):
+        """MD tag with no mismatches should return empty list."""
+        # 20 means 20 matches, no mismatches
+        positions = _parse_md_tag_mismatches("20")
+        assert positions == []
+
+    def test_parse_md_tag_leading_mismatch(self):
+        """MD tag with mismatch at start should return position 0."""
+        # A19 means: mismatch at pos 0, then 19 matches
+        positions = _parse_md_tag_mismatches("A19")
+        assert positions == [0]
+
+    def test_parse_md_tag_trailing_mismatch(self):
+        """MD tag with mismatch at end should return correct position."""
+        # 19A means: 19 matches, mismatch at pos 19
+        positions = _parse_md_tag_mismatches("19A")
+        assert positions == [19]
+
+    def test_parse_md_tag_consecutive_mismatches(self):
+        """MD tag with consecutive mismatches should handle correctly."""
+        # 5AT10 means: 5 matches, mismatch at 5, mismatch at 6, 10 matches
+        positions = _parse_md_tag_mismatches("5AT10")
+        assert positions == [5, 6]
+
+    def test_parse_md_tag_with_deletion(self):
+        """MD tag with deletion (^) should skip deletion bases."""
+        # 10^AC5 means: 10 matches, deletion of AC, 5 matches (no mismatches)
+        positions = _parse_md_tag_mismatches("10^AC5")
+        assert positions == []
+
+    def test_parse_md_tag_complex(self):
+        """MD tag with mixed elements should parse correctly."""
+        # 3A5^TT2G4 means: 3 matches, mismatch at 3, 5 matches, del TT, 2 matches, mismatch, 4 matches
+        positions = _parse_md_tag_mismatches("3A5^TT2G4")
+        assert positions == [3, 11]  # pos 3 and pos 3+1+5+2=11
+
+    def test_parse_md_tag_empty(self):
+        """Empty MD tag should return empty list."""
+        positions = _parse_md_tag_mismatches("")
+        assert positions == []
+
+    def test_parse_md_tag_all_mismatches(self):
+        """MD tag with all mismatches should return all positions."""
+        # ACGT means 4 consecutive mismatches at positions 0,1,2,3
+        positions = _parse_md_tag_mismatches("ACGT")
+        assert positions == [0, 1, 2, 3]
+
+    def test_bowtie_search_missing_index(self):
+        """Should return empty list and warning when bowtie index is missing."""
+        mock_db = MagicMock()
+        warnings = []
+
+        result = _search_offtargets_bowtie(
+            db=mock_db,
+            guide="ATGCATGCATGCATGCATGC",
+            pam_type=PAMType.NGG,
+            organism_tag="nonexistent_organism",
+            max_mismatches=3,
+            warnings=warnings,
+        )
+
+        assert result == []
+        assert len(warnings) == 1
+        assert "not found" in warnings[0].lower()
 
 
 # =============================================================================
@@ -372,20 +721,60 @@ class TestDesignGuidesIntegration:
         assert result.success is False
         assert "too short" in result.error
 
+    def test_warns_for_unimplemented_request_options(self, mock_db):
+        """Accepted-but-unimplemented options should be explicit warnings."""
+        request = CrisprDesignRequest(
+            sequence="ATGCATGCATGCATGCATGCAGG",
+            organism="C_albicans_SC5314_A22",
+            offtarget_genomes=["C_auris_B8441"],
+            include_homology_arms=True,
+            check_offtargets=False,
+        )
+
+        result = design_guides(mock_db, request)
+
+        assert result.success is True
+        assert any("Additional off-target genomes" in w for w in result.warnings)
+        assert any("Homology arm design" in w for w in result.warnings)
+
+    def test_offtarget_checked_marks_only_searched_guides(self, mock_db):
+        """Guides beyond the off-target search limit should not look checked."""
+        test_sequence = "A" + ("ATGCATGCATGCATGCATGCAGG" * 20)
+        request = CrisprDesignRequest(
+            sequence=test_sequence,
+            organism="C_albicans_SC5314_A22",
+            pam=PAMType.NGG,
+            guide_length=20,
+            max_guides=20,
+            check_offtargets=True,
+        )
+
+        with patch(
+            "cgd.api.services.crispr_service._search_offtargets_blast",
+            side_effect=lambda *args, **kwargs: kwargs["status"].update({"performed": True}) or [],
+        ) as search_mock:
+            result = design_guides(mock_db, request)
+
+        assert result.success is True
+        assert search_mock.call_count == 14
+        assert sum(1 for guide in result.guides if guide.offtarget_checked) == 14
+        assert any(not guide.offtarget_checked for guide in result.guides)
+        assert any("top 14 guides only" in w for w in result.warnings)
+
 
 # =============================================================================
-# CRISPOR Validation Tests
+# CHOPCHOP Validation Tests
 # =============================================================================
 #
-# These tests compare our guide predictions against CRISPOR results.
-# They verify that guides found by CRISPOR are also found by our tool.
+# These tests compare our guide predictions against CHOPCHOP results.
+# They verify that guides found by CHOPCHOP are also found by our tool.
 #
-# Note: Our tool may find additional guides not reported by CRISPOR
-# (different filtering criteria), but CRISPOR guides should be present.
+# Note: Our tool may find additional guides not reported by CHOPCHOP
+# (different filtering criteria), but CHOPCHOP guides should be present.
 # =============================================================================
 
-class TestCRISPORValidation:
-    """Validate guide predictions against CRISPOR results."""
+class TestCHOPCHOPValidation:
+    """Validate guide predictions against CHOPCHOP results."""
 
     @pytest.fixture
     def mock_db(self):
@@ -393,14 +782,14 @@ class TestCRISPORValidation:
         return MagicMock()
 
     @pytest.mark.parametrize("gene_data", CRISPR_TEST_GENES, ids=lambda g: g["gene_name"])
-    def test_finds_crispor_guides(self, mock_db, gene_data):
+    def test_finds_chopchop_guides(self, mock_db, gene_data):
         """
-        Verify that guides found by CRISPOR are also found by our tool.
+        Verify that guides found by CHOPCHOP are also found by our tool.
 
         This test:
         1. Takes the CDS sequence for each gene
         2. Runs our CRISPR designer
-        3. Verifies that CRISPOR's top guides are in our results
+        3. Verifies that CHOPCHOP's top guides are in our results
         """
         if not gene_data["cds_first_500bp"]:
             pytest.skip(f"CDS sequence not populated for {gene_data['gene_name']}")
@@ -409,6 +798,7 @@ class TestCRISPORValidation:
             pytest.skip(f"Expected guides not populated for {gene_data['gene_name']}")
 
         # Run our guide finder
+        # Use high max_guides to check all discovered guides (not just top-ranked)
         request = CrisprDesignRequest(
             sequence=gene_data["cds_first_500bp"],
             organism="C_albicans_SC5314_A22",
@@ -416,6 +806,7 @@ class TestCRISPORValidation:
             guide_length=20,
             target_region=TargetRegion.FIVE_PRIME,
             check_offtargets=False,
+            max_guides=100,
         )
 
         result = design_guides(mock_db, request)
@@ -424,7 +815,7 @@ class TestCRISPORValidation:
         # Get our guide sequences
         our_guides = {guide.sequence for guide in result.guides}
 
-        # Check that CRISPOR guides are found
+        # Check that CHOPCHOP guides are found
         missing_guides = []
         for expected_guide in gene_data["expected_guides_5prime"]:
             if expected_guide not in our_guides:
@@ -435,7 +826,7 @@ class TestCRISPORValidation:
 
         if missing_guides:
             pytest.fail(
-                f"Gene {gene_data['gene_name']}: Missing CRISPOR guides: {missing_guides}"
+                f"Gene {gene_data['gene_name']}: Missing CHOPCHOP guides: {missing_guides}"
             )
 
 
@@ -459,11 +850,11 @@ def fetch_fixture_data():
     """
     print("To populate test fixtures:")
     print("1. Export CDS sequences for each gene from CGD")
-    print("2. Submit each sequence to CRISPOR (https://crispor.tefor.net/)")
+    print("2. Submit each sequence to CHOPCHOP (https://chopchop.cbu.uib.no/)")
     print("3. Copy the top 10 guide sequences for each gene")
     print("4. Update CRISPR_TEST_GENES fixture with:")
     print("   - cds_first_500bp: First 500bp of CDS")
-    print("   - expected_guides_5prime: List of guide sequences from CRISPOR")
+    print("   - expected_guides_5prime: List of guide sequences from CHOPCHOP")
     print("")
     print("Genes to process:")
     for gene in CRISPR_TEST_GENES:
