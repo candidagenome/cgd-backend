@@ -324,11 +324,14 @@ def _calculate_chopchop_penalty(
     penalty += _calculate_self_complementarity(guide)
 
     # Efficiency lowers the penalty (higher efficiency = lower penalty)
-    penalty -= efficiency_score
+    # Scale by 100 to match CHOPCHOP's actual weighting where efficiency
+    # competes meaningfully with off-target penalties (which are 400-1000 each)
+    penalty -= efficiency_score * 100
 
     # Position bonus for 5' targeting (knockout mode)
-    # CHOPCHOP ranks guides at 5' positions higher for knockout experiments
-    # because early frameshifts are more likely to produce null alleles.
+    # CHOPCHOP uses position primarily as a tie-breaker, so we keep these
+    # values small relative to efficiency (0-10000) and off-targets (400-1000 each).
+    # These serve as minor tie-breakers when other factors are equal.
     if (
         position is not None
         and cds_length is not None
@@ -337,14 +340,14 @@ def _calculate_chopchop_penalty(
     ):
         pct = position / cds_length
         if pct <= 0.10:
-            # First 10% of CDS: strong bonus
-            penalty -= 8
+            # First 10% of CDS: minor tie-breaker bonus
+            penalty -= 3
         elif pct <= 0.25:
-            # 10-25% of CDS: moderate bonus
-            penalty -= 5
-        elif pct <= 0.50:
-            # 25-50% of CDS: small bonus
+            # 10-25% of CDS: smaller tie-breaker
             penalty -= 2
+        elif pct <= 0.50:
+            # 25-50% of CDS: minimal tie-breaker
+            penalty -= 1
 
     return round(penalty, 3)
 
@@ -353,10 +356,21 @@ def _chopchop_penalty_to_display_score(penalty: float) -> float:
     """
     Convert lower-is-better CHOPCHOP penalty to the existing 0-100 UI score.
 
-    One strong off-target or GC penalty should visibly move the guide out of
-    the "high" band, while excellent low-penalty guides remain near 100.
+    With efficiency scaled by 100, penalties typically range from:
+    - Excellent guides: -10,000 to -5,000 (high efficiency, few off-targets)
+    - Good guides: -5,000 to 0
+    - Poor guides: 0 to +5,000 (low efficiency or many off-targets)
+    - Very poor: +5,000 to +20,000+
+
+    We map this to 0-100 where:
+    - Penalty <= -8000: score = 100
+    - Penalty >= +2000: score = 0
+    - Linear interpolation between
     """
-    return round(max(0.0, min(100.0, 100.0 - max(penalty, 0.0) / 10.0)), 1)
+    # Map penalty range [-8000, +2000] to score range [100, 0]
+    # Score = 100 - (penalty + 8000) / 100
+    score = 100.0 - (penalty + 8000) / 100.0
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 def _generate_cloning_primers(
