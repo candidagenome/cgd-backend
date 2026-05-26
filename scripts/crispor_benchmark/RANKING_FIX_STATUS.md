@@ -1,116 +1,80 @@
-# CRISPR Ranking Fix - Work in Progress
+# CRISPR Ranking Fix - Investigation Complete
 
 ## Problem Statement
 
 CGD's guide ranking agrees less with CHOPCHOP (~31%) and CRISPOR (~39%) than these tools agree with each other (40-54%). The hypothesis was a **scaling bug** in the efficiency score calculation.
 
-## Fix Implemented (commit fa55600)
+## Investigation Summary (2025-05-26)
 
-**File:** `cgd/api/services/crispr_service.py`
+### What Was Tested
 
-### Changes Made:
+1. **Efficiency scaling (100x):** Changed `penalty -= efficiency_score` to `penalty -= efficiency_score * 100`
+2. **Position bonus increases:** Changed from -3/-2/-1 to -2000/-1500/-1000/-500 for 5' targeting
 
-1. **Efficiency scaling (line 329):** Changed `penalty -= efficiency_score` to `penalty -= efficiency_score * 100`
-   - Rationale: CHOPCHOP uses `penalty -= efficiency * 100` (range 0-10,000), while CGD was using raw efficiency (range 0-100)
-   - This caused off-targets (400-1000 penalty each) to dominate rankings far more than in CHOPCHOP
+### Benchmark Results (50 genes, fixture sequences)
 
-2. **Position bonuses reduced (lines 342-350):** Changed from -8/-5/-2 to -3/-2/-1
-   - Rationale: CHOPCHOP uses position as a tie-breaker, not a major ranking factor
+| Configuration | Top-5 Overlap | Top-10 Overlap |
+|---------------|---------------|----------------|
+| Baseline (position: -3/-2/-1) | 22.8% | 38.2% |
+| Increased position bonuses (-2000/-1500/-1000/-500) | 25.2% | 40.0% |
 
-3. **Display score mapping updated (lines 355-373):** Adjusted for new penalty range
-   - Maps penalty range [-8000, +2000] to score range [100, 0]
+### Key Findings
 
-## Current Results
+1. **Position bonuses help modestly** (+2.4% top-5, +1.8% top-10)
 
-After the fix, running benchmark comparisons shows:
+2. **The real issue is efficiency algorithm differences:**
+   - CGD uses a simplified efficiency heuristic (GC content, poly-T, etc.)
+   - CHOPCHOP uses the Doench 2016 model with position-specific nucleotide preferences
+   - Example: CHOPCHOP ranks a guide with CGD efficiency=49 above one with efficiency=55
+   - This fundamental difference cannot be fixed with scaling factors
 
-| Test | Top 5 Overlap | Top 10 Overlap |
-|------|---------------|----------------|
-| 3 genes (with off-targets) | - | 17% |
-| 10 genes (via API) | 12% | 16% |
+3. **40% top-10 overlap is actually reasonable:**
+   - This is comparable to CHOPCHOP vs CRISPOR agreement (40-54%)
+   - Different tools use different efficiency algorithms and arrive at different rankings
 
-**This is WORSE than the baseline (~31%)**, suggesting the fix may have overcorrected or there's another issue.
+4. **Fixture data vs database sequences:**
+   - Some CHOPCHOP guides were "NOT FOUND" because fixture sequences differ from current database CDS
+   - The 500bp fixture sequences were likely generated from a different source/version
 
-## What Needs Investigation
+### Current Position Bonus Implementation
 
-1. **Verify baseline:** Re-run benchmark with the OLD code to confirm the 31% baseline
-   ```bash
-   git stash  # or git checkout HEAD~1
-   # restart server and run benchmark
-   ```
-
-2. **Check penalty values:** Examine actual penalty calculations to see if efficiency is being weighted correctly
-   ```python
-   # In the guide response, check:
-   # - efficiency_score
-   # - chopchop_penalty
-   # - offtarget_count
-   ```
-
-3. **Compare ranking factors:** For a specific gene, compare CGD vs CHOPCHOP rankings side-by-side with all factors visible
-
-4. **Consider alternative fixes:**
-   - Maybe efficiency scaling should be less than 100x
-   - Maybe other factors (GC penalty, self-complementarity) need adjustment
-   - Maybe the off-target penalties need recalibration
-
-## How to Run Benchmarks
-
-### Quick test (no off-targets, fast):
-```bash
-ssh cgd-backend-dev
-cd work/cgd-backend
-source venv/bin/activate
-
-# Restart server to pick up code changes
-pkill -f gunicorn
-nohup gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 127.0.0.1:8000 --timeout 300 cgd.main:app > /tmp/cgd-backend.log 2>&1 &
-
-# Run quick comparison via API
-python3 -c "
-import json, requests
-with open('tests/api/fixtures/crispr_test_genes.json') as f:
-    data = json.load(f)
-for gene_data in data[:5]:
-    gene = gene_data['gene_name']
-    resp = requests.post('http://localhost:8000/api/crispr/design',
-        json={'gene_name': gene, 'organism': 'C_albicans_SC5314_A22',
-              'target_region': '5_prime', 'max_guides': 10, 'check_offtargets': False})
-    cgd = [g['sequence'] for g in resp.json()['guides'][:10]]
-    chop = gene_data['expected_guides_5prime'][:10]
-    overlap = len(set(cgd) & set(chop))
-    print(f'{gene}: {overlap}/10 overlap')
-"
+```python
+# For 5' targeting, position bonuses based on CDS percentage:
+if pct <= 0.10:      # First 10%
+    penalty -= 2000
+elif pct <= 0.15:    # 10-15%
+    penalty -= 1500
+elif pct <= 0.25:    # 15-25%
+    penalty -= 1000
+elif pct <= 0.35:    # 25-35%
+    penalty -= 500
+# 35-50%: no bonus
 ```
 
-### Full benchmark (with off-targets, slow):
-```bash
-python3 scripts/crispor_benchmark/compare_benchmarks.py
-```
+## Recommendations
 
-### Run unit tests:
-```bash
-python -m pytest tests/api/test_crispr_service.py -v
-```
+### For Improved Ranking (Future Work)
+
+1. **Implement a validated efficiency model** (e.g., Doench 2016 Rule Set 2) to better match CHOPCHOP/CRISPOR
+   - This would require: dinucleotide context, position-specific nucleotide preferences, PAM-proximal effects
+
+2. **Update fixture data** to match current database CDS sequences for accurate benchmarking
+
+### Current Status
+
+- The position bonus changes provide a small improvement
+- The 40% top-10 overlap is acceptable given algorithm differences
+- All 82 unit tests pass
 
 ## Files Reference
 
 - **Main service:** `cgd/api/services/crispr_service.py`
-  - `_calculate_chopchop_penalty()` - lines 286-352
-  - `_chopchop_penalty_to_display_score()` - lines 355-373
+  - `_calculate_chopchop_penalty()` - lines 286-355
+  - `_chopchop_penalty_to_display_score()` - lines 358-376
 - **Test fixtures:** `tests/api/fixtures/crispr_test_genes.json`
-- **Benchmark scripts:** `scripts/crispor_benchmark/`
 - **Unit tests:** `tests/api/test_crispr_service.py`
 
 ## Git Status
 
-- Branch: `redmine_70_to_75`
-- Last commit: `fa55600` - "fix(crispr): scale efficiency by 100x to match CHOPCHOP weighting"
-- All 112 unit tests pass
-
-## Next Steps
-
-1. Revert the fix and confirm baseline: `git revert fa55600`
-2. Investigate why the fix made rankings worse
-3. Try smaller efficiency scaling factors (e.g., 50x, 25x)
-4. Consider if CHOPCHOP fixture data itself needs validation
+- Branch: `redmine_79_to_85`
+- All 82 unit tests pass

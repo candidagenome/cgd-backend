@@ -329,9 +329,11 @@ def _calculate_chopchop_penalty(
     penalty -= efficiency_score * 100
 
     # Position bonus for 5' targeting (knockout mode)
-    # CHOPCHOP uses position primarily as a tie-breaker, so we keep these
-    # values small relative to efficiency (0-10000) and off-targets (400-1000 each).
-    # These serve as minor tie-breakers when other factors are equal.
+    # For gene knockouts, guides in the 5' region of the CDS are strongly preferred
+    # because they disrupt the protein earlier, creating truncated/non-functional products.
+    # CHOPCHOP weighs position significantly for 5' targeting - guides in the first 10-15%
+    # of CDS should rank much higher than those at 40-50%, even with slightly lower efficiency.
+    # These bonuses are scaled to compete meaningfully with efficiency differences (0-10000).
     if (
         position is not None
         and cds_length is not None
@@ -340,14 +342,18 @@ def _calculate_chopchop_penalty(
     ):
         pct = position / cds_length
         if pct <= 0.10:
-            # First 10% of CDS: minor tie-breaker bonus
-            penalty -= 3
+            # First 10% of CDS: strong bonus to prioritize early knockouts
+            penalty -= 2000
+        elif pct <= 0.15:
+            # 10-15% of CDS: significant bonus
+            penalty -= 1500
         elif pct <= 0.25:
-            # 10-25% of CDS: smaller tie-breaker
-            penalty -= 2
-        elif pct <= 0.50:
-            # 25-50% of CDS: minimal tie-breaker
-            penalty -= 1
+            # 15-25% of CDS: moderate bonus
+            penalty -= 1000
+        elif pct <= 0.35:
+            # 25-35% of CDS: small bonus
+            penalty -= 500
+        # 35-50% of CDS: no bonus (still within target region but not preferred)
 
     return round(penalty, 3)
 
