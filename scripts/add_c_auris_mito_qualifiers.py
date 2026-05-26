@@ -46,30 +46,41 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_organism_no(session) -> int:
+    """Get organism_no for C. auris B8441."""
+    query = text(f"""
+        SELECT organism_no
+        FROM {DB_SCHEMA}.organism
+        WHERE organism_abbrev = :abbrev
+    """)
+    result = session.execute(query, {"abbrev": ORGANISM_ABBREV}).first()
+    if not result:
+        raise ValueError(f"Organism not found: {ORGANISM_ABBREV}")
+    return result[0]
+
+
 def get_mito_orfs_without_qualifier(session) -> list:
     """
     Get C. auris B8441 mitochondrial ORFs that don't have a feature_qualifier.
 
     Returns list of tuples: (feature_no, feature_name, gene_name)
     """
+    organism_no = get_organism_no(session)
+    logger.info(f"Organism: {ORGANISM_ABBREV} (organism_no={organism_no})")
+
     query = text(f"""
-        SELECT DISTINCT f.feature_no, f.feature_name, f.gene_name
+        SELECT f.feature_no, f.feature_name, f.gene_name
         FROM {DB_SCHEMA}.feature f
-        JOIN {DB_SCHEMA}.feat_location fl ON f.feature_no = fl.feature_no
-        JOIN {DB_SCHEMA}.seq s ON fl.root_seq_no = s.seq_no
-        JOIN {DB_SCHEMA}.feature chrom ON s.seq_no = chrom.feature_no
-        WHERE chrom.feature_name = :mito_chromosome
+        WHERE f.organism_no = :organism_no
         AND f.feature_type = 'ORF'
-        AND fl.is_loc_current = 'Y'
+        AND f.feature_name LIKE '%mito%'
         AND f.feature_no NOT IN (
             SELECT feature_no FROM {DB_SCHEMA}.feat_property
             WHERE property_type = 'feature_qualifier'
         )
         ORDER BY f.feature_name
     """)
-    result = session.execute(
-        query, {"mito_chromosome": MITO_CHROMOSOME}
-    ).fetchall()
+    result = session.execute(query, {"organism_no": organism_no}).fetchall()
     return [(row[0], row[1], row[2]) for row in result]
 
 
