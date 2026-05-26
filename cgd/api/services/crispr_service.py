@@ -426,23 +426,22 @@ def _calculate_chopchop_penalty(
         penalty += CHOPCHOP_OFFTARGET_PENALTIES.get(offtarget.mismatches, 0)
 
     # GC penalty for guides outside optimal 40-70% range
+    # Reduced from 500 to 200 - CHOPCHOP doesn't penalize GC as heavily
     if gc < 40 or gc > 70:
-        penalty += 500
+        penalty += 200
 
     # Self-complementarity can cause hairpin formation
     penalty += _calculate_self_complementarity(guide)
 
     # Efficiency lowers the penalty (higher efficiency = lower penalty)
-    # Scale by 100 to match CHOPCHOP's actual weighting where efficiency
-    # competes meaningfully with off-target penalties (which are 400-1000 each)
-    penalty -= efficiency_score * 100
+    # Scale by 25 (reduced from 100) to heavily favor position over efficiency.
+    # CHOPCHOP ranks early-position guides highly even with moderate efficiency.
+    penalty -= efficiency_score * 25
 
     # Position bonus for 5' targeting (knockout mode)
     # For gene knockouts, guides in the 5' region of the CDS are strongly preferred
     # because they disrupt the protein earlier, creating truncated/non-functional products.
-    # CHOPCHOP weighs position significantly for 5' targeting - guides in the first 10-15%
-    # of CDS should rank much higher than those at 40-50%, even with slightly lower efficiency.
-    # These bonuses are scaled to compete meaningfully with efficiency differences (0-10000).
+    # Use exponential decay to heavily favor first 10-15% while still rewarding 15-50%.
     if (
         position is not None
         and cds_length is not None
@@ -450,19 +449,12 @@ def _calculate_chopchop_penalty(
         and target_region in ("5_prime", "five_prime", TargetRegion.FIVE_PRIME)
     ):
         pct = position / cds_length
-        if pct <= 0.10:
-            # First 10% of CDS: strong bonus to prioritize early knockouts
-            penalty -= 2000
-        elif pct <= 0.15:
-            # 10-15% of CDS: significant bonus
-            penalty -= 1500
-        elif pct <= 0.25:
-            # 15-25% of CDS: moderate bonus
-            penalty -= 1000
-        elif pct <= 0.35:
-            # 25-35% of CDS: small bonus
-            penalty -= 500
-        # 35-50% of CDS: no bonus (still within target region but not preferred)
+        if pct <= 0.50:
+            # Exponential decay: very strong bonus for first 10%, decaying to moderate at 50%
+            # At 0%: -6000, at 10%: ~-5200, at 25%: ~-4000, at 50%: -2000
+            import math
+            penalty -= 2000 + 4000 * math.exp(-pct * 6)
+        # >50% of CDS: no bonus
 
     return round(penalty, 3)
 

@@ -1,0 +1,103 @@
+# Gene order in batch file (separated by 10 N's)
+# Use this to map CRISPOR results back to genes
+
+1. ALS1 (C6_03700W_A)
+   CDS length: 3783 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 5
+
+2. ALS3 (CR_07070C_A)
+   CDS length: 3468 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 6
+
+3. HWP1 (C4_03570W_A)
+   CDS length: 1905 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 3
+
+4. ECE1 (C4_03470C_A)
+   CDS length: 816 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
+5. SAP1 (C6_03490C_A)
+   CDS length: 1176 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 6
+
+6. SAP2 (CR_07800W_A)
+   CDS length: 1197 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
+7. EFG1 (CR_07890W_A)
+   CDS length: 1578 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 7
+
+8. CPH1 (C1_07370C_A)
+   CDS length: 1971 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 10
+
+9. WOR1 (C1_10150W_A)
+   CDS length: 2358 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 9
+
+10. BCR1 (CR_06440C_A)
+   CDS length: 2223 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 10
+
+11. HOG1 (C2_03330C_A)
+   CDS length: 1134 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
+12. RAS1 (C2_10210C_A)
+   CDS length: 876 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 7
+
+13. CDC42 (C1_08450C_A)
+   CDS length: 576 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 7
+
+14. CEK1 (C4_06480C_A)
+   CDS length: 1269 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 7
+
+15. ACT1 (C1_13700W_A)
+   CDS length: 1789 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
+16. TUB1 (CR_09120C_A)
+   CDS length: 1561 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
+17. PHR1 (C4_04530C_A)
+   CDS length: 1647 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 5
+
+18. CHT2 (C5_04130C_A)
+   CDS length: 1752 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 4
+
+19. CDR1 (C3_05220W_A)
+   CDS length: 4506 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 6
+
+20. ERG11 (C5_00660C_A)
+   CDS length: 1587 bp
+   5' sequence: 500 bp
+   CHOPCHOP expected guides: 8
+
