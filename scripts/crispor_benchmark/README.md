@@ -19,7 +19,7 @@ This directory contains scripts and data for benchmarking CGD's CRISPR guide des
 
 ---
 
-## Benchmark Results (May 2025)
+## Benchmark Results (May 2026)
 
 ### Summary
 
@@ -31,14 +31,13 @@ When CGD results are expanded to the top 20, CGD recovers ~79% of CHOPCHOP and C
 
 | Comparison | Overlap | Match Rate |
 |------------|---------|------------|
-| CHOPCHOP top 10 found in CGD top 10 | 78/140 | **55.7%** |
+| CHOPCHOP top 10 found in CGD top 10 | 79/140 | **56.4%** |
 | CHOPCHOP top 10 found in CRISPOR top 10 | 76/140 | 54.3% |
-| CRISPOR top 10 found in CGD top 10 | 104/200 | 52.0% |
-| CGD top 10 found in CRISPOR top 10 | 104/198 | 52.5% |
-| CRISPOR top 10 found in CHOPCHOP top 10 | 76/200 | 38.0% |
-| CGD top 10 found in CHOPCHOP top 10 | 78/198 | 39.4% |
+| CRISPOR top 10 found in CGD top 10 | 111/200 | 55.5% |
+| CGD top 10 found in CRISPOR top 10 | 111/200 | 55.5% |
+| CGD top 10 found in CHOPCHOP top 10 | 79/200 | 39.5% |
 
-> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD and CRISPOR each returned ~200 guides across the 20 genes.
+> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD and CRISPOR each returned 200 guides across the 20 genes.
 
 ### Extended Comparison (Top 20)
 
@@ -111,26 +110,74 @@ This distinction is important because the UI behavior depends on whether off-tar
 ```
 crispor_benchmark/
 ├── README.md                    # This file
-├── generate_crispor_input.py    # Generate FASTA files for CRISPOR
+├── collect_crispor_auto.py      # Automatic CRISPOR guide collection
 ├── compare_benchmarks.py        # Compare results across tools
+├── generate_crispor_input.py    # Generate FASTA files for CRISPOR
 ├── crispor_results_template.json# Template for storing CRISPOR results
-├── crispor_results.json         # Actual CRISPOR results (fill in)
+├── crispor_results.json         # Actual CRISPOR results
 └── input_sequences/             # Generated FASTA files
     ├── ALS1.fasta
     ├── ALS3.fasta
     ├── ...
     ├── all_genes_batch.fasta    # Combined for batch submission
     └── gene_order.txt           # Reference for batch results
+
+# Related scripts (in parent scripts/ directory):
+# ├── fetch_chopchop_guides.py   # Automatic CHOPCHOP guide collection (Playwright)
 ```
 
-## Workflow
+## Automatic Data Collection
+
+> **Note**: Neither CHOPCHOP nor CRISPOR provides a formal API. The `fetch_chopchop_guides.py` script uses **Playwright browser automation** to submit sequences to the CHOPCHOP website and scrape the results. Similarly, `collect_crispor_auto.py` submits **HTTP form requests** directly to the CRISPOR web interface. These scripts may break if the websites change their UI or form structure.
+
+### Collecting CRISPOR Guides
+
+Use the automated script to collect CRISPOR guides via the web interface:
+
+```bash
+# Collect guides for all 20 benchmark genes
+python scripts/crispor_benchmark/collect_crispor_auto.py
+
+# Collect guides for specific genes
+python scripts/crispor_benchmark/collect_crispor_auto.py --genes ALS1,HWP1,EFG1
+
+# Adjust delay between requests (default: 5 seconds)
+python scripts/crispor_benchmark/collect_crispor_auto.py --delay 10
+```
+
+Results are saved to `crispor_results.json`.
+
+### Collecting CHOPCHOP Guides
+
+Use the Playwright-based script to collect CHOPCHOP guides:
+
+```bash
+# Install Playwright first
+pip install playwright
+playwright install chromium
+
+# Collect guides for all genes
+python scripts/fetch_chopchop_guides.py
+
+# Collect guides for a specific gene
+python scripts/fetch_chopchop_guides.py --gene HOG1
+
+# Run in visible mode for debugging
+python scripts/fetch_chopchop_guides.py --visible
+```
+
+Results are saved to `tests/api/fixtures/crispr_test_genes.json` in the `expected_guides_5prime` field.
+
+---
+
+## Manual Workflow (Alternative)
 
 ### Step 1: Generate Input Sequences
 ```bash
 python scripts/crispor_benchmark/generate_crispor_input.py
 ```
 
-### Step 2: Run CRISPOR Analysis
+### Step 2: Run CRISPOR Analysis (Manual)
 1. Go to http://crispor.gi.ucsc.edu/
 2. Select genome: **Candida albicans SC5314** (under Fungi)
 3. PAM: **NGG**
