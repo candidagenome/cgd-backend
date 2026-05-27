@@ -2,11 +2,14 @@
 """
 Compare CRISPR guide rankings across CGD, CHOPCHOP, and CRISPOR.
 
-This script generates a comprehensive comparison report showing:
-1. Guide overlap between tools (consensus guides)
-2. Ranking correlation analysis
-3. Per-gene breakdown of matches/misses
-4. Summary statistics
+This script performs TOP-10 vs TOP-10 comparisons as documented in the README:
+1. CHOPCHOP top 10 found in CGD top 10
+2. CRISPOR top 10 found in CGD top 10
+3. CGD top 10 found in CHOPCHOP top 10
+4. CGD top 10 found in CRISPOR top 10
+5. Extended comparison: top 10 found in top 20
+
+This measures RANKING ALIGNMENT, not just guide discovery.
 """
 
 import json
@@ -61,59 +64,78 @@ def get_cgd_guides(gene_name: str, max_guides: int = 50) -> List[str]:
         db.close()
 
 
+def count_overlap(list_a: List[str], list_b: List[str], top_n: int = 10) -> int:
+    """Count how many of list_a's top N appear in list_b's top N."""
+    set_a = set(list_a[:top_n])
+    set_b = set(list_b[:top_n])
+    return len(set_a & set_b)
+
+
 def analyze_gene(
     gene_name: str,
     chopchop_guides: List[str],
     crispor_guides: List[str],
     cgd_guides: List[str],
 ) -> dict:
-    """Analyze guide overlap and rankings for a single gene."""
-    chopchop_set = set(chopchop_guides)
-    crispor_set = set(crispor_guides)
-    cgd_set = set(cgd_guides)
+    """Analyze top-10 vs top-10 overlap for a single gene."""
+    # Top 10 sets
+    chopchop_top10 = set(chopchop_guides[:10])
+    crispor_top10 = set(crispor_guides[:10])
+    cgd_top10 = set(cgd_guides[:10])
+    cgd_top20 = set(cgd_guides[:20])
 
-    # Create rank lookups
-    chopchop_rank = {g: i+1 for i, g in enumerate(chopchop_guides)}
-    crispor_rank = {g: i+1 for i, g in enumerate(crispor_guides)}
-    cgd_rank = {g: i+1 for i, g in enumerate(cgd_guides)}
+    # Top 10 vs Top 10 comparisons
+    chopchop_in_cgd_top10 = len(chopchop_top10 & cgd_top10)
+    crispor_in_cgd_top10 = len(crispor_top10 & cgd_top10)
+    cgd_in_chopchop_top10 = len(cgd_top10 & chopchop_top10)
+    cgd_in_crispor_top10 = len(cgd_top10 & crispor_top10)
+    chopchop_in_crispor_top10 = len(chopchop_top10 & crispor_top10)
+    crispor_in_chopchop_top10 = len(crispor_top10 & chopchop_top10)
 
-    # Find overlaps
-    all_guides = chopchop_set | crispor_set | cgd_set
-    consensus_2 = (chopchop_set & crispor_set) | (chopchop_set & cgd_set) | (crispor_set & cgd_set)
-    consensus_3 = chopchop_set & crispor_set & cgd_set
+    # Extended: Top 10 in Top 20
+    chopchop_in_cgd_top20 = len(chopchop_top10 & cgd_top20)
+    crispor_in_cgd_top20 = len(crispor_top10 & cgd_top20)
 
-    # CGD matches
-    cgd_matches_chopchop = cgd_set & chopchop_set
-    cgd_matches_crispor = cgd_set & crispor_set
+    # Consensus (all 3 tools agree in top 10)
+    consensus_3 = chopchop_top10 & crispor_top10 & cgd_top10
 
     return {
         "gene_name": gene_name,
-        "chopchop_count": len(chopchop_guides),
-        "crispor_count": len(crispor_guides),
-        "cgd_count": len(cgd_guides),
-        "cgd_matches_chopchop": len(cgd_matches_chopchop),
-        "cgd_matches_crispor": len(cgd_matches_crispor),
-        "consensus_2_tools": len(consensus_2),
+        "chopchop_count": min(len(chopchop_guides), 10),
+        "crispor_count": min(len(crispor_guides), 10),
+        "cgd_count": min(len(cgd_guides), 10),
+        # Top 10 vs Top 10
+        "chopchop_in_cgd_top10": chopchop_in_cgd_top10,
+        "crispor_in_cgd_top10": crispor_in_cgd_top10,
+        "cgd_in_chopchop_top10": cgd_in_chopchop_top10,
+        "cgd_in_crispor_top10": cgd_in_crispor_top10,
+        "chopchop_in_crispor_top10": chopchop_in_crispor_top10,
+        # Extended
+        "chopchop_in_cgd_top20": chopchop_in_cgd_top20,
+        "crispor_in_cgd_top20": crispor_in_cgd_top20,
+        # Consensus
         "consensus_3_tools": len(consensus_3),
-        "chopchop_rank": chopchop_rank,
-        "crispor_rank": crispor_rank,
-        "cgd_rank": cgd_rank,
         "consensus_guides": list(consensus_3),
+        # Full guide lists for detailed comparison
+        "chopchop_guides": chopchop_guides,
+        "crispor_guides": crispor_guides,
+        "cgd_guides": cgd_guides,
     }
 
 
-def print_detailed_comparison(
-    gene_name: str,
-    chopchop_guides: List[str],
-    crispor_guides: List[str],
-    cgd_guides: List[str],
-):
+def print_detailed_comparison(result: dict):
     """Print detailed ranking comparison for a gene."""
+    gene_name = result["gene_name"]
+    chopchop_guides = result["chopchop_guides"]
+    crispor_guides = result["crispor_guides"]
+    cgd_guides = result["cgd_guides"]
+
     chopchop_rank = {g: i+1 for i, g in enumerate(chopchop_guides)}
     crispor_rank = {g: i+1 for i, g in enumerate(crispor_guides)}
     cgd_rank = {g: i+1 for i, g in enumerate(cgd_guides)}
 
-    all_guides = set(chopchop_guides) | set(crispor_guides) | set(cgd_guides[:20])
+    # Show guides that appear in any tool's top 10
+    all_top10 = set(chopchop_guides[:10]) | set(crispor_guides[:10]) | set(cgd_guides[:10])
 
     print(f"\n{gene_name}")
     print("-" * 100)
@@ -128,30 +150,37 @@ def print_detailed_comparison(
             crispor_rank.get(g, 999),
         )
 
-    for guide in sorted(all_guides, key=sort_key)[:20]:
+    for guide in sorted(all_top10, key=sort_key):
         chop_r = chopchop_rank.get(guide, "-")
         crisp_r = crispor_rank.get(guide, "-")
         cgd_r = cgd_rank.get(guide, "-")
 
-        # Determine consensus level
-        in_tools = sum([
-            guide in chopchop_rank,
-            guide in crispor_rank,
-            guide in cgd_rank,
+        # Highlight if in top 10 of each tool
+        chop_str = str(chop_r) if chop_r == "-" or chop_r > 10 else f"*{chop_r}*"
+        crisp_str = str(crisp_r) if crisp_r == "-" or crisp_r > 10 else f"*{crisp_r}*"
+        cgd_str = str(cgd_r) if cgd_r == "-" or cgd_r > 10 else f"*{cgd_r}*"
+
+        # Determine consensus level (all must be in top 10)
+        in_top10 = sum([
+            isinstance(chop_r, int) and chop_r <= 10,
+            isinstance(crisp_r, int) and crisp_r <= 10,
+            isinstance(cgd_r, int) and cgd_r <= 10,
         ])
-        if in_tools == 3:
+        if in_top10 == 3:
             consensus = "*** ALL 3 ***"
-        elif in_tools == 2:
+        elif in_top10 == 2:
             consensus = "2 tools"
         else:
             consensus = ""
 
-        print(f"{guide:<24} {str(chop_r):<10} {str(crisp_r):<10} {str(cgd_r):<10} {consensus}")
+        print(f"{guide:<24} {chop_str:<10} {crisp_str:<10} {cgd_str:<10} {consensus}")
 
 
 def main():
     print("=" * 100)
     print("CRISPR Guide Benchmark: CGD vs CHOPCHOP vs CRISPOR")
+    print("=" * 100)
+    print("Comparison method: TOP-10 vs TOP-10 (strict ranking alignment)")
     print("=" * 100)
 
     chopchop_data, crispor_data = load_fixtures()
@@ -160,10 +189,21 @@ def main():
     crispor_by_gene = {g["gene_name"]: g for g in crispor_data}
 
     results = []
-    total_chopchop = 0
-    total_crispor = 0
-    total_cgd_match_chopchop = 0
-    total_cgd_match_crispor = 0
+
+    # Totals for summary
+    total_chopchop_guides = 0
+    total_crispor_guides = 0
+    total_cgd_guides = 0
+
+    total_chopchop_in_cgd_top10 = 0
+    total_crispor_in_cgd_top10 = 0
+    total_cgd_in_chopchop_top10 = 0
+    total_cgd_in_crispor_top10 = 0
+    total_chopchop_in_crispor_top10 = 0
+
+    total_chopchop_in_cgd_top20 = 0
+    total_crispor_in_cgd_top20 = 0
+
     total_consensus_3 = 0
 
     for gene_data in chopchop_data:
@@ -187,50 +227,88 @@ def main():
         analysis = analyze_gene(gene_name, chopchop_guides, crispor_guides, cgd_guides)
         results.append(analysis)
 
-        total_chopchop += len(chopchop_guides)
-        total_crispor += len(crispor_guides)
-        total_cgd_match_chopchop += analysis["cgd_matches_chopchop"]
-        total_cgd_match_crispor += analysis["cgd_matches_crispor"]
+        # Accumulate totals
+        total_chopchop_guides += analysis["chopchop_count"]
+        total_crispor_guides += analysis["crispor_count"]
+        total_cgd_guides += analysis["cgd_count"]
+
+        total_chopchop_in_cgd_top10 += analysis["chopchop_in_cgd_top10"]
+        total_crispor_in_cgd_top10 += analysis["crispor_in_cgd_top10"]
+        total_cgd_in_chopchop_top10 += analysis["cgd_in_chopchop_top10"]
+        total_cgd_in_crispor_top10 += analysis["cgd_in_crispor_top10"]
+        total_chopchop_in_crispor_top10 += analysis["chopchop_in_crispor_top10"]
+
+        total_chopchop_in_cgd_top20 += analysis["chopchop_in_cgd_top20"]
+        total_crispor_in_cgd_top20 += analysis["crispor_in_cgd_top20"]
+
         total_consensus_3 += analysis["consensus_3_tools"]
 
-    # Print summary
+    # Print per-gene summary
     print("\n" + "=" * 100)
-    print("SUMMARY")
+    print("PER-GENE SUMMARY (Top 10 vs Top 10)")
     print("=" * 100)
 
-    print(f"\n{'Gene':<10} {'CHOPCHOP':<10} {'CRISPOR':<10} {'CGD→CHOP':<12} {'CGD→CRISP':<12} {'All 3'}")
+    print(f"\n{'Gene':<10} {'CHOP':<6} {'CRISP':<6} {'CGD':<6} "
+          f"{'CHOP→CGD':<10} {'CRISP→CGD':<10} {'All 3':<6}")
     print("-" * 70)
     for r in results:
-        chop_match = f"{r['cgd_matches_chopchop']}/{r['chopchop_count']}"
-        crisp_match = f"{r['cgd_matches_crispor']}/{r['crispor_count']}" if r['crispor_count'] > 0 else "-"
-        print(f"{r['gene_name']:<10} {r['chopchop_count']:<10} {r['crispor_count']:<10} {chop_match:<12} {crisp_match:<12} {r['consensus_3_tools']}")
+        chop_cgd = f"{r['chopchop_in_cgd_top10']}/{r['chopchop_count']}"
+        crisp_cgd = f"{r['crispor_in_cgd_top10']}/{r['crispor_count']}" if r['crispor_count'] > 0 else "-"
+        print(f"{r['gene_name']:<10} {r['chopchop_count']:<6} {r['crispor_count']:<6} {r['cgd_count']:<6} "
+              f"{chop_cgd:<10} {crisp_cgd:<10} {r['consensus_3_tools']:<6}")
 
+    # Print main summary table (matching README format)
+    print("\n" + "=" * 100)
+    print("TOP 10 GUIDE COMPARISON (20 Genes)")
+    print("=" * 100)
+
+    print(f"\n{'Comparison':<45} {'Overlap':<12} {'Match Rate'}")
     print("-" * 70)
-    chopchop_pct = 100 * total_cgd_match_chopchop / total_chopchop if total_chopchop > 0 else 0
-    crispor_pct = 100 * total_cgd_match_crispor / total_crispor if total_crispor > 0 else 0
 
-    print(f"\nCGD vs CHOPCHOP match rate: {total_cgd_match_chopchop}/{total_chopchop} ({chopchop_pct:.1f}%)")
-    if total_crispor > 0:
-        print(f"CGD vs CRISPOR match rate:  {total_cgd_match_crispor}/{total_crispor} ({crispor_pct:.1f}%)")
-    print(f"Consensus (all 3 tools):    {total_consensus_3} guides")
+    # CHOPCHOP top 10 found in CGD top 10
+    rate = 100 * total_chopchop_in_cgd_top10 / total_chopchop_guides if total_chopchop_guides > 0 else 0
+    print(f"{'CHOPCHOP top 10 found in CGD top 10':<45} {total_chopchop_in_cgd_top10}/{total_chopchop_guides:<6} {rate:.1f}%")
+
+    # CHOPCHOP top 10 found in CRISPOR top 10
+    rate = 100 * total_chopchop_in_crispor_top10 / total_chopchop_guides if total_chopchop_guides > 0 else 0
+    print(f"{'CHOPCHOP top 10 found in CRISPOR top 10':<45} {total_chopchop_in_crispor_top10}/{total_chopchop_guides:<6} {rate:.1f}%")
+
+    # CRISPOR top 10 found in CGD top 10
+    rate = 100 * total_crispor_in_cgd_top10 / total_crispor_guides if total_crispor_guides > 0 else 0
+    print(f"{'CRISPOR top 10 found in CGD top 10':<45} {total_crispor_in_cgd_top10}/{total_crispor_guides:<6} {rate:.1f}%")
+
+    # CGD top 10 found in CRISPOR top 10
+    rate = 100 * total_cgd_in_crispor_top10 / total_cgd_guides if total_cgd_guides > 0 else 0
+    print(f"{'CGD top 10 found in CRISPOR top 10':<45} {total_cgd_in_crispor_top10}/{total_cgd_guides:<6} {rate:.1f}%")
+
+    # CGD top 10 found in CHOPCHOP top 10
+    rate = 100 * total_cgd_in_chopchop_top10 / total_cgd_guides if total_cgd_guides > 0 else 0
+    print(f"{'CGD top 10 found in CHOPCHOP top 10':<45} {total_cgd_in_chopchop_top10}/{total_cgd_guides:<6} {rate:.1f}%")
+
+    # Extended comparison
+    print("\n" + "=" * 100)
+    print("EXTENDED COMPARISON (Top 10 in Top 20)")
+    print("=" * 100)
+
+    print(f"\n{'Comparison':<45} {'Match Rate'}")
+    print("-" * 70)
+
+    rate = 100 * total_chopchop_in_cgd_top20 / total_chopchop_guides if total_chopchop_guides > 0 else 0
+    print(f"{'CHOPCHOP top 10 found in CGD top 20':<45} {rate:.1f}% ({total_chopchop_in_cgd_top20}/{total_chopchop_guides})")
+
+    rate = 100 * total_crispor_in_cgd_top20 / total_crispor_guides if total_crispor_guides > 0 else 0
+    print(f"{'CRISPOR top 10 found in CGD top 20':<45} {rate:.1f}% ({total_crispor_in_cgd_top20}/{total_crispor_guides})")
+
+    print(f"\nConsensus guides (in all 3 tools' top 10): {total_consensus_3}")
 
     # Print detailed comparison for select genes
     print("\n" + "=" * 100)
-    print("DETAILED RANKING COMPARISON (showing top 20 guides)")
+    print("DETAILED RANKING COMPARISON (showing guides in any tool's top 10)")
+    print("*N* = guide is in that tool's top 10")
     print("=" * 100)
 
-    for gene_data in chopchop_data[:5]:  # First 5 genes for detail
-        gene_name = gene_data["gene_name"]
-        chopchop_guides = gene_data["expected_guides_5prime"]
-        crispor_gene = crispor_by_gene.get(gene_name, {})
-        crispor_guides = [g["sequence"] for g in crispor_gene.get("crispor_top_guides", [])]
-
-        try:
-            cgd_guides = get_cgd_guides(gene_name)
-        except Exception:
-            cgd_guides = []
-
-        print_detailed_comparison(gene_name, chopchop_guides, crispor_guides, cgd_guides)
+    for result in results[:5]:  # First 5 genes for detail
+        print_detailed_comparison(result)
 
 
 if __name__ == "__main__":
