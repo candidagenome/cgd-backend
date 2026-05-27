@@ -2557,6 +2557,7 @@ def get_crispr_config() -> CrisprConfigResponse:
         ("C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
         ("C_auris_B8441", "Candida auris B8441"),
         ("C_glabrata_CBS138", "Candida glabrata CBS138"),
+        ("C_tropicalis_MYA-3404", "Candida tropicalis MYA-3404"),
     ]
 
     organisms = [
