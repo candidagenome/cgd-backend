@@ -1486,38 +1486,61 @@ def _get_all_chromosome_sequences(
     """
     Get all chromosome/contig sequences for an organism.
 
-    Returns dict mapping chromosome_name -> sequence (uppercase).
+    Some organisms (e.g., C. tropicalis, C. parapsilosis) have their genome
+    stored as contigs rather than chromosomes. This function queries for
+    chromosomes first, and falls back to contigs if no chromosomes are found.
+
+    Returns dict mapping chromosome/contig name -> sequence (uppercase).
     """
     org_abbrev = _map_organism_tag_to_abbrev(organism_tag)
 
-    # Query all chromosome features for this organism
-    chromosomes = (
-        db.query(Feature)
-        .join(Organism, Feature.organism_no == Organism.organism_no)
-        .filter(
-            Organism.organism_abbrev == org_abbrev,
-            Feature.feature_type == "chromosome"
-        )
-        .all()
-    )
-
-    result = {}
-    for chrom in chromosomes:
-        # Get genomic sequence for this chromosome
-        seq_record = (
-            db.query(Seq)
+    def _query_sequences_by_type(feature_type: str) -> Dict[str, str]:
+        """Query sequences for a given feature type (chromosome or contig)."""
+        features = (
+            db.query(Feature)
+            .join(Organism, Feature.organism_no == Organism.organism_no)
             .filter(
-                Seq.feature_no == chrom.feature_no,
-                Seq.seq_type == "genomic",
-                Seq.is_seq_current == "Y"
+                Organism.organism_abbrev == org_abbrev,
+                Feature.feature_type == feature_type
             )
-            .first()
+            .all()
         )
-        if seq_record and seq_record.residues:
-            result[chrom.feature_name] = seq_record.residues.upper()
+
+        sequences = {}
+        for feat in features:
+            # Skip mitochondrial sequences (they're not relevant for CRISPR)
+            if "mito" in feat.feature_name.lower():
+                continue
+
+            # Get genomic sequence for this feature
+            seq_record = (
+                db.query(Seq)
+                .filter(
+                    Seq.feature_no == feat.feature_no,
+                    Seq.seq_type == "genomic",
+                    Seq.is_seq_current == "Y"
+                )
+                .first()
+            )
+            if seq_record and seq_record.residues:
+                sequences[feat.feature_name] = seq_record.residues.upper()
+
+        return sequences
+
+    # Try chromosomes first
+    result = _query_sequences_by_type("chromosome")
+
+    # If no chromosomes found, try contigs
+    if not result:
+        result = _query_sequences_by_type("contig")
+        if result:
+            logger.info(
+                f"No chromosomes found for {organism_tag}, "
+                f"using {len(result)} contigs instead"
+            )
 
     logger.info(
-        f"Loaded {len(result)} chromosomes for {organism_tag}, "
+        f"Loaded {len(result)} sequences for {organism_tag}, "
         f"total {sum(len(s) for s in result.values()):,} bp"
     )
     return result
