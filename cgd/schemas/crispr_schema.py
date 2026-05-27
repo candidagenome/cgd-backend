@@ -195,6 +195,10 @@ class GuideResult(BaseModel):
         False,
         description="True if any off-targets hit paralogs/orthologs of target gene"
     )
+    all_offtargets_intergenic: bool = Field(
+        False,
+        description="True if all off-targets are in intergenic regions (no gene disruption)"
+    )
     offtargets: List[OffTargetHit] = Field(
         default_factory=list,
         description="Top off-target hits (limited for performance)"

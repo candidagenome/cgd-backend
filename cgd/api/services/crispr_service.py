@@ -3010,6 +3010,12 @@ def design_guides(
                 guide.offtarget_in_paralogs > 0 or guide.offtarget_in_orthologs > 0
             )
 
+            # Check if all off-targets are intergenic (not in any gene)
+            guide.all_offtargets_intergenic = (
+                len(offtargets) > 0 and
+                all(ot.gene_region == "intergenic" for ot in offtargets)
+            )
+
             # Recalculate specificity score based on actual off-targets only
             # when the search completed. If BLAST is unavailable, leave the
             # optimistic default in place but expose offtarget_checked=False.
