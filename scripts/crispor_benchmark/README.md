@@ -17,6 +17,95 @@ This directory contains scripts and data for benchmarking CGD's CRISPR guide des
 - **Target region**: 5' end of CDS (first 500bp) - optimal for knockout experiments
 - **PAM**: NGG (SpCas9)
 
+---
+
+## Benchmark Results (May 2025)
+
+### Summary
+
+**Overall, CGD guide rankings are broadly consistent with CHOPCHOP and CRISPOR, especially when comparing CGD top 20 against external top 10 results.**
+
+When CGD results are expanded to the top 20, CGD recovers ~79% of CHOPCHOP and CRISPOR guides, suggesting that most differences are due to ranking order rather than missing guide candidates.
+
+### Top 10 Guide Comparison (20 Genes)
+
+| Comparison | Overlap | Match Rate |
+|------------|---------|------------|
+| CHOPCHOP top 10 found in CGD top 10 | 78/140 | **55.7%** |
+| CHOPCHOP top 10 found in CRISPOR top 10 | 76/140 | 54.3% |
+| CRISPOR top 10 found in CGD top 10 | 104/200 | 52.0% |
+| CGD top 10 found in CRISPOR top 10 | 104/198 | 52.5% |
+| CRISPOR top 10 found in CHOPCHOP top 10 | 76/200 | 38.0% |
+| CGD top 10 found in CHOPCHOP top 10 | 78/198 | 39.4% |
+
+> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD and CRISPOR each returned ~200 guides across the 20 genes.
+
+### Extended Comparison (Top 20)
+
+| Comparison | Match Rate |
+|------------|------------|
+| CHOPCHOP top 10 found in CGD top 20 | **78.6%** (110/140) |
+| CRISPOR top 10 found in CGD top 20 | **79.5%** (159/200) |
+
+This is the strongest evidence that CGD is finding the same candidate guides as other tools, even if the exact ranking differs.
+
+### Key Findings
+
+1. **CGD top guides show similar overlap with CHOPCHOP and CRISPOR**, with ~50–56% agreement in strict top 10 comparisons.
+
+2. **When CGD results are expanded to the top 20**, CGD recovers ~79% of CHOPCHOP/CRISPOR guides, suggesting that many differences are due to ranking order rather than missing guide candidates.
+
+3. **CHOPCHOP returned fewer guides for some genes**, so CHOPCHOP comparisons use 140 possible guides instead of 200.
+
+4. **Match rate measures overlap between tools, not biological correctness.** Each tool uses different efficiency, specificity, filtering, and ranking criteria. Differences are expected.
+
+### Important Caveat
+
+These predictions are intended to prioritize guide selection. **Experimental validation is still recommended** before proceeding with final experiments.
+
+---
+
+## How CGD Scores Guides
+
+### Efficiency Prediction (Doench 2016 Rule Set 2)
+
+CGD uses the **Doench 2016 Rule Set 2 (Azimuth)** algorithm for efficiency prediction:
+
+- **30-mer context**: 4bp upstream + 20bp guide + 3bp PAM + 3bp downstream
+- **Position-specific features**: Nucleotide and dinucleotide weights from published coefficients
+- **Coefficient-based implementation**: No external dependencies (scikit-learn model weights embedded)
+- **Fallback**: Heuristic scoring when 30-mer context is unavailable
+
+### Ranking Formula
+
+Final guide ranking includes more than just efficiency. CGD uses a penalty-based system where **lower penalty = better rank**:
+
+```
+penalty = off_target_penalty
+        - efficiency_score * 25
+        - position_bonus (exponential decay for 5' targeting)
+        + gc_penalty (if outside 40-70%)
+        + self_complementarity_penalty
+```
+
+**Position bonus** uses exponential decay to favor early guides for knockout experiments:
+- At 0% (gene start): ~-6000 bonus
+- At 10%: ~-5200 bonus
+- At 50%: ~-2000 bonus
+- Beyond 50%: no bonus
+
+### Off-Target Checking and Specificity
+
+Specificity scores are only shown when off-target checking is performed:
+
+- **With off-target checking**: Specificity is calculated based on BLAST search results. Guides with high specificity and good efficiency are marked as "Recommended."
+
+- **Without off-target checking**: Specificity shows as "—" (not checked). Guides can still be ranked by efficiency and position, but they are not marked as recommended.
+
+This distinction is important because the UI behavior depends on whether off-target checking was enabled.
+
+---
+
 ## Directory Structure
 
 ```
@@ -71,56 +160,7 @@ The comparison analyzes:
 3. **Consensus Guides**: Guides recommended by 2+ or all 3 tools
 4. **Per-Gene Breakdown**: Which genes have good/poor correlation
 
-## Current Results (May 2025)
-
-### Top 10 Guide Comparison (20 Genes)
-
-| Comparison | Overlap | Match Rate | Description |
-|------------|---------|------------|-------------|
-| **CGD → CHOPCHOP** | 78/140 | **55.7%** | % of CHOPCHOP top 10 found in CGD top 10 |
-| **CHOPCHOP → CRISPOR** | 76/140 | 54.3% | % of CHOPCHOP top 10 found in CRISPOR top 10 |
-| **CRISPOR → CGD** | 104/200 | 52.0% | % of CRISPOR top 10 found in CGD top 10 |
-| **CGD → CRISPOR** | 104/198 | 52.5% | % of CGD top 10 found in CRISPOR top 10 |
-| **CRISPOR → CHOPCHOP** | 76/200 | 38.0% | % of CRISPOR top 10 found in CHOPCHOP top 10 |
-| **CGD → CHOPCHOP** | 78/198 | 39.4% | % of CGD top 10 found in CHOPCHOP top 10 |
-
-### Key Findings
-
-- **CGD matches CHOPCHOP better than CRISPOR does** (55.7% vs 54.3%)
-- All three tools agree on ~50% of top 10 guides, reflecting different ranking priorities
-- CHOPCHOP returns fewer guides per gene (140 total vs 200), affecting overlap percentages
-
-### Extended Comparison (Top 20)
-
-| Comparison | Match Rate |
-|------------|------------|
-| CGD → CHOPCHOP (top 20) | **78.6%** (110/140) |
-| CGD → CRISPOR (top 20) | 79.5% (159/200) |
-
-### CGD Efficiency Model
-
-CGD uses the **Doench 2016 Rule Set 2 (Azimuth)** algorithm for efficiency prediction:
-
-- **30-mer context**: 4bp upstream + 20bp guide + 3bp PAM + 3bp downstream
-- **Position-specific features**: Nucleotide and dinucleotide weights from published coefficients
-- **Coefficient-based implementation**: No external dependencies (scikit-learn model weights embedded)
-- **Fallback**: Heuristic scoring when 30-mer context is unavailable
-
-### CGD Ranking Penalty Formula
-
-```
-penalty = off_target_penalty
-        - efficiency_score * 25
-        - position_bonus (exponential decay for 5' targeting)
-        + gc_penalty (if outside 40-70%)
-        + self_complementarity_penalty
-```
-
-Position bonus uses exponential decay: `2000 + 4000 * exp(-position_fraction * 6)`
-- At 0% (gene start): ~-6000 bonus
-- At 10%: ~-5200 bonus
-- At 50%: ~-2000 bonus
-- Beyond 50%: no bonus
+---
 
 ## References
 
