@@ -71,15 +71,56 @@ The comparison analyzes:
 3. **Consensus Guides**: Guides recommended by 2+ or all 3 tools
 4. **Per-Gene Breakdown**: Which genes have good/poor correlation
 
-## Current Results
+## Current Results (May 2025)
 
-### CGD vs CHOPCHOP (as of 2024)
-- Match rate: **85.0%** (119/140 CHOPCHOP guides in CGD top 50)
-- 13 genes with 100% match
-- 7 genes with partial matches (60-87.5%)
+### Top 10 Guide Comparison (20 Genes)
 
-### CGD vs CRISPOR
-- *Pending CRISPOR data collection*
+| Comparison | Overlap | Match Rate | Description |
+|------------|---------|------------|-------------|
+| **CGD → CHOPCHOP** | 78/140 | **55.7%** | % of CHOPCHOP top 10 found in CGD top 10 |
+| **CHOPCHOP → CRISPOR** | 76/140 | 54.3% | % of CHOPCHOP top 10 found in CRISPOR top 10 |
+| **CRISPOR → CGD** | 104/200 | 52.0% | % of CRISPOR top 10 found in CGD top 10 |
+| **CGD → CRISPOR** | 104/198 | 52.5% | % of CGD top 10 found in CRISPOR top 10 |
+| **CRISPOR → CHOPCHOP** | 76/200 | 38.0% | % of CRISPOR top 10 found in CHOPCHOP top 10 |
+| **CGD → CHOPCHOP** | 78/198 | 39.4% | % of CGD top 10 found in CHOPCHOP top 10 |
+
+### Key Findings
+
+- **CGD matches CHOPCHOP better than CRISPOR does** (55.7% vs 54.3%)
+- All three tools agree on ~50% of top 10 guides, reflecting different ranking priorities
+- CHOPCHOP returns fewer guides per gene (140 total vs 200), affecting overlap percentages
+
+### Extended Comparison (Top 20)
+
+| Comparison | Match Rate |
+|------------|------------|
+| CGD → CHOPCHOP (top 20) | **78.6%** (110/140) |
+| CGD → CRISPOR (top 20) | 79.5% (159/200) |
+
+### CGD Efficiency Model
+
+CGD uses the **Doench 2016 Rule Set 2 (Azimuth)** algorithm for efficiency prediction:
+
+- **30-mer context**: 4bp upstream + 20bp guide + 3bp PAM + 3bp downstream
+- **Position-specific features**: Nucleotide and dinucleotide weights from published coefficients
+- **Coefficient-based implementation**: No external dependencies (scikit-learn model weights embedded)
+- **Fallback**: Heuristic scoring when 30-mer context is unavailable
+
+### CGD Ranking Penalty Formula
+
+```
+penalty = off_target_penalty
+        - efficiency_score * 25
+        - position_bonus (exponential decay for 5' targeting)
+        + gc_penalty (if outside 40-70%)
+        + self_complementarity_penalty
+```
+
+Position bonus uses exponential decay: `2000 + 4000 * exp(-position_fraction * 6)`
+- At 0% (gene start): ~-6000 bonus
+- At 10%: ~-5200 bonus
+- At 50%: ~-2000 bonus
+- Beyond 50%: no bonus
 
 ## References
 

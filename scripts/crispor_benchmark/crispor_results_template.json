@@ -1,0 +1,135 @@
+[
+  {
+    "gene_name": "ALS1",
+    "feature_name": "C6_03700W_A",
+    "crispor_top_guides": [
+      {
+        "rank": 1,
+        "sequence": "GUIDE_SEQUENCE_HERE",
+        "position": 0,
+        "strand": "+",
+        "mit_specificity_score": 0.0,
+        "doench_efficiency_score": 0.0,
+        "offtargets_0mm": 0,
+        "offtargets_1mm": 0,
+        "offtargets_2mm": 0,
+        "offtargets_3mm": 0
+      }
+    ],
+    "notes": "Fill in top 10 guides from CRISPOR results"
+  },
+  {
+    "gene_name": "ALS3",
+    "feature_name": "CR_07070C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "HWP1",
+    "feature_name": "C4_03570W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "ECE1",
+    "feature_name": "C4_03470C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "SAP1",
+    "feature_name": "C6_03490C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "SAP2",
+    "feature_name": "CR_07800W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "EFG1",
+    "feature_name": "CR_07890W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "CPH1",
+    "feature_name": "C1_07370C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "WOR1",
+    "feature_name": "C1_10150W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "BCR1",
+    "feature_name": "CR_06440C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "HOG1",
+    "feature_name": "C2_03330C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "RAS1",
+    "feature_name": "C2_10210C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "CDC42",
+    "feature_name": "C1_08450C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "CEK1",
+    "feature_name": "C4_06480C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "ACT1",
+    "feature_name": "C1_13700W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "TUB1",
+    "feature_name": "CR_09120C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "PHR1",
+    "feature_name": "C4_04530C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "CHT2",
+    "feature_name": "C5_04130C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "CDR1",
+    "feature_name": "C3_05220W_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  },
+  {
+    "gene_name": "ERG11",
+    "feature_name": "C5_00660C_A",
+    "crispor_top_guides": [],
+    "notes": ""
+  }
+]

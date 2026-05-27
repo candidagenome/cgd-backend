@@ -32,6 +32,8 @@ from cgd.api.services.crispr_service import (
     _calculate_self_complementarity,
     _find_restriction_sites,
     _calculate_efficiency_score,
+    _calculate_efficiency_score_heuristic,
+    _get_30mer_context,
     _calculate_chopchop_penalty,
     _chopchop_penalty_to_display_score,
     _find_pam_sites,
@@ -42,6 +44,10 @@ from cgd.api.services.crispr_service import (
     _parse_md_tag_mismatches,
     _count_mismatches,
     design_guides,
+)
+from cgd.api.services.azimuth_minimal import (
+    predict_efficiency as azimuth_predict,
+    is_model_available as azimuth_available,
 )
 
 
@@ -163,8 +169,8 @@ class TestRestrictionSites:
 class TestEfficiencyScore:
     """Tests for efficiency score calculation."""
 
-    def test_score_range(self):
-        """Score should be between 0 and 100."""
+    def test_heuristic_score_range(self):
+        """Heuristic score should be between 0 and 100."""
         # Various test sequences
         seqs = [
             "ATGCATGCATGCATGCATGC",
@@ -173,20 +179,170 @@ class TestEfficiencyScore:
             "ATGCTTTTGATCGATCGATC",
         ]
         for seq in seqs:
-            score = _calculate_efficiency_score(seq)
+            score = _calculate_efficiency_score_heuristic(seq)
             assert 0 <= score <= 100
 
     def test_poly_t_penalty(self):
         """Poly-T should reduce efficiency score."""
-        with_poly_t = _calculate_efficiency_score("ATGCTTTTGATCGATCGATC")
-        without_poly_t = _calculate_efficiency_score("ATGCGATCGATCGATCGATC")
+        with_poly_t = _calculate_efficiency_score_heuristic("ATGCTTTTGATCGATCGATC")
+        without_poly_t = _calculate_efficiency_score_heuristic("ATGCGATCGATCGATCGATC")
         assert with_poly_t < without_poly_t
 
     def test_extreme_gc_penalty(self):
         """Extreme GC content should reduce score."""
-        all_gc = _calculate_efficiency_score("GGGGGGGGGGGGGGGGGGGG")
-        balanced = _calculate_efficiency_score("ATGCATGCATGCATGCATGC")
+        all_gc = _calculate_efficiency_score_heuristic("GGGGGGGGGGGGGGGGGGGG")
+        balanced = _calculate_efficiency_score_heuristic("ATGCATGCATGCATGCATGC")
         assert all_gc < balanced
+
+    def test_azimuth_score_with_context(self):
+        """Azimuth model should return score when given 30-mer context."""
+        # Valid 30-mer: 4bp upstream + 20bp guide + 3bp PAM + 3bp downstream
+        context_30mer = "ATGCATGCATGCATGCATGCATGCAGGATG"
+        guide = context_30mer[4:24]
+
+        score, method = _calculate_efficiency_score(
+            guide,
+            context_30mer=context_30mer,
+            pam_type=PAMType.NGG
+        )
+
+        assert 0 <= score <= 100
+        assert method == "azimuth"
+
+    def test_azimuth_fallback_without_context(self):
+        """Should fallback to heuristic without 30-mer context."""
+        guide = "ATGCATGCATGCATGCATGC"
+
+        score, method = _calculate_efficiency_score(
+            guide,
+            context_30mer=None,
+            pam_type=PAMType.NGG
+        )
+
+        assert 0 <= score <= 100
+        assert method == "heuristic"
+
+    def test_azimuth_fallback_non_ngg_pam(self):
+        """Should fallback to heuristic for non-NGG PAM types."""
+        context_30mer = "ATGCATGCATGCATGCATGCATGCAGGATG"
+        guide = context_30mer[4:24]
+
+        score, method = _calculate_efficiency_score(
+            guide,
+            context_30mer=context_30mer,
+            pam_type=PAMType.TTTV  # Cas12a PAM
+        )
+
+        assert 0 <= score <= 100
+        assert method == "heuristic"
+
+
+class TestAzimuthMinimal:
+    """Tests for the Azimuth minimal implementation."""
+
+    def test_model_available(self):
+        """Azimuth model should always be available (coefficient-based)."""
+        assert azimuth_available() is True
+
+    def test_valid_30mer_prediction(self):
+        """Should return score for valid 30-mer."""
+        # Valid 30-mer with NGG PAM at positions 25-27
+        seq = "ATGCATGCATGCATGCATGCATGCAGGATG"
+        score = azimuth_predict(seq)
+
+        assert score is not None
+        assert 0 <= score <= 1
+
+    def test_invalid_length_returns_none(self):
+        """Should return None for sequences not exactly 30bp."""
+        assert azimuth_predict("ATGC") is None
+        assert azimuth_predict("A" * 29) is None
+        assert azimuth_predict("A" * 31) is None
+
+    def test_invalid_pam_returns_none(self):
+        """Should return None if PAM is not xGG."""
+        # Invalid PAM (AAA instead of xGG)
+        seq = "ATGCATGCATGCATGCATGCATGCAAATGC"
+        assert azimuth_predict(seq) is None
+
+    def test_invalid_nucleotides_returns_none(self):
+        """Should return None if sequence contains non-ACGT characters."""
+        seq = "ATGCATGCATGCATGCATGCNTGCAGGATG"  # Contains N
+        assert azimuth_predict(seq) is None
+
+    def test_poly_t_penalty_applied(self):
+        """Sequences with TTTT should score lower."""
+        # Without poly-T
+        seq_no_polyt = "ATGCATGCATGCATGCATGCATGCAGGATG"
+        # With poly-T in guide region
+        seq_polyt = "ATGCTTTTTTTTTTTTTTTTTTGCAGGATG"
+
+        score_no_polyt = azimuth_predict(seq_no_polyt)
+        score_polyt = azimuth_predict(seq_polyt)
+
+        assert score_no_polyt is not None
+        assert score_polyt is not None
+        assert score_polyt < score_no_polyt
+
+    def test_gc_penalty_applied(self):
+        """Extreme GC content should result in lower scores."""
+        # Balanced GC
+        seq_balanced = "ATGCATGCATGCATGCATGCATGCAGGATG"
+        # Low GC (all A in guide)
+        seq_low_gc = "AAAAAAAAAAAAAAAAAAAAAAAAAGGAAA"
+
+        score_balanced = azimuth_predict(seq_balanced)
+        score_low_gc = azimuth_predict(seq_low_gc)
+
+        assert score_balanced is not None
+        assert score_low_gc is not None
+        # Low GC should score lower
+        assert score_low_gc < score_balanced
+
+
+class Test30merContextExtraction:
+    """Tests for 30-mer context extraction."""
+
+    def test_forward_strand_extraction(self):
+        """Should extract correct 30-mer for forward strand guides."""
+        # Create a target sequence with known structure
+        # Format: XXXX + GUIDE(20) + PAM(3) + XXX
+        target = "GGGGAAAAAAAAAAAAAAAAAAAAAAGGGCCC"
+        #         0123 456789...             2627282930
+
+        # Guide starts at position 5 (1-based)
+        context = _get_30mer_context(target, 5, guide_length=20, pam_length=3, strand="+")
+
+        # Should be None because we need 4bp upstream from position 5
+        # Position 5 means index 4, and we need 4bp before that (indices 0-3)
+        # But position 5 - 4 = 1, which would start at index 0
+        # Actually, position 1 would start at index 0, and we need 4bp upstream
+        # So the context would start at position 1-4 = -3, which is invalid
+
+        # Let me reconsider: if guide_position=5 (1-based), that's index 4
+        # upstream_start = 4 - 4 = 0 (valid)
+        # downstream_end = 4 + 20 + 3 + 3 = 30 (valid if target is 30bp long)
+        assert context is not None
+        assert len(context) == 30
+
+    def test_context_too_short_returns_none(self):
+        """Should return None if sequence doesn't have enough flanking context."""
+        # Short sequence where we can't extract 30-mer
+        target = "AAAAAAAAAAAAAAAAAAAAAGG"  # Only 23bp
+
+        context = _get_30mer_context(target, 1, guide_length=20, pam_length=3, strand="+")
+
+        assert context is None  # Need 4bp upstream which isn't available
+
+    def test_context_at_sequence_end_returns_none(self):
+        """Should return None if guide is too close to sequence end."""
+        # Target sequence
+        target = "ATGC" + "A" * 20 + "AGG"  # 27bp total
+
+        # Guide at position 5 would need 3bp downstream after PAM
+        context = _get_30mer_context(target, 5, guide_length=20, pam_length=3, strand="+")
+
+        assert context is None  # Need 3bp downstream which isn't available
 
 
 class TestCHOPCHOPScoring:

@@ -41,6 +41,10 @@ from cgd.schemas.crispr_schema import (
     CloningPrimers,
     HomologyArms,
 )
+from cgd.api.services.azimuth_minimal import (
+    predict_efficiency as azimuth_predict,
+    is_model_available as azimuth_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,13 +207,14 @@ def _find_restriction_sites(seq: str) -> List[RestrictionSite]:
     return sites
 
 
-def _calculate_efficiency_score(guide: str) -> float:
+def _calculate_efficiency_score_heuristic(guide: str) -> float:
     """
-    Calculate predicted efficiency score using simplified Rule Set 2.
+    Calculate predicted efficiency score using simplified heuristics.
+
+    This is a fallback method when Azimuth model is unavailable or when
+    the guide context is insufficient (non-NGG PAM, missing flanking sequence).
 
     Returns score from 0-100, where higher is better.
-    This is a simplified implementation; production would use the full
-    Doench 2016 model or a trained model.
     """
     score = 50.0  # baseline
     guide = guide.upper()
@@ -241,12 +246,116 @@ def _calculate_efficiency_score(guide: str) -> float:
     if len(guide) >= 3 and guide[2] == "C":
         score += 3
 
-    # Note: GG motif bonus removed - it was over-weighting TGG endings
-    # compared to actual Doench 2016 model, causing poor correlation
-    # with CHOPCHOP rankings.
-
     # Clamp to 0-100
     return max(0, min(100, score))
+
+
+def _get_30mer_context(
+    target_sequence: str,
+    guide_position: int,
+    guide_length: int = 20,
+    pam_length: int = 3,
+    strand: str = "+"
+) -> Optional[str]:
+    """
+    Extract 30-mer context for Azimuth efficiency prediction.
+
+    The 30-mer format required by Azimuth/Rule Set 2:
+        - Positions 1-4: 4bp upstream of guide
+        - Positions 5-24: 20bp guide sequence
+        - Positions 25-27: 3bp PAM (NGG)
+        - Positions 28-30: 3bp downstream of PAM
+
+    Args:
+        target_sequence: The full target sequence
+        guide_position: 1-based position of the guide in target_sequence
+        guide_length: Length of the guide (default 20)
+        pam_length: Length of the PAM (default 3)
+        strand: Strand of the guide ("+" or "-")
+
+    Returns:
+        30-mer sequence or None if context cannot be extracted
+    """
+    seq = target_sequence.upper()
+    pos = guide_position - 1  # Convert to 0-based
+
+    # For 3' PAM (NGG): guide is at [pos:pos+guide_length], PAM at [pos+guide_length:pos+guide_length+pam_length]
+    # We need 4bp upstream + 20bp guide + 3bp PAM + 3bp downstream = 30bp total
+
+    if strand == "+":
+        # Forward strand: guide-PAM orientation
+        upstream_start = pos - 4
+        downstream_end = pos + guide_length + pam_length + 3
+
+        if upstream_start < 0 or downstream_end > len(seq):
+            return None
+
+        context_30mer = seq[upstream_start:downstream_end]
+    else:
+        # Reverse strand: the guide is stored in reverse complement orientation
+        # The guide_position points to the leftmost coordinate in the original sequence
+        # For reverse strand, we need to extract and reverse complement
+
+        # Calculate positions for reverse strand
+        # Guide spans [pos:pos+guide_length], PAM is upstream in genomic coords
+        # For reverse complement: PAM is at [pos-pam_length:pos], downstream is [pos-pam_length-3:pos-pam_length]
+        downstream_start = pos - pam_length - 3
+        upstream_end = pos + guide_length + 4
+
+        if downstream_start < 0 or upstream_end > len(seq):
+            return None
+
+        # Extract and reverse complement
+        context_region = seq[downstream_start:upstream_end]
+        context_30mer = _reverse_complement(context_region)
+
+    # Validate length
+    if len(context_30mer) != 30:
+        return None
+
+    # Validate contains only ACGT
+    if not re.match(r'^[ACGT]+$', context_30mer):
+        return None
+
+    return context_30mer
+
+
+def _calculate_efficiency_score(
+    guide: str,
+    context_30mer: Optional[str] = None,
+    pam_type: PAMType = PAMType.NGG
+) -> Tuple[float, str]:
+    """
+    Calculate predicted efficiency score using Azimuth (Rule Set 2) or fallback heuristic.
+
+    Attempts to use the Azimuth model if:
+    - context_30mer is provided and valid
+    - PAM type is NGG (Azimuth is optimized for SpCas9)
+    - Model is available
+
+    Falls back to heuristic scoring otherwise.
+
+    Args:
+        guide: 20bp guide sequence
+        context_30mer: Optional 30-mer context for Azimuth prediction
+        pam_type: PAM type (Azimuth only supports NGG)
+
+    Returns:
+        Tuple of (score from 0-100, method used: "azimuth" or "heuristic")
+    """
+    # Only use Azimuth for NGG PAM (SpCas9) - it's not trained for other PAMs
+    if pam_type != PAMType.NGG:
+        return _calculate_efficiency_score_heuristic(guide), "heuristic"
+
+    # Try Azimuth if we have context
+    if context_30mer and azimuth_available():
+        azimuth_score = azimuth_predict(context_30mer)
+        if azimuth_score is not None:
+            # Convert from 0-1 to 0-100
+            return round(azimuth_score * 100, 1), "azimuth"
+
+    # Fallback to heuristic
+    return _calculate_efficiency_score_heuristic(guide), "heuristic"
 
 
 def _calculate_cfd_score(guide: str, offtarget: str) -> float:
@@ -317,21 +426,22 @@ def _calculate_chopchop_penalty(
         penalty += CHOPCHOP_OFFTARGET_PENALTIES.get(offtarget.mismatches, 0)
 
     # GC penalty for guides outside optimal 40-70% range
+    # Reduced from 500 to 200 - CHOPCHOP doesn't penalize GC as heavily
     if gc < 40 or gc > 70:
-        penalty += 500
+        penalty += 200
 
     # Self-complementarity can cause hairpin formation
     penalty += _calculate_self_complementarity(guide)
 
     # Efficiency lowers the penalty (higher efficiency = lower penalty)
-    # Scale by 100 to match CHOPCHOP's actual weighting where efficiency
-    # competes meaningfully with off-target penalties (which are 400-1000 each)
-    penalty -= efficiency_score * 100
+    # Scale by 25 (reduced from 100) to heavily favor position over efficiency.
+    # CHOPCHOP ranks early-position guides highly even with moderate efficiency.
+    penalty -= efficiency_score * 25
 
     # Position bonus for 5' targeting (knockout mode)
-    # CHOPCHOP uses position primarily as a tie-breaker, so we keep these
-    # values small relative to efficiency (0-10000) and off-targets (400-1000 each).
-    # These serve as minor tie-breakers when other factors are equal.
+    # For gene knockouts, guides in the 5' region of the CDS are strongly preferred
+    # because they disrupt the protein earlier, creating truncated/non-functional products.
+    # Use exponential decay to heavily favor first 10-15% while still rewarding 15-50%.
     if (
         position is not None
         and cds_length is not None
@@ -339,15 +449,12 @@ def _calculate_chopchop_penalty(
         and target_region in ("5_prime", "five_prime", TargetRegion.FIVE_PRIME)
     ):
         pct = position / cds_length
-        if pct <= 0.10:
-            # First 10% of CDS: minor tie-breaker bonus
-            penalty -= 3
-        elif pct <= 0.25:
-            # 10-25% of CDS: smaller tie-breaker
-            penalty -= 2
-        elif pct <= 0.50:
-            # 25-50% of CDS: minimal tie-breaker
-            penalty -= 1
+        if pct <= 0.50:
+            # Exponential decay: very strong bonus for first 10%, decaying to moderate at 50%
+            # At 0%: -6000, at 10%: ~-5200, at 25%: ~-4000, at 50%: -2000
+            import math
+            penalty -= 2000 + 4000 * math.exp(-pct * 6)
+        # >50% of CDS: no bonus
 
     return round(penalty, 3)
 
@@ -2630,14 +2737,32 @@ def design_guides(
     guide_results = []
     pam_config = PAM_PATTERNS[request.pam]
 
+    # Track efficiency scoring method for reporting
+    efficiency_methods_used = set()
+
     for guide_seq, pam_seq, position, strand in all_guides:
         # Skip guides with non-ACGT characters
         if not re.match(r"^[ACGT]+$", guide_seq):
             continue
 
-        # Calculate efficiency scores
+        # Calculate efficiency scores with Azimuth if possible
         gc_content = _calculate_gc_content(guide_seq)
-        efficiency_score = _calculate_efficiency_score(guide_seq)
+
+        # Extract 30-mer context for Azimuth prediction
+        context_30mer = _get_30mer_context(
+            target_sequence,
+            position,
+            request.guide_length,
+            pam_length=len(pam_seq),
+            strand=strand
+        )
+
+        efficiency_score, efficiency_method = _calculate_efficiency_score(
+            guide_seq,
+            context_30mer=context_30mer,
+            pam_type=request.pam
+        )
+        efficiency_methods_used.add(efficiency_method)
 
         # Initial specificity score (will be updated after off-target search)
         specificity_score = 100.0
@@ -2734,6 +2859,21 @@ def design_guides(
     # CHOPCHOP ranks lower penalties first. Position is used as a stable
     # tie-breaker so equally scoring knockout guides favor the 5' end.
     guide_results.sort(key=lambda g: (g.chopchop_penalty, g.position))
+
+    # Log efficiency method used
+    if "azimuth" in efficiency_methods_used:
+        if "heuristic" in efficiency_methods_used:
+            logger.info("Efficiency scoring: mixed (Azimuth + heuristic fallback)")
+        else:
+            logger.info("Efficiency scoring: Azimuth (Rule Set 2)")
+    else:
+        logger.info("Efficiency scoring: heuristic only")
+        if request.pam == PAMType.NGG and azimuth_available():
+            # Azimuth available but not used - likely context extraction failed
+            warnings.append(
+                "Efficiency scores used heuristic method; "
+                "30-mer context unavailable for Azimuth prediction"
+            )
 
     # Perform off-target search for top guides (limited for performance)
     if request.check_offtargets:
