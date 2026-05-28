@@ -1126,7 +1126,8 @@ def _filter_target_region(
     guides: List[Tuple[str, str, int, str]],
     sequence_length: int,
     target_region: TargetRegion,
-    upstream_length: int = 0
+    upstream_length: int = 0,
+    gene_strand: Optional[str] = None
 ) -> List[Tuple[str, str, int, str]]:
     """
     Filter guides to those within the target region.
@@ -1137,6 +1138,9 @@ def _filter_target_region(
         target_region: Target region type
         upstream_length: Length of upstream sequence prepended (for FIVE_PRIME_UPSTREAM)
                         Positions <= upstream_length are in the upstream region
+        gene_strand: Gene strand ("+" or "-"). For minus strand genes, the coding
+                    sequence in CGD is stored in genomic orientation, so we need to
+                    invert the 5'/3' filtering logic.
 
     Returns:
         Filtered list of guides
@@ -1153,19 +1157,37 @@ def _filter_target_region(
     # of the CDS, not just the first 20%
     region_size = int(cds_length * 0.5)
 
+    # For minus strand genes, the coding sequence is stored in genomic orientation
+    # (not 5' to 3' of the gene), so we need to invert the region logic.
+    # Position 1 in the sequence corresponds to the 3' end of the gene.
+    is_minus_strand = gene_strand == "-"
+
     if target_region == TargetRegion.FIVE_PRIME:
-        # First 20% of CDS (positions 1 to region_size, no upstream)
-        return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
+        if is_minus_strand:
+            # For minus strand: 5' end is at HIGH positions (end of sequence)
+            start = sequence_length - region_size
+            return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
+        else:
+            # For plus strand: 5' end is at LOW positions (start of sequence)
+            return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
     elif target_region == TargetRegion.FIVE_PRIME_UPSTREAM:
-        # Upstream region (positions 1 to upstream_length) + first 20% of CDS
-        # The upstream region positions are: 1 to upstream_length
-        # The first 20% of CDS positions are: upstream_length+1 to upstream_length+region_size
-        max_position = upstream_length + region_size
-        return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
+        if is_minus_strand:
+            # For minus strand: 5' end + downstream (which is "upstream" in genomic coords)
+            # is at HIGH positions. Include upstream_length before the CDS end.
+            min_position = sequence_length - region_size - upstream_length
+            return [(g, pam, p, s) for g, pam, p, s in guides if p >= min_position]
+        else:
+            # For plus strand: upstream + 5' end at LOW positions
+            max_position = upstream_length + region_size
+            return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
     elif target_region == TargetRegion.THREE_PRIME:
-        # Last 20% of CDS
-        start = sequence_length - region_size
-        return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
+        if is_minus_strand:
+            # For minus strand: 3' end is at LOW positions (start of sequence)
+            return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
+        else:
+            # For plus strand: 3' end is at HIGH positions (end of sequence)
+            start = sequence_length - region_size
+            return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
 
     return guides
 
@@ -2739,7 +2761,8 @@ def design_guides(
             all_guides,
             len(target_sequence),
             request.target_region,
-            upstream_length=upstream_length
+            upstream_length=upstream_length,
+            gene_strand=gene_info.strand if gene_info else None
         )
 
     if not all_guides:

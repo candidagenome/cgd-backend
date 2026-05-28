@@ -648,6 +648,62 @@ class TestTargetRegionFiltering:
         assert 800 in positions  # first 50% CDS
         assert 1200 not in positions  # past first 50%
 
+    def test_five_prime_filter_minus_strand(self, sample_guides):
+        """5' prime for minus strand should include last 50% (high positions)."""
+        filtered = _filter_target_region(
+            sample_guides,
+            sequence_length=1000,
+            target_region=TargetRegion.FIVE_PRIME,
+            gene_strand="-"
+        )
+
+        positions = [pos for _, _, pos, _ in filtered]
+        # For minus strand: 5' is at HIGH positions (>= 500)
+        for pos in positions:
+            assert pos >= 500
+
+    def test_three_prime_filter_minus_strand(self, sample_guides):
+        """3' prime for minus strand should include first 50% (low positions)."""
+        filtered = _filter_target_region(
+            sample_guides,
+            sequence_length=1000,
+            target_region=TargetRegion.THREE_PRIME,
+            gene_strand="-"
+        )
+
+        positions = [pos for _, _, pos, _ in filtered]
+        # For minus strand: 3' is at LOW positions (<= 500)
+        for pos in positions:
+            assert pos <= 500
+
+    def test_five_prime_upstream_filter_minus_strand(self):
+        """5' prime upstream for minus strand should include end of sequence + downstream."""
+        # For minus strand: 5' end is at HIGH positions
+        # "upstream" in gene terms is actually downstream in genomic coords
+        guides = [
+            ("GUIDE1", "NGG", 100, "+"),   # 3' region (for minus strand)
+            ("GUIDE2", "NGG", 400, "+"),   # 3' region (for minus strand)
+            ("GUIDE3", "NGG", 600, "+"),   # Near 5' end
+            ("GUIDE4", "NGG", 1000, "+"),  # In 5' region
+            ("GUIDE5", "NGG", 1400, "+"),  # In 5' region + upstream
+        ]
+
+        filtered = _filter_target_region(
+            guides,
+            sequence_length=1500,  # 500 upstream + 1000 CDS
+            target_region=TargetRegion.FIVE_PRIME_UPSTREAM,
+            upstream_length=500,
+            gene_strand="-"
+        )
+
+        # For minus strand: min_position = 1500 - 500 - 500 = 500
+        positions = [pos for _, _, pos, _ in filtered]
+        assert 100 not in positions   # too far from 5' end
+        assert 400 not in positions   # too far from 5' end
+        assert 600 in positions       # in 5' region
+        assert 1000 in positions      # in 5' region
+        assert 1400 in positions      # in upstream region
+
 
 # =============================================================================
 # Brute-Force Off-Target Search Tests
