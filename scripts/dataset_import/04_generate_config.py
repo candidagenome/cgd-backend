@@ -11,17 +11,76 @@ Usage:
 
     python 04_generate_config.py --from-metadata study_metadata.json
 
+    # From curator's Excel template (TSV export)
+    python 04_generate_config.py --from-tsv study_metadata.tsv
+
 Output:
     Prints Python dict configuration to stdout, ready to paste into EXPRESSION_STUDIES.
+
+Supports group-based control matching for time-course and multi-factor experiments.
+When conditions have a "group" field, treatments are matched to controls within
+the same group for fold change calculations.
 """
 
 import argparse
+import csv
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any, List
+
+
+def parse_tsv_metadata(tsv_file: str) -> Dict[str, Any]:
+    """
+    Parse curator's TSV metadata file (exported from Excel template).
+
+    Expected columns:
+    - Study-level (first row): Study_ID, PMID, NCBI_BioProject, GEO_Accession, Organism, Category
+    - Sample-level: SRR_ID, Condition_Label, Bucket, Group, Replicate, Strain, Treatment, Timepoint
+
+    Returns dict with study info and conditions list.
+    """
+    metadata = {
+        "study": None,
+        "pmid": None,
+        "ncbi_id": None,
+        "category": None,
+        "species": None,
+        "conditions": [],  # List of dicts with srr_id, label, bucket, group
+    }
+
+    with open(tsv_file, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+
+        for row in reader:
+            # Extract study-level info from first row that has it
+            if row.get('Study_ID') and not metadata['study']:
+                metadata['study'] = row['Study_ID']
+            if row.get('PMID') and not metadata['pmid']:
+                metadata['pmid'] = row['PMID']
+            if row.get('NCBI_BioProject') and not metadata['ncbi_id']:
+                metadata['ncbi_id'] = row['NCBI_BioProject']
+            if row.get('Category') and not metadata['category']:
+                metadata['category'] = row['Category']
+            if row.get('Organism') and not metadata['species']:
+                metadata['species'] = row['Organism']
+
+            # Extract sample-level info
+            srr_id = row.get('SRR_ID', '').strip()
+            if not srr_id:
+                continue
+
+            condition = {
+                'srr_id': srr_id,
+                'label': row.get('Condition_Label', srr_id).strip(),
+                'bucket': row.get('Bucket', 'treatment').strip().lower(),
+                'group': row.get('Group', '').strip() or None,
+            }
+            metadata['conditions'].append(condition)
+
+    return metadata
 
 
 def get_category_from_description(description: str) -> str:
@@ -84,11 +143,18 @@ def generate_config(
     category: Optional[str] = None,
     description: Optional[str] = None,
     bigwig_dir: Optional[str] = None,
-    conditions: Optional[list[str]] = None,
+    conditions: Optional[List[Any]] = None,
     control: Optional[str] = None,
     path_style: str = "new",
 ) -> str:
-    """Generate Python dict configuration for a study."""
+    """
+    Generate Python dict configuration for a study.
+
+    Args:
+        conditions: Can be either:
+            - List of strings (condition names) - legacy format
+            - List of dicts with keys: srr_id, label, bucket, group - new format
+    """
 
     # Auto-detect conditions from BigWig directory
     if bigwig_dir and not conditions:
@@ -100,30 +166,47 @@ def generate_config(
     elif not category:
         category = "Gene Expression"
 
-    # Auto-detect control
-    if conditions and not control:
-        control = infer_control_condition(conditions)
-
-    # Build conditions dict
+    # Build conditions dict - handle both old (list of strings) and new (list of dicts) formats
     conditions_dict = {}
+    has_groups = False
+
     if conditions:
         for cond in conditions:
-            # Try to infer bucket (control vs experimental)
-            cond_lower = cond.lower()
-            if control and cond == control:
-                bucket = "control"
-            elif any(kw in cond_lower for kw in ["control", "ctrl", "wt", "untreated"]):
-                bucket = "control"
+            if isinstance(cond, dict):
+                # New format: dict with srr_id, label, bucket, group
+                cond_id = cond.get('srr_id', '')
+                label = cond.get('label', cond_id)
+                bucket = cond.get('bucket', 'treatment')
+                group = cond.get('group')
+
+                conditions_dict[cond_id] = {
+                    "label": label,
+                    "bucket": bucket,
+                }
+                if group:
+                    conditions_dict[cond_id]["group"] = group
+                    has_groups = True
             else:
-                bucket = "experimental"
+                # Legacy format: string condition name
+                cond_lower = cond.lower()
+                if control and cond == control:
+                    bucket = "control"
+                elif any(kw in cond_lower for kw in ["control", "ctrl", "wt", "untreated"]):
+                    bucket = "control"
+                else:
+                    bucket = "experimental"
 
-            # Generate label from condition name
-            label = cond.replace("_", " ").replace("-", " ").title()
+                # Generate label from condition name
+                label = cond.replace("_", " ").replace("-", " ").title()
 
-            conditions_dict[cond] = {
-                "label": label,
-                "bucket": bucket,
-            }
+                conditions_dict[cond] = {
+                    "label": label,
+                    "bucket": bucket,
+                }
+
+    # Auto-detect control (only for legacy format without groups)
+    if conditions_dict and not control and not has_groups:
+        control = infer_control_condition(list(conditions_dict.keys()))
 
     # Generate Python dict as string
     config = f'''
@@ -144,7 +227,8 @@ def generate_config(
     config += f'''
         "path_style": "{path_style}",'''
 
-    if control:
+    # Only include study-level control if not using group-based matching
+    if control and not has_groups:
         config += f'''
         "control": "{control}",'''
 
@@ -152,8 +236,13 @@ def generate_config(
         "conditions": {'''
 
     for cond_name, cond_data in conditions_dict.items():
+        # Build condition entry
+        parts = [f'"label": "{cond_data["label"]}"', f'"bucket": "{cond_data["bucket"]}"']
+        if cond_data.get("group"):
+            parts.append(f'"group": "{cond_data["group"]}"')
+
         config += f'''
-            "{cond_name}": {{"label": "{cond_data['label']}", "bucket": "{cond_data['bucket']}"}},'''
+            "{cond_name}": {{{", ".join(parts)}}},'''
 
     config += '''
         }
@@ -173,8 +262,11 @@ Examples:
       --pmid 39455573 --ncbi PRJNA1086003 \\
       --bigwig-dir /data/HTS/C_auris_B8441/bam/Wang_2024
 
-  # Generate config from metadata file
+  # Generate config from metadata file (JSON)
   python 04_generate_config.py --from-metadata study_info.json
+
+  # Generate config from curator's TSV template (supports group-based control matching)
+  python 04_generate_config.py --from-tsv Du_2015.metadata.tsv
 
   # Specify conditions manually
   python 04_generate_config.py --species C_auris_B8441 --study Test \\
@@ -193,11 +285,25 @@ Examples:
     parser.add_argument("--control", help="Control condition name")
     parser.add_argument("--path-style", default="new", help="Path style: old, new, lohse, direct")
     parser.add_argument("--from-metadata", help="JSON file with study metadata")
+    parser.add_argument("--from-tsv", help="TSV file from curator's Excel template (supports group field)")
 
     args = parser.parse_args()
 
-    # Load from metadata file if provided
-    if args.from_metadata:
+    conditions = None
+
+    # Load from TSV file if provided (curator's template format)
+    if args.from_tsv:
+        metadata = parse_tsv_metadata(args.from_tsv)
+        args.species = metadata.get("species") or args.species
+        args.study = metadata.get("study") or args.study
+        args.pmid = metadata.get("pmid") or args.pmid
+        args.ncbi = metadata.get("ncbi_id") or args.ncbi
+        args.category = metadata.get("category") or args.category
+        # conditions is a list of dicts with srr_id, label, bucket, group
+        conditions = metadata.get("conditions", [])
+
+    # Load from JSON metadata file if provided
+    elif args.from_metadata:
         with open(args.from_metadata) as f:
             metadata = json.load(f)
         args.species = metadata.get("species", args.species)
@@ -207,20 +313,19 @@ Examples:
         args.category = metadata.get("category", args.category)
         args.description = metadata.get("description", args.description)
         args.bigwig_dir = metadata.get("bigwig_dir", args.bigwig_dir)
-        args.conditions = metadata.get("conditions", args.conditions)
+        conditions = metadata.get("conditions", args.conditions)
         args.control = metadata.get("control", args.control)
 
-    # Validate required arguments
-    if not args.study:
-        parser.error("--study is required")
-
-    # Parse conditions if provided as string
-    conditions = None
-    if args.conditions:
+    # Parse conditions if provided as string (command line)
+    if args.conditions and not conditions:
         if isinstance(args.conditions, str):
             conditions = [c.strip() for c in args.conditions.split(",")]
         else:
             conditions = args.conditions
+
+    # Validate required arguments
+    if not args.study:
+        parser.error("--study is required (or provide --from-tsv with Study_ID column)")
 
     # Generate and print config
     config = generate_config(
