@@ -14,8 +14,26 @@ This directory contains scripts and data for benchmarking CGD's CRISPR guide des
 
 - **Organism**: *Candida albicans* SC5314
 - **Genes**: 20 well-studied genes (adhesins, proteases, transcription factors, etc.)
-- **Target region**: 5' end of CDS (first 500bp) - optimal for knockout experiments
+- **Target region**: 5' end of CDS (first 500bp) - used for benchmark comparison
 - **PAM**: NGG (SpCas9)
+
+### Note on CGD's Target Region Settings
+
+CGD offers several target region options with different behaviors:
+
+| Option | Description |
+|--------|-------------|
+| **5' Region + Upstream (Default)** | 500bp upstream of ATG + first 20% of CDS |
+| **5' Region** | First 20% of CDS only |
+| **3' Region** | Last 20% of CDS |
+| **Full CDS** | Entire coding sequence |
+
+**Why 20% instead of 50%?** CGD uses a conservative 20% threshold for 5' targeting because:
+- Frameshifts near the start codon are more effective for knockouts
+- Avoids internal start codons that could produce partially functional proteins
+- Smaller search region allows more thorough off-target analysis
+
+The benchmark used **first 500bp** to match what CHOPCHOP and CRISPOR provide. For genes with CDS >2500bp, this is less than 20%; for shorter genes, it's more than 20%. The benchmark script uses `target_region="5_prime"` with CGD's API.
 
 ---
 
@@ -88,10 +106,13 @@ penalty = off_target_penalty
 ```
 
 **Position bonus** uses exponential decay to favor early guides for knockout experiments:
-- At 0% (gene start): ~-6000 bonus
+- At 0% (gene start): ~-6000 bonus (highest priority)
 - At 10%: ~-5200 bonus
+- At 20%: ~-4000 bonus (end of 5' Region)
 - At 50%: ~-2000 bonus
-- Beyond 50%: no bonus
+- Beyond 50%: no bonus (lowest priority for knockouts)
+
+This position weighting means guides in the **first 20% of CDS** receive the highest ranking boost, aligning with CGD's recommended 5' Region targeting. Guides beyond 50% are not penalized but receive no position bonus, making them rank lower than equally-scored guides near the start.
 
 ### Off-Target Penalty Calculation
 
