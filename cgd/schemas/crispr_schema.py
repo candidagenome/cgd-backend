@@ -278,6 +278,7 @@ class CrisprDesignResponse(BaseModel):
     # Target sequence info
     target_sequence: Optional[str] = Field(None, description="Target sequence used for design")
     target_length: int = Field(0, description="Length of target sequence")
+    upstream_length: int = Field(0, description="Length of upstream region (0 if no upstream)")
 
     # Design parameters used
     organism: str = Field(description="Organism used")

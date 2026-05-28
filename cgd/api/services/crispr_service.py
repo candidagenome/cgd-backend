@@ -3095,6 +3095,7 @@ def design_guides(
         gene_info=gene_info,
         target_sequence=target_sequence[:100] + "..." if len(target_sequence) > 100 else target_sequence,
         target_length=len(target_sequence),
+        upstream_length=upstream_length,
         organism=request.organism,
         pam=request.pam.value,
         guide_length=request.guide_length,
