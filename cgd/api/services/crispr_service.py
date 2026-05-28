@@ -1132,15 +1132,21 @@ def _filter_target_region(
     """
     Filter guides to those within the target region.
 
+    The target sequence is always in gene orientation (5' to 3'), regardless of
+    genomic strand. This means:
+    - Position 1 = 5' end (or start of upstream if FIVE_PRIME_UPSTREAM)
+    - Position N = 3' end of CDS
+
+    For FIVE_PRIME_UPSTREAM, the sequence structure is: [upstream_500bp][CDS]
+    So positions 1-500 are upstream, and 501+ are CDS (starting from 5' end).
+
     Args:
         guides: List of (guide_seq, pam_seq, position, strand) tuples
         sequence_length: Total length of the target sequence
         target_region: Target region type
         upstream_length: Length of upstream sequence prepended (for FIVE_PRIME_UPSTREAM)
-                        Positions <= upstream_length are in the upstream region
-        gene_strand: Gene strand ("+" or "-"). For minus strand genes, the coding
-                    sequence in CGD is stored in genomic orientation, so we need to
-                    invert the 5'/3' filtering logic.
+        gene_strand: Gene strand ("+" or "-") - not used for filtering since
+                    sequence is always in gene orientation
 
     Returns:
         Filtered list of guides
@@ -1156,40 +1162,19 @@ def _filter_target_region(
     # For knockout experiments, targeting the first 20% ensures early frameshift
     region_size = int(cds_length * 0.2)
 
-    # For minus strand genes, the coding sequence is stored in genomic orientation
-    # (not 5' to 3' of the gene), so we need to invert the region logic.
-    # Position 1 in the sequence corresponds to the 3' end of the gene.
-    is_minus_strand = gene_strand == "-"
-
     if target_region == TargetRegion.FIVE_PRIME:
-        if is_minus_strand:
-            # For minus strand: 5' end is at HIGH positions (end of sequence)
-            start = sequence_length - region_size
-            return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
-        else:
-            # For plus strand: 5' end is at LOW positions (start of sequence)
-            return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
+        # 5' region: first 20% of CDS (positions 1 to region_size)
+        return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
     elif target_region == TargetRegion.FIVE_PRIME_UPSTREAM:
-        if is_minus_strand:
-            # For minus strand: the sequence is [upstream][CDS in genomic orientation]
-            # - Upstream region is at positions 1 to upstream_length (this IS the 5' upstream)
-            # - 5' end of CDS is at HIGH positions (sequence_length - region_size) to sequence_length
-            # We need to include BOTH ranges (they're not contiguous)
-            five_prime_cds_start = sequence_length - region_size
-            return [(g, pam, p, s) for g, pam, p, s in guides
-                    if p <= upstream_length or p >= five_prime_cds_start]
-        else:
-            # For plus strand: upstream + 5' end at LOW positions (contiguous)
-            max_position = upstream_length + region_size
-            return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
+        # 5' + upstream: upstream region + first 20% of CDS
+        # Positions 1 to upstream_length are upstream
+        # Positions upstream_length+1 to upstream_length+region_size are 5' CDS
+        max_position = upstream_length + region_size
+        return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
     elif target_region == TargetRegion.THREE_PRIME:
-        if is_minus_strand:
-            # For minus strand: 3' end is at LOW positions (start of sequence)
-            return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
-        else:
-            # For plus strand: 3' end is at HIGH positions (end of sequence)
-            start = sequence_length - region_size
-            return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
+        # 3' region: last 20% of CDS (positions sequence_length-region_size to end)
+        start = sequence_length - region_size
+        return [(g, pam, p, s) for g, pam, p, s in guides if p >= start]
 
     return guides
 
