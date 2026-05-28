@@ -33,7 +33,7 @@ CGD offers several target region options with different behaviors:
 - Avoids internal start codons that could produce partially functional proteins
 - Smaller search region allows more thorough off-target analysis
 
-The benchmark used **first 500bp** to match what CHOPCHOP and CRISPOR provide. For genes with CDS >2500bp, this is less than 20%; for shorter genes, it's more than 20%. The benchmark script uses `target_region="5_prime"` with CGD's API.
+The benchmark uses the **first 500bp of CDS** for all three tools to ensure a fair comparison. The benchmark script passes the exact same 500bp sequence to CGD's API that was used for CHOPCHOP and CRISPOR.
 
 ---
 
@@ -43,36 +43,36 @@ The benchmark used **first 500bp** to match what CHOPCHOP and CRISPOR provide. F
 
 **Overall, CGD guide rankings are broadly consistent with CHOPCHOP and CRISPOR, especially when comparing CGD top 20 against external top 10 results.**
 
-When CGD results are expanded to the top 20, CGD recovers ~79% of CHOPCHOP and CRISPOR guides, suggesting that most differences are due to ranking order rather than missing guide candidates.
+When CGD results are expanded to the top 20, CGD recovers ~72–81% of CHOPCHOP and CRISPOR guides, suggesting that most differences are due to ranking order rather than missing guide candidates.
 
 ### Top 10 Guide Comparison (20 Genes)
 
 | Comparison | Overlap | Match Rate |
 |------------|---------|------------|
-| CHOPCHOP top 10 found in CGD top 10 | 79/140 | **56.4%** |
+| CHOPCHOP top 10 found in CGD top 10 | 82/140 | **58.6%** |
 | CHOPCHOP top 10 found in CRISPOR top 10 | 76/140 | 54.3% |
-| CRISPOR top 10 found in CGD top 10 | 111/200 | 55.5% |
-| CGD top 10 found in CRISPOR top 10 | 111/200 | 55.5% |
-| CGD top 10 found in CHOPCHOP top 10 | 79/200 | 39.5% |
+| CRISPOR top 10 found in CGD top 10 | 104/200 | 52.0% |
+| CGD top 10 found in CRISPOR top 10 | 104/197 | 52.8% |
+| CGD top 10 found in CHOPCHOP top 10 | 82/197 | 41.6% |
 
-> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD and CRISPOR each returned 200 guides across the 20 genes.
+> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD returned 197 guides (some short genes had fewer candidates).
 
 ### Extended Comparison (Top 20)
 
 | Comparison | Match Rate |
 |------------|------------|
-| CHOPCHOP top 10 found in CGD top 20 | **78.6%** (110/140) |
-| CRISPOR top 10 found in CGD top 20 | **79.5%** (159/200) |
+| CHOPCHOP top 10 found in CGD top 20 | **80.7%** (113/140) |
+| CRISPOR top 10 found in CGD top 20 | **72.0%** (144/200) |
 
-This is the strongest evidence that CGD is finding the same candidate guides as other tools, even if the exact ranking differs.
+This shows that CGD is finding the same candidate guides as other tools, even if the exact ranking differs.
 
 ### Key Findings
 
-1. **CGD top guides show similar overlap with CHOPCHOP and CRISPOR**, with ~50–56% agreement in strict top 10 comparisons.
+1. **CGD top guides show similar overlap with CHOPCHOP and CRISPOR**, with ~52–59% agreement in strict top 10 comparisons.
 
-2. **When CGD results are expanded to the top 20**, CGD recovers ~79% of CHOPCHOP/CRISPOR guides, suggesting that many differences are due to ranking order rather than missing guide candidates.
+2. **When CGD results are expanded to the top 20**, CGD recovers ~72–81% of CHOPCHOP/CRISPOR guides, suggesting that many differences are due to ranking order rather than missing guide candidates.
 
-3. **CHOPCHOP returned fewer guides for some genes**, so CHOPCHOP comparisons use 140 possible guides instead of 200.
+3. **53 consensus guides** appear in all three tools' top 10 across the 20 test genes.
 
 4. **Match rate measures overlap between tools, not biological correctness.** Each tool uses different efficiency, specificity, filtering, and ranking criteria. Differences are expected.
 

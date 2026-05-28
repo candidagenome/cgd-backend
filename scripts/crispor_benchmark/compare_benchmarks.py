@@ -41,8 +41,8 @@ def load_fixtures() -> Tuple[List[dict], List[dict]]:
     return chopchop_data, crispor_data
 
 
-def get_cgd_guides(gene_name: str, max_guides: int = 50) -> List[str]:
-    """Get CGD-generated guides for a gene."""
+def get_cgd_guides(sequence: str, max_guides: int = 50) -> List[str]:
+    """Get CGD-generated guides for a sequence (first 500bp of CDS)."""
     from cgd.db.engine import SessionLocal
     from cgd.api.services import crispr_service
     from cgd.schemas.crispr_schema import CrisprDesignRequest, OffTargetMethod
@@ -50,10 +50,10 @@ def get_cgd_guides(gene_name: str, max_guides: int = 50) -> List[str]:
     db = SessionLocal()
     try:
         request = CrisprDesignRequest(
-            gene_name=gene_name,
+            sequence=sequence,
             organism="C_albicans_SC5314_A22",
-            pam_type="NGG",
-            target_region="5_prime",
+            pam="NGG",
+            target_region="full_cds",  # Use full sequence since we're passing exactly 500bp
             guide_length=20,
             max_guides=max_guides,
             offtarget_method=OffTargetMethod.BOWTIE,
@@ -214,11 +214,16 @@ def main():
         crispor_gene = crispor_by_gene.get(gene_name, {})
         crispor_guides = [g["sequence"] for g in crispor_gene.get("crispor_top_guides", [])]
 
-        # Get CGD guides
+        # Get CGD guides using first 500bp sequence (same as CHOPCHOP/CRISPOR)
+        sequence_500bp = gene_data.get("cds_first_500bp", "")
         print(f"Processing {gene_name}...", end=" ", flush=True)
         try:
-            cgd_guides = get_cgd_guides(gene_name)
-            print(f"got {len(cgd_guides)} guides")
+            if not sequence_500bp:
+                print("ERROR: No cds_first_500bp sequence")
+                cgd_guides = []
+            else:
+                cgd_guides = get_cgd_guides(sequence_500bp)
+                print(f"got {len(cgd_guides)} guides")
         except Exception as e:
             print(f"ERROR: {e}")
             cgd_guides = []
