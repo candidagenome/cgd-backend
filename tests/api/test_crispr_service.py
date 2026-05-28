@@ -677,15 +677,17 @@ class TestTargetRegionFiltering:
             assert pos <= 200
 
     def test_five_prime_upstream_filter_minus_strand(self):
-        """5' prime upstream for minus strand should include end of sequence + downstream."""
-        # For minus strand: 5' end is at HIGH positions
-        # "upstream" in gene terms is actually downstream in genomic coords
+        """5' prime upstream for minus strand includes upstream region AND 5' end of CDS."""
+        # For minus strand: sequence is [upstream][CDS in genomic orientation]
+        # - Upstream (positions 1-500) is the 5' upstream of the gene
+        # - CDS (positions 501-1500) has 5' end at HIGH positions (1300-1500 for 20%)
         guides = [
-            ("GUIDE1", "NGG", 100, "+"),   # 3' region (for minus strand)
-            ("GUIDE2", "NGG", 400, "+"),   # 3' region (for minus strand)
-            ("GUIDE3", "NGG", 800, "+"),   # Near 5' end but not in 20%
-            ("GUIDE4", "NGG", 1000, "+"),  # In 5' region (last 20% of CDS)
-            ("GUIDE5", "NGG", 1400, "+"),  # In upstream region
+            ("GUIDE1", "NGG", 100, "+"),   # In upstream region - should be included
+            ("GUIDE2", "NGG", 400, "+"),   # In upstream region - should be included
+            ("GUIDE3", "NGG", 600, "+"),   # In CDS but not 5' end - excluded
+            ("GUIDE4", "NGG", 1000, "+"),  # In CDS but not 5' end - excluded
+            ("GUIDE5", "NGG", 1350, "+"),  # In 5' end of CDS (>= 1300) - included
+            ("GUIDE6", "NGG", 1450, "+"),  # In 5' end of CDS - included
         ]
 
         filtered = _filter_target_region(
@@ -696,13 +698,15 @@ class TestTargetRegionFiltering:
             gene_strand="-"
         )
 
-        # For minus strand with 20%: min_position = 1500 - 200 - 500 = 800
+        # Minus strand: include upstream (1-500) OR 5' end of CDS (1300-1500)
+        # 5' CDS start = 1500 - 200 = 1300
         positions = [pos for _, _, pos, _ in filtered]
-        assert 100 not in positions   # too far from 5' end
-        assert 400 not in positions   # too far from 5' end
-        assert 800 in positions       # at boundary of 5' region
-        assert 1000 in positions      # in 5' region
-        assert 1400 in positions      # in upstream region
+        assert 100 in positions       # in upstream region
+        assert 400 in positions       # in upstream region
+        assert 600 not in positions   # in CDS middle
+        assert 1000 not in positions  # in CDS middle
+        assert 1350 in positions      # in 5' end of CDS
+        assert 1450 in positions      # in 5' end of CDS
 
 
 # =============================================================================

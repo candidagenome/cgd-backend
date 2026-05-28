@@ -1171,12 +1171,15 @@ def _filter_target_region(
             return [(g, pam, p, s) for g, pam, p, s in guides if p <= region_size]
     elif target_region == TargetRegion.FIVE_PRIME_UPSTREAM:
         if is_minus_strand:
-            # For minus strand: 5' end + downstream (which is "upstream" in genomic coords)
-            # is at HIGH positions. Include upstream_length before the CDS end.
-            min_position = sequence_length - region_size - upstream_length
-            return [(g, pam, p, s) for g, pam, p, s in guides if p >= min_position]
+            # For minus strand: the sequence is [upstream][CDS in genomic orientation]
+            # - Upstream region is at positions 1 to upstream_length (this IS the 5' upstream)
+            # - 5' end of CDS is at HIGH positions (sequence_length - region_size) to sequence_length
+            # We need to include BOTH ranges (they're not contiguous)
+            five_prime_cds_start = sequence_length - region_size
+            return [(g, pam, p, s) for g, pam, p, s in guides
+                    if p <= upstream_length or p >= five_prime_cds_start]
         else:
-            # For plus strand: upstream + 5' end at LOW positions
+            # For plus strand: upstream + 5' end at LOW positions (contiguous)
             max_position = upstream_length + region_size
             return [(g, pam, p, s) for g, pam, p, s in guides if p <= max_position]
     elif target_region == TargetRegion.THREE_PRIME:
