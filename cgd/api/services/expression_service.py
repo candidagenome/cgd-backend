@@ -1333,6 +1333,93 @@ def _get_library_size(
     return study_sizes.get(condition_id)
 
 
+def _build_group_control_map(study_info: dict) -> Dict[str, str]:
+    """
+    Build a mapping of group -> control_id for a study.
+
+    For studies using group-based control matching, each group should have
+    exactly one condition with bucket="control". This function builds a map
+    from group names to their control condition IDs.
+
+    For backward compatibility, if no groups are defined, returns an empty dict
+    and the caller should fall back to the study-level "control" field.
+
+    Args:
+        study_info: Study configuration dict with "conditions" field
+
+    Returns:
+        Dict mapping group name to control condition ID.
+        Empty dict if no groups are defined.
+    """
+    group_controls: Dict[str, str] = {}
+
+    for cond_id, cond_info in study_info.get("conditions", {}).items():
+        group = cond_info.get("group")
+        bucket = cond_info.get("bucket", "")
+
+        if group and bucket == "control":
+            if group in group_controls:
+                logger.warning(
+                    f"Multiple controls found for group '{group}': "
+                    f"{group_controls[group]} and {cond_id}. Using first."
+                )
+            else:
+                group_controls[group] = cond_id
+
+    return group_controls
+
+
+def _get_control_for_condition(
+    study_info: dict,
+    cond_id: str,
+    group_control_map: Dict[str, str]
+) -> Optional[str]:
+    """
+    Get the control condition ID for a given condition.
+
+    Uses group-based matching if the condition has a "group" field,
+    otherwise falls back to the study-level "control" field.
+
+    Args:
+        study_info: Study configuration dict
+        cond_id: Condition ID to find control for
+        group_control_map: Pre-built map from _build_group_control_map()
+
+    Returns:
+        Control condition ID, or None if not found
+    """
+    cond_info = study_info.get("conditions", {}).get(cond_id, {})
+    group = cond_info.get("group")
+
+    if group and group_control_map:
+        # Use group-based control
+        control_id = group_control_map.get(group)
+        if not control_id:
+            logger.warning(
+                f"No control found for group '{group}' "
+                f"(condition {cond_id})"
+            )
+        return control_id
+    else:
+        # Fall back to study-level control
+        return study_info.get("control")
+
+
+def _is_control_condition(study_info: dict, cond_id: str) -> bool:
+    """
+    Check if a condition is a control (bucket == "control").
+
+    Args:
+        study_info: Study configuration dict
+        cond_id: Condition ID to check
+
+    Returns:
+        True if condition is a control, False otherwise
+    """
+    cond_info = study_info.get("conditions", {}).get(cond_id, {})
+    return cond_info.get("bucket") == "control"
+
+
 def _calculate_fold_change(
     cond_value: float,
     control_value: float,
@@ -1551,12 +1638,23 @@ def get_gene_expression(
     warnings: List[str] = []
 
     for study_id, study_info in studies_config.items():
-        control_id = study_info["control"]
-        control_path = _get_bigwig_path(base_path, study_id, control_id, study_info)
+        # Build group -> control mapping for this study
+        group_control_map = _build_group_control_map(study_info)
+        default_control_id = study_info.get("control")
 
-        # Get control expression value
-        control_value = _get_expression_value(control_path, chromosome, start, end)
-        if control_value is None or control_value <= 0:
+        # Cache control values (may have multiple controls for group-based studies)
+        control_values: Dict[str, float] = {}
+        control_ids_needed = set(group_control_map.values())
+        if default_control_id:
+            control_ids_needed.add(default_control_id)
+
+        for ctrl_id in control_ids_needed:
+            ctrl_path = _get_bigwig_path(base_path, study_id, ctrl_id, study_info)
+            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end)
+            if ctrl_value is not None and ctrl_value > 0:
+                control_values[ctrl_id] = ctrl_value
+
+        if not control_values:
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
@@ -1564,8 +1662,18 @@ def get_gene_expression(
         conditions: List[ExpressionCondition] = []
 
         for cond_id, cond_info in study_info["conditions"].items():
-            if cond_id == control_id:
+            # Skip control conditions
+            if _is_control_condition(study_info, cond_id):
                 continue
+
+            # Get the appropriate control for this condition
+            control_id = _get_control_for_condition(
+                study_info, cond_id, group_control_map
+            )
+            if not control_id or control_id not in control_values:
+                continue
+
+            control_value = control_values[control_id]
 
             cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
             cond_value = _get_expression_value(cond_path, chromosome, start, end)
@@ -1587,7 +1695,7 @@ def get_gene_expression(
                 label=cond_info["label"],
                 value=round(cond_value, 2),
                 fold_change=fold_change,
-                bucket=cond_info["bucket"]
+                bucket=cond_info.get("bucket", "")
             ))
 
             all_fold_changes.append(fold_change)
@@ -1597,15 +1705,17 @@ def get_gene_expression(
         conditions.sort(key=lambda x: x.fold_change, reverse=True)
 
         if conditions:
-            # Get human-readable control label
-            control_label = study_info["conditions"].get(control_id, {}).get("label", control_id)
+            # For display, use the first/default control
+            display_control_id = default_control_id or next(iter(control_values.keys()), None)
+            control_label = study_info["conditions"].get(display_control_id, {}).get("label", display_control_id)
+            display_control_value = control_values.get(display_control_id, 0)
             studies.append(ExpressionStudy(
                 study_id=study_id,
                 category=study_info["category"],
                 pmid=study_info.get("pmid"),
-                control_id=control_id,
+                control_id=display_control_id,
                 control_label=control_label,
-                control_value=round(control_value, 2),
+                control_value=round(display_control_value, 2),
                 conditions=conditions
             ))
 
@@ -1738,12 +1848,23 @@ def _get_expression_for_organism(
     warnings: List[str] = []
 
     for study_id, study_info in studies_config.items():
-        control_id = study_info["control"]
-        control_path = _get_bigwig_path(base_path, study_id, control_id, study_info)
+        # Build group -> control mapping for this study
+        group_control_map = _build_group_control_map(study_info)
+        default_control_id = study_info.get("control")
 
-        # Get control expression value
-        control_value = _get_expression_value(control_path, chromosome, start, end)
-        if control_value is None or control_value <= 0:
+        # Cache control values (may have multiple controls for group-based studies)
+        control_values: Dict[str, float] = {}
+        control_ids_needed = set(group_control_map.values())
+        if default_control_id:
+            control_ids_needed.add(default_control_id)
+
+        for ctrl_id in control_ids_needed:
+            ctrl_path = _get_bigwig_path(base_path, study_id, ctrl_id, study_info)
+            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end)
+            if ctrl_value is not None and ctrl_value > 0:
+                control_values[ctrl_id] = ctrl_value
+
+        if not control_values:
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
@@ -1751,8 +1872,18 @@ def _get_expression_for_organism(
         conditions: List[ExpressionCondition] = []
 
         for cond_id, cond_info in study_info["conditions"].items():
-            if cond_id == control_id:
+            # Skip control conditions
+            if _is_control_condition(study_info, cond_id):
                 continue
+
+            # Get the appropriate control for this condition
+            control_id = _get_control_for_condition(
+                study_info, cond_id, group_control_map
+            )
+            if not control_id or control_id not in control_values:
+                continue
+
+            control_value = control_values[control_id]
 
             cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
             cond_value = _get_expression_value(cond_path, chromosome, start, end)
@@ -1774,7 +1905,7 @@ def _get_expression_for_organism(
                 label=cond_info["label"],
                 value=round(cond_value, 2),
                 fold_change=fold_change,
-                bucket=cond_info["bucket"]
+                bucket=cond_info.get("bucket", "")
             ))
 
             all_fold_changes.append(fold_change)
@@ -1784,15 +1915,17 @@ def _get_expression_for_organism(
         conditions.sort(key=lambda x: x.fold_change, reverse=True)
 
         if conditions:
-            # Get human-readable control label
-            control_label = study_info["conditions"].get(control_id, {}).get("label", control_id)
+            # For display, use the first/default control
+            display_control_id = default_control_id or next(iter(control_values.keys()), None)
+            control_label = study_info["conditions"].get(display_control_id, {}).get("label", display_control_id)
+            display_control_value = control_values.get(display_control_id, 0)
             studies.append(ExpressionStudy(
                 study_id=study_id,
                 category=study_info["category"],
                 pmid=study_info.get("pmid"),
-                control_id=control_id,
+                control_id=display_control_id,
                 control_label=control_label,
-                control_value=round(control_value, 2),
+                control_value=round(display_control_value, 2),
                 conditions=conditions
             ))
 
@@ -2184,9 +2317,9 @@ def _get_all_condition_ids(organism_key: str) -> List[str]:
     condition_ids = []
 
     for study_id, study_info in studies_config.items():
-        control_id = study_info["control"]
         for cond_id in study_info["conditions"]:
-            if cond_id != control_id:
+            # Skip control conditions (bucket == "control")
+            if not _is_control_condition(study_info, cond_id):
                 # Use study_id + cond_id as unique key
                 condition_ids.append(f"{study_id}:{cond_id}")
 
@@ -2215,18 +2348,39 @@ def _build_expression_profile(
     profile: Dict[str, float] = {}
 
     for study_id, study_info in studies_config.items():
-        control_id = study_info["control"]
-        control_path = _get_bigwig_path(base_path, study_id, control_id, study_info)
+        # Build group -> control mapping for this study
+        group_control_map = _build_group_control_map(study_info)
+        default_control_id = study_info.get("control")
 
-        # Get control expression value
-        control_value = _get_expression_value(control_path, chromosome, start, end)
-        if control_value is None or control_value <= 0:
+        # Cache control values (may have multiple controls for group-based studies)
+        control_values: Dict[str, float] = {}
+        control_ids_needed = set(group_control_map.values())
+        if default_control_id:
+            control_ids_needed.add(default_control_id)
+
+        for ctrl_id in control_ids_needed:
+            ctrl_path = _get_bigwig_path(base_path, study_id, ctrl_id, study_info)
+            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end)
+            if ctrl_value is not None and ctrl_value > 0:
+                control_values[ctrl_id] = ctrl_value
+
+        if not control_values:
             continue
 
         # Process conditions
         for cond_id, cond_info in study_info["conditions"].items():
-            if cond_id == control_id:
+            # Skip control conditions
+            if _is_control_condition(study_info, cond_id):
                 continue
+
+            # Get the appropriate control for this condition
+            control_id = _get_control_for_condition(
+                study_info, cond_id, group_control_map
+            )
+            if not control_id or control_id not in control_values:
+                continue
+
+            control_value = control_values[control_id]
 
             cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
             cond_value = _get_expression_value(cond_path, chromosome, start, end)
