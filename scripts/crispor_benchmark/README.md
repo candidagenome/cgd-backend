@@ -43,36 +43,36 @@ The benchmark uses the **first 500bp of CDS** for all three tools to ensure a fa
 
 **Overall, CGD guide rankings are broadly consistent with CHOPCHOP and CRISPOR, especially when comparing CGD top 20 against external top 10 results.**
 
-When CGD results are expanded to the top 20, CGD recovers ~72–81% of CHOPCHOP and CRISPOR guides, suggesting that most differences are due to ranking order rather than missing guide candidates.
+When CGD results are expanded to the top 20, CGD recovers ~69–71% of CHOPCHOP and CRISPOR guides, suggesting that most differences are due to ranking order rather than missing guide candidates.
 
 ### Top 10 Guide Comparison (20 Genes)
 
 | Comparison | Overlap | Match Rate |
 |------------|---------|------------|
-| CHOPCHOP top 10 found in CGD top 10 | 82/140 | **58.6%** |
+| CHOPCHOP top 10 found in CGD top 10 | 67/140 | **47.9%** |
 | CHOPCHOP top 10 found in CRISPOR top 10 | 76/140 | 54.3% |
-| CRISPOR top 10 found in CGD top 10 | 104/200 | 52.0% |
-| CGD top 10 found in CRISPOR top 10 | 104/197 | 52.8% |
-| CGD top 10 found in CHOPCHOP top 10 | 82/197 | 41.6% |
+| CRISPOR top 10 found in CGD top 10 | 90/200 | 45.0% |
+| CGD top 10 found in CRISPOR top 10 | 90/200 | 45.0% |
+| CGD top 10 found in CHOPCHOP top 10 | 67/200 | 33.5% |
 
-> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200. CGD returned 197 guides (some short genes had fewer candidates).
+> **Note on denominators**: CHOPCHOP returned fewer than 10 guides for some genes, so CHOPCHOP-based comparisons use 140 possible guides instead of 200.
 
 ### Extended Comparison (Top 20)
 
 | Comparison | Match Rate |
 |------------|------------|
-| CHOPCHOP top 10 found in CGD top 20 | **80.7%** (113/140) |
-| CRISPOR top 10 found in CGD top 20 | **72.0%** (144/200) |
+| CHOPCHOP top 10 found in CGD top 20 | **70.7%** (99/140) |
+| CRISPOR top 10 found in CGD top 20 | **68.5%** (137/200) |
 
 This shows that CGD is finding the same candidate guides as other tools, even if the exact ranking differs.
 
 ### Key Findings
 
-1. **CGD top guides show similar overlap with CHOPCHOP and CRISPOR**, with ~52–59% agreement in strict top 10 comparisons.
+1. **CGD top guides show similar overlap with CHOPCHOP and CRISPOR**, with ~45–48% agreement in strict top 10 comparisons.
 
-2. **When CGD results are expanded to the top 20**, CGD recovers ~72–81% of CHOPCHOP/CRISPOR guides, suggesting that many differences are due to ranking order rather than missing guide candidates.
+2. **When CGD results are expanded to the top 20**, CGD recovers ~69–71% of CHOPCHOP/CRISPOR guides, suggesting that many differences are due to ranking order rather than missing guide candidates.
 
-3. **53 consensus guides** appear in all three tools' top 10 across the 20 test genes.
+3. **46 consensus guides** appear in all three tools' top 10 across the 20 test genes.
 
 4. **Match rate measures overlap between tools, not biological correctness.** Each tool uses different efficiency, specificity, filtering, and ranking criteria. Differences are expected.
 
