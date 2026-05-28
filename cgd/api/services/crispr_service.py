@@ -1152,10 +1152,9 @@ def _filter_target_region(
     # upstream_length indicates where CDS starts
     cds_length = sequence_length - upstream_length
 
-    # Calculate region boundaries (50% of CDS)
-    # CHOPCHOP's "5' region" includes guides in approximately the first half
-    # of the CDS, not just the first 20%
-    region_size = int(cds_length * 0.5)
+    # Calculate region boundaries (20% of CDS as documented in the UI)
+    # For knockout experiments, targeting the first 20% ensures early frameshift
+    region_size = int(cds_length * 0.2)
 
     # For minus strand genes, the coding sequence is stored in genomic orientation
     # (not 5' to 3' of the gene), so we need to invert the region logic.
