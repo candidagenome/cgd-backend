@@ -6,7 +6,7 @@ This directory contains scripts and data for benchmarking CGD's CRISPR guide des
 
 | Tool | Type | Scoring Method | Reference |
 |------|------|----------------|-----------|
-| **CGD** | In-house | Doench 2016 + position bonus + CFD off-target | This repository |
+| **CGD** | In-house | Doench 2016 + position bonus + mismatch-count off-target | This repository |
 | **CHOPCHOP** | Academic | Doench 2016 + MIT specificity | chopchop.cbu.uib.no |
 | **CRISPOR** | Academic | Doench 2016 + CFD specificity | crispor.gi.ucsc.edu |
 
@@ -93,7 +93,27 @@ penalty = off_target_penalty
 - At 50%: ~-2000 bonus
 - Beyond 50%: no bonus
 
-### Off-Target Checking and Specificity
+### Off-Target Penalty Calculation
+
+CGD uses a **mismatch-count-based penalty system** (similar to CHOPCHOP) rather than CFD scoring. Each off-target hit found by BLAST adds to the penalty based on the number of mismatches:
+
+| Mismatches | Penalty per Hit |
+|------------|-----------------|
+| 0 (exact match) | +1000 |
+| 1 | +800 |
+| 2 | +600 |
+| 3 | +400 |
+
+Additional rules:
+- If a guide has **>100 off-target hits**, an extra +20,000 penalty is applied
+- Off-targets with ≥4 mismatches are not counted (considered unlikely to cut)
+
+**Example**: A guide with 0 exact matches, 2 hits at 1mm, 5 hits at 2mm, and 10 hits at 3mm:
+```
+off_target_penalty = (0 × 1000) + (2 × 800) + (5 × 600) + (10 × 400) = 8600
+```
+
+### Specificity Score
 
 Specificity scores are only shown when off-target checking is performed:
 
@@ -102,6 +122,13 @@ Specificity scores are only shown when off-target checking is performed:
 - **Without off-target checking**: Specificity shows as "—" (not checked). Guides can still be ranked by efficiency and position, but they are not marked as recommended.
 
 This distinction is important because the UI behavior depends on whether off-target checking was enabled.
+
+### Note on Scoring Methods
+
+CGD's mismatch-count penalty is simpler than CFD (Cutting Frequency Determination), which uses a position-specific matrix derived from experimental data. The mismatch-count approach:
+- Treats all mismatches at a given count equally (regardless of position or nucleotide type)
+- Is computationally simpler
+- Provides similar ranking results for most use cases
 
 ---
 
