@@ -2,17 +2,19 @@
 
 This directory contains scripts for loading physical and genetic interaction data from BioGRID into CGD.
 
-## Data Statistics (May 2026)
+## Data Statistics (June 2026)
 
 | Type | Raw Interactions |
 |------|------------------|
-| Physical | 1,568 |
-| Genetic | 531 |
+| Physical | 1,520 |
+| Genetic | 530 |
 | **Total** | **2,099** |
 
-After filtering (inter-species removed, missing PMIDs):
-- **~1,872 interactions** loadable with current reference data
+After filtering (inter-species removed, missing PMIDs, duplicates):
+- **1,806 interactions** loaded
 - **178 interactions** skipped due to 8 missing PMIDs
+- **49 interactions** skipped (inter-species)
+- **66 interactions** skipped (duplicates)
 
 ---
 
@@ -63,6 +65,25 @@ Or use this Python script:
 cd ~/work/cgd-backend
 source venv/bin/activate
 python scripts/loading/biogrid/add_cv_terms.py
+```
+
+### Step 2b: Add Code Table Entries
+
+The database triggers also validate `source` and `action` values against the `code` table:
+
+```sql
+-- Add BioGRID as a source for INTERACTION table
+INSERT INTO MULTI.code (code_no, tab_name, col_name, code_value, description, date_created, created_by)
+VALUES ((SELECT MAX(code_no)+1 FROM MULTI.code), 'INTERACTION', 'SOURCE', 'BioGRID', 'BioGRID protein interaction database', SYSDATE, 'SHUAI');
+
+-- Add Bait and Hit as actions for FEAT_INTERACT table
+INSERT INTO MULTI.code (code_no, tab_name, col_name, code_value, description, date_created, created_by)
+VALUES ((SELECT MAX(code_no)+1 FROM MULTI.code), 'FEAT_INTERACT', 'ACTION', 'Bait', 'Bait protein in interaction', SYSDATE, 'SHUAI');
+
+INSERT INTO MULTI.code (code_no, tab_name, col_name, code_value, description, date_created, created_by)
+VALUES ((SELECT MAX(code_no)+1 FROM MULTI.code), 'FEAT_INTERACT', 'ACTION', 'Hit', 'Hit/prey protein in interaction', SYSDATE, 'SHUAI');
+
+COMMIT;
 ```
 
 ### Step 3: (Optional) Add Missing References
