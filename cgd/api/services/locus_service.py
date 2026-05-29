@@ -78,6 +78,7 @@ from cgd.schemas.interaction_schema import (
     InteractionDetailsForOrganism,
     InteractionOut,
     InteractorOut,
+    InteractionReferenceOut,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -2051,10 +2052,12 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
             )
             for rl in ref_links:
                 ref = rl.reference
-                if ref and ref.pubmed:
-                    references.append(f"PMID:{ref.pubmed}")
-                elif ref:
-                    references.append(ref.dbxref_id)
+                if ref:
+                    references.append(InteractionReferenceOut(
+                        dbxref_id=ref.dbxref_id,
+                        pubmed=ref.pubmed,
+                        citation=ref.citation,
+                    ))
 
             interactions.append(InteractionOut(
                 interaction_no=interaction.interaction_no,

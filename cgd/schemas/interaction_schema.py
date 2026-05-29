@@ -14,13 +14,20 @@ class InteractorOut(BaseModel):
     action: str  # Bait, Hit, etc.
 
 
+class InteractionReferenceOut(BaseModel):
+    """Reference info for interaction citations."""
+    dbxref_id: typing.Optional[str] = None
+    pubmed: typing.Optional[int] = None
+    citation: typing.Optional[str] = None  # "Author et al. (Year) Title. Journal"
+
+
 class InteractionOut(BaseModel):
     interaction_no: int
     experiment_type: str
     description: typing.Optional[str] = None
     source: str
     interactors: list[InteractorOut] = []
-    references: list[str] = []  # PMID strings
+    references: list[InteractionReferenceOut] = []
 
 
 class InteractionDetailsForOrganism(BaseModel):
