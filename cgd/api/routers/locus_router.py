@@ -125,7 +125,13 @@ def interaction_details(name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{name}/interaction_network", response_model=InteractionNetworkResponse)
-def interaction_network(name: str, depth: int = 2, db: Session = Depends(get_db)):
+def interaction_network(
+    name: str,
+    depth: int = 2,
+    include_string: bool = True,
+    string_score: int = 400,
+    db: Session = Depends(get_db)
+):
     """
     Get interaction network graph for this locus, grouped by organism.
 
@@ -135,9 +141,14 @@ def interaction_network(name: str, depth: int = 2, db: Session = Depends(get_db)
     Args:
         name: Locus name (gene_name, feature_name, or dbxref_id)
         depth: Network depth (1 = direct interactions only, 2 = include interactor-interactor)
+        include_string: Whether to include STRING database interactions (default True)
+        string_score: Minimum STRING confidence score 0-1000 (default 400 = medium)
     """
     try:
-        return locus_service.get_locus_interaction_network(db, name, max_depth=depth)
+        return locus_service.get_locus_interaction_network(
+            db, name, max_depth=depth,
+            include_string=include_string, string_score=string_score
+        )
     except Exception as e:
         logger.error(f"Error in interaction_network for {name}: {e}")
         logger.error(traceback.format_exc())

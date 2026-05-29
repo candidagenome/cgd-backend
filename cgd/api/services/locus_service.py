@@ -2097,7 +2097,13 @@ GENETIC_INTERACTION_TYPES = {
 }
 
 
-def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) -> InteractionNetworkResponse:
+def get_locus_interaction_network(
+    db: Session,
+    name: str,
+    max_depth: int = 1,
+    include_string: bool = True,
+    string_score: int = 400,
+) -> InteractionNetworkResponse:
     """
     Build a network graph of interactions for the queried locus.
 
@@ -2105,11 +2111,14 @@ def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) ->
     - The queried gene as the central node
     - All direct interactors as surrounding nodes
     - If max_depth > 1, also includes interactions between those interactors
+    - Optionally includes STRING database interactions
 
     Args:
         db: Database session
         name: Locus name (gene_name, feature_name, or dbxref_id)
         max_depth: How many levels of interactions to include (1 = direct only, 2 = include interactor-interactor)
+        include_string: Whether to include STRING database interactions
+        string_score: Minimum STRING confidence score (0-1000)
     """
     from cgd.models.models import Feature, FeatInteract, Interaction
 
@@ -2180,7 +2189,7 @@ def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) ->
                     feature_nos_in_network.add(other_feat.feature_no)
 
                 # Add edge (use sorted key to avoid duplicates A->B and B->A)
-                edge_key = '|'.join(sorted([query_feature_name, other_name]) + [interaction_type])
+                edge_key = '|'.join(sorted([query_feature_name, other_name]) + [interaction_type, 'BioGRID'])
                 if edge_key not in edges_dict:
                     edges_dict[edge_key] = NetworkEdge(
                         source=query_feature_name,
@@ -2188,6 +2197,7 @@ def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) ->
                         interaction_type=interaction_type,
                         experiment_type=interaction.experiment_type,
                         experiment_count=1,
+                        source_db='BioGRID',
                     )
                 else:
                     edges_dict[edge_key].experiment_count += 1
@@ -2218,7 +2228,7 @@ def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) ->
                         name_a = feat_a.feature_name
                         name_b = feat_b.feature_name
 
-                        edge_key = '|'.join(sorted([name_a, name_b]) + [interaction_type])
+                        edge_key = '|'.join(sorted([name_a, name_b]) + [interaction_type, 'BioGRID'])
                         if edge_key not in edges_dict:
                             edges_dict[edge_key] = NetworkEdge(
                                 source=name_a,
@@ -2226,9 +2236,48 @@ def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) ->
                                 interaction_type=interaction_type,
                                 experiment_type=interaction.experiment_type,
                                 experiment_count=1,
+                                source_db='BioGRID',
                             )
                         else:
                             edges_dict[edge_key].experiment_count += 1
+
+        # Integrate STRING data if requested and taxon is supported
+        if include_string:
+            from cgd.api.services.string_service import fetch_string_interactions, STRING_SUPPORTED_TAXONS
+            if taxon_id in STRING_SUPPORTED_TAXONS:
+                string_interactions = fetch_string_interactions(
+                    locus_display_name, taxon_id, required_score=string_score
+                )
+                for si in string_interactions:
+                    source_name = si['source']
+                    target_name = si['target']
+
+                    # Add STRING nodes if not already present
+                    if source_name not in nodes_dict:
+                        nodes_dict[source_name] = NetworkNode(
+                            id=source_name,
+                            label=source_name,
+                            is_query=(source_name.upper() == locus_display_name.upper()),
+                        )
+                    if target_name not in nodes_dict:
+                        nodes_dict[target_name] = NetworkNode(
+                            id=target_name,
+                            label=target_name,
+                            is_query=(target_name.upper() == locus_display_name.upper()),
+                        )
+
+                    # Add STRING edge
+                    edge_key = '|'.join(sorted([source_name, target_name]) + ['string', 'STRING'])
+                    if edge_key not in edges_dict:
+                        edges_dict[edge_key] = NetworkEdge(
+                            source=source_name,
+                            target=target_name,
+                            interaction_type='string',
+                            experiment_type='STRING combined',
+                            experiment_count=1,
+                            source_db='STRING',
+                            score=si.get('combined_score'),
+                        )
 
         out[organism_name] = InteractionNetworkForOrganism(
             locus_display_name=locus_display_name,

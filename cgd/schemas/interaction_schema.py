@@ -60,9 +60,11 @@ class NetworkEdge(BaseModel):
     """An edge in the interaction network (an interaction)."""
     source: str  # feature_name of source node
     target: str  # feature_name of target node
-    interaction_type: str  # 'physical' or 'genetic'
-    experiment_type: str  # e.g., 'Affinity Capture-Western'
+    interaction_type: str  # 'physical', 'genetic', or 'string'
+    experiment_type: str  # e.g., 'Affinity Capture-Western' or 'STRING combined'
     experiment_count: int = 1  # number of experiments supporting this edge
+    source_db: str = "BioGRID"  # 'BioGRID' or 'STRING'
+    score: typing.Optional[int] = None  # STRING confidence score (0-1000)
 
 
 class InteractionNetworkForOrganism(BaseModel):
