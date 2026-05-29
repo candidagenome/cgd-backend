@@ -22,6 +22,7 @@ from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinProperties
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 from cgd.schemas.synteny_schema import SyntenyResponse
 from cgd.schemas.expression_schema import ExpressionDetailsResponse
+from cgd.schemas.interaction_schema import InteractionDetailsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,21 @@ def sequence_details(name: str, db: Session = Depends(get_db)):
     Returns chromosomal coordinates and DNA/protein sequences.
     """
     return locus_service.get_locus_sequence_details(db, name)
+
+
+@router.get("/{name}/interaction_details", response_model=InteractionDetailsResponse)
+def interaction_details(name: str, db: Session = Depends(get_db)):
+    """
+    Get physical interaction data for this locus, grouped by organism.
+
+    Returns protein-protein interactions from BioGRID and other sources.
+    """
+    try:
+        return locus_service.get_locus_interaction_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in interaction_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/references", response_model=LocusReferencesResponse)
