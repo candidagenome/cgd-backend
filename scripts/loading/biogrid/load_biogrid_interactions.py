@@ -255,72 +255,66 @@ def load_interactions(db, interactions: list[dict], feature_lookup: dict,
             continue
 
         # Normalize order: smaller feature_no first
+        is_self_interaction = (feature_no_a == feature_no_b)
         if feature_no_a > feature_no_b:
             feature_no_a, feature_no_b = feature_no_b, feature_no_a
             action_a, action_b = 'Hit', 'Bait'
         else:
             action_a, action_b = 'Bait', 'Hit'
 
-        # Get or create Interaction record
+        # Create unique key for this specific interaction
+        # Each BioGRID interaction gets its own Interaction record
         experiment_type = data['experiment_type']
-        interaction_key = (experiment_type, reference_no, data.get('description'))
+        interaction_key = (feature_no_a, feature_no_b, experiment_type, reference_no)
 
         if interaction_key in interaction_cache:
-            interaction_no = interaction_cache[interaction_key]
-        else:
-            # Check if interaction exists
-            existing = db.query(Interaction).filter(
-                Interaction.experiment_type == experiment_type,
-                Interaction.source == SOURCE_NAME,
-                Interaction.description == data.get('description')
-            ).first()
+            # Already processed this exact interaction
+            stats['existing_interactions'] += 1
+            continue
 
-            if existing:
-                interaction_no = existing.interaction_no
-            elif not dry_run:
-                # Create new interaction
-                new_interaction = Interaction(
-                    experiment_type=experiment_type,
-                    source=SOURCE_NAME,
-                    description=data.get('description'),
-                    created_by=CREATED_BY,
-                )
-                db.add(new_interaction)
-                db.flush()
-                interaction_no = new_interaction.interaction_no
+        if not dry_run:
+            # Create new interaction record for each BioGRID interaction
+            new_interaction = Interaction(
+                experiment_type=experiment_type,
+                source=SOURCE_NAME,
+                description=data.get('description'),
+                created_by=CREATED_BY,
+            )
+            db.add(new_interaction)
+            db.flush()
+            interaction_no = new_interaction.interaction_no
 
-                # Link to reference via RefLink
-                ref_link = RefLink(
-                    reference_no=reference_no,
-                    tab_name='INTERACTION',
-                    primary_key=interaction_no,
-                    col_name='INTERACTION_NO',
-                    created_by=CREATED_BY,
-                )
-                db.add(ref_link)
-            else:
-                interaction_no = -1  # Placeholder for dry run
+            # Link to reference via RefLink
+            ref_link = RefLink(
+                reference_no=reference_no,
+                tab_name='INTERACTION',
+                primary_key=interaction_no,
+                col_name='INTERACTION_NO',
+                created_by=CREATED_BY,
+            )
+            db.add(ref_link)
 
-            interaction_cache[interaction_key] = interaction_no
+            # Create FeatInteract records
+            feat_interact_a = FeatInteract(
+                feature_no=feature_no_a,
+                interaction_no=interaction_no,
+                action=action_a,
+                created_by=CREATED_BY,
+            )
+            db.add(feat_interact_a)
 
-        # Create FeatInteract records for both interactors
-        for feature_no, action in [(feature_no_a, action_a), (feature_no_b, action_b)]:
-            key = (feature_no, interaction_no, action)
-
-            if key in existing_interactions:
-                stats['existing_interactions'] += 1
-                continue
-
-            if not dry_run:
-                feat_interact = FeatInteract(
-                    feature_no=feature_no,
+            # For self-interactions, only create one FeatInteract record
+            if not is_self_interaction:
+                feat_interact_b = FeatInteract(
+                    feature_no=feature_no_b,
                     interaction_no=interaction_no,
-                    action=action,
+                    action=action_b,
                     created_by=CREATED_BY,
                 )
-                db.add(feat_interact)
+                db.add(feat_interact_b)
 
-            stats['new_interactions'] += 1
+        interaction_cache[interaction_key] = True
+        stats['new_interactions'] += 1
 
     if not dry_run:
         db.commit()
