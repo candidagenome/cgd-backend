@@ -79,6 +79,7 @@ from cgd.schemas.interaction_schema import (
     InteractionOut,
     InteractorOut,
     InteractionReferenceOut,
+    StringInteractionOut,
     InteractionNetworkResponse,
     InteractionNetworkForOrganism,
     NetworkNode,
@@ -2072,10 +2073,61 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
                 references=references,
             ))
 
+        # Fetch STRING interactions for supported organisms
+        string_interactions = []
+        from cgd.api.services.string_service import fetch_string_interactions, STRING_SUPPORTED_TAXONS
+        if taxon_id in STRING_SUPPORTED_TAXONS:
+            string_data = fetch_string_interactions(
+                locus_display_name, taxon_id, required_score=400
+            )
+
+            # Build gene name to feature name mapping for this organism
+            if string_data:
+                string_gene_names = set()
+                for si in string_data:
+                    # Add the interactor (not the query gene)
+                    if si['source'].upper() != locus_display_name.upper():
+                        string_gene_names.add(si['source'].upper())
+                    if si['target'].upper() != locus_display_name.upper():
+                        string_gene_names.add(si['target'].upper())
+
+                gene_to_feature: dict[str, str] = {}
+                if string_gene_names:
+                    matching_features = (
+                        db.query(Feature)
+                        .filter(func.upper(Feature.gene_name).in_(string_gene_names))
+                        .filter(Feature.organism_no == f.organism_no)
+                        .all()
+                    )
+                    for mf in matching_features:
+                        if mf.gene_name:
+                            gene_to_feature[mf.gene_name.upper()] = mf.feature_name
+
+                for si in string_data:
+                    # Determine which is the interactor (not the query gene)
+                    if si['source'].upper() == locus_display_name.upper():
+                        interactor_gene = si['target']
+                    else:
+                        interactor_gene = si['source']
+
+                    interactor_feature = gene_to_feature.get(interactor_gene.upper())
+                    evidence = si.get('evidence_scores', {})
+
+                    string_interactions.append(StringInteractionOut(
+                        interactor=interactor_gene,
+                        interactor_feature_name=interactor_feature,
+                        combined_score=si.get('combined_score', 0),
+                        experimental_score=int(evidence.get('escore', 0) * 1000) if evidence.get('escore', 0) <= 1 else int(evidence.get('escore', 0)),
+                        database_score=int(evidence.get('dscore', 0) * 1000) if evidence.get('dscore', 0) <= 1 else int(evidence.get('dscore', 0)),
+                        textmining_score=int(evidence.get('tscore', 0) * 1000) if evidence.get('tscore', 0) <= 1 else int(evidence.get('tscore', 0)),
+                        coexpression_score=int(evidence.get('ascore', 0) * 1000) if evidence.get('ascore', 0) <= 1 else int(evidence.get('ascore', 0)),
+                    ))
+
         out[organism_name] = InteractionDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             interactions=interactions,
+            string_interactions=string_interactions,
         )
 
     return InteractionDetailsResponse(results=out)

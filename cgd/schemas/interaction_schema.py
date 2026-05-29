@@ -30,10 +30,22 @@ class InteractionOut(BaseModel):
     references: list[InteractionReferenceOut] = []
 
 
+class StringInteractionOut(BaseModel):
+    """STRING database interaction."""
+    interactor: str  # Gene name of the interactor
+    interactor_feature_name: typing.Optional[str] = None  # CGD feature name if mapped
+    combined_score: int  # Combined confidence score (0-1000)
+    experimental_score: int = 0  # Experimental evidence score
+    database_score: int = 0  # Database evidence score
+    textmining_score: int = 0  # Text mining evidence score
+    coexpression_score: int = 0  # Co-expression evidence score
+
+
 class InteractionDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
     interactions: list[InteractionOut]
+    string_interactions: list[StringInteractionOut] = []
 
 
 class InteractionDetailsResponse(BaseModel):
