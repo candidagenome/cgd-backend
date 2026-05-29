@@ -79,6 +79,10 @@ from cgd.schemas.interaction_schema import (
     InteractionOut,
     InteractorOut,
     InteractionReferenceOut,
+    InteractionNetworkResponse,
+    InteractionNetworkForOrganism,
+    NetworkNode,
+    NetworkEdge,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -2075,6 +2079,165 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
         )
 
     return InteractionDetailsResponse(results=out)
+
+
+# Genetic interaction types (from BioGRID)
+GENETIC_INTERACTION_TYPES = {
+    'Dosage Lethality',
+    'Dosage Rescue',
+    'Dosage Growth Defect',
+    'Negative Genetic',
+    'Positive Genetic',
+    'Phenotypic Enhancement',
+    'Phenotypic Suppression',
+    'Synthetic Growth Defect',
+    'Synthetic Haploinsufficiency',
+    'Synthetic Lethality',
+    'Synthetic Rescue',
+}
+
+
+def get_locus_interaction_network(db: Session, name: str, max_depth: int = 1) -> InteractionNetworkResponse:
+    """
+    Build a network graph of interactions for the queried locus.
+
+    This includes:
+    - The queried gene as the central node
+    - All direct interactors as surrounding nodes
+    - If max_depth > 1, also includes interactions between those interactors
+
+    Args:
+        db: Database session
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        max_depth: How many levels of interactions to include (1 = direct only, 2 = include interactor-interactor)
+    """
+    from cgd.models.models import Feature, FeatInteract, Interaction
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_interact).joinedload(FeatInteract.interaction),
+        )
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, InteractionNetworkForOrganism] = {}
+
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+        query_feature_name = f.feature_name
+
+        # Collect nodes and edges
+        nodes_dict: dict[str, NetworkNode] = {}
+        edges_dict: dict[str, NetworkEdge] = {}  # key: "source|target|type" to deduplicate
+        feature_nos_in_network: set[int] = set()
+
+        # Add query node
+        nodes_dict[query_feature_name] = NetworkNode(
+            id=query_feature_name,
+            label=locus_display_name,
+            is_query=True,
+        )
+        feature_nos_in_network.add(f.feature_no)
+
+        # Process direct interactions
+        for fi in f.feat_interact:
+            interaction = fi.interaction
+            if interaction is None:
+                continue
+
+            interaction_type = 'genetic' if interaction.experiment_type in GENETIC_INTERACTION_TYPES else 'physical'
+
+            # Get all other interactors
+            for other_fi in interaction.feat_interact:
+                other_feat = other_fi.feature
+                if other_feat is None or other_feat.feature_no == f.feature_no:
+                    continue
+
+                other_name = other_feat.feature_name
+                other_label = other_feat.gene_name or other_feat.feature_name
+
+                # Add node if not exists
+                if other_name not in nodes_dict:
+                    nodes_dict[other_name] = NetworkNode(
+                        id=other_name,
+                        label=other_label,
+                        is_query=False,
+                    )
+                    feature_nos_in_network.add(other_feat.feature_no)
+
+                # Add edge (use sorted key to avoid duplicates A->B and B->A)
+                edge_key = '|'.join(sorted([query_feature_name, other_name]) + [interaction_type])
+                if edge_key not in edges_dict:
+                    edges_dict[edge_key] = NetworkEdge(
+                        source=query_feature_name,
+                        target=other_name,
+                        interaction_type=interaction_type,
+                        experiment_type=interaction.experiment_type,
+                        experiment_count=1,
+                    )
+                else:
+                    edges_dict[edge_key].experiment_count += 1
+
+        # If max_depth > 1, find interactions between the collected nodes
+        if max_depth > 1 and len(feature_nos_in_network) > 1:
+            # Query all interactions involving the features in our network
+            interactor_interactions = (
+                db.query(Interaction)
+                .join(FeatInteract)
+                .filter(FeatInteract.feature_no.in_(feature_nos_in_network))
+                .options(joinedload(Interaction.feat_interact).joinedload(FeatInteract.feature))
+                .all()
+            )
+
+            for interaction in interactor_interactions:
+                interaction_type = 'genetic' if interaction.experiment_type in GENETIC_INTERACTION_TYPES else 'physical'
+
+                # Get features involved in this interaction that are in our network
+                involved_features = [
+                    fi.feature for fi in interaction.feat_interact
+                    if fi.feature and fi.feature.feature_no in feature_nos_in_network
+                ]
+
+                # Create edges between all pairs
+                for i, feat_a in enumerate(involved_features):
+                    for feat_b in involved_features[i + 1:]:
+                        name_a = feat_a.feature_name
+                        name_b = feat_b.feature_name
+
+                        edge_key = '|'.join(sorted([name_a, name_b]) + [interaction_type])
+                        if edge_key not in edges_dict:
+                            edges_dict[edge_key] = NetworkEdge(
+                                source=name_a,
+                                target=name_b,
+                                interaction_type=interaction_type,
+                                experiment_type=interaction.experiment_type,
+                                experiment_count=1,
+                            )
+                        else:
+                            edges_dict[edge_key].experiment_count += 1
+
+        out[organism_name] = InteractionNetworkForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            nodes=list(nodes_dict.values()),
+            edges=list(edges_dict.values()),
+        )
+
+    return InteractionNetworkResponse(results=out)
 
 
 def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:

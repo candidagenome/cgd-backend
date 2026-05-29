@@ -46,3 +46,35 @@ class InteractionDetailsResponse(BaseModel):
     }
     """
     results: dict[str, InteractionDetailsForOrganism]
+
+
+# Network graph schemas for Cytoscape visualization
+class NetworkNode(BaseModel):
+    """A node in the interaction network (a gene/feature)."""
+    id: str  # feature_name (unique identifier)
+    label: str  # display name (gene_name or feature_name)
+    is_query: bool = False  # True if this is the queried gene
+
+
+class NetworkEdge(BaseModel):
+    """An edge in the interaction network (an interaction)."""
+    source: str  # feature_name of source node
+    target: str  # feature_name of target node
+    interaction_type: str  # 'physical' or 'genetic'
+    experiment_type: str  # e.g., 'Affinity Capture-Western'
+    experiment_count: int = 1  # number of experiments supporting this edge
+
+
+class InteractionNetworkForOrganism(BaseModel):
+    """Network graph data for one organism."""
+    locus_display_name: str
+    taxon_id: int
+    nodes: list[NetworkNode]
+    edges: list[NetworkEdge]
+
+
+class InteractionNetworkResponse(BaseModel):
+    """
+    Network graph response grouped by organism.
+    """
+    results: dict[str, InteractionNetworkForOrganism]

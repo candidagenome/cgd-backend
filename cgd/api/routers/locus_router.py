@@ -22,7 +22,7 @@ from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinProperties
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 from cgd.schemas.synteny_schema import SyntenyResponse
 from cgd.schemas.expression_schema import ExpressionDetailsResponse
-from cgd.schemas.interaction_schema import InteractionDetailsResponse
+from cgd.schemas.interaction_schema import InteractionDetailsResponse, InteractionNetworkResponse
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,26 @@ def interaction_details(name: str, db: Session = Depends(get_db)):
         return locus_service.get_locus_interaction_details(db, name)
     except Exception as e:
         logger.error(f"Error in interaction_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/interaction_network", response_model=InteractionNetworkResponse)
+def interaction_network(name: str, depth: int = 2, db: Session = Depends(get_db)):
+    """
+    Get interaction network graph for this locus, grouped by organism.
+
+    Returns nodes (genes) and edges (interactions) for network visualization.
+    Includes interactions between interactors when depth > 1.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        depth: Network depth (1 = direct interactions only, 2 = include interactor-interactor)
+    """
+    try:
+        return locus_service.get_locus_interaction_network(db, name, max_depth=depth)
+    except Exception as e:
+        logger.error(f"Error in interaction_network for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
