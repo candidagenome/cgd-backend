@@ -2248,30 +2248,62 @@ def get_locus_interaction_network(
                 string_interactions = fetch_string_interactions(
                     locus_display_name, taxon_id, required_score=string_score
                 )
+
+                # Build a mapping from gene names to feature names for this organism
+                # First, collect all STRING gene names we need to map
+                string_gene_names = set()
                 for si in string_interactions:
-                    source_name = si['source']
-                    target_name = si['target']
+                    string_gene_names.add(si['source'].upper())
+                    string_gene_names.add(si['target'].upper())
+
+                # Query features by gene name to get feature_name mapping
+                gene_to_feature: dict[str, tuple[str, str]] = {}  # gene_name.upper() -> (feature_name, gene_name)
+                if string_gene_names:
+                    matching_features = (
+                        db.query(Feature)
+                        .filter(func.upper(Feature.gene_name).in_(string_gene_names))
+                        .filter(Feature.organism_no == f.organism_no)
+                        .all()
+                    )
+                    for mf in matching_features:
+                        if mf.gene_name:
+                            gene_to_feature[mf.gene_name.upper()] = (mf.feature_name, mf.gene_name)
+
+                for si in string_interactions:
+                    source_gene = si['source']
+                    target_gene = si['target']
+
+                    # Map gene names to feature names if available
+                    if source_gene.upper() in gene_to_feature:
+                        source_id, source_label = gene_to_feature[source_gene.upper()]
+                    else:
+                        source_id, source_label = source_gene, source_gene
+
+                    if target_gene.upper() in gene_to_feature:
+                        target_id, target_label = gene_to_feature[target_gene.upper()]
+                    else:
+                        target_id, target_label = target_gene, target_gene
 
                     # Add STRING nodes if not already present
-                    if source_name not in nodes_dict:
-                        nodes_dict[source_name] = NetworkNode(
-                            id=source_name,
-                            label=source_name,
-                            is_query=(source_name.upper() == locus_display_name.upper()),
+                    if source_id not in nodes_dict:
+                        nodes_dict[source_id] = NetworkNode(
+                            id=source_id,
+                            label=source_label,
+                            is_query=(source_id == query_feature_name),
                         )
-                    if target_name not in nodes_dict:
-                        nodes_dict[target_name] = NetworkNode(
-                            id=target_name,
-                            label=target_name,
-                            is_query=(target_name.upper() == locus_display_name.upper()),
+                    if target_id not in nodes_dict:
+                        nodes_dict[target_id] = NetworkNode(
+                            id=target_id,
+                            label=target_label,
+                            is_query=(target_id == query_feature_name),
                         )
 
                     # Add STRING edge
-                    edge_key = '|'.join(sorted([source_name, target_name]) + ['string', 'STRING'])
+                    edge_key = '|'.join(sorted([source_id, target_id]) + ['string', 'STRING'])
                     if edge_key not in edges_dict:
                         edges_dict[edge_key] = NetworkEdge(
-                            source=source_name,
-                            target=target_name,
+                            source=source_id,
+                            target=target_id,
                             interaction_type='string',
                             experiment_type='STRING combined',
                             experiment_count=1,
