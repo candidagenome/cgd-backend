@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 BIOGRID_API_URL = "https://webservice.thebiogrid.org/interactions/"
 CANDIDA_ALBICANS_TAXID = "237561"
 SOURCE_NAME = "BioGRID"
-CREATED_BY = os.environ.get('DEFAULT_USER', 'SCRIPT')
+CREATED_BY = os.environ.get('DEFAULT_USER', 'SHUAI')  # Must exist in dbuser table
 
 # Genetic interaction types (to separate from physical)
 GENETIC_TYPES = {
