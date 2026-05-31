@@ -41,6 +41,12 @@ class StringInteractionOut(BaseModel):
     coexpression_score: int = 0  # Co-expression evidence score
 
 
+class EnrichmentGene(BaseModel):
+    """A gene annotated to an enriched term. feature_name links to CGD when known."""
+    label: str                                      # display name (gene or systematic)
+    feature_name: typing.Optional[str] = None       # CGD feature_name for /locus/ link
+
+
 class StringEnrichmentTerm(BaseModel):
     """A functionally-enriched term among a gene's STRING network partners."""
     category: str          # STRING category code (Process, Function, KEGG, ...)
@@ -51,6 +57,7 @@ class StringEnrichmentTerm(BaseModel):
     p_value: float
     genes: int             # number of network genes with this term
     background: int        # genome background count for this term
+    gene_list: list[EnrichmentGene] = []  # the network genes annotated to this term
 
 
 class StringEnrichmentForOrganism(BaseModel):
@@ -75,6 +82,7 @@ class NetworkEnrichmentTerm(BaseModel):
     fold_enrichment: float
     p_value: float
     fdr: typing.Optional[float] = None
+    genes: list[EnrichmentGene] = []  # the query genes annotated to this term
 
 
 class NetworkEnrichmentForOrganism(BaseModel):

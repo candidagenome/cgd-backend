@@ -297,6 +297,11 @@ def fetch_string_enrichment(
         category = r.get('category', '')
         if category not in STRING_ENRICHMENT_CATEGORIES:
             continue
+        # STRING returns the matched gene names as a comma-separated string
+        # (preferredNames) or list, depending on version.
+        pref = r.get('preferredNames', [])
+        if isinstance(pref, str):
+            pref = [p.strip() for p in pref.split(',') if p.strip()]
         results.append({
             'category': category,
             'category_label': STRING_ENRICHMENT_CATEGORIES[category],
@@ -306,6 +311,7 @@ def fetch_string_enrichment(
             'p_value': r.get('p_value', 1.0),
             'genes': r.get('number_of_genes', 0),
             'background': r.get('number_of_genes_in_background', 0),
+            'gene_names': pref,
         })
 
     # Most significant first.

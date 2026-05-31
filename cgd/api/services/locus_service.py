@@ -92,6 +92,7 @@ from cgd.schemas.interaction_schema import (
     NetworkEnrichmentResponse,
     NetworkEnrichmentForOrganism,
     NetworkEnrichmentTerm,
+    EnrichmentGene,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -2674,12 +2675,34 @@ def get_locus_string_enrichment(
         terms = fetch_string_enrichment(list(identifiers), taxon_id)
         if not terms:
             continue
+        terms = terms[:max_terms]
+
+        # Map the matched STRING gene names to CGD features (for /locus/ links)
+        all_names = {nm.upper() for t in terms for nm in t.get('gene_names', [])}
+        name_to_feature = _map_string_names_to_features(db, all_names, f.organism_no)
+
+        term_objs = []
+        for t in terms:
+            gene_list = []
+            for nm in t.get('gene_names', []):
+                mapped = name_to_feature.get(nm.upper())
+                gene_list.append(EnrichmentGene(
+                    label=mapped[1] if mapped else nm,
+                    feature_name=mapped[0] if mapped else None,
+                ))
+            term_objs.append(StringEnrichmentTerm(
+                category=t['category'], category_label=t['category_label'],
+                term=t['term'], description=t['description'],
+                fdr=t['fdr'], p_value=t['p_value'],
+                genes=t['genes'], background=t['background'],
+                gene_list=gene_list,
+            ))
 
         out[organism_name] = StringEnrichmentForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             network_size=len(identifiers),
-            terms=[StringEnrichmentTerm(**t) for t in terms[:max_terms]],
+            terms=term_objs,
         )
 
     return StringEnrichmentResponse(results=out)
@@ -2794,6 +2817,10 @@ def get_locus_network_enrichment(
                     term=t.goid, description=t.go_term,
                     query_count=t.query_count, fold_enrichment=t.fold_enrichment,
                     p_value=t.p_value, fdr=t.fdr,
+                    genes=[EnrichmentGene(
+                        label=g.gene_name or g.systematic_name,
+                        feature_name=g.systematic_name,
+                    ) for g in t.genes],
                 ))
             go_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
             go_terms = go_terms[:max_terms]
@@ -2812,6 +2839,10 @@ def get_locus_network_enrichment(
                     term=p.observable, description=desc,
                     query_count=p.query_count, fold_enrichment=p.fold_enrichment,
                     p_value=p.p_value, fdr=p.fdr,
+                    genes=[EnrichmentGene(
+                        label=g.gene_name or g.systematic_name,
+                        feature_name=g.systematic_name,
+                    ) for g in p.genes],
                 ))
             pheno_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
             pheno_terms = pheno_terms[:max_terms]
