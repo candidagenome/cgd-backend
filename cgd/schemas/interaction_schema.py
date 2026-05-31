@@ -101,6 +101,7 @@ class NetworkEnrichmentResponse(BaseModel):
 class InteractionDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
+    organism_no: typing.Optional[int] = None  # for GO/phenotype enrichment requests
     interactions: list[InteractionOut]
     string_interactions: list[StringInteractionOut] = []
 

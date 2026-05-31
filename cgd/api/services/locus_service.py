@@ -2146,6 +2146,7 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
         out[organism_name] = InteractionDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
+            organism_no=f.organism_no,
             interactions=interactions,
             string_interactions=string_interactions,
         )
