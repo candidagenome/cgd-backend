@@ -19,15 +19,25 @@ log = logging.getLogger(__name__)
 STRING_API_URL = "https://string-db.org/api"
 
 # Candida species supported by STRING.
-# All four use systematic names (== CGD feature_name) as STRING preferredName,
-# except C. parapsilosis (UniProt-style names) and C. dubliniensis (absent from
-# STRING), which are intentionally not listed here.
+# albicans/glabrata/auris/tropicalis map by gene name or systematic name
+# (== CGD feature_name). C. parapsilosis returns gene symbols where available
+# and UniProt mnemonics otherwise, so unnamed genes are mapped back to CGD via
+# the UniProt accession embedded in the STRING id (see source_accession below).
+# C. dubliniensis is absent from STRING v12.
 STRING_SUPPORTED_TAXONS = {
     237561: "Candida albicans SC5314",
     284593: "Candida glabrata CBS138",
     498019: "Candida auris B8441",
     294747: "Candida tropicalis MYA-3404",
+    578454: "Candida parapsilosis CDC317",
 }
+
+
+def _string_accession(string_id: str) -> str:
+    """Extract the bare protein accession from a STRING id like '578454.G8B991'."""
+    if not string_id:
+        return ''
+    return string_id.split('.', 1)[1] if '.' in string_id else string_id
 
 # Cache timeout in seconds (1 hour)
 CACHE_TIMEOUT = 3600
@@ -100,6 +110,9 @@ def fetch_string_interactions(
         # STRING returns preferredName_A/B for gene names
         source = item.get('preferredName_A', item.get('stringId_A', ''))
         target = item.get('preferredName_B', item.get('stringId_B', ''))
+        # Bare protein accession (UniProt for Candida) for fallback CGD mapping
+        source_accession = _string_accession(item.get('stringId_A', ''))
+        target_accession = _string_accession(item.get('stringId_B', ''))
         score = item.get('score', 0)
 
         if not source or not target:
@@ -114,6 +127,8 @@ def fetch_string_interactions(
         interactions.append({
             'source': source,
             'target': target,
+            'source_accession': source_accession,
+            'target_accession': target_accession,
             'score': score,
             'combined_score': int(score * 1000) if score <= 1 else int(score),
             'source_db': 'STRING',

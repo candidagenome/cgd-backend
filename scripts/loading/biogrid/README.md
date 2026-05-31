@@ -135,6 +135,65 @@ ORDER BY COUNT(*) DESC;
 
 ---
 
+## Interaction Tab — Live Integrations & API Deployment Notes
+
+The Interactions tab combines three data sources: **(a)** curated BioGRID
+interactions loaded by *this* script, **(b)** live STRING predictions fetched at
+request time, and **(c)** GO-Slim annotations for the network visualization.
+Only **(a)** is a data load. **(b)** and **(c)** are read-only API features
+(branch `redmine_80_interaction`) with the deployment dependencies below.
+
+### No schema changes / no migration
+The `interaction_details`, `interaction_network`, and `string_enrichment`
+endpoints are read-only queries — no new tables, columns, or migrations.
+After pulling the code, **restart the API service** so gunicorn reloads the
+modules (it caches them in memory):
+```bash
+sudo systemctl restart cgd-api
+```
+
+### STRING is fetched LIVE — no data to load
+- STRING data is pulled at request time from `https://string-db.org/api`
+  (`cgd/api/services/string_service.py`). **The prod backend host needs
+  outbound HTTPS egress to `string-db.org`** — confirm the firewall/security
+  group allows it, or STRING sections render empty.
+- Supported species are pinned in `STRING_SUPPORTED_TAXONS`:
+  C. albicans `237561`, C. glabrata `284593`, C. auris `498019`,
+  C. tropicalis `294747`, C. parapsilosis `578454`. **C. dubliniensis
+  (`573826`) is excluded** — it is absent from STRING v12.
+- STRING→CGD identifier mapping (`locus_service.py`) has three match paths,
+  because STRING's `preferredName` differs by species:
+  1. **gene name** (C. albicans, C. glabrata) — match on `Feature.gene_name`;
+  2. **systematic name** (C. auris `B9J08_*`, C. tropicalis `CTRG_*`, == CGD
+     `feature_name`) — match on `Feature.feature_name`
+     (`_map_string_names_to_features`);
+  3. **UniProt accession** (C. parapsilosis unnamed genes return a UniProt
+     mnemonic, but the STRING id embeds the accession) — fall back to the
+     `EBI` dbxref (`_map_uniprot_accessions_to_features`). This requires
+     **`EBI` UniProt dbxrefs to be loaded** for the species (parapsilosis has
+     ~5,800). If a new species is added, check which identifier STRING returns
+     and confirm the matching path covers it.
+- **No response caching is currently active.** `lru_cache`/`CACHE_TIMEOUT` are
+  imported/defined in `string_service.py` but **not applied** — every page view
+  hits STRING live, and `/string_enrichment` makes **two** calls (network +
+  enrichment). If STRING latency or courtesy rate-limiting becomes an issue in
+  prod, add caching (e.g. in-process `lru_cache` keyed by gene+taxon+score, or
+  a short-TTL cache). Requests already send a `caller_identity` / User-Agent.
+- The STRING API URL is **not version-pinned** (uses current, v12.x). A STRING
+  release can change scores/identifiers; spot-check after STRING updates.
+
+### GO-Slim network coloring depends on loaded GO data
+- The network's "Color by GO function" / shared-GO features roll annotations up
+  to the **`Candida GO-Slim`** GoSet using the **`GO_PATH`** ancestor table
+  (`locus_service.py`). Both must be populated — they are part of the standard
+  CGD GO load. If a DB is missing the `Candida GO-Slim` set or `GO_PATH` rows,
+  the network still renders, just **without** GO coloring (graceful
+  degradation). The set name is `Candida GO-Slim` (not `CGD_GO_Slim`).
+- The three GO ontology roots (GOIDs `3674`/`5575`/`8150`) are filtered out so
+  they don't swamp the "shared GO term" signal.
+
+---
+
 ## Database Schema
 
 ### Tables Used

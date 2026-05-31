@@ -2092,30 +2092,45 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
             # Build gene name to feature name mapping for this organism
             if string_data:
                 string_gene_names = set()
+                string_accessions = set()
                 for si in string_data:
                     # Add the interactor (not the query gene)
                     if si['source'].upper() != locus_display_name.upper():
                         string_gene_names.add(si['source'].upper())
+                        if si.get('source_accession'):
+                            string_accessions.add(si['source_accession'].upper())
                     if si['target'].upper() != locus_display_name.upper():
                         string_gene_names.add(si['target'].upper())
+                        if si.get('target_accession'):
+                            string_accessions.add(si['target_accession'].upper())
 
                 gene_to_feature = _map_string_names_to_features(
                     db, string_gene_names, f.organism_no
+                )
+                acc_to_feature = _map_uniprot_accessions_to_features(
+                    db, string_accessions, f.organism_no
                 )
 
                 for si in string_data:
                     # Determine which is the interactor (not the query gene)
                     if si['source'].upper() == locus_display_name.upper():
                         interactor_gene = si['target']
+                        interactor_accession = si.get('target_accession')
                     else:
                         interactor_gene = si['source']
+                        interactor_accession = si.get('source_accession')
 
                     mapped = gene_to_feature.get(interactor_gene.upper())
+                    if not mapped and interactor_accession:
+                        mapped = acc_to_feature.get(interactor_accession.upper())
                     interactor_feature = mapped[0] if mapped else None
+                    # Prefer the CGD display name (gene or systematic) over a raw
+                    # STRING UniProt mnemonic once we've resolved the feature.
+                    interactor_display = mapped[1] if mapped else interactor_gene
                     evidence = si.get('evidence_scores', {})
 
                     string_interactions.append(StringInteractionOut(
-                        interactor=interactor_gene,
+                        interactor=interactor_display,
                         interactor_feature_name=interactor_feature,
                         combined_score=si.get('combined_score', 0),
                         experimental_score=int(evidence.get('escore', 0) * 1000) if evidence.get('escore', 0) <= 1 else int(evidence.get('escore', 0)),
@@ -2183,6 +2198,41 @@ def _map_string_names_to_features(
             result.setdefault(mf.gene_name.upper(), (mf.feature_name, label, mf.feature_no))
         if mf.feature_name and mf.feature_name.upper() in names_upper:
             result.setdefault(mf.feature_name.upper(), (mf.feature_name, label, mf.feature_no))
+    return result
+
+
+def _map_uniprot_accessions_to_features(
+    db: Session,
+    accessions_upper: set[str],
+    organism_no: int,
+) -> dict[str, tuple[str, str, int]]:
+    """
+    Map UniProt accessions to CGD features via the 'EBI' dbxref source.
+
+    Used as a fallback for species like C. parapsilosis where STRING returns a
+    UniProt mnemonic (not the systematic name) for genes without a standard
+    symbol; the STRING id embeds the UniProt accession, which CGD stores as an
+    EBI dbxref.
+
+    Returns: upper(accession) -> (feature_name, display_label, feature_no).
+    """
+    result: dict[str, tuple[str, str, int]] = {}
+    if not accessions_upper:
+        return result
+    rows = (
+        db.query(Feature, Dbxref.dbxref_id)
+        .join(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .join(Dbxref, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(Dbxref.source == 'EBI')
+        .filter(func.upper(Dbxref.dbxref_id).in_(accessions_upper))
+        .all()
+    )
+    for mf, dbxref_id in rows:
+        result.setdefault(
+            dbxref_id.upper(),
+            (mf.feature_name, mf.gene_name or mf.feature_name, mf.feature_no),
+        )
     return result
 
 
@@ -2440,33 +2490,42 @@ def get_locus_interaction_network(
                     locus_display_name, taxon_id, required_score=string_score
                 )
 
-                # Build a mapping from gene names to feature names for this organism
-                # First, collect all STRING gene names we need to map
+                # Collect STRING names and UniProt accessions to map to CGD.
                 string_gene_names = set()
+                string_accessions = set()
                 for si in string_interactions:
                     string_gene_names.add(si['source'].upper())
                     string_gene_names.add(si['target'].upper())
+                    if si.get('source_accession'):
+                        string_accessions.add(si['source_accession'].upper())
+                    if si.get('target_accession'):
+                        string_accessions.add(si['target_accession'].upper())
 
-                # Map STRING names (gene OR systematic) to CGD features.
+                # Map by name (gene OR systematic), with UniProt-accession fallback
+                # (covers C. parapsilosis genes that come back as UniProt mnemonics).
                 gene_to_feature = _map_string_names_to_features(
                     db, string_gene_names, f.organism_no
                 )
+                acc_to_feature = _map_uniprot_accessions_to_features(
+                    db, string_accessions, f.organism_no
+                )
+
+                def _resolve(name, accession):
+                    """STRING name/accession -> (id, label, feature_no)."""
+                    mapped = gene_to_feature.get(name.upper())
+                    if not mapped and accession:
+                        mapped = acc_to_feature.get(accession.upper())
+                    if mapped:
+                        return mapped[0], mapped[1], mapped[2]
+                    return name, name, None
 
                 for si in string_interactions:
-                    source_gene = si['source']
-                    target_gene = si['target']
-
-                    # Map gene names to feature names if available
-                    source_feat_no = target_feat_no = None
-                    if source_gene.upper() in gene_to_feature:
-                        source_id, source_label, source_feat_no = gene_to_feature[source_gene.upper()]
-                    else:
-                        source_id, source_label = source_gene, source_gene
-
-                    if target_gene.upper() in gene_to_feature:
-                        target_id, target_label, target_feat_no = gene_to_feature[target_gene.upper()]
-                    else:
-                        target_id, target_label = target_gene, target_gene
+                    source_id, source_label, source_feat_no = _resolve(
+                        si['source'], si.get('source_accession')
+                    )
+                    target_id, target_label, target_feat_no = _resolve(
+                        si['target'], si.get('target_accession')
+                    )
 
                     # Add STRING nodes if not already present
                     if source_id not in nodes_dict:
