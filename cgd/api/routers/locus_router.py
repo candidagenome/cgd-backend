@@ -26,6 +26,7 @@ from cgd.schemas.interaction_schema import (
     InteractionDetailsResponse,
     InteractionNetworkResponse,
     StringEnrichmentResponse,
+    NetworkEnrichmentResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,36 @@ def string_enrichment(
         return locus_service.get_locus_string_enrichment(db, name, string_score=string_score)
     except Exception as e:
         logger.error(f"Error in string_enrichment for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/network_enrichment", response_model=NetworkEnrichmentResponse)
+def network_enrichment(
+    name: str,
+    include_string: bool = False,
+    p_value_cutoff: float = 0.01,
+    db: Session = Depends(get_db)
+):
+    """
+    CGD-native GO and phenotype enrichment of this gene's interaction network,
+    grouped by organism.
+
+    Runs CGD's GO Term Finder and Phenotype Enrichment engines (hypergeometric
+    test against CGD's own annotations) over the gene's interaction partners.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        include_string: also include STRING-predicted partners in the gene set
+            (default False = curated BioGRID interactors only)
+        p_value_cutoff: significance cutoff (default 0.01)
+    """
+    try:
+        return locus_service.get_locus_network_enrichment(
+            db, name, include_string=include_string, p_value_cutoff=p_value_cutoff
+        )
+    except Exception as e:
+        logger.error(f"Error in network_enrichment for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

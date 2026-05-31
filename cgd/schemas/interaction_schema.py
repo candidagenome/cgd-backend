@@ -64,6 +64,32 @@ class StringEnrichmentResponse(BaseModel):
     results: dict[str, StringEnrichmentForOrganism]
 
 
+class NetworkEnrichmentTerm(BaseModel):
+    """An enriched GO term or phenotype among a gene's interaction partners,
+    computed against CGD's own annotations (GO Term Finder / Phenotype
+    Enrichment engines)."""
+    category_label: str          # "GO Biological Process" ... or "Phenotype"
+    term: str                    # GOID (GO:XXXXXXX) or phenotype observable
+    description: str             # term/phenotype name
+    query_count: int             # query genes annotated to this term
+    fold_enrichment: float
+    p_value: float
+    fdr: typing.Optional[float] = None
+
+
+class NetworkEnrichmentForOrganism(BaseModel):
+    locus_display_name: str
+    taxon_id: int
+    gene_count: int              # genes the enrichment ran over (query + partners)
+    include_string: bool         # whether STRING partners were included in the set
+    go_terms: list[NetworkEnrichmentTerm] = []
+    phenotype_terms: list[NetworkEnrichmentTerm] = []
+
+
+class NetworkEnrichmentResponse(BaseModel):
+    results: dict[str, NetworkEnrichmentForOrganism]
+
+
 class InteractionDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int

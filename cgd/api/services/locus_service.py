@@ -89,6 +89,9 @@ from cgd.schemas.interaction_schema import (
     StringEnrichmentResponse,
     StringEnrichmentForOrganism,
     StringEnrichmentTerm,
+    NetworkEnrichmentResponse,
+    NetworkEnrichmentForOrganism,
+    NetworkEnrichmentTerm,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -2680,6 +2683,149 @@ def get_locus_string_enrichment(
         )
 
     return StringEnrichmentResponse(results=out)
+
+
+def get_locus_network_enrichment(
+    db: Session,
+    name: str,
+    include_string: bool = False,
+    p_value_cutoff: float = 0.01,
+    max_terms: int = 25,
+) -> NetworkEnrichmentResponse:
+    """
+    CGD-native GO and phenotype enrichment of a gene's interaction partners.
+
+    Unlike the STRING enrichment (computed by STRING over its own annotations),
+    this runs CGD's GO Term Finder and Phenotype Enrichment engines against
+    CGD's curated annotations, over the gene's interaction network.
+
+    The gene set is the query plus its curated BioGRID interactors; when
+    include_string is set, STRING partners that map to CGD features are added.
+    """
+    from cgd.models.models import FeatInteract, Interaction
+    from cgd.api.services.go_term_finder_service import run_go_term_finder
+    from cgd.api.services.phenotype_enrichment_service import run_phenotype_enrichment
+    from cgd.schemas.go_term_finder_schema import GoTermFinderRequest, GoOntology
+    from cgd.schemas.phenotype_enrichment_schema import PhenotypeEnrichmentRequest
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_interact)
+            .joinedload(FeatInteract.interaction)
+            .joinedload(Interaction.feat_interact)
+            .joinedload(FeatInteract.feature),
+        )
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, NetworkEnrichmentForOrganism] = {}
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Curated BioGRID interactor feature_names (+ the query gene itself)
+        gene_set: set[str] = {f.feature_name}
+        for fi in f.feat_interact:
+            interaction = fi.interaction
+            if interaction is None:
+                continue
+            for other_fi in interaction.feat_interact:
+                other = other_fi.feature
+                if other is not None and other.feature_no != f.feature_no:
+                    gene_set.add(other.feature_name)
+
+        # Optionally add STRING partners that map to CGD features
+        if include_string:
+            from cgd.api.services.string_service import (
+                fetch_string_interactions, STRING_SUPPORTED_TAXONS,
+            )
+            if taxon_id in STRING_SUPPORTED_TAXONS:
+                partners = fetch_string_interactions(
+                    locus_display_name, taxon_id, required_score=400
+                )
+                names, accs = set(), set()
+                for si in partners:
+                    names.add(si['source'].upper())
+                    names.add(si['target'].upper())
+                    if si.get('source_accession'):
+                        accs.add(si['source_accession'].upper())
+                    if si.get('target_accession'):
+                        accs.add(si['target_accession'].upper())
+                name_map = _map_string_names_to_features(db, names, f.organism_no)
+                acc_map = _map_uniprot_accessions_to_features(db, accs, f.organism_no)
+                for mapped in list(name_map.values()) + list(acc_map.values()):
+                    gene_set.add(mapped[0])
+
+        genes = sorted(gene_set)
+        # Need a few genes for enrichment to be meaningful
+        if len(genes) < 3:
+            out[organism_name] = NetworkEnrichmentForOrganism(
+                locus_display_name=locus_display_name,
+                taxon_id=taxon_id,
+                gene_count=len(genes),
+                include_string=include_string,
+            )
+            continue
+
+        go_terms: list[NetworkEnrichmentTerm] = []
+        pheno_terms: list[NetworkEnrichmentTerm] = []
+
+        go_resp = run_go_term_finder(db, GoTermFinderRequest(
+            genes=genes, organism_no=f.organism_no,
+            ontology=GoOntology.ALL, p_value_cutoff=p_value_cutoff,
+        ))
+        if go_resp.success and go_resp.result:
+            r = go_resp.result
+            for t in (r.process_terms + r.function_terms + r.component_terms):
+                go_terms.append(NetworkEnrichmentTerm(
+                    category_label=f"GO {t.aspect_name}",
+                    term=t.goid, description=t.go_term,
+                    query_count=t.query_count, fold_enrichment=t.fold_enrichment,
+                    p_value=t.p_value, fdr=t.fdr,
+                ))
+            go_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
+            go_terms = go_terms[:max_terms]
+
+        ph_resp = run_phenotype_enrichment(db, PhenotypeEnrichmentRequest(
+            genes=genes, organism_no=f.organism_no, p_value_cutoff=p_value_cutoff,
+        ))
+        if ph_resp.success and ph_resp.result:
+            for p in ph_resp.result.enriched_phenotypes:
+                desc = p.observable
+                extra = ', '.join(x for x in [p.qualifier, p.mutant_type] if x)
+                if extra:
+                    desc = f"{desc} ({extra})"
+                pheno_terms.append(NetworkEnrichmentTerm(
+                    category_label="Phenotype",
+                    term=p.observable, description=desc,
+                    query_count=p.query_count, fold_enrichment=p.fold_enrichment,
+                    p_value=p.p_value, fdr=p.fdr,
+                ))
+            pheno_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
+            pheno_terms = pheno_terms[:max_terms]
+
+        out[organism_name] = NetworkEnrichmentForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            gene_count=len(genes),
+            include_string=include_string,
+            go_terms=go_terms,
+            phenotype_terms=pheno_terms,
+        )
+
+    return NetworkEnrichmentResponse(results=out)
 
 
 def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:
