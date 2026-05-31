@@ -22,7 +22,11 @@ from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinProperties
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 from cgd.schemas.synteny_schema import SyntenyResponse
 from cgd.schemas.expression_schema import ExpressionDetailsResponse
-from cgd.schemas.interaction_schema import InteractionDetailsResponse, InteractionNetworkResponse
+from cgd.schemas.interaction_schema import (
+    InteractionDetailsResponse,
+    InteractionNetworkResponse,
+    StringEnrichmentResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +155,31 @@ def interaction_network(
         )
     except Exception as e:
         logger.error(f"Error in interaction_network for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/string_enrichment", response_model=StringEnrichmentResponse)
+def string_enrichment(
+    name: str,
+    string_score: int = 400,
+    db: Session = Depends(get_db)
+):
+    """
+    Get STRING functional enrichment of this gene's interaction network,
+    grouped by organism.
+
+    Reports GO/KEGG/Reactome terms over-represented among the gene's STRING
+    network partners. Only returns data for STRING-supported organisms.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        string_score: Minimum STRING confidence score 0-1000 (default 400)
+    """
+    try:
+        return locus_service.get_locus_string_enrichment(db, name, string_score=string_score)
+    except Exception as e:
+        logger.error(f"Error in string_enrichment for {name}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

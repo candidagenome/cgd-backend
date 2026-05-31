@@ -86,6 +86,9 @@ from cgd.schemas.interaction_schema import (
     NetworkEdge,
     GoSlimTermOut,
     SharedGoEdge,
+    StringEnrichmentResponse,
+    StringEnrichmentForOrganism,
+    StringEnrichmentTerm,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -2096,17 +2099,9 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
                     if si['target'].upper() != locus_display_name.upper():
                         string_gene_names.add(si['target'].upper())
 
-                gene_to_feature: dict[str, str] = {}
-                if string_gene_names:
-                    matching_features = (
-                        db.query(Feature)
-                        .filter(func.upper(Feature.gene_name).in_(string_gene_names))
-                        .filter(Feature.organism_no == f.organism_no)
-                        .all()
-                    )
-                    for mf in matching_features:
-                        if mf.gene_name:
-                            gene_to_feature[mf.gene_name.upper()] = mf.feature_name
+                gene_to_feature = _map_string_names_to_features(
+                    db, string_gene_names, f.organism_no
+                )
 
                 for si in string_data:
                     # Determine which is the interactor (not the query gene)
@@ -2115,7 +2110,8 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
                     else:
                         interactor_gene = si['source']
 
-                    interactor_feature = gene_to_feature.get(interactor_gene.upper())
+                    mapped = gene_to_feature.get(interactor_gene.upper())
+                    interactor_feature = mapped[0] if mapped else None
                     evidence = si.get('evidence_scores', {})
 
                     string_interactions.append(StringInteractionOut(
@@ -2152,6 +2148,43 @@ GENETIC_INTERACTION_TYPES = {
     'Synthetic Lethality',
     'Synthetic Rescue',
 }
+
+def _map_string_names_to_features(
+    db: Session,
+    names_upper: set[str],
+    organism_no: int,
+) -> dict[str, tuple[str, str, int]]:
+    """
+    Map STRING preferredNames to CGD features for one organism.
+
+    STRING uses standard gene names for some species (C. albicans) and
+    systematic names (== CGD feature_name) for others (C. auris B9J08_*,
+    C. tropicalis CTRG_*), so we match against BOTH gene_name and feature_name.
+
+    Returns: upper(name) -> (feature_name, display_label, feature_no).
+    """
+    result: dict[str, tuple[str, str, int]] = {}
+    if not names_upper:
+        return result
+    feats = (
+        db.query(Feature)
+        .filter(Feature.organism_no == organism_no)
+        .filter(
+            or_(
+                func.upper(Feature.gene_name).in_(names_upper),
+                func.upper(Feature.feature_name).in_(names_upper),
+            )
+        )
+        .all()
+    )
+    for mf in feats:
+        label = mf.gene_name or mf.feature_name
+        if mf.gene_name and mf.gene_name.upper() in names_upper:
+            result.setdefault(mf.gene_name.upper(), (mf.feature_name, label, mf.feature_no))
+        if mf.feature_name and mf.feature_name.upper() in names_upper:
+            result.setdefault(mf.feature_name.upper(), (mf.feature_name, label, mf.feature_no))
+    return result
+
 
 # GO Slim set used to annotate/cluster interaction-network nodes
 NETWORK_GO_SLIM_SET = "Candida GO-Slim"
@@ -2414,18 +2447,10 @@ def get_locus_interaction_network(
                     string_gene_names.add(si['source'].upper())
                     string_gene_names.add(si['target'].upper())
 
-                # Query features by gene name to get feature_name mapping
-                gene_to_feature: dict[str, tuple[str, str, int]] = {}  # gene_name.upper() -> (feature_name, gene_name, feature_no)
-                if string_gene_names:
-                    matching_features = (
-                        db.query(Feature)
-                        .filter(func.upper(Feature.gene_name).in_(string_gene_names))
-                        .filter(Feature.organism_no == f.organism_no)
-                        .all()
-                    )
-                    for mf in matching_features:
-                        if mf.gene_name:
-                            gene_to_feature[mf.gene_name.upper()] = (mf.feature_name, mf.gene_name, mf.feature_no)
+                # Map STRING names (gene OR systematic) to CGD features.
+                gene_to_feature = _map_string_names_to_features(
+                    db, string_gene_names, f.organism_no
+                )
 
                 for si in string_interactions:
                     source_gene = si['source']
@@ -2530,6 +2555,72 @@ def get_locus_interaction_network(
         )
 
     return InteractionNetworkResponse(results=out)
+
+
+def get_locus_string_enrichment(
+    db: Session,
+    name: str,
+    string_score: int = 400,
+    max_terms: int = 20,
+) -> StringEnrichmentResponse:
+    """
+    Functional enrichment of a gene's STRING network neighborhood.
+
+    Fetches the gene's STRING partners, then asks STRING which GO/KEGG/Reactome
+    terms are over-represented among that set ("this gene's interactors are
+    enriched for ergosterol biosynthesis", etc.).
+    """
+    from cgd.api.services.string_service import (
+        fetch_string_interactions, fetch_string_enrichment, STRING_SUPPORTED_TAXONS,
+    )
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(joinedload(Feature.organism))
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, StringEnrichmentForOrganism] = {}
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+        if taxon_id not in STRING_SUPPORTED_TAXONS:
+            continue
+
+        partners = fetch_string_interactions(
+            locus_display_name, taxon_id, required_score=string_score
+        )
+        if not partners:
+            continue
+
+        # Identifier set = query gene + all partners (STRING preferredNames).
+        identifiers = {locus_display_name}
+        for si in partners:
+            identifiers.add(si['source'])
+            identifiers.add(si['target'])
+
+        terms = fetch_string_enrichment(list(identifiers), taxon_id)
+        if not terms:
+            continue
+
+        out[organism_name] = StringEnrichmentForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            network_size=len(identifiers),
+            terms=[StringEnrichmentTerm(**t) for t in terms[:max_terms]],
+        )
+
+    return StringEnrichmentResponse(results=out)
 
 
 def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:

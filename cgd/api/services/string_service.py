@@ -18,10 +18,15 @@ log = logging.getLogger(__name__)
 # STRING API configuration
 STRING_API_URL = "https://string-db.org/api"
 
-# Candida species supported by STRING
+# Candida species supported by STRING.
+# All four use systematic names (== CGD feature_name) as STRING preferredName,
+# except C. parapsilosis (UniProt-style names) and C. dubliniensis (absent from
+# STRING), which are intentionally not listed here.
 STRING_SUPPORTED_TAXONS = {
     237561: "Candida albicans SC5314",
     284593: "Candida glabrata CBS138",
+    498019: "Candida auris B8441",
+    294747: "Candida tropicalis MYA-3404",
 }
 
 # Cache timeout in seconds (1 hour)
@@ -218,3 +223,76 @@ def fetch_string_network(
         'edges': edges,
         'source': 'STRING',
     }
+
+
+# STRING enrichment categories worth surfacing, mapped to friendly labels.
+STRING_ENRICHMENT_CATEGORIES = {
+    "Process": "GO Biological Process",
+    "Function": "GO Molecular Function",
+    "Component": "GO Cellular Component",
+    "KEGG": "KEGG Pathway",
+    "RCTM": "Reactome Pathway",
+}
+
+
+def fetch_string_enrichment(
+    identifiers: list[str],
+    taxon_id: int,
+) -> list[dict]:
+    """
+    Run STRING functional enrichment on a set of proteins (typically a gene
+    and its STRING network partners).
+
+    Args:
+        identifiers: list of gene/protein identifiers (STRING preferredNames)
+        taxon_id: NCBI taxon ID (must be in STRING_SUPPORTED_TAXONS)
+
+    Returns:
+        List of enriched-term dicts: category, category_label, term, description,
+        fdr, p_value, genes (count), background (count).
+    """
+    if taxon_id not in STRING_SUPPORTED_TAXONS:
+        return []
+    # Need at least a couple of genes for a meaningful test.
+    ids = [i for i in dict.fromkeys(identifiers) if i]  # dedupe, keep order
+    if len(ids) < 2:
+        return []
+
+    # POST to avoid URL-length limits for large neighborhoods.
+    url = f"{STRING_API_URL}/json/enrichment"
+    data = urllib.parse.urlencode({
+        'identifiers': '\r'.join(ids),
+        'species': str(taxon_id),
+        'caller_identity': 'candidagenome.org',
+    }).encode('utf-8')
+
+    try:
+        req = urllib.request.Request(
+            url, data=data,
+            headers={'User-Agent': 'CGD/1.0 (Candida Genome Database)'},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            rows = json.loads(response.read().decode('utf-8'))
+    except Exception as e:  # noqa: BLE001
+        log.error(f"STRING enrichment failed for taxon {taxon_id}: {e}")
+        return []
+
+    results = []
+    for r in rows:
+        category = r.get('category', '')
+        if category not in STRING_ENRICHMENT_CATEGORIES:
+            continue
+        results.append({
+            'category': category,
+            'category_label': STRING_ENRICHMENT_CATEGORIES[category],
+            'term': r.get('term', ''),
+            'description': r.get('description', ''),
+            'fdr': r.get('fdr', 1.0),
+            'p_value': r.get('p_value', 1.0),
+            'genes': r.get('number_of_genes', 0),
+            'background': r.get('number_of_genes_in_background', 0),
+        })
+
+    # Most significant first.
+    results.sort(key=lambda x: (x['fdr'], x['p_value']))
+    return results

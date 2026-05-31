@@ -41,6 +41,29 @@ class StringInteractionOut(BaseModel):
     coexpression_score: int = 0  # Co-expression evidence score
 
 
+class StringEnrichmentTerm(BaseModel):
+    """A functionally-enriched term among a gene's STRING network partners."""
+    category: str          # STRING category code (Process, Function, KEGG, ...)
+    category_label: str    # human-friendly label
+    term: str              # term ID (e.g. GO:0006696)
+    description: str       # term name
+    fdr: float             # false discovery rate
+    p_value: float
+    genes: int             # number of network genes with this term
+    background: int        # genome background count for this term
+
+
+class StringEnrichmentForOrganism(BaseModel):
+    locus_display_name: str
+    taxon_id: int
+    network_size: int                       # number of genes the enrichment ran over
+    terms: list[StringEnrichmentTerm] = []
+
+
+class StringEnrichmentResponse(BaseModel):
+    results: dict[str, StringEnrichmentForOrganism]
+
+
 class InteractionDetailsForOrganism(BaseModel):
     locus_display_name: str
     taxon_id: int
