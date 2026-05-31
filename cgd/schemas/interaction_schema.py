@@ -61,11 +61,23 @@ class InteractionDetailsResponse(BaseModel):
 
 
 # Network graph schemas for Cytoscape visualization
+class GoSlimTermOut(BaseModel):
+    """A GO Slim term annotated to a network node."""
+    goid: str  # e.g. "GO:0006950"
+    term: str  # human-readable term name
+    aspect: str  # 'P' (process), 'F' (function), 'C' (component)
+
+
 class NetworkNode(BaseModel):
     """A node in the interaction network (a gene/feature)."""
     id: str  # feature_name (unique identifier)
     label: str  # display name (gene_name or feature_name)
     is_query: bool = False  # True if this is the queried gene
+    # GO Slim annotations (CGD_GO_Slim set), via direct or ancestor mapping
+    go_terms: list[GoSlimTermOut] = []  # all slim terms across P/F/C
+    shared_go: list[GoSlimTermOut] = []  # slim terms also annotated to the query gene
+    go_category: typing.Optional[str] = None  # representative biological-process term (for coloring)
+    go_category_id: typing.Optional[str] = None  # GO id of go_category
 
 
 class NetworkEdge(BaseModel):
@@ -79,12 +91,20 @@ class NetworkEdge(BaseModel):
     score: typing.Optional[int] = None  # STRING confidence score (0-1000)
 
 
+class SharedGoEdge(BaseModel):
+    """A non-interaction link drawn between two nodes that share a GO Slim term."""
+    source: str  # feature_name
+    target: str  # feature_name
+    shared_terms: list[GoSlimTermOut] = []
+
+
 class InteractionNetworkForOrganism(BaseModel):
     """Network graph data for one organism."""
     locus_display_name: str
     taxon_id: int
     nodes: list[NetworkNode]
     edges: list[NetworkEdge]
+    shared_go_edges: list[SharedGoEdge] = []
 
 
 class InteractionNetworkResponse(BaseModel):

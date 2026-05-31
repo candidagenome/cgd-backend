@@ -84,6 +84,8 @@ from cgd.schemas.interaction_schema import (
     InteractionNetworkForOrganism,
     NetworkNode,
     NetworkEdge,
+    GoSlimTermOut,
+    SharedGoEdge,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -173,6 +175,9 @@ from cgd.models.models import (
     CvtermRelationship,
     CvTerm,
     Cv,
+    Go,
+    GoSet,
+    GoPath,
 )
 
 
@@ -2148,6 +2153,104 @@ GENETIC_INTERACTION_TYPES = {
     'Synthetic Rescue',
 }
 
+# GO Slim set used to annotate/cluster interaction-network nodes
+NETWORK_GO_SLIM_SET = "Candida GO-Slim"
+
+# The three GO ontology roots (molecular_function, cellular_component,
+# biological_process). They are members of the slim set but are shared by
+# essentially every gene, so they carry no signal and are excluded.
+GO_ROOT_GOIDS = {3674, 5575, 8150}
+
+# Bounds for the (potentially O(n^2)) shared-GO overlay edges. Hub genes can
+# have hundreds of interactors; beyond these limits the overlay is neither
+# renderable nor informative, so we skip/cap it.
+MAX_SHARED_GO_NODES = 60
+MAX_SHARED_GO_EDGES = 800
+
+
+def _get_slim_terms_for_features(
+    db: Session,
+    feature_nos: set[int],
+    set_name: str = NETWORK_GO_SLIM_SET,
+) -> dict[int, dict[int, GoSlimTermOut]]:
+    """
+    Map a set of features to their GO Slim terms (CGD_GO_Slim) across all
+    aspects (P/F/C), via direct annotation or ancestor in the GO DAG.
+
+    Returns: feature_no -> {go_no: GoSlimTermOut}.
+
+    Mirrors the mapping logic in go_slim_mapper_service but is scoped to the
+    small set of features in an interaction network, so it runs cheaply.
+    """
+    result: dict[int, dict[int, GoSlimTermOut]] = {fn: {} for fn in feature_nos}
+    if not feature_nos:
+        return result
+
+    # 1) All slim terms in the set (go_no -> term details), all aspects
+    slim_rows = (
+        db.query(Go.go_no, Go.goid, Go.go_term, Go.go_aspect)
+        .join(GoSet, GoSet.go_no == Go.go_no)
+        .filter(GoSet.go_set_name == set_name)
+        .all()
+    )
+    slim_term_details: dict[int, GoSlimTermOut] = {}
+    for go_no, goid, go_term, go_aspect in slim_rows:
+        if goid in GO_ROOT_GOIDS:
+            continue  # skip the uninformative ontology roots
+        slim_term_details[go_no] = GoSlimTermOut(
+            goid=f"GO:{goid:07d}" if isinstance(goid, int) else str(goid),
+            term=go_term,
+            aspect=(go_aspect or "").upper()[:1],
+        )
+    slim_go_nos = set(slim_term_details.keys())
+    if not slim_go_nos:
+        return result
+
+    # 2) Direct GO annotations for these features
+    feature_nos_list = list(feature_nos)
+    feature_to_go_nos: dict[int, set[int]] = {fn: set() for fn in feature_nos}
+    CHUNK = 900
+    for i in range(0, len(feature_nos_list), CHUNK):
+        chunk = feature_nos_list[i:i + CHUNK]
+        rows = (
+            db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
+            .filter(GoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        for feature_no, go_no in rows:
+            feature_to_go_nos.setdefault(feature_no, set()).add(go_no)
+
+    # 3) Ancestors for every annotated go_no (so a specific annotation rolls
+    #    up to the slim term it descends from)
+    all_go_nos = set()
+    for go_nos in feature_to_go_nos.values():
+        all_go_nos.update(go_nos)
+
+    go_no_to_ancestors: dict[int, set[int]] = {}
+    if all_go_nos:
+        all_go_nos_list = list(all_go_nos)
+        for i in range(0, len(all_go_nos_list), CHUNK):
+            chunk = all_go_nos_list[i:i + CHUNK]
+            rows = (
+                db.query(GoPath.child_go_no, GoPath.ancestor_go_no)
+                .filter(GoPath.child_go_no.in_(chunk))
+                .all()
+            )
+            for child_go_no, ancestor_go_no in rows:
+                go_no_to_ancestors.setdefault(child_go_no, set()).add(ancestor_go_no)
+
+    # 4) Map each feature's annotations to slim terms (direct or via ancestor)
+    for feature_no, go_nos in feature_to_go_nos.items():
+        mapped = result.setdefault(feature_no, {})
+        for go_no in go_nos:
+            if go_no in slim_go_nos:
+                mapped[go_no] = slim_term_details[go_no]
+            for ancestor in go_no_to_ancestors.get(go_no, ()):  # noqa
+                if ancestor in slim_go_nos:
+                    mapped[ancestor] = slim_term_details[ancestor]
+
+    return result
+
 
 def get_locus_interaction_network(
     db: Session,
@@ -2205,6 +2308,7 @@ def get_locus_interaction_network(
         nodes_dict: dict[str, NetworkNode] = {}
         edges_dict: dict[str, NetworkEdge] = {}  # key: "source|target|type" to deduplicate
         feature_nos_in_network: set[int] = set()
+        node_feature_no: dict[str, int] = {}  # node id -> feature_no (for GO mapping)
 
         # Add query node
         nodes_dict[query_feature_name] = NetworkNode(
@@ -2213,6 +2317,7 @@ def get_locus_interaction_network(
             is_query=True,
         )
         feature_nos_in_network.add(f.feature_no)
+        node_feature_no[query_feature_name] = f.feature_no
 
         # Process direct interactions
         for fi in f.feat_interact:
@@ -2239,6 +2344,7 @@ def get_locus_interaction_network(
                         is_query=False,
                     )
                     feature_nos_in_network.add(other_feat.feature_no)
+                    node_feature_no[other_name] = other_feat.feature_no
 
                 # Add edge (use sorted key to avoid duplicates A->B and B->A)
                 edge_key = '|'.join(sorted([query_feature_name, other_name]) + [interaction_type, 'BioGRID'])
@@ -2309,7 +2415,7 @@ def get_locus_interaction_network(
                     string_gene_names.add(si['target'].upper())
 
                 # Query features by gene name to get feature_name mapping
-                gene_to_feature: dict[str, tuple[str, str]] = {}  # gene_name.upper() -> (feature_name, gene_name)
+                gene_to_feature: dict[str, tuple[str, str, int]] = {}  # gene_name.upper() -> (feature_name, gene_name, feature_no)
                 if string_gene_names:
                     matching_features = (
                         db.query(Feature)
@@ -2319,20 +2425,21 @@ def get_locus_interaction_network(
                     )
                     for mf in matching_features:
                         if mf.gene_name:
-                            gene_to_feature[mf.gene_name.upper()] = (mf.feature_name, mf.gene_name)
+                            gene_to_feature[mf.gene_name.upper()] = (mf.feature_name, mf.gene_name, mf.feature_no)
 
                 for si in string_interactions:
                     source_gene = si['source']
                     target_gene = si['target']
 
                     # Map gene names to feature names if available
+                    source_feat_no = target_feat_no = None
                     if source_gene.upper() in gene_to_feature:
-                        source_id, source_label = gene_to_feature[source_gene.upper()]
+                        source_id, source_label, source_feat_no = gene_to_feature[source_gene.upper()]
                     else:
                         source_id, source_label = source_gene, source_gene
 
                     if target_gene.upper() in gene_to_feature:
-                        target_id, target_label = gene_to_feature[target_gene.upper()]
+                        target_id, target_label, target_feat_no = gene_to_feature[target_gene.upper()]
                     else:
                         target_id, target_label = target_gene, target_gene
 
@@ -2343,12 +2450,16 @@ def get_locus_interaction_network(
                             label=source_label,
                             is_query=(source_id == query_feature_name),
                         )
+                        if source_feat_no is not None:
+                            node_feature_no.setdefault(source_id, source_feat_no)
                     if target_id not in nodes_dict:
                         nodes_dict[target_id] = NetworkNode(
                             id=target_id,
                             label=target_label,
                             is_query=(target_id == query_feature_name),
                         )
+                        if target_feat_no is not None:
+                            node_feature_no.setdefault(target_id, target_feat_no)
 
                     # Add STRING edge
                     edge_key = '|'.join(sorted([source_id, target_id]) + ['string', 'STRING'])
@@ -2363,11 +2474,59 @@ def get_locus_interaction_network(
                             score=si.get('combined_score'),
                         )
 
+        # Annotate nodes with GO Slim terms and compute shared-GO links
+        slim_map = _get_slim_terms_for_features(db, set(node_feature_no.values()))
+        query_slim = slim_map.get(f.feature_no, {})  # {go_no: GoSlimTermOut}
+
+        for node_id, node in nodes_dict.items():
+            feat_no = node_feature_no.get(node_id)
+            if feat_no is None:
+                continue
+            node_slim = slim_map.get(feat_no, {})
+            if not node_slim:
+                continue
+            node.go_terms = list(node_slim.values())
+            # Representative biological-process term drives node coloring
+            process_terms = [t for t in node_slim.values() if t.aspect == 'P']
+            chosen = process_terms[0] if process_terms else next(iter(node_slim.values()))
+            node.go_category = chosen.term
+            node.go_category_id = chosen.goid
+            # Terms shared with the query gene (skip the query node itself)
+            if not node.is_query and query_slim:
+                shared = [t for gno, t in node_slim.items() if gno in query_slim]
+                node.shared_go = shared
+
+        # Shared-GO overlay edges: connect every pair of nodes that share a
+        # slim term. Useful for revealing functional modules not captured by
+        # curated/predicted interactions. This is O(n^2), so it is only built
+        # for modestly sized networks and capped (see MAX_SHARED_GO_* above).
+        shared_go_edges: list[SharedGoEdge] = []
+        slim_items = [
+            (nid, slim_map.get(fno, {}))
+            for nid, fno in node_feature_no.items()
+            if slim_map.get(fno)
+        ]
+        if len(slim_items) <= MAX_SHARED_GO_NODES:
+            for i, (id_a, slim_a) in enumerate(slim_items):
+                if len(shared_go_edges) >= MAX_SHARED_GO_EDGES:
+                    break
+                for id_b, slim_b in slim_items[i + 1:]:
+                    common = set(slim_a) & set(slim_b)
+                    if common:
+                        shared_go_edges.append(SharedGoEdge(
+                            source=id_a,
+                            target=id_b,
+                            shared_terms=[slim_a[gno] for gno in common],
+                        ))
+                        if len(shared_go_edges) >= MAX_SHARED_GO_EDGES:
+                            break
+
         out[organism_name] = InteractionNetworkForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             nodes=list(nodes_dict.values()),
             edges=list(edges_dict.values()),
+            shared_go_edges=shared_go_edges,
         )
 
     return InteractionNetworkResponse(results=out)
