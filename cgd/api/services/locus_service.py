@@ -2181,6 +2181,13 @@ def _map_string_names_to_features(
     systematic names (== CGD feature_name) for others (C. auris B9J08_*,
     C. tropicalis CTRG_*), so we match against BOTH gene_name and feature_name.
 
+    Excludes old assembly-19/21 features (feature_name like orf19.* / orf21.*):
+    in C. albicans the gene_name "HOG1" is shared by several features
+    (orf19.895, orf19.8514, C2_03330C_A) that are all flagged is_seq_current,
+    so without this a name resolves to an orf19 feature instead of the current
+    assembly-22 one (C2_03330C_A) — which detaches STRING nodes from the
+    query/BioGRID nodes (they'd attach to a different node id).
+
     Returns: upper(name) -> (feature_name, display_label, feature_no).
     """
     result: dict[str, tuple[str, str, int]] = {}
@@ -2195,6 +2202,8 @@ def _map_string_names_to_features(
                 func.upper(Feature.feature_name).in_(names_upper),
             )
         )
+        .filter(~func.upper(Feature.feature_name).like('ORF19.%'))
+        .filter(~func.upper(Feature.feature_name).like('ORF21.%'))
         .all()
     )
     for mf in feats:
