@@ -649,7 +649,11 @@ class TestTargetRegionFiltering:
         assert 1200 not in positions  # past first 20%
 
     def test_five_prime_filter_minus_strand(self, sample_guides):
-        """5' prime for minus strand should include last 20% (high positions)."""
+        """5' filter is strand-independent.
+
+        The coding sequence is always stored in gene orientation (5'->3'),
+        so the 5' region is the first 20% of the CDS for both strands.
+        """
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -658,12 +662,16 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # For minus strand: 5' is at HIGH positions (>= 800, last 20%)
+        # Sequence is in gene orientation, so 5' is at LOW positions (<= 200)
         for pos in positions:
-            assert pos >= 800
+            assert pos <= 200
 
     def test_three_prime_filter_minus_strand(self, sample_guides):
-        """3' prime for minus strand should include first 20% (low positions)."""
+        """3' filter is strand-independent.
+
+        The CDS is always in gene orientation, so the 3' region is the last
+        20% of the CDS for both strands.
+        """
         filtered = _filter_target_region(
             sample_guides,
             sequence_length=1000,
@@ -672,22 +680,23 @@ class TestTargetRegionFiltering:
         )
 
         positions = [pos for _, _, pos, _ in filtered]
-        # For minus strand: 3' is at LOW positions (<= 200, first 20%)
+        # Sequence is in gene orientation, so 3' is at HIGH positions (>= 800)
         for pos in positions:
-            assert pos <= 200
+            assert pos >= 800
 
     def test_five_prime_upstream_filter_minus_strand(self):
-        """5' prime upstream for minus strand includes upstream region AND 5' end of CDS."""
-        # For minus strand: sequence is [upstream][CDS in genomic orientation]
-        # - Upstream (positions 1-500) is the 5' upstream of the gene
-        # - CDS (positions 501-1500) has 5' end at HIGH positions (1300-1500 for 20%)
+        """5' upstream filter is strand-independent.
+
+        Upstream sequence is prepended in gene orientation, so the structure is
+        always [upstream][5' CDS] occupying the low positions for both strands.
+        """
+        # Simulate 500bp upstream + 1000bp CDS, all in gene orientation
         guides = [
-            ("GUIDE1", "NGG", 100, "+"),   # In upstream region - should be included
-            ("GUIDE2", "NGG", 400, "+"),   # In upstream region - should be included
-            ("GUIDE3", "NGG", 600, "+"),   # In CDS but not 5' end - excluded
-            ("GUIDE4", "NGG", 1000, "+"),  # In CDS but not 5' end - excluded
-            ("GUIDE5", "NGG", 1350, "+"),  # In 5' end of CDS (>= 1300) - included
-            ("GUIDE6", "NGG", 1450, "+"),  # In 5' end of CDS - included
+            ("GUIDE1", "NGG", 100, "+"),   # In upstream region - included
+            ("GUIDE2", "NGG", 400, "+"),   # In upstream region - included
+            ("GUIDE3", "NGG", 600, "+"),   # In first 20% of CDS (501-700) - included
+            ("GUIDE4", "NGG", 800, "+"),   # Past first 20% of CDS - excluded
+            ("GUIDE5", "NGG", 1200, "+"),  # Past first 20% of CDS - excluded
         ]
 
         filtered = _filter_target_region(
@@ -698,15 +707,13 @@ class TestTargetRegionFiltering:
             gene_strand="-"
         )
 
-        # Minus strand: include upstream (1-500) OR 5' end of CDS (1300-1500)
-        # 5' CDS start = 1500 - 200 = 1300
+        # Include upstream (1-500) + first 20% of CDS (501-700); max position = 700
         positions = [pos for _, _, pos, _ in filtered]
-        assert 100 in positions       # in upstream region
-        assert 400 in positions       # in upstream region
-        assert 600 not in positions   # in CDS middle
-        assert 1000 not in positions  # in CDS middle
-        assert 1350 in positions      # in 5' end of CDS
-        assert 1450 in positions      # in 5' end of CDS
+        assert 100 in positions       # upstream
+        assert 400 in positions       # upstream
+        assert 600 in positions       # first 20% CDS
+        assert 800 not in positions   # past first 20%
+        assert 1200 not in positions  # past first 20%
 
 
 # =============================================================================
