@@ -51,6 +51,7 @@ from cgd.api.routers.curation import (
     go_curation_router,
     reference_curation_router,
     phenotype_curation_router,
+    interaction_curation_router,
     colleague_curation_router,
     locus_curation_router,
     litguide_curation_router,
@@ -152,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(go_curation_router)
     app.include_router(reference_curation_router)
     app.include_router(phenotype_curation_router)
+    app.include_router(interaction_curation_router)
     app.include_router(colleague_curation_router)
     app.include_router(locus_curation_router)
     app.include_router(litguide_curation_router)
