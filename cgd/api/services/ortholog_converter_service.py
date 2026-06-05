@@ -483,9 +483,10 @@ def convert_orthologs_from_sgd(
     found_count = 0
     converted_count = 0
 
-    # CGD stores S. cerevisiae orthologs by SGDID and gene name but not by
-    # systematic/ORF name. Resolve all inputs via the SGD API up front so ORF
-    # names (e.g. YDR300C) and aliases can be matched to the stored identifiers.
+    # Source is S. cerevisiae: always resolve every input via the SGD API to get
+    # the canonical gene name, systematic/ORF name, and SGDID. CGD stores its
+    # S. cerevisiae orthologs by SGDID and gene name (never by ORF name), so this
+    # both lets ORF-name input be matched and supplies the ORF name for display.
     sgd_resolution = _resolve_sgd_ids([g for g in gene_ids if g and g.strip()])
 
     for gene_id in gene_ids:
@@ -493,23 +494,32 @@ def convert_orthologs_from_sgd(
         if not gene_id_stripped:
             continue
 
-        # Find CGD feature linked to this SGD gene via DbxrefFeat. Try the raw
-        # input first (matches a gene name or SGDID), then fall back to the
-        # SGD-resolved SGDID / gene name (handles systematic/ORF names).
-        feature, dbxref = _find_cgd_feature_for_sgd_gene(db, gene_id_stripped)
-        if not (feature and dbxref):
-            resolved = sgd_resolution.get(gene_id_stripped.upper())
-            if resolved:
-                for candidate in (resolved.get("sgdid"), resolved.get("gene_name")):
-                    if not candidate:
-                        continue
-                    feature, dbxref = _find_cgd_feature_for_sgd_gene(db, candidate)
-                    if feature and dbxref:
-                        break
+        resolved = sgd_resolution.get(gene_id_stripped.upper()) or {}
+        input_gene_name = resolved.get("gene_name")
+        input_orf_name = resolved.get("systematic_name")
+        input_sgdid = resolved.get("sgdid")
+
+        # Find the CGD feature linked to this SGD gene via DbxrefFeat. Prefer the
+        # SGD-resolved SGDID (stable), then the gene name, then the raw input.
+        feature, dbxref = (None, None)
+        for candidate in (input_sgdid, input_gene_name, gene_id_stripped):
+            if not candidate:
+                continue
+            feature, dbxref = _find_cgd_feature_for_sgd_gene(db, candidate)
+            if feature and dbxref:
+                break
+
+        # Prefer the SGD-resolved names for display; fall back to CGD's dbxref.
+        if dbxref:
+            input_gene_name = input_gene_name or dbxref.description
+            input_sgdid = input_sgdid or dbxref.dbxref_id
 
         if not feature or not dbxref:
             results.append(OrthologResult(
                 input_id=gene_id_stripped,
+                input_gene_name=input_gene_name,
+                input_feature_name=input_orf_name,
+                input_sgdid=input_sgdid,
                 input_organism="Saccharomyces cerevisiae",
                 found=False,
                 relationship="not_found",
@@ -527,8 +537,9 @@ def convert_orthologs_from_sgd(
             converted_count += 1
             results.append(OrthologResult(
                 input_id=gene_id_stripped,
-                input_gene_name=dbxref.description,  # SGD gene name
-                input_feature_name=dbxref.dbxref_id,  # SGD systematic name
+                input_gene_name=input_gene_name,
+                input_feature_name=input_orf_name,
+                input_sgdid=input_sgdid,
                 input_organism="Saccharomyces cerevisiae",
                 found=True,
                 ortholog_id=feature.feature_name,
@@ -570,8 +581,9 @@ def convert_orthologs_from_sgd(
         if not all_orthologs:
             results.append(OrthologResult(
                 input_id=gene_id_stripped,
-                input_gene_name=dbxref.description,
-                input_feature_name=dbxref.dbxref_id,
+                input_gene_name=input_gene_name,
+                input_feature_name=input_orf_name,
+                input_sgdid=input_sgdid,
                 input_organism="Saccharomyces cerevisiae",
                 found=True,
                 cluster_id=cluster_id or (homology_groups[0].homology_group_id if homology_groups else None),
@@ -598,8 +610,9 @@ def convert_orthologs_from_sgd(
 
         results.append(OrthologResult(
             input_id=gene_id_stripped,
-            input_gene_name=dbxref.description,
-            input_feature_name=dbxref.dbxref_id,
+            input_gene_name=input_gene_name,
+            input_feature_name=input_orf_name,
+            input_sgdid=input_sgdid,
             input_organism="Saccharomyces cerevisiae",
             found=True,
             ortholog_id=first_orth['id'],
