@@ -19,9 +19,11 @@ from typing import Optional
 
 from sqlalchemy import and_
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from cgd.models.models import Feature, Interaction, FeatInteract, RefLink
+from cgd.models.models import (
+    Feature, Interaction, FeatInteract, RefLink, Reference, RefUrl,
+)
 from cgd.api.services.curation.phenotype_curation_service import (
     PhenotypeCurationService,
 )
@@ -159,9 +161,24 @@ class InteractionCurationService:
                 .all()
             )
             for rl in ref_links:
-                ref = rl.reference
+                ref = (
+                    self.db.query(Reference)
+                    .options(joinedload(Reference.ref_url).joinedload(RefUrl.url))
+                    .filter(Reference.reference_no == rl.reference_no)
+                    .first()
+                )
                 if ref:
-                    references.append({"pubmed": ref.pubmed, "citation": ref.citation})
+                    urls = [
+                        {"url_type": ru.url.url_type, "url": ru.url.url}
+                        for ru in ref.ref_url if ru.url
+                    ]
+                    references.append({
+                        "reference_no": ref.reference_no,
+                        "dbxref_id": ref.dbxref_id,
+                        "pubmed": ref.pubmed,
+                        "citation": ref.citation,
+                        "urls": urls,
+                    })
 
             row = {
                 "interaction_no": interaction.interaction_no,

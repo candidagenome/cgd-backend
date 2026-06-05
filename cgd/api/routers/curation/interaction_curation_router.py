@@ -35,9 +35,17 @@ class InteractionPartnerOut(BaseModel):
     action: str  # Bait / Hit
 
 
+class InteractionReferenceUrlOut(BaseModel):
+    url_type: Optional[str] = None
+    url: str
+
+
 class InteractionReferenceOut(BaseModel):
+    reference_no: Optional[int] = None
+    dbxref_id: Optional[str] = None
     pubmed: Optional[int] = None
     citation: Optional[str] = None
+    urls: list[InteractionReferenceUrlOut] = []
 
 
 class CuratedInteractionOut(BaseModel):
