@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import httpx
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -30,6 +31,81 @@ from cgd.schemas.ortholog_converter_schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+# SGD REST API for resolving S. cerevisiae identifiers (gene name, systematic/
+# ORF name, alias, or SGDID) to the canonical SGDID and standard gene name.
+SGD_ENTITY_API_URL = "https://backend.yeastgenome.org/entity/locus/"
+SGD_ENTITY_TIMEOUT = 10.0
+
+
+def _resolve_sgd_ids(gene_ids: list[str]) -> dict[str, dict]:
+    """
+    Resolve S. cerevisiae identifiers to canonical SGDID and gene name via the
+    SGD REST API.
+
+    CGD links S. cerevisiae orthologs through DbxrefFeat -> Dbxref
+    (source='SGD'), where dbxref_id holds the SGDID (e.g. S000002708) and
+    description holds the standard gene name (e.g. PRO1). Systematic/ORF names
+    (e.g. YDR300C) are not stored, so input using ORF names cannot be matched
+    directly. This resolver maps any accepted SGD identifier to the SGDID and
+    gene name that CGD does store.
+
+    Returns a dict keyed by the upper-cased identifier (the API query echo plus
+    the systematic name, gene name, SGDID, and prefixed modEntityId) with
+    values::
+
+        {'sgdid': 'S000002708', 'gene_name': 'PRO1', 'systematic_name': 'YDR300C'}
+
+    Best-effort: returns an empty dict if the SGD API is unavailable, leaving
+    direct CGD lookups (by gene name or SGDID) unaffected.
+    """
+    # De-duplicate while preserving order.
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in gene_ids:
+        gene = (raw or "").strip()
+        if gene and gene.upper() not in seen:
+            seen.add(gene.upper())
+            cleaned.append(gene)
+    if not cleaned:
+        return {}
+
+    try:
+        # The endpoint accepts pipe-separated identifiers; httpx percent-encodes
+        # the path for us.
+        response = httpx.get(
+            SGD_ENTITY_API_URL + "|".join(cleaned),
+            timeout=SGD_ENTITY_TIMEOUT,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "SGD entity lookup returned status %s", response.status_code
+            )
+            return {}
+        entries = response.json()
+    except (httpx.RequestError, ValueError) as exc:
+        logger.warning("SGD entity lookup failed: %s", exc)
+        return {}
+
+    resolution: dict[str, dict] = {}
+    for entry in entries or []:
+        mod_id = (entry.get("modEntityId") or "").strip()
+        # Strip the "SGD:" prefix to match the dbxref_id stored in CGD.
+        sgdid = mod_id.split(":", 1)[1] if ":" in mod_id else mod_id
+        gene_name = (entry.get("display_name") or "").strip() or None
+        systematic_name = (entry.get("format_name") or "").strip() or None
+        info = {
+            "sgdid": sgdid or None,
+            "gene_name": gene_name,
+            "systematic_name": systematic_name,
+        }
+        # Key by every identifier form so a match succeeds regardless of which
+        # the user supplied.
+        for key in (entry.get("query"), systematic_name, gene_name, sgdid, mod_id):
+            if key and key.strip():
+                resolution[key.strip().upper()] = info
+
+    return resolution
 
 
 def _get_organism_name(feature: Feature) -> Optional[str]:
@@ -407,17 +483,29 @@ def convert_orthologs_from_sgd(
     found_count = 0
     converted_count = 0
 
+    # CGD stores S. cerevisiae orthologs by SGDID and gene name but not by
+    # systematic/ORF name. Resolve all inputs via the SGD API up front so ORF
+    # names (e.g. YDR300C) and aliases can be matched to the stored identifiers.
+    sgd_resolution = _resolve_sgd_ids([g for g in gene_ids if g and g.strip()])
+
     for gene_id in gene_ids:
         gene_id_stripped = gene_id.strip()
         if not gene_id_stripped:
             continue
 
-        # Find CGD feature linked to this SGD gene via DbxrefFeat
-        result = _find_cgd_feature_for_sgd_gene(db, gene_id_stripped)
-        if result == (None, None):
-            feature, dbxref = None, None
-        else:
-            feature, dbxref = result
+        # Find CGD feature linked to this SGD gene via DbxrefFeat. Try the raw
+        # input first (matches a gene name or SGDID), then fall back to the
+        # SGD-resolved SGDID / gene name (handles systematic/ORF names).
+        feature, dbxref = _find_cgd_feature_for_sgd_gene(db, gene_id_stripped)
+        if not (feature and dbxref):
+            resolved = sgd_resolution.get(gene_id_stripped.upper())
+            if resolved:
+                for candidate in (resolved.get("sgdid"), resolved.get("gene_name")):
+                    if not candidate:
+                        continue
+                    feature, dbxref = _find_cgd_feature_for_sgd_gene(db, candidate)
+                    if feature and dbxref:
+                        break
 
         if not feature or not dbxref:
             results.append(OrthologResult(
