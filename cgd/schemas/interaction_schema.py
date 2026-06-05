@@ -30,6 +30,25 @@ class InteractionOut(BaseModel):
     references: list[InteractionReferenceOut] = []
 
 
+class InferredInteractionOut(BaseModel):
+    """An orthology-inferred (interolog) interaction transferred from another
+    Candida species' curated interaction. Predicted, never curated."""
+    interactor_feature_name: typing.Optional[str] = None
+    interactor_gene_name: typing.Optional[str] = None
+    interaction_type: str  # 'physical' | 'genetic'
+    experiment_type: str
+    description: typing.Optional[str] = None
+    source: str  # source of the originating curated interaction (BioGRID / CGD)
+    # Provenance: the source-species gene pair the inference came from
+    source_organism: typing.Optional[str] = None
+    source_gene_name: typing.Optional[str] = None
+    source_gene_feature_name: typing.Optional[str] = None
+    source_partner_name: typing.Optional[str] = None
+    source_partner_feature_name: typing.Optional[str] = None
+    ortholog_method: typing.Optional[str] = None  # CGOB / BLAST RBH / BLAST
+    references: list[InteractionReferenceOut] = []
+
+
 class StringInteractionOut(BaseModel):
     """STRING database interaction."""
     interactor: str  # Gene name of the interactor
@@ -104,6 +123,7 @@ class InteractionDetailsForOrganism(BaseModel):
     organism_no: typing.Optional[int] = None  # for GO/phenotype enrichment requests
     interactions: list[InteractionOut]
     string_interactions: list[StringInteractionOut] = []
+    inferred_interactions: list[InferredInteractionOut] = []
 
 
 class InteractionDetailsResponse(BaseModel):

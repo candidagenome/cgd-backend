@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import logging
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -8,6 +9,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, or_
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from cgd.api.crud.locus_crud import get_features_for_locus_name
 from cgd.schemas.locus_schema import (
@@ -2143,12 +2146,23 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
                         coexpression_score=int(evidence.get('ascore', 0) * 1000) if evidence.get('ascore', 0) <= 1 else int(evidence.get('ascore', 0)),
                     ))
 
+        # Orthology-inferred (interolog) interactions transferred from the
+        # C. albicans ortholog's curated interactions (computed live; empty for
+        # C. albicans itself).
+        from cgd.api.services.interolog_service import get_inferred_interactions
+        try:
+            inferred_interactions = get_inferred_interactions(db, f, organism_name)
+        except Exception:
+            logger.exception("Failed to compute inferred interactions for %s", locus_display_name)
+            inferred_interactions = []
+
         out[organism_name] = InteractionDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
             organism_no=f.organism_no,
             interactions=interactions,
             string_interactions=string_interactions,
+            inferred_interactions=inferred_interactions,
         )
 
     return InteractionDetailsResponse(results=out)
