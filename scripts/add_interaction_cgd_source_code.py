@@ -19,6 +19,8 @@ import logging
 # Allow running directly: add project root to path.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from sqlalchemy import text  # noqa: E402
+
 from cgd.db.engine import SessionLocal  # noqa: E402
 from cgd.models.models import Code  # noqa: E402
 
@@ -58,8 +60,26 @@ def main(dry_run: bool = False) -> int:
             log.info("--dry-run: not committing.")
             return 0
 
-        # code_no and created_by are populated by Oracle defaults/triggers.
+        # The CODE_BIUR trigger assigns code_no from code_seq only when it is
+        # NULL. On data-loaded environments code_seq can lag max(code_no), so a
+        # plain insert collides on CODE_PK. Pull nextval until we get a value
+        # not already in use (this also re-syncs the sequence), then insert with
+        # that explicit code_no (the trigger leaves a non-null value alone).
+        code_no = None
+        for _ in range(100000):
+            candidate = int(db.execute(text("SELECT MULTI.code_seq.NEXTVAL FROM dual")).scalar())
+            in_use = db.execute(
+                text("SELECT 1 FROM MULTI.code WHERE code_no = :n"), {"n": candidate}
+            ).first()
+            if not in_use:
+                code_no = candidate
+                break
+        if code_no is None:
+            raise RuntimeError("Could not obtain a free code_no from code_seq")
+
+        # created_by is populated by the trigger/default.
         code = Code(
+            code_no=code_no,
             tab_name=TAB_NAME,
             col_name=COL_NAME,
             code_value=CODE_VALUE,
@@ -67,7 +87,7 @@ def main(dry_run: bool = False) -> int:
         )
         db.add(code)
         db.commit()
-        log.info("Added CODE row (code_no=%s).", code.code_no)
+        log.info("Added CODE row (code_no=%s).", code_no)
         return 0
     except Exception:
         db.rollback()
