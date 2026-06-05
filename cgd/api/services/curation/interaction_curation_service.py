@@ -310,7 +310,11 @@ class InteractionCurationService:
                 f"(interaction {interaction_no} is from {interaction.source})."
             )
 
-        # Reference links are in a generic table (no FK cascade) -> delete explicitly.
+        # Delete children then the interaction itself with bulk queries. Using
+        # a bulk delete for the interaction (rather than db.delete(interaction))
+        # avoids ORM relationship-cascade handling of the already-removed
+        # feat_interact rows, which otherwise raises StaleDataError on flush.
+        # Reference links live in a generic table (no FK cascade) -> explicit.
         self.db.query(RefLink).filter(
             RefLink.tab_name == REF_TAB,
             RefLink.primary_key == interaction_no,
@@ -318,7 +322,9 @@ class InteractionCurationService:
         self.db.query(FeatInteract).filter(
             FeatInteract.interaction_no == interaction_no,
         ).delete(synchronize_session=False)
-        self.db.delete(interaction)
+        self.db.query(Interaction).filter(
+            Interaction.interaction_no == interaction_no,
+        ).delete(synchronize_session=False)
         self.db.commit()
 
         logger.info("Deleted CGD interaction %s by %s", interaction_no, curator_userid)
