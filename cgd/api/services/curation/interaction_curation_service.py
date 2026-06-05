@@ -18,6 +18,7 @@ import logging
 from typing import Optional
 
 from sqlalchemy import and_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from cgd.models.models import Feature, Interaction, FeatInteract, RefLink
@@ -88,8 +89,25 @@ class InteractionCurationService:
         """Return 'genetic' or 'physical' for an experiment type."""
         return "genetic" if (experiment_type or "").lower() in _GENETIC_SET else "physical"
 
+    def _cv_type_map(self) -> dict:
+        """Map lower(term) -> exact term for the experiment_type CV.
+
+        The INTERACTION_BIUR trigger validates experiment_type against cv_term,
+        so only terms in this CV are accepted by the database.
+        """
+        try:
+            return {t.lower(): t for t in self._helper.get_cv_terms("experiment_type")}
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Failed to load experiment_type CV terms")
+            return {}
+
     def get_experiment_types(self) -> dict:
-        return {"physical": PHYSICAL_TYPES, "genetic": GENETIC_TYPES}
+        # Offer only types that are both classifiable here AND present in the
+        # experiment_type CV; otherwise the INTERACTION trigger would reject them.
+        cv_map = self._cv_type_map()
+        physical = [t for t in PHYSICAL_TYPES if not cv_map or t.lower() in cv_map]
+        genetic = [t for t in GENETIC_TYPES if not cv_map or t.lower() in cv_map]
+        return {"physical": physical, "genetic": genetic}
 
     # ------------------------------------------------------------------
     # Read
@@ -182,9 +200,20 @@ class InteractionCurationService:
         curator_userid: str,
     ) -> int:
         """Create a curator (source='CGD') interaction. Queried gene = Bait."""
-        canonical = _ALL_TYPES.get((experiment_type or "").lower())
+        key = (experiment_type or "").lower()
+        canonical = _ALL_TYPES.get(key)
         if not canonical:
             raise InteractionCurationError(f"Unknown experiment type: '{experiment_type}'")
+        # experiment_type is validated by the INTERACTION trigger against the
+        # experiment_type CV. Reject up front with a clean error and use the
+        # CV's exact casing for the stored value.
+        cv_map = self._cv_type_map()
+        if cv_map and key not in cv_map:
+            raise InteractionCurationError(
+                f"Experiment type '{canonical}' is not a valid CGD interaction "
+                f"experiment type."
+            )
+        canonical = cv_map.get(key, canonical)
 
         bait = self._helper.get_feature_by_name(feature_name, organism_abbrev)
         if not bait:
@@ -216,41 +245,49 @@ class InteractionCurationService:
                 f"An identical CGD interaction already exists (interaction {existing})."
             )
 
-        interaction = Interaction(
-            experiment_type=canonical,
-            source=SOURCE,
-            description=(description or None),
-            created_by=curator_userid[:12],
-        )
-        self.db.add(interaction)
-        self.db.flush()  # populate interaction_no (Oracle trigger)
-        interaction_no = interaction.interaction_no
+        try:
+            interaction = Interaction(
+                experiment_type=canonical,
+                source=SOURCE,
+                description=(description or None),
+                created_by=curator_userid[:12],
+            )
+            self.db.add(interaction)
+            self.db.flush()  # populate interaction_no (Oracle trigger)
+            interaction_no = interaction.interaction_no
 
-        self.db.add(RefLink(
-            reference_no=reference_no,
-            tab_name=REF_TAB,
-            col_name=REF_COL,
-            primary_key=interaction_no,
-            created_by=curator_userid[:12],
-        ))
-
-        # Queried gene = Bait
-        self.db.add(FeatInteract(
-            feature_no=bait.feature_no,
-            interaction_no=interaction_no,
-            action="Bait",
-            created_by=curator_userid[:12],
-        ))
-        # Partner = Hit (omit for a self-interaction)
-        if hit.feature_no != bait.feature_no:
-            self.db.add(FeatInteract(
-                feature_no=hit.feature_no,
-                interaction_no=interaction_no,
-                action="Hit",
+            self.db.add(RefLink(
+                reference_no=reference_no,
+                tab_name=REF_TAB,
+                col_name=REF_COL,
+                primary_key=interaction_no,
                 created_by=curator_userid[:12],
             ))
 
-        self.db.commit()
+            # Queried gene = Bait
+            self.db.add(FeatInteract(
+                feature_no=bait.feature_no,
+                interaction_no=interaction_no,
+                action="Bait",
+                created_by=curator_userid[:12],
+            ))
+            # Partner = Hit (omit for a self-interaction)
+            if hit.feature_no != bait.feature_no:
+                self.db.add(FeatInteract(
+                    feature_no=hit.feature_no,
+                    interaction_no=interaction_no,
+                    action="Hit",
+                    created_by=curator_userid[:12],
+                ))
+
+            self.db.commit()
+        except SQLAlchemyError:
+            self.db.rollback()
+            logger.exception("Failed to insert interaction")
+            raise InteractionCurationError(
+                "Could not save the interaction; the database rejected the data. "
+                "Please check the experiment type and reference."
+            )
         logger.info(
             "Created CGD interaction %s: %s (%s) %s-%s by %s",
             interaction_no, canonical, self.classify(canonical),
