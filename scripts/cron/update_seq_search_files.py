@@ -113,6 +113,17 @@ STRAIN_ASSEMBLIES = {
     "C_albicans_SC5314": ["A22", "A21", "A19"],
 }
 
+# Datasets that may legitimately be empty for some organisms.
+# For example, C_tropicalis has no tRNA/rRNA/ncRNA/pseudogene annotations, so the
+# upstream dump (dump_sequence.py, MIN count 0) produces empty other_features files.
+# Skip such empty source files instead of failing makeblastdb ("No sequences added").
+OPTIONAL_EMPTY_DATASETS = {
+    "other_features_genomic",
+    "other_features_genomic_1000",
+    "other_features_no_introns",
+    "other_features_plus_intergenic",
+}
+
 # Datasets to skip for specific assemblies (to match legacy file set)
 ASSEMBLY_SKIP_DATASETS = {
     "A19": ["default_coding", "default_genomic", "default_protein", "not_feature"],
@@ -757,6 +768,16 @@ class SequenceProcessor:
         if not source_file.exists():
             self.log_error(f"Source file not found: {source_file}")
             return False
+
+        # Some organisms legitimately have no "other features" (tRNA/rRNA/ncRNA/etc.),
+        # so the upstream dump produces an empty file. Skip these gracefully instead of
+        # failing the whole strain on an empty makeblastdb input ("No sequences added").
+        if dataset in OPTIONAL_EMPTY_DATASETS and count_sequences_in_file(source_file) == 0:
+            self.log(
+                f"Skipping {dataset} for {self.strain_abbrev}: source file is empty "
+                f"(organism has no such features): {source_file}"
+            )
+            return True
 
         success = True
 
