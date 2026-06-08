@@ -71,7 +71,8 @@ class OrthologResult(BaseModel):
     """Result for a single gene's ortholog conversion."""
     input_id: str = Field(..., description="Original input gene ID")
     input_gene_name: Optional[str] = Field(None, description="Standard gene name of input")
-    input_feature_name: Optional[str] = Field(None, description="Systematic name of input")
+    input_feature_name: Optional[str] = Field(None, description="Systematic/ORF name of input")
+    input_sgdid: Optional[str] = Field(None, description="SGDID of input (S. cerevisiae source only)")
     input_organism: Optional[str] = Field(None, description="Organism of the input gene")
     found: bool = Field(..., description="Whether the input gene was found in CGD")
     ortholog_id: Optional[str] = Field(None, description="Target ortholog ID")

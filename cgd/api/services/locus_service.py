@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import logging
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -8,6 +9,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func, or_
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from cgd.api.crud.locus_crud import get_features_for_locus_name
 from cgd.schemas.locus_schema import (
@@ -78,6 +81,21 @@ from cgd.schemas.interaction_schema import (
     InteractionDetailsForOrganism,
     InteractionOut,
     InteractorOut,
+    InteractionReferenceOut,
+    StringInteractionOut,
+    InteractionNetworkResponse,
+    InteractionNetworkForOrganism,
+    NetworkNode,
+    NetworkEdge,
+    GoSlimTermOut,
+    SharedGoEdge,
+    StringEnrichmentResponse,
+    StringEnrichmentForOrganism,
+    StringEnrichmentTerm,
+    NetworkEnrichmentResponse,
+    NetworkEnrichmentForOrganism,
+    NetworkEnrichmentTerm,
+    EnrichmentGene,
 )
 from cgd.schemas.protein_schema import (
     ProteinDetailsResponse,
@@ -167,6 +185,9 @@ from cgd.models.models import (
     CvtermRelationship,
     CvTerm,
     Cv,
+    Go,
+    GoSet,
+    GoPath,
 )
 
 
@@ -2051,10 +2072,12 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
             )
             for rl in ref_links:
                 ref = rl.reference
-                if ref and ref.pubmed:
-                    references.append(f"PMID:{ref.pubmed}")
-                elif ref:
-                    references.append(ref.dbxref_id)
+                if ref:
+                    references.append(InteractionReferenceOut(
+                        dbxref_id=ref.dbxref_id,
+                        pubmed=ref.pubmed,
+                        citation=ref.citation,
+                    ))
 
             interactions.append(InteractionOut(
                 interaction_no=interaction.interaction_no,
@@ -2065,13 +2088,799 @@ def get_locus_interaction_details(db: Session, name: str) -> InteractionDetailsR
                 references=references,
             ))
 
+        # Fetch STRING interactions for supported organisms
+        string_interactions = []
+        from cgd.api.services.string_service import fetch_string_interactions, STRING_SUPPORTED_TAXONS
+        if taxon_id in STRING_SUPPORTED_TAXONS:
+            string_data = fetch_string_interactions(
+                locus_display_name, taxon_id, required_score=400
+            )
+
+            # Build gene name to feature name mapping for this organism
+            if string_data:
+                string_gene_names = set()
+                string_accessions = set()
+                for si in string_data:
+                    # Add the interactor (not the query gene)
+                    if si['source'].upper() != locus_display_name.upper():
+                        string_gene_names.add(si['source'].upper())
+                        if si.get('source_accession'):
+                            string_accessions.add(si['source_accession'].upper())
+                    if si['target'].upper() != locus_display_name.upper():
+                        string_gene_names.add(si['target'].upper())
+                        if si.get('target_accession'):
+                            string_accessions.add(si['target_accession'].upper())
+
+                gene_to_feature = _map_string_names_to_features(
+                    db, string_gene_names, f.organism_no
+                )
+                acc_to_feature = _map_uniprot_accessions_to_features(
+                    db, string_accessions, f.organism_no
+                )
+
+                for si in string_data:
+                    # Determine which is the interactor (not the query gene)
+                    if si['source'].upper() == locus_display_name.upper():
+                        interactor_gene = si['target']
+                        interactor_accession = si.get('target_accession')
+                    else:
+                        interactor_gene = si['source']
+                        interactor_accession = si.get('source_accession')
+
+                    mapped = gene_to_feature.get(interactor_gene.upper())
+                    if not mapped and interactor_accession:
+                        mapped = acc_to_feature.get(interactor_accession.upper())
+                    interactor_feature = mapped[0] if mapped else None
+                    # Prefer the CGD display name (gene or systematic) over a raw
+                    # STRING UniProt mnemonic once we've resolved the feature.
+                    interactor_display = mapped[1] if mapped else interactor_gene
+                    evidence = si.get('evidence_scores', {})
+
+                    string_interactions.append(StringInteractionOut(
+                        interactor=interactor_display,
+                        interactor_feature_name=interactor_feature,
+                        combined_score=si.get('combined_score', 0),
+                        experimental_score=int(evidence.get('escore', 0) * 1000) if evidence.get('escore', 0) <= 1 else int(evidence.get('escore', 0)),
+                        database_score=int(evidence.get('dscore', 0) * 1000) if evidence.get('dscore', 0) <= 1 else int(evidence.get('dscore', 0)),
+                        textmining_score=int(evidence.get('tscore', 0) * 1000) if evidence.get('tscore', 0) <= 1 else int(evidence.get('tscore', 0)),
+                        coexpression_score=int(evidence.get('ascore', 0) * 1000) if evidence.get('ascore', 0) <= 1 else int(evidence.get('ascore', 0)),
+                    ))
+
+        # Orthology-inferred (interolog) interactions transferred from the
+        # C. albicans ortholog's curated interactions (computed live; empty for
+        # C. albicans itself).
+        from cgd.api.services.interolog_service import get_inferred_interactions
+        try:
+            inferred_interactions = get_inferred_interactions(db, f, organism_name)
+        except Exception:
+            logger.exception("Failed to compute inferred interactions for %s", locus_display_name)
+            inferred_interactions = []
+
         out[organism_name] = InteractionDetailsForOrganism(
             locus_display_name=locus_display_name,
             taxon_id=taxon_id,
+            organism_no=f.organism_no,
             interactions=interactions,
+            string_interactions=string_interactions,
+            inferred_interactions=inferred_interactions,
         )
 
     return InteractionDetailsResponse(results=out)
+
+
+# Genetic interaction types (from BioGRID)
+GENETIC_INTERACTION_TYPES = {
+    'Dosage Lethality',
+    'Dosage Rescue',
+    'Dosage Growth Defect',
+    'Negative Genetic',
+    'Positive Genetic',
+    'Phenotypic Enhancement',
+    'Phenotypic Suppression',
+    'Synthetic Growth Defect',
+    'Synthetic Haploinsufficiency',
+    'Synthetic Lethality',
+    'Synthetic Rescue',
+}
+
+def _map_string_names_to_features(
+    db: Session,
+    names_upper: set[str],
+    organism_no: int,
+) -> dict[str, tuple[str, str, int]]:
+    """
+    Map STRING preferredNames to CGD features for one organism.
+
+    STRING uses standard gene names for some species (C. albicans) and
+    systematic names (== CGD feature_name) for others (C. auris B9J08_*,
+    C. tropicalis CTRG_*), so we match against BOTH gene_name and feature_name.
+
+    Excludes old assembly-19/21 features (feature_name like orf19.* / orf21.*):
+    in C. albicans the gene_name "HOG1" is shared by several features
+    (orf19.895, orf19.8514, C2_03330C_A) that are all flagged is_seq_current,
+    so without this a name resolves to an orf19 feature instead of the current
+    assembly-22 one (C2_03330C_A) — which detaches STRING nodes from the
+    query/BioGRID nodes (they'd attach to a different node id).
+
+    Returns: upper(name) -> (feature_name, display_label, feature_no).
+    """
+    result: dict[str, tuple[str, str, int]] = {}
+    if not names_upper:
+        return result
+    feats = (
+        db.query(Feature)
+        .filter(Feature.organism_no == organism_no)
+        .filter(
+            or_(
+                func.upper(Feature.gene_name).in_(names_upper),
+                func.upper(Feature.feature_name).in_(names_upper),
+            )
+        )
+        .filter(~func.upper(Feature.feature_name).like('ORF19.%'))
+        .filter(~func.upper(Feature.feature_name).like('ORF21.%'))
+        .all()
+    )
+    for mf in feats:
+        label = mf.gene_name or mf.feature_name
+        if mf.gene_name and mf.gene_name.upper() in names_upper:
+            result.setdefault(mf.gene_name.upper(), (mf.feature_name, label, mf.feature_no))
+        if mf.feature_name and mf.feature_name.upper() in names_upper:
+            result.setdefault(mf.feature_name.upper(), (mf.feature_name, label, mf.feature_no))
+    return result
+
+
+def _map_uniprot_accessions_to_features(
+    db: Session,
+    accessions_upper: set[str],
+    organism_no: int,
+) -> dict[str, tuple[str, str, int]]:
+    """
+    Map UniProt accessions to CGD features via the 'EBI' dbxref source.
+
+    Used as a fallback for species like C. parapsilosis where STRING returns a
+    UniProt mnemonic (not the systematic name) for genes without a standard
+    symbol; the STRING id embeds the UniProt accession, which CGD stores as an
+    EBI dbxref.
+
+    Returns: upper(accession) -> (feature_name, display_label, feature_no).
+    """
+    result: dict[str, tuple[str, str, int]] = {}
+    if not accessions_upper:
+        return result
+    rows = (
+        db.query(Feature, Dbxref.dbxref_id)
+        .join(DbxrefFeat, DbxrefFeat.feature_no == Feature.feature_no)
+        .join(Dbxref, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .filter(Feature.organism_no == organism_no)
+        .filter(Dbxref.source == 'EBI')
+        .filter(func.upper(Dbxref.dbxref_id).in_(accessions_upper))
+        .all()
+    )
+    for mf, dbxref_id in rows:
+        result.setdefault(
+            dbxref_id.upper(),
+            (mf.feature_name, mf.gene_name or mf.feature_name, mf.feature_no),
+        )
+    return result
+
+
+# GO Slim set used to annotate/cluster interaction-network nodes
+NETWORK_GO_SLIM_SET = "Candida GO-Slim"
+
+# The three GO ontology roots (molecular_function, cellular_component,
+# biological_process). They are members of the slim set but are shared by
+# essentially every gene, so they carry no signal and are excluded.
+GO_ROOT_GOIDS = {3674, 5575, 8150}
+
+# Bounds for the (potentially O(n^2)) shared-GO overlay edges. Hub genes can
+# have hundreds of interactors; beyond these limits the overlay is neither
+# renderable nor informative, so we skip/cap it.
+MAX_SHARED_GO_NODES = 60
+MAX_SHARED_GO_EDGES = 800
+
+
+def _get_slim_terms_for_features(
+    db: Session,
+    feature_nos: set[int],
+    set_name: str = NETWORK_GO_SLIM_SET,
+) -> dict[int, dict[int, GoSlimTermOut]]:
+    """
+    Map a set of features to their GO Slim terms (CGD_GO_Slim) across all
+    aspects (P/F/C), via direct annotation or ancestor in the GO DAG.
+
+    Returns: feature_no -> {go_no: GoSlimTermOut}.
+
+    Mirrors the mapping logic in go_slim_mapper_service but is scoped to the
+    small set of features in an interaction network, so it runs cheaply.
+    """
+    result: dict[int, dict[int, GoSlimTermOut]] = {fn: {} for fn in feature_nos}
+    if not feature_nos:
+        return result
+
+    # 1) All slim terms in the set (go_no -> term details), all aspects
+    slim_rows = (
+        db.query(Go.go_no, Go.goid, Go.go_term, Go.go_aspect)
+        .join(GoSet, GoSet.go_no == Go.go_no)
+        .filter(GoSet.go_set_name == set_name)
+        .all()
+    )
+    slim_term_details: dict[int, GoSlimTermOut] = {}
+    for go_no, goid, go_term, go_aspect in slim_rows:
+        if goid in GO_ROOT_GOIDS:
+            continue  # skip the uninformative ontology roots
+        slim_term_details[go_no] = GoSlimTermOut(
+            goid=f"GO:{goid:07d}" if isinstance(goid, int) else str(goid),
+            term=go_term,
+            aspect=(go_aspect or "").upper()[:1],
+        )
+    slim_go_nos = set(slim_term_details.keys())
+    if not slim_go_nos:
+        return result
+
+    # 2) Direct GO annotations for these features
+    feature_nos_list = list(feature_nos)
+    feature_to_go_nos: dict[int, set[int]] = {fn: set() for fn in feature_nos}
+    CHUNK = 900
+    for i in range(0, len(feature_nos_list), CHUNK):
+        chunk = feature_nos_list[i:i + CHUNK]
+        rows = (
+            db.query(GoAnnotation.feature_no, GoAnnotation.go_no)
+            .filter(GoAnnotation.feature_no.in_(chunk))
+            .all()
+        )
+        for feature_no, go_no in rows:
+            feature_to_go_nos.setdefault(feature_no, set()).add(go_no)
+
+    # 3) Ancestors for every annotated go_no (so a specific annotation rolls
+    #    up to the slim term it descends from)
+    all_go_nos = set()
+    for go_nos in feature_to_go_nos.values():
+        all_go_nos.update(go_nos)
+
+    go_no_to_ancestors: dict[int, set[int]] = {}
+    if all_go_nos:
+        all_go_nos_list = list(all_go_nos)
+        for i in range(0, len(all_go_nos_list), CHUNK):
+            chunk = all_go_nos_list[i:i + CHUNK]
+            rows = (
+                db.query(GoPath.child_go_no, GoPath.ancestor_go_no)
+                .filter(GoPath.child_go_no.in_(chunk))
+                .all()
+            )
+            for child_go_no, ancestor_go_no in rows:
+                go_no_to_ancestors.setdefault(child_go_no, set()).add(ancestor_go_no)
+
+    # 4) Map each feature's annotations to slim terms (direct or via ancestor)
+    for feature_no, go_nos in feature_to_go_nos.items():
+        mapped = result.setdefault(feature_no, {})
+        for go_no in go_nos:
+            if go_no in slim_go_nos:
+                mapped[go_no] = slim_term_details[go_no]
+            for ancestor in go_no_to_ancestors.get(go_no, ()):  # noqa
+                if ancestor in slim_go_nos:
+                    mapped[ancestor] = slim_term_details[ancestor]
+
+    return result
+
+
+def get_locus_interaction_network(
+    db: Session,
+    name: str,
+    max_depth: int = 1,
+    include_string: bool = True,
+    string_score: int = 400,
+) -> InteractionNetworkResponse:
+    """
+    Build a network graph of interactions for the queried locus.
+
+    This includes:
+    - The queried gene as the central node
+    - All direct interactors as surrounding nodes
+    - If max_depth > 1, also includes interactions between those interactors
+    - Optionally includes STRING database interactions
+
+    Args:
+        db: Database session
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        max_depth: How many levels of interactions to include (1 = direct only, 2 = include interactor-interactor)
+        include_string: Whether to include STRING database interactions
+        string_score: Minimum STRING confidence score (0-1000)
+    """
+    from cgd.models.models import Feature, FeatInteract, Interaction
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_interact).joinedload(FeatInteract.interaction),
+        )
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, InteractionNetworkForOrganism] = {}
+
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+        query_feature_name = f.feature_name
+
+        # Collect nodes and edges
+        nodes_dict: dict[str, NetworkNode] = {}
+        edges_dict: dict[str, NetworkEdge] = {}  # key: "source|target|type" to deduplicate
+        feature_nos_in_network: set[int] = set()
+        node_feature_no: dict[str, int] = {}  # node id -> feature_no (for GO mapping)
+
+        # Add query node
+        nodes_dict[query_feature_name] = NetworkNode(
+            id=query_feature_name,
+            label=locus_display_name,
+            is_query=True,
+        )
+        feature_nos_in_network.add(f.feature_no)
+        node_feature_no[query_feature_name] = f.feature_no
+
+        # Process direct interactions
+        for fi in f.feat_interact:
+            interaction = fi.interaction
+            if interaction is None:
+                continue
+
+            interaction_type = 'genetic' if interaction.experiment_type in GENETIC_INTERACTION_TYPES else 'physical'
+
+            # Get all other interactors
+            for other_fi in interaction.feat_interact:
+                other_feat = other_fi.feature
+                if other_feat is None or other_feat.feature_no == f.feature_no:
+                    continue
+
+                other_name = other_feat.feature_name
+                other_label = other_feat.gene_name or other_feat.feature_name
+
+                # Add node if not exists
+                if other_name not in nodes_dict:
+                    nodes_dict[other_name] = NetworkNode(
+                        id=other_name,
+                        label=other_label,
+                        is_query=False,
+                    )
+                    feature_nos_in_network.add(other_feat.feature_no)
+                    node_feature_no[other_name] = other_feat.feature_no
+
+                # Add edge (use sorted key to avoid duplicates A->B and B->A)
+                edge_key = '|'.join(sorted([query_feature_name, other_name]) + [interaction_type, 'BioGRID'])
+                if edge_key not in edges_dict:
+                    edges_dict[edge_key] = NetworkEdge(
+                        source=query_feature_name,
+                        target=other_name,
+                        interaction_type=interaction_type,
+                        experiment_type=interaction.experiment_type,
+                        experiment_count=1,
+                        source_db='BioGRID',
+                    )
+                else:
+                    edges_dict[edge_key].experiment_count += 1
+
+        # If max_depth > 1, find interactions between the collected nodes
+        if max_depth > 1 and len(feature_nos_in_network) > 1:
+            # Query all interactions involving the features in our network
+            interactor_interactions = (
+                db.query(Interaction)
+                .join(FeatInteract)
+                .filter(FeatInteract.feature_no.in_(feature_nos_in_network))
+                .options(joinedload(Interaction.feat_interact).joinedload(FeatInteract.feature))
+                .all()
+            )
+
+            for interaction in interactor_interactions:
+                interaction_type = 'genetic' if interaction.experiment_type in GENETIC_INTERACTION_TYPES else 'physical'
+
+                # Get features involved in this interaction that are in our network
+                involved_features = [
+                    fi.feature for fi in interaction.feat_interact
+                    if fi.feature and fi.feature.feature_no in feature_nos_in_network
+                ]
+
+                # Create edges between all pairs
+                for i, feat_a in enumerate(involved_features):
+                    for feat_b in involved_features[i + 1:]:
+                        name_a = feat_a.feature_name
+                        name_b = feat_b.feature_name
+
+                        edge_key = '|'.join(sorted([name_a, name_b]) + [interaction_type, 'BioGRID'])
+                        if edge_key not in edges_dict:
+                            edges_dict[edge_key] = NetworkEdge(
+                                source=name_a,
+                                target=name_b,
+                                interaction_type=interaction_type,
+                                experiment_type=interaction.experiment_type,
+                                experiment_count=1,
+                                source_db='BioGRID',
+                            )
+                        else:
+                            edges_dict[edge_key].experiment_count += 1
+
+        # Integrate STRING data if requested and taxon is supported
+        if include_string:
+            from cgd.api.services.string_service import fetch_string_interactions, STRING_SUPPORTED_TAXONS
+            if taxon_id in STRING_SUPPORTED_TAXONS:
+                string_interactions = fetch_string_interactions(
+                    locus_display_name, taxon_id, required_score=string_score
+                )
+
+                # Collect STRING names and UniProt accessions to map to CGD.
+                string_gene_names = set()
+                string_accessions = set()
+                for si in string_interactions:
+                    string_gene_names.add(si['source'].upper())
+                    string_gene_names.add(si['target'].upper())
+                    if si.get('source_accession'):
+                        string_accessions.add(si['source_accession'].upper())
+                    if si.get('target_accession'):
+                        string_accessions.add(si['target_accession'].upper())
+
+                # Map by name (gene OR systematic), with UniProt-accession fallback
+                # (covers C. parapsilosis genes that come back as UniProt mnemonics).
+                gene_to_feature = _map_string_names_to_features(
+                    db, string_gene_names, f.organism_no
+                )
+                acc_to_feature = _map_uniprot_accessions_to_features(
+                    db, string_accessions, f.organism_no
+                )
+
+                def _resolve(name, accession):
+                    """STRING name/accession -> (id, label, feature_no)."""
+                    mapped = gene_to_feature.get(name.upper())
+                    if not mapped and accession:
+                        mapped = acc_to_feature.get(accession.upper())
+                    if mapped:
+                        return mapped[0], mapped[1], mapped[2]
+                    return name, name, None
+
+                for si in string_interactions:
+                    source_id, source_label, source_feat_no = _resolve(
+                        si['source'], si.get('source_accession')
+                    )
+                    target_id, target_label, target_feat_no = _resolve(
+                        si['target'], si.get('target_accession')
+                    )
+
+                    # Add STRING nodes if not already present
+                    if source_id not in nodes_dict:
+                        nodes_dict[source_id] = NetworkNode(
+                            id=source_id,
+                            label=source_label,
+                            is_query=(source_id == query_feature_name),
+                        )
+                        if source_feat_no is not None:
+                            node_feature_no.setdefault(source_id, source_feat_no)
+                    if target_id not in nodes_dict:
+                        nodes_dict[target_id] = NetworkNode(
+                            id=target_id,
+                            label=target_label,
+                            is_query=(target_id == query_feature_name),
+                        )
+                        if target_feat_no is not None:
+                            node_feature_no.setdefault(target_id, target_feat_no)
+
+                    # Add STRING edge
+                    edge_key = '|'.join(sorted([source_id, target_id]) + ['string', 'STRING'])
+                    if edge_key not in edges_dict:
+                        edges_dict[edge_key] = NetworkEdge(
+                            source=source_id,
+                            target=target_id,
+                            interaction_type='string',
+                            experiment_type='STRING combined',
+                            experiment_count=1,
+                            source_db='STRING',
+                            score=si.get('combined_score'),
+                        )
+
+        # Annotate nodes with GO Slim terms and compute shared-GO links
+        slim_map = _get_slim_terms_for_features(db, set(node_feature_no.values()))
+        query_slim = slim_map.get(f.feature_no, {})  # {go_no: GoSlimTermOut}
+
+        for node_id, node in nodes_dict.items():
+            feat_no = node_feature_no.get(node_id)
+            if feat_no is None:
+                continue
+            node_slim = slim_map.get(feat_no, {})
+            if not node_slim:
+                continue
+            node.go_terms = list(node_slim.values())
+            # Representative biological-process term drives node coloring
+            process_terms = [t for t in node_slim.values() if t.aspect == 'P']
+            chosen = process_terms[0] if process_terms else next(iter(node_slim.values()))
+            node.go_category = chosen.term
+            node.go_category_id = chosen.goid
+            # Terms shared with the query gene (skip the query node itself)
+            if not node.is_query and query_slim:
+                shared = [t for gno, t in node_slim.items() if gno in query_slim]
+                node.shared_go = shared
+
+        # Shared-GO overlay edges: connect every pair of nodes that share a
+        # slim term. Useful for revealing functional modules not captured by
+        # curated/predicted interactions. This is O(n^2), so it is only built
+        # for modestly sized networks and capped (see MAX_SHARED_GO_* above).
+        shared_go_edges: list[SharedGoEdge] = []
+        slim_items = [
+            (nid, slim_map.get(fno, {}))
+            for nid, fno in node_feature_no.items()
+            if slim_map.get(fno)
+        ]
+        if len(slim_items) <= MAX_SHARED_GO_NODES:
+            for i, (id_a, slim_a) in enumerate(slim_items):
+                if len(shared_go_edges) >= MAX_SHARED_GO_EDGES:
+                    break
+                for id_b, slim_b in slim_items[i + 1:]:
+                    common = set(slim_a) & set(slim_b)
+                    if common:
+                        shared_go_edges.append(SharedGoEdge(
+                            source=id_a,
+                            target=id_b,
+                            shared_terms=[slim_a[gno] for gno in common],
+                        ))
+                        if len(shared_go_edges) >= MAX_SHARED_GO_EDGES:
+                            break
+
+        out[organism_name] = InteractionNetworkForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            nodes=list(nodes_dict.values()),
+            edges=list(edges_dict.values()),
+            shared_go_edges=shared_go_edges,
+        )
+
+    return InteractionNetworkResponse(results=out)
+
+
+def get_locus_string_enrichment(
+    db: Session,
+    name: str,
+    string_score: int = 400,
+    max_terms: int = 20,
+) -> StringEnrichmentResponse:
+    """
+    Functional enrichment of a gene's STRING network neighborhood.
+
+    Fetches the gene's STRING partners, then asks STRING which GO/KEGG/Reactome
+    terms are over-represented among that set ("this gene's interactors are
+    enriched for ergosterol biosynthesis", etc.).
+    """
+    from cgd.api.services.string_service import (
+        fetch_string_interactions, fetch_string_enrichment, STRING_SUPPORTED_TAXONS,
+    )
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(joinedload(Feature.organism))
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, StringEnrichmentForOrganism] = {}
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+        if taxon_id not in STRING_SUPPORTED_TAXONS:
+            continue
+
+        partners = fetch_string_interactions(
+            locus_display_name, taxon_id, required_score=string_score
+        )
+        if not partners:
+            continue
+
+        # Identifier set = query gene + all partners (STRING preferredNames).
+        identifiers = {locus_display_name}
+        for si in partners:
+            identifiers.add(si['source'])
+            identifiers.add(si['target'])
+
+        terms = fetch_string_enrichment(list(identifiers), taxon_id)
+        if not terms:
+            continue
+        terms = terms[:max_terms]
+
+        # Map the matched STRING gene names to CGD features (for /locus/ links)
+        all_names = {nm.upper() for t in terms for nm in t.get('gene_names', [])}
+        name_to_feature = _map_string_names_to_features(db, all_names, f.organism_no)
+
+        term_objs = []
+        for t in terms:
+            gene_list = []
+            for nm in t.get('gene_names', []):
+                mapped = name_to_feature.get(nm.upper())
+                gene_list.append(EnrichmentGene(
+                    label=mapped[1] if mapped else nm,
+                    feature_name=mapped[0] if mapped else None,
+                ))
+            term_objs.append(StringEnrichmentTerm(
+                category=t['category'], category_label=t['category_label'],
+                term=t['term'], description=t['description'],
+                fdr=t['fdr'], p_value=t['p_value'],
+                genes=t['genes'], background=t['background'],
+                gene_list=gene_list,
+            ))
+
+        out[organism_name] = StringEnrichmentForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            network_size=len(identifiers),
+            terms=term_objs,
+        )
+
+    return StringEnrichmentResponse(results=out)
+
+
+def get_locus_network_enrichment(
+    db: Session,
+    name: str,
+    include_string: bool = False,
+    p_value_cutoff: float = 0.01,
+    max_terms: int = 25,
+) -> NetworkEnrichmentResponse:
+    """
+    CGD-native GO and phenotype enrichment of a gene's interaction partners.
+
+    Unlike the STRING enrichment (computed by STRING over its own annotations),
+    this runs CGD's GO Term Finder and Phenotype Enrichment engines against
+    CGD's curated annotations, over the gene's interaction network.
+
+    The gene set is the query plus its curated BioGRID interactors; when
+    include_string is set, STRING partners that map to CGD features are added.
+    """
+    from cgd.models.models import FeatInteract, Interaction
+    from cgd.api.services.go_term_finder_service import run_go_term_finder
+    from cgd.api.services.phenotype_enrichment_service import run_phenotype_enrichment
+    from cgd.schemas.go_term_finder_schema import GoTermFinderRequest, GoOntology
+    from cgd.schemas.phenotype_enrichment_schema import PhenotypeEnrichmentRequest
+
+    n = name.strip()
+    features = (
+        db.query(Feature)
+        .options(
+            joinedload(Feature.organism),
+            joinedload(Feature.feat_interact)
+            .joinedload(FeatInteract.interaction)
+            .joinedload(Interaction.feat_interact)
+            .joinedload(FeatInteract.feature),
+        )
+        .filter(
+            or_(
+                func.upper(Feature.gene_name) == func.upper(n),
+                func.upper(Feature.feature_name) == func.upper(n),
+                func.upper(Feature.dbxref_id) == func.upper(n),
+            )
+        )
+        .filter(func.lower(Feature.feature_type) != 'allele')
+        .all()
+    )
+    features = _filter_features_by_preference(db, features)
+
+    out: dict[str, NetworkEnrichmentForOrganism] = {}
+    for f in features:
+        organism_name, taxon_id = _get_organism_info(f)
+        locus_display_name = f.gene_name or f.feature_name
+
+        # Curated BioGRID interactor feature_names (+ the query gene itself)
+        gene_set: set[str] = {f.feature_name}
+        for fi in f.feat_interact:
+            interaction = fi.interaction
+            if interaction is None:
+                continue
+            for other_fi in interaction.feat_interact:
+                other = other_fi.feature
+                if other is not None and other.feature_no != f.feature_no:
+                    gene_set.add(other.feature_name)
+
+        # Optionally add STRING partners that map to CGD features
+        if include_string:
+            from cgd.api.services.string_service import (
+                fetch_string_interactions, STRING_SUPPORTED_TAXONS,
+            )
+            if taxon_id in STRING_SUPPORTED_TAXONS:
+                partners = fetch_string_interactions(
+                    locus_display_name, taxon_id, required_score=400
+                )
+                names, accs = set(), set()
+                for si in partners:
+                    names.add(si['source'].upper())
+                    names.add(si['target'].upper())
+                    if si.get('source_accession'):
+                        accs.add(si['source_accession'].upper())
+                    if si.get('target_accession'):
+                        accs.add(si['target_accession'].upper())
+                name_map = _map_string_names_to_features(db, names, f.organism_no)
+                acc_map = _map_uniprot_accessions_to_features(db, accs, f.organism_no)
+                for mapped in list(name_map.values()) + list(acc_map.values()):
+                    gene_set.add(mapped[0])
+
+        genes = sorted(gene_set)
+        # Need a few genes for enrichment to be meaningful
+        if len(genes) < 3:
+            out[organism_name] = NetworkEnrichmentForOrganism(
+                locus_display_name=locus_display_name,
+                taxon_id=taxon_id,
+                gene_count=len(genes),
+                include_string=include_string,
+            )
+            continue
+
+        go_terms: list[NetworkEnrichmentTerm] = []
+        pheno_terms: list[NetworkEnrichmentTerm] = []
+
+        go_resp = run_go_term_finder(db, GoTermFinderRequest(
+            genes=genes, organism_no=f.organism_no,
+            ontology=GoOntology.ALL, p_value_cutoff=p_value_cutoff,
+        ))
+        if go_resp.success and go_resp.result:
+            r = go_resp.result
+            for t in (r.process_terms + r.function_terms + r.component_terms):
+                go_terms.append(NetworkEnrichmentTerm(
+                    category_label=f"GO {t.aspect_name}",
+                    term=t.goid, description=t.go_term,
+                    query_count=t.query_count, fold_enrichment=t.fold_enrichment,
+                    p_value=t.p_value, fdr=t.fdr,
+                    genes=[EnrichmentGene(
+                        label=g.gene_name or g.systematic_name,
+                        feature_name=g.systematic_name,
+                    ) for g in t.genes],
+                ))
+            go_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
+            go_terms = go_terms[:max_terms]
+
+        ph_resp = run_phenotype_enrichment(db, PhenotypeEnrichmentRequest(
+            genes=genes, organism_no=f.organism_no, p_value_cutoff=p_value_cutoff,
+        ))
+        if ph_resp.success and ph_resp.result:
+            for p in ph_resp.result.enriched_phenotypes:
+                desc = p.observable
+                extra = ', '.join(x for x in [p.qualifier, p.mutant_type] if x)
+                if extra:
+                    desc = f"{desc} ({extra})"
+                pheno_terms.append(NetworkEnrichmentTerm(
+                    category_label="Phenotype",
+                    term=p.observable, description=desc,
+                    query_count=p.query_count, fold_enrichment=p.fold_enrichment,
+                    p_value=p.p_value, fdr=p.fdr,
+                    genes=[EnrichmentGene(
+                        label=g.gene_name or g.systematic_name,
+                        feature_name=g.systematic_name,
+                    ) for g in p.genes],
+                ))
+            pheno_terms.sort(key=lambda x: (x.fdr if x.fdr is not None else x.p_value, x.p_value))
+            pheno_terms = pheno_terms[:max_terms]
+
+        out[organism_name] = NetworkEnrichmentForOrganism(
+            locus_display_name=locus_display_name,
+            taxon_id=taxon_id,
+            gene_count=len(genes),
+            include_string=include_string,
+            go_terms=go_terms,
+            phenotype_terms=pheno_terms,
+        )
+
+    return NetworkEnrichmentResponse(results=out)
 
 
 def get_locus_protein_details(db: Session, name: str) -> ProteinDetailsResponse:

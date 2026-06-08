@@ -225,6 +225,24 @@ EXPRESSION_STUDIES = {
                 "SRR27928389": {"label": "Iracane et al long RNA control (biol rep 6)", "bucket": "control"},
             },
         },
+        "Iracane_2024_sRNA": {
+            "category": "Mutation Comparison",
+            "pmid": "38625945",
+            "path_style": "direct",
+            "control": "SRR27911426",
+            "conditions": {
+                "SRR27911207": {"label": "Iracane et al short RNA strain ago1-K361E (biol rep 1)", "bucket": "mutation"},
+                "SRR27911216": {"label": "Iracane et al short RNA strain ago1-K361E (biol rep 2)", "bucket": "mutation"},
+                "SRR27911367": {"label": "Iracane et al short RNA strain ago1-K361E (biol rep 3)", "bucket": "mutation"},
+                "SRR27911401": {"label": "Iracane et al short RNA strain ago1-K361E (biol rep 4)", "bucket": "mutation"},
+                "SRR27911426": {"label": "Iracane et al short RNA control (biol rep 1)", "bucket": "control"},
+                "SRR27911427": {"label": "Iracane et al short RNA control (biol rep 2)", "bucket": "control"},
+                "SRR27911443": {"label": "Iracane et al short RNA control (biol rep 3)", "bucket": "control"},
+                "SRR27911450": {"label": "Iracane et al short RNA control (biol rep 4)", "bucket": "control"},
+                "SRR27911484": {"label": "Iracane et al short RNA control (biol rep 5)", "bucket": "control"},
+                "SRR27911485": {"label": "Iracane et al short RNA control (biol rep 6)", "bucket": "control"},
+            },
+        },
     },
     "C_auris_B8441": {
         "Shivarathri_2022": {

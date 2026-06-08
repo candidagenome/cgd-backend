@@ -22,6 +22,12 @@ from cgd.schemas.protein_schema import ProteinDetailsResponse, ProteinProperties
 from cgd.schemas.homology_schema import HomologyDetailsResponse
 from cgd.schemas.synteny_schema import SyntenyResponse
 from cgd.schemas.expression_schema import ExpressionDetailsResponse
+from cgd.schemas.interaction_schema import (
+    InteractionDetailsResponse,
+    InteractionNetworkResponse,
+    StringEnrichmentResponse,
+    NetworkEnrichmentResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +112,107 @@ def sequence_details(name: str, db: Session = Depends(get_db)):
     Returns chromosomal coordinates and DNA/protein sequences.
     """
     return locus_service.get_locus_sequence_details(db, name)
+
+
+@router.get("/{name}/interaction_details", response_model=InteractionDetailsResponse)
+def interaction_details(name: str, db: Session = Depends(get_db)):
+    """
+    Get physical interaction data for this locus, grouped by organism.
+
+    Returns protein-protein interactions from BioGRID and other sources.
+    """
+    try:
+        return locus_service.get_locus_interaction_details(db, name)
+    except Exception as e:
+        logger.error(f"Error in interaction_details for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/interaction_network", response_model=InteractionNetworkResponse)
+def interaction_network(
+    name: str,
+    depth: int = 2,
+    include_string: bool = True,
+    string_score: int = 400,
+    db: Session = Depends(get_db)
+):
+    """
+    Get interaction network graph for this locus, grouped by organism.
+
+    Returns nodes (genes) and edges (interactions) for network visualization.
+    Includes interactions between interactors when depth > 1.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        depth: Network depth (1 = direct interactions only, 2 = include interactor-interactor)
+        include_string: Whether to include STRING database interactions (default True)
+        string_score: Minimum STRING confidence score 0-1000 (default 400 = medium)
+    """
+    try:
+        return locus_service.get_locus_interaction_network(
+            db, name, max_depth=depth,
+            include_string=include_string, string_score=string_score
+        )
+    except Exception as e:
+        logger.error(f"Error in interaction_network for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/string_enrichment", response_model=StringEnrichmentResponse)
+def string_enrichment(
+    name: str,
+    string_score: int = 400,
+    db: Session = Depends(get_db)
+):
+    """
+    Get STRING functional enrichment of this gene's interaction network,
+    grouped by organism.
+
+    Reports GO/KEGG/Reactome terms over-represented among the gene's STRING
+    network partners. Only returns data for STRING-supported organisms.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        string_score: Minimum STRING confidence score 0-1000 (default 400)
+    """
+    try:
+        return locus_service.get_locus_string_enrichment(db, name, string_score=string_score)
+    except Exception as e:
+        logger.error(f"Error in string_enrichment for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{name}/network_enrichment", response_model=NetworkEnrichmentResponse)
+def network_enrichment(
+    name: str,
+    include_string: bool = False,
+    p_value_cutoff: float = 0.01,
+    db: Session = Depends(get_db)
+):
+    """
+    CGD-native GO and phenotype enrichment of this gene's interaction network,
+    grouped by organism.
+
+    Runs CGD's GO Term Finder and Phenotype Enrichment engines (hypergeometric
+    test against CGD's own annotations) over the gene's interaction partners.
+
+    Args:
+        name: Locus name (gene_name, feature_name, or dbxref_id)
+        include_string: also include STRING-predicted partners in the gene set
+            (default False = curated BioGRID interactors only)
+        p_value_cutoff: significance cutoff (default 0.01)
+    """
+    try:
+        return locus_service.get_locus_network_enrichment(
+            db, name, include_string=include_string, p_value_cutoff=p_value_cutoff
+        )
+    except Exception as e:
+        logger.error(f"Error in network_enrichment for {name}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{name}/references", response_model=LocusReferencesResponse)
