@@ -985,6 +985,33 @@ def run_blast_search(
         )
 
 
+def _step_align_coord(pos: int, chunk: str, direction: int) -> Tuple[int, int, int]:
+    """Advance an alignment coordinate across one printed chunk.
+
+    BLAST coordinates run in the direction of the strand: a plus-strand match
+    counts up, a minus-strand (Crick) match counts DOWN. Gap characters ('-')
+    in the aligned chunk do not consume a residue position.
+
+    Args:
+        pos: coordinate of the first residue this chunk would consume
+        chunk: the aligned sequence chunk (may contain '-' gaps)
+        direction: +1 for plus strand, -1 for minus strand
+
+    Returns:
+        (start_label, end_label, next_pos) where start/end_label are the
+        coordinates to print at the ends of this line and next_pos is the
+        coordinate for the following chunk.
+    """
+    residues = len(chunk) - chunk.count("-")
+    if residues == 0:
+        # All-gap line: nothing consumed, label with the current position.
+        return pos, pos, pos
+    start_label = pos
+    end_label = pos + direction * (residues - 1)
+    next_pos = pos + direction * residues
+    return start_label, end_label, next_pos
+
+
 def format_blast_results_text(result: BlastSearchResult) -> str:
     """Format BLAST results as plain text."""
     lines = []
@@ -1021,19 +1048,26 @@ def format_blast_results_text(result: BlastSearchResult) -> str:
                 lines.append(f"  Frame = {hsp.query_frame}")
             lines.append("")
 
-            # Show alignment in chunks
+            # Show alignment in chunks. Coordinates step in the direction of
+            # each strand (BLAST reports from > to for a minus-strand match), so
+            # a Crick-strand subject must count DOWN, not up. Gaps don't consume
+            # a residue position.
             chunk_size = 60
+            q_dir = 1 if hsp.query_end >= hsp.query_start else -1
+            s_dir = 1 if hsp.hit_end >= hsp.hit_start else -1
+            q_pos = hsp.query_start
+            s_pos = hsp.hit_start
             for i in range(0, len(hsp.query_seq), chunk_size):
                 q_chunk = hsp.query_seq[i:i+chunk_size]
                 m_chunk = hsp.midline[i:i+chunk_size]
                 s_chunk = hsp.hit_seq[i:i+chunk_size]
 
-                q_start = hsp.query_start + i
-                s_start = hsp.hit_start + i
+                q_start, q_end, q_pos = _step_align_coord(q_pos, q_chunk, q_dir)
+                s_start, s_end, s_pos = _step_align_coord(s_pos, s_chunk, s_dir)
 
-                lines.append(f"Query  {q_start:<6} {q_chunk} {q_start + len(q_chunk) - 1}")
+                lines.append(f"Query  {q_start:<6} {q_chunk} {q_end}")
                 lines.append(f"       {'':6} {m_chunk}")
-                lines.append(f"Sbjct  {s_start:<6} {s_chunk} {s_start + len(s_chunk) - 1}")
+                lines.append(f"Sbjct  {s_start:<6} {s_chunk} {s_end}")
                 lines.append("")
 
     return "\n".join(lines)
