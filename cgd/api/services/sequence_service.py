@@ -448,8 +448,16 @@ def _add_flanking_regions(
 ) -> str:
     """Add flanking regions to a sequence.
 
-    Uses subfeatures to determine the true genomic span for accurate flanking
-    extraction, since FeatLocation coordinates may not represent the full span.
+    Flanking is anchored on the FeatLocation coordinates, which delimit the
+    exact genomic span of the stored genomic ("with introns") sequence this
+    function flanks. ``start_coord``/``stop_coord`` are NOT ordered low-to-high
+    (on the Crick strand ``start_coord`` is the larger value), so we take the
+    min/max to get the genomic low/high boundary.
+
+    Note: do NOT anchor on the min/max of the subfeatures. Subfeatures include
+    UTRs that extend beyond this span, which leaves UTR-sized gaps between the
+    sequence and its flanks; subfeature coordinates can also be unreliable,
+    spanning far beyond the gene and pushing a flank off the chromosome.
     """
     if not location:
         return sequence
@@ -470,21 +478,10 @@ def _add_flanking_regions(
     chr_seq = root_seq.residues
     strand = location.strand
 
-    # Get the true genomic span from subfeatures (like _get_genomic_utr_sequence does)
-    # FeatLocation.start_coord/stop_coord may not represent the full gene span
-    subfeatures = _get_subfeatures(db, feature)
-
-    if subfeatures:
-        # Find min/max coordinates from all subfeatures
-        all_coords = []
-        for feat_type, start, stop in subfeatures:
-            all_coords.extend([start, stop])
-        feat_start = min(all_coords)
-        feat_stop = max(all_coords)
-    else:
-        # Fall back to location coordinates if no subfeatures
-        feat_start = location.start_coord
-        feat_stop = location.stop_coord
+    # Genomic low/high boundary of the stored genomic sequence. start_coord and
+    # stop_coord are swapped on the Crick strand, so normalize with min/max.
+    feat_start = min(location.start_coord, location.stop_coord)
+    feat_stop = max(location.start_coord, location.stop_coord)
 
     # Extract flanking regions from chromosome
     if strand == "W":
