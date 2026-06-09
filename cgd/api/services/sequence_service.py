@@ -26,13 +26,24 @@ def _reverse_complement(seq: str) -> str:
     return seq.translate(COMPLEMENT_MAP)[::-1]
 
 
-def _get_subfeatures(db: Session, feature: Feature) -> list:
+def _get_subfeatures(
+    db: Session,
+    feature: Feature,
+    root_seq_no: Optional[int] = None,
+) -> list:
     """
     Get subfeatures (CDS, UTR, exons) for a feature, ordered by start coordinate.
 
     Returns list of tuples: (feature_type, start_coord, stop_coord)
+
+    A legacy ORF (e.g. orf19.5007) is mapped onto several assemblies, and its
+    subfeatures carry a current FeatLocation on EACH assembly's root sequence.
+    Pass ``root_seq_no`` (the parent location's root sequence) to keep only the
+    subfeatures on that assembly; otherwise coordinates from different
+    assemblies are pooled and min/max spans become meaningless (e.g. an ORF
+    appearing to span millions of bp across two chromosomes).
     """
-    subfeatures = (
+    query = (
         db.query(
             Feature.feature_type,
             FeatLocation.start_coord,
@@ -45,10 +56,11 @@ def _get_subfeatures(db: Session, feature: Feature) -> list:
             FeatRelationship.rank == 2,  # rank 2 = subfeature
             FeatLocation.is_loc_current == "Y",
         )
-        .order_by(FeatLocation.start_coord)
-        .all()
     )
-    return subfeatures
+    if root_seq_no is not None:
+        query = query.filter(FeatLocation.root_seq_no == root_seq_no)
+
+    return query.order_by(FeatLocation.start_coord).all()
 
 
 def _get_genomic_utr_sequence(
@@ -62,7 +74,7 @@ def _get_genomic_utr_sequence(
     This returns the full genomic span from the first subfeature to the last,
     including any introns between them.
     """
-    subfeatures = _get_subfeatures(db, feature)
+    subfeatures = _get_subfeatures(db, feature, location.root_seq_no)
 
     if not subfeatures:
         return None
@@ -114,7 +126,7 @@ def _get_coding_utr_sequence(
     This concatenates all CDS, UTR, and Noncoding_exon subfeatures,
     excluding introns. This is the spliced transcript sequence.
     """
-    subfeatures = _get_subfeatures(db, feature)
+    subfeatures = _get_subfeatures(db, feature, location.root_seq_no)
 
     if not subfeatures:
         return None
