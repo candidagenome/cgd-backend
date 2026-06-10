@@ -942,4 +942,12 @@ class PhenotypeCurationService:
                 for t in sorted(cv_terms, key=lambda x: x.term_name.lower())
             ]
 
+        # The experiment_type CV is shared with the interaction curation tool,
+        # whose experiment types (Far Western, FRET, Two-hybrid, Negative
+        # Genetic, etc.) are stored as flat root terms alongside the phenotype
+        # hierarchy. The phenotype tool should only offer phenotype assay terms,
+        # so restrict the tree to the "phenotype assays" subtree.
+        if cv_lower == "experiment_type":
+            tree = [node for node in tree if node["term"].lower() == "phenotype assays"]
+
         return tree
