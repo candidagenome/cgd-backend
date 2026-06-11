@@ -593,10 +593,15 @@ class LocusCurationService:
         alias_name: str,
         alias_type: str,
         curator_userid: str,
-        reference_no: Optional[int] = None,
+        pmid: Optional[int] = None,
     ) -> int:
         """
         Add alias to feature.
+
+        Args:
+            pmid: Optional PubMed ID to cite for the alias. Resolved to an
+                internal reference_no (creating the reference if it does not
+                yet exist), matching how feature-field references are linked.
 
         Returns:
             feat_alias_no
@@ -604,6 +609,31 @@ class LocusCurationService:
         feature = self.get_feature_by_no(feature_no)
         if not feature:
             raise LocusCurationError(f"Feature {feature_no} not found")
+
+        # Resolve the PMID to an internal reference before touching any rows,
+        # so a bad PMID fails cleanly instead of violating RL_REF_FK on insert.
+        reference_no = None
+        if pmid:
+            ref_service = ReferenceCurationService(self.db)
+            reference = ref_service.get_reference_by_pubmed(pmid)
+            if not reference:
+                try:
+                    new_reference_no = ref_service.create_reference_from_pubmed(
+                        pubmed=pmid,
+                        reference_status="Published",
+                        curator_userid=curator_userid,
+                    )
+                    reference = ref_service.get_reference_by_no(new_reference_no)
+                    logger.info(f"Created reference from PMID:{pmid}")
+                except ReferenceCurationError as e:
+                    raise LocusCurationError(
+                        f"Could not add reference for PMID:{pmid}: {e}"
+                    )
+            if not reference:
+                raise LocusCurationError(
+                    f"Could not resolve PMID:{pmid} to a reference"
+                )
+            reference_no = reference.reference_no
 
         # Check if alias already exists in Alias table
         alias = (

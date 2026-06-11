@@ -150,7 +150,7 @@ class AddAliasRequest(BaseModel):
 
     alias_name: str = Field(..., description="Alias name")
     alias_type: str = Field(default="Uniform", description="Alias type")
-    reference_no: Optional[int] = Field(None, description="Reference number")
+    pmid: Optional[int] = Field(None, description="Optional PubMed ID to cite")
 
 
 class AddNoteRequest(BaseModel):
@@ -287,7 +287,7 @@ def add_alias(
             request.alias_name,
             request.alias_type,
             current_user.userid,
-            request.reference_no,
+            request.pmid,
         )
 
         return AddItemResponse(
