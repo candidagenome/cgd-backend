@@ -707,7 +707,7 @@ def _parse_blast_xml(
         literature_link = None
         if is_feature_db and is_cgd:
             # For gene/protein databases, hit_id is the feature name
-            feature_name = hit_id
+            feature_name = _resolve_feature_name(hit_id, hit_def)
             locus_link = f"/locus/{feature_name}"
             literature_link = f"/locus/{feature_name}?tab=literature"
         else:
@@ -731,8 +731,13 @@ def _parse_blast_xml(
         # Map to orf19 ID for Assembly 22 hits
         orf19_id = None
         if db_session and organism_tag and "A22" in organism_tag:
-            # Try to extract feature name from hit info
-            feature_name = hit_accession or hit_id
+            # Try to extract feature name from hit info. When the DB lacks
+            # -parse_seqids, Hit_accession is a meaningless ordinal, so resolve
+            # the real name from the defline instead of trusting the accession.
+            if hit_id and "BL_ORD_ID" in hit_id.upper():
+                feature_name = _resolve_feature_name(hit_id, hit_def)
+            else:
+                feature_name = hit_accession or hit_id
             orf19_id = _map_to_orf19_id(db_session, feature_name, organism_tag)
 
         hit = BlastHit(
@@ -769,6 +774,22 @@ def _parse_blast_xml(
         search_time=0,  # Not available in XML
         warnings=[],
     )
+
+
+def _resolve_feature_name(hit_id: str, hit_def: str) -> str:
+    """Return the real feature name for a hit.
+
+    When a BLAST database is built without ``-parse_seqids`` (the
+    duplicate-seq_id fallback in ``update_seq_search_files.py``), makeblastdb
+    assigns placeholder ids of the form ``gnl|BL_ORD_ID|<n>`` and the real
+    identifier is preserved as the first token of the definition line. In that
+    case fall back to the defline so locus links resolve correctly.
+    """
+    if hit_id and "BL_ORD_ID" not in hit_id.upper():
+        return hit_id
+    if hit_def:
+        return hit_def.split()[0]
+    return hit_id
 
 
 def _extract_locus_link(hit_id: str, hit_def: str, hit_accession: str) -> Optional[str]:
