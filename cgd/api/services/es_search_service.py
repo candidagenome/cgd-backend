@@ -19,6 +19,7 @@ from cgd.schemas.search_schema import (
     AutocompleteSuggestion,
     AutocompleteResponse,
     CategorySearchResponse,
+    OrthologRelation,
     TextSearchResult,
     TextSearchCategoryResult,
     TextSearchResponse,
@@ -1586,7 +1587,29 @@ def _parse_text_search_result(hit: dict, query: str, category: str) -> TextSearc
         gene_name = source.get("gene_name")
         feature_name = source.get("feature_name")
         organism = source.get("organism")
-        related_orthologs = source.get("related_orthologs", [])
+        ortholog_source = source.get("ortholog_source", "Ortholog")
+
+        # Build OrthologRelation objects from the indexed related-ortholog dicts.
+        # The raw dicts lack a 'source' field (required by OrthologRelation), so
+        # passing them straight through raises a ValidationError and silently
+        # forces the router to fall back to the (CGOB-only) Oracle path.
+        related_orthologs = []
+        for rel in source.get("related_orthologs", []) or []:
+            short_org = rel.get("short_organism")
+            rel_name = rel.get("name")
+            rel_feature = rel.get("feature_name")
+            if rel_name and rel_feature and rel_name != rel_feature:
+                rel_display = f"{rel_feature}/{rel_name}"
+            else:
+                rel_display = rel_name or rel_feature or ""
+            if short_org:
+                rel_display = f"{short_org} {rel_display}"
+            related_orthologs.append(OrthologRelation(
+                name=rel_display,
+                organism=rel.get("organism"),
+                source=ortholog_source,
+                link=rel.get("link"),
+            ))
 
         # Display name: use "name/feature" format when both exist and are different
         if gene_name and feature_name and gene_name != feature_name:

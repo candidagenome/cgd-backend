@@ -645,42 +645,57 @@ def index_external_ids(db: Session, es: Elasticsearch) -> int:
 
 def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
     """
-    Generate Elasticsearch documents for ortholog groups.
+    Generate Elasticsearch documents for ortholog clusters.
 
-    Each document represents ONE gene with ALL its orthologs across all homology
-    groups. When searching for any gene name in any of its ortholog groups,
-    the gene and all its orthologs are returned.
+    Each document represents ONE gene with ALL its orthologs in the same
+    transitive cluster. Searching for any gene/feature name in a cluster returns
+    every gene in that cluster.
 
     Strategy:
-    1. First pass: collect all ortholog relationships for each feature across
-       ALL homology groups (CGOB, BLAST RBH, BLAST)
-    2. Second pass: yield one document per feature with combined ortholog data
+    1. Build the ortholog graph over CGOB and BLAST RBH homology groups (the same
+       edge set the locus page and synteny viewer use). All members of a group
+       are connected to each other.
+    2. Compute connected components (transitive closure) with union-find, so a
+       gene linked to a name only through intermediate species still carries that
+       name. e.g. CTRG_00286 -RBH-> Cd36_43320 -CGOB-> CDR3 puts CDR3 in
+       CTRG_00286's cluster, so searching "CDR3" finds CTRG_00286.
+    3. Yield one document per feature with the full cluster's searchable names and
+       related orthologs.
 
-    This ensures that searching for "HOG1" finds all 6 Candida species even if
-    some orthologs are only linked via BLAST RBH (not CGOB).
+    Plain 'BLAST' (non-reciprocal best hits) is intentionally excluded to match
+    the locus/synteny ortholog view and to keep clusters bounded; RBH and CGOB are
+    effectively one gene per species so closure does not produce mega-clusters.
     """
     a21_exclude = _get_a21_exclusion_set(db)
 
-    # Get all ortholog homology groups (CGOB, BLAST RBH, BLAST)
+    # Get ortholog homology groups (CGOB and BLAST RBH only) - matches the
+    # locus page / synteny viewer ortholog edge set.
     homology_groups = (
         db.query(HomologyGroup)
         .filter(
-            HomologyGroup.method.in_(['CGOB', 'BLAST RBH', 'BLAST']),
+            HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
             HomologyGroup.homology_group_type == 'ortholog'
         )
         .all()
     )
 
-    # First pass: build a map of feature_no -> set of all related feature_nos
-    # This collects orthologs transitively across all groups
-    feature_orthologs: dict[int, set[int]] = {}
     feature_data: dict[int, Feature] = {}  # Cache feature data
-    feature_best_source: dict[int, str] = {}  # Track best source (CGOB > BLAST RBH > BLAST)
+    feature_methods: dict[int, set[str]] = {}  # Methods linking each feature
+    parent: dict[int, int] = {}  # Union-find parent pointers
 
-    source_priority = {'CGOB': 0, 'BLAST RBH': 1, 'BLAST': 2}
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # Path compression
+            x = parent[x]
+        return x
 
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Build the ortholog graph: every member of a group is connected.
     for hg in homology_groups:
-        # Get all features in this homology group
         feat_homologies = (
             db.query(FeatHomology, Feature)
             .join(Feature, FeatHomology.feature_no == Feature.feature_no)
@@ -698,46 +713,58 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
         if len(valid_features) < 2:
             continue  # Need at least 2 features to be orthologs
 
-        # Collect all feature_nos in this group
-        group_feature_nos = {feat.feature_no for fh, feat in valid_features}
-
-        # For each feature in the group, add all others as orthologs
+        feature_nos = [feat.feature_no for fh, feat in valid_features]
         for fh, feat in valid_features:
-            if feat.feature_no not in feature_orthologs:
-                feature_orthologs[feat.feature_no] = set()
-                feature_data[feat.feature_no] = feat
+            fno = feat.feature_no
+            if fno not in parent:
+                parent[fno] = fno
+            feature_data[fno] = feat
+            feature_methods.setdefault(fno, set()).add(hg.method)
 
-            # Add all other features in this group as orthologs
-            feature_orthologs[feat.feature_no].update(
-                group_feature_nos - {feat.feature_no}
-            )
+        # Union all members of this group into one component.
+        for other in feature_nos[1:]:
+            union(feature_nos[0], other)
 
-            # Track best source (prefer CGOB over BLAST RBH over BLAST)
-            current_priority = feature_best_source.get(feat.feature_no, 'BLAST')
-            if source_priority.get(hg.method, 2) < source_priority.get(current_priority, 2):
-                feature_best_source[feat.feature_no] = hg.method
+    # Group features by their connected-component root.
+    components: dict[int, list[int]] = {}
+    for fno in parent:
+        components.setdefault(find(fno), []).append(fno)
 
-    # Second pass: yield one document per feature with all its orthologs
-    for feature_no, ortholog_feature_nos in feature_orthologs.items():
-        feat = feature_data[feature_no]
-        gene_name = feat.gene_name or feat.feature_name
-        gene_organism = feat.organism.organism_name if feat.organism else None
-        short_organism = _get_short_organism_name(gene_organism)
+    # CGOB (curated) preferred over BLAST RBH for the displayed source.
+    source_priority = {'CGOB': 0, 'BLAST RBH': 1}
 
-        # Collect all gene names and feature names from this feature + all orthologs
-        all_gene_names = set()
-        all_feature_names = set()
+    def best_source(fno: int) -> str:
+        best = 'BLAST RBH'
+        for method in feature_methods.get(fno, set()):
+            if source_priority.get(method, 1) < source_priority.get(best, 1):
+                best = method
+        return best
 
-        # Add this feature's names
-        if feat.gene_name:
-            all_gene_names.add(feat.gene_name)
-        if feat.feature_name:
-            all_feature_names.add(feat.feature_name)
+    # Yield one document per feature carrying its whole cluster's names.
+    for member_feature_nos in components.values():
+        if len(member_feature_nos) < 2:
+            continue  # Singletons have no orthologs
 
-        # Build ortholog list and collect names
-        ortholog_list = []
-        for orth_feature_no in ortholog_feature_nos:
-            if orth_feature_no in feature_data:
+        for feature_no in member_feature_nos:
+            feat = feature_data[feature_no]
+            gene_name = feat.gene_name or feat.feature_name
+            gene_organism = feat.organism.organism_name if feat.organism else None
+            short_organism = _get_short_organism_name(gene_organism)
+
+            # Collect all gene/feature names from this feature + all orthologs
+            all_gene_names = set()
+            all_feature_names = set()
+
+            if feat.gene_name:
+                all_gene_names.add(feat.gene_name)
+            if feat.feature_name:
+                all_feature_names.add(feat.feature_name)
+
+            # Build ortholog list and collect names from the rest of the cluster
+            ortholog_list = []
+            for orth_feature_no in member_feature_nos:
+                if orth_feature_no == feature_no:
+                    continue
                 orth = feature_data[orth_feature_no]
                 orth_name = orth.gene_name or orth.feature_name
                 orth_organism = orth.organism.organism_name if orth.organism else None
@@ -757,31 +784,31 @@ def _generate_ortholog_docs(db: Session) -> Generator[dict, None, None]:
                     "link": f"/locus/{orth.feature_name}",
                 })
 
-        doc = {
-            "_index": INDEX_NAME,
-            "_id": f"ortholog_{feature_no}",
-            "_source": {
-                "type": "ortholog",
-                "id": feat.dbxref_id,
-                # This gene's info
-                "gene_name": gene_name,
-                "feature_name": feat.feature_name,
-                "dbxref_id": feat.dbxref_id,
-                "organism": gene_organism,
-                "short_organism": short_organism,
-                "name": gene_name,
-                # Ortholog info
-                "ortholog_source": feature_best_source.get(feature_no, 'BLAST'),
-                "group_size": len(ortholog_feature_nos) + 1,  # Include self
-                # All names for searching (from this gene + all orthologs)
-                "all_gene_names": " ".join(sorted(all_gene_names)),
-                "all_feature_names": " ".join(sorted(all_feature_names)),
-                # Related orthologs for display
-                "related_orthologs": ortholog_list,
-                "link": f"/locus/{feat.feature_name}",
+            doc = {
+                "_index": INDEX_NAME,
+                "_id": f"ortholog_{feature_no}",
+                "_source": {
+                    "type": "ortholog",
+                    "id": feat.dbxref_id,
+                    # This gene's info
+                    "gene_name": gene_name,
+                    "feature_name": feat.feature_name,
+                    "dbxref_id": feat.dbxref_id,
+                    "organism": gene_organism,
+                    "short_organism": short_organism,
+                    "name": gene_name,
+                    # Ortholog info
+                    "ortholog_source": best_source(feature_no),
+                    "group_size": len(member_feature_nos),  # Includes self
+                    # All names for searching (from this gene + all orthologs)
+                    "all_gene_names": " ".join(sorted(all_gene_names)),
+                    "all_feature_names": " ".join(sorted(all_feature_names)),
+                    # Related orthologs for display
+                    "related_orthologs": ortholog_list,
+                    "link": f"/locus/{feat.feature_name}",
+                }
             }
-        }
-        yield doc
+            yield doc
 
 
 def _get_short_organism_name(organism_name: str | None) -> str:
