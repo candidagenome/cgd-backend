@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import httpx
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from cgd.core.settings import settings
 from cgd.models.models import (
     Feature,
     FeatLocation,
@@ -16,6 +18,8 @@ from cgd.models.models import (
     Seq,
     FeatAlias,
     Alias,
+    DbxrefHomology,
+    Dbxref,
 )
 from cgd.schemas.synteny_schema import (
     Exon,
@@ -37,6 +41,138 @@ CGD_SPECIES = [
     'Candida auris B8441',
     'Candida glabrata CBS138',
 ]
+
+# External reference species shown above the Candida group in the synteny viewer.
+# S. cerevisiae gene neighborhoods are fetched live from the SGD backend; only
+# the ortholog mapping (which SGD gene corresponds to a Candida gene) is local.
+SC_REFERENCE_ORGANISM = 'Saccharomyces cerevisiae'
+SGD_SYNTENY_TIMEOUT = 8.0
+
+# Process-lifetime cache of successful SGD neighborhood lookups, keyed by
+# (sgdid, flanking_count). Only successes are cached so a transient SGD outage
+# does not poison later requests. SGD genome coordinates change rarely, and the
+# cache is cleared on every deploy/restart.
+_sgd_synteny_cache: dict[tuple[str, int], dict] = {}
+
+
+def _fetch_sgd_synteny(sgdid: str, flanking_count: int) -> Optional[dict]:
+    """Fetch a gene's neighborhood from the SGD backend. Best-effort: returns
+    None if SGD is unavailable or the gene is not found."""
+    key = (sgdid.upper(), flanking_count)
+    if key in _sgd_synteny_cache:
+        return _sgd_synteny_cache[key]
+
+    url = f"{settings.sgd_backend_url.rstrip('/')}/locus/{sgdid}/synteny_neighbors"
+    try:
+        resp = httpx.get(
+            url,
+            params={"flanking": flanking_count},
+            timeout=SGD_SYNTENY_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "SGD synteny lookup for %s returned status %s", sgdid, resp.status_code
+            )
+            return None
+        data = resp.json()
+    except (httpx.RequestError, ValueError) as exc:
+        logger.warning("SGD synteny lookup for %s failed: %s", sgdid, exc)
+        return None
+
+    if data and data.get("neighbors"):
+        _sgd_synteny_cache[key] = data
+        return data
+    return None
+
+
+def _normalize_strand(strand: Optional[str]) -> str:
+    """Normalize SGD '+'/'-' strands to CGD's 'W'/'C' for consistent display."""
+    if strand == '+':
+        return 'W'
+    if strand == '-':
+        return 'C'
+    return strand or 'W'
+
+
+def _sgd_orthologs_in_cluster(cluster: HomologyGroup) -> list[str]:
+    """Return SGDIDs of S. cerevisiae external orthologs stored on a cluster."""
+    sgdids: list[str] = []
+    for dh in cluster.dbxref_homology:
+        dbx = dh.dbxref
+        if dbx and (dbx.source or '').upper() == 'SGD' and dbx.dbxref_id:
+            sgdids.append(dbx.dbxref_id)
+    return sgdids
+
+
+def _build_sc_reference_region(
+    query_clusters: list[HomologyGroup],
+    sgdid_to_ortholog_id: dict[str, str],
+    ortholog_connections: dict[str, set],
+    flanking_count: int,
+) -> Optional[SyntenyRegion]:
+    """
+    Build the S. cerevisiae external-reference region for the synteny viewer.
+
+    The query gene's S. cerevisiae ortholog (SGDID) is resolved from local
+    ortholog clusters; its gene neighborhood is then fetched live from the SGD
+    backend. Each SGD neighbor is connected back to the Candida genes via the
+    shared ortholog_id when one exists. Best-effort: returns None when the query
+    gene has no S. cerevisiae ortholog or SGD is unavailable.
+    """
+    # Resolve the query gene's S. cerevisiae ortholog to center the SGD view.
+    query_sgdid = None
+    for cluster in query_clusters:
+        sgdids = _sgd_orthologs_in_cluster(cluster)
+        if sgdids:
+            query_sgdid = sgdids[0]
+            break
+    if not query_sgdid:
+        return None
+
+    data = _fetch_sgd_synteny(query_sgdid, flanking_count)
+    if not data:
+        return None
+
+    genes: list[SyntenyGene] = []
+    for n in data.get("neighbors", []):
+        sgdid = (n.get("sgdid") or "").strip()
+        feature_name = n.get("systematic_name") or sgdid
+        if not feature_name:
+            continue
+
+        is_query = bool(n.get("is_query")) or (sgdid and sgdid.upper() == query_sgdid.upper())
+        ortholog_id = sgdid_to_ortholog_id.get(sgdid.upper()) if sgdid else None
+
+        if ortholog_id:
+            ortholog_connections.setdefault(ortholog_id, set()).add(feature_name)
+
+        exons = [
+            Exon(start=e["start"], stop=e["stop"])
+            for e in n.get("exons", [])
+            if e.get("start") is not None and e.get("stop") is not None
+        ]
+
+        genes.append(SyntenyGene(
+            feature_name=feature_name,
+            gene_name=n.get("gene_name"),
+            start=n.get("start"),
+            stop=n.get("stop"),
+            strand=_normalize_strand(n.get("strand")),
+            is_query=is_query,
+            ortholog_id=ortholog_id,
+            exons=exons,
+            external_url=f"https://www.yeastgenome.org/locus/{sgdid}" if sgdid else None,
+        ))
+
+    if not genes:
+        return None
+
+    return SyntenyRegion(
+        organism_name=SC_REFERENCE_ORGANISM,
+        chromosome=data.get("chromosome") or "",
+        genes=genes,
+        is_reference=True,
+    )
 
 
 def _get_organism_info(f) -> tuple[str, int]:
@@ -437,6 +573,7 @@ def get_synteny_data(
     synteny_regions: dict[str, SyntenyRegion] = {}
     ortholog_connections: dict[str, set] = {}  # ortholog_id -> set of feature_names
     feature_to_ortholog: dict[int, str] = {}  # feature_no -> ortholog_id
+    sgdid_to_ortholog_id: dict[str, str] = {}  # SGDID -> ortholog_id (for S. cerevisiae links)
 
     # If we have a CGOB cluster, get all orthologs and their locations
     orthologs_by_species: dict[str, list] = {sp: [] for sp in CGD_SPECIES}
@@ -476,6 +613,11 @@ def get_synteny_data(
                     if effective_id not in ortholog_connections:
                         ortholog_connections[effective_id] = set()
                     ortholog_connections[effective_id].add(other_feat.feature_name)
+
+        # Map this cluster's S. cerevisiae orthologs to the same ortholog_id so
+        # the SGD reference row can be connected back to these Candida genes.
+        for sgdid in _sgd_orthologs_in_cluster(cluster):
+            sgdid_to_ortholog_id.setdefault(sgdid.upper(), effective_id)
 
     # Get ALL ortholog clusters for the query gene (not just the first one)
     # This is important for C. tropicalis which has separate pairwise BLAST RBH
@@ -581,6 +723,9 @@ def get_synteny_data(
                             if fh.feature:
                                 ortholog_connections[ortholog_id].add(fh.feature.feature_name)
                                 feature_to_ortholog[fh.feature.feature_no] = ortholog_id
+                        # Connect this flanking gene's S. cerevisiae orthologs too
+                        for sgdid in _sgd_orthologs_in_cluster(cluster):
+                            sgdid_to_ortholog_id.setdefault(sgdid.upper(), ortholog_id)
 
             # Get exons for this gene (empty list if no introns)
             gene_exons = exons_by_feature.get(feat_no, [])
@@ -601,6 +746,20 @@ def get_synteny_data(
             chromosome=chromosome,
             genes=genes,
         )
+
+    # Add the S. cerevisiae external-reference region (best-effort, live from SGD).
+    # Must run before the connections list is finalized so SGD genes are linked.
+    try:
+        sc_region = _build_sc_reference_region(
+            all_query_clusters,
+            sgdid_to_ortholog_id,
+            ortholog_connections,
+            flanking_count,
+        )
+        if sc_region is not None:
+            synteny_regions[SC_REFERENCE_ORGANISM] = sc_region
+    except Exception as exc:  # never let the reference row break core synteny
+        logger.warning("Failed to build S. cerevisiae reference region: %s", exc)
 
     # Build ortholog connections list (only include groups with genes in multiple species)
     connections = []

@@ -21,6 +21,7 @@ class SyntenyGene(BaseModel):
     is_query: bool = False
     ortholog_id: typing.Optional[str] = None  # CGOB cluster ID if part of an ortholog group
     exons: list[Exon] = []  # Exon coordinates (empty list = no introns/single exon)
+    external_url: typing.Optional[str] = None  # Link to an external DB (e.g. SGD) for reference genes
 
 
 class SyntenyRegion(BaseModel):
@@ -28,6 +29,7 @@ class SyntenyRegion(BaseModel):
     organism_name: str
     chromosome: str
     genes: list[SyntenyGene] = []
+    is_reference: bool = False  # True for external reference species (e.g. S. cerevisiae)
 
 
 class OrthologConnection(BaseModel):
