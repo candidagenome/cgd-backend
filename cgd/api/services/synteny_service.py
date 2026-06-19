@@ -95,13 +95,20 @@ def _normalize_strand(strand: Optional[str]) -> str:
 
 
 def _sgd_orthologs_in_cluster(cluster: HomologyGroup) -> list[str]:
-    """Return SGDIDs of S. cerevisiae external orthologs stored on a cluster."""
-    sgdids: list[str] = []
+    """Return S. cerevisiae ortholog identifiers stored on a cluster.
+
+    CGD records these as DbxrefHomology rows whose ``name`` is the organism
+    ("Saccharomyces cerevisiae S288C") and whose ``dbxref.source`` is the CGOB
+    pillar source (not 'SGD'), so match on the organism name like the ortholog
+    converter does. The ``dbxref_id`` is the CGOB identifier, typically the
+    systematic/ORF name (e.g. YLR113W) rather than an SGDID; the SGD endpoint
+    resolves either form."""
+    ids: list[str] = []
     for dh in cluster.dbxref_homology:
         dbx = dh.dbxref
-        if dbx and (dbx.source or '').upper() == 'SGD' and dbx.dbxref_id:
-            sgdids.append(dbx.dbxref_id)
-    return sgdids
+        if dbx and dbx.dbxref_id and 'saccharomyces cerevisiae' in (dh.name or '').lower():
+            ids.append(dbx.dbxref_id)
+    return ids
 
 
 def _build_sc_reference_region(
@@ -120,28 +127,42 @@ def _build_sc_reference_region(
     gene has no S. cerevisiae ortholog or SGD is unavailable.
     """
     # Resolve the query gene's S. cerevisiae ortholog to center the SGD view.
-    query_sgdid = None
+    # This identifier (and the connection map keys) are CGOB ids, typically
+    # systematic/ORF names (e.g. YLR113W) rather than SGDIDs.
+    query_sc_id = None
     for cluster in query_clusters:
-        sgdids = _sgd_orthologs_in_cluster(cluster)
-        if sgdids:
-            query_sgdid = sgdids[0]
+        sc_ids = _sgd_orthologs_in_cluster(cluster)
+        if sc_ids:
+            query_sc_id = sc_ids[0]
             break
-    if not query_sgdid:
+    if not query_sc_id:
         return None
 
-    data = _fetch_sgd_synteny(query_sgdid, flanking_count)
+    data = _fetch_sgd_synteny(query_sc_id, flanking_count)
     if not data:
         return None
+
+    query_sc_id_upper = query_sc_id.upper()
 
     genes: list[SyntenyGene] = []
     for n in data.get("neighbors", []):
         sgdid = (n.get("sgdid") or "").strip()
-        feature_name = n.get("systematic_name") or sgdid
+        systematic = (n.get("systematic_name") or "").strip()
+        feature_name = systematic or sgdid
         if not feature_name:
             continue
 
-        is_query = bool(n.get("is_query")) or (sgdid and sgdid.upper() == query_sgdid.upper())
-        ortholog_id = sgdid_to_ortholog_id.get(sgdid.upper()) if sgdid else None
+        # CGOB stores S. cerevisiae orthologs by systematic name, but fall back
+        # to SGDID so connections resolve regardless of which form was recorded.
+        ortholog_id = None
+        for key in (systematic, sgdid):
+            if key and key.upper() in sgdid_to_ortholog_id:
+                ortholog_id = sgdid_to_ortholog_id[key.upper()]
+                break
+
+        is_query = bool(n.get("is_query")) or (
+            query_sc_id_upper in {systematic.upper(), sgdid.upper()}
+        )
 
         if ortholog_id:
             ortholog_connections.setdefault(ortholog_id, set()).add(feature_name)
@@ -573,7 +594,7 @@ def get_synteny_data(
     synteny_regions: dict[str, SyntenyRegion] = {}
     ortholog_connections: dict[str, set] = {}  # ortholog_id -> set of feature_names
     feature_to_ortholog: dict[int, str] = {}  # feature_no -> ortholog_id
-    sgdid_to_ortholog_id: dict[str, str] = {}  # SGDID -> ortholog_id (for S. cerevisiae links)
+    sgdid_to_ortholog_id: dict[str, str] = {}  # S. cerevisiae CGOB id (e.g. YLR113W) -> ortholog_id
 
     # If we have a CGOB cluster, get all orthologs and their locations
     orthologs_by_species: dict[str, list] = {sp: [] for sp in CGD_SPECIES}
