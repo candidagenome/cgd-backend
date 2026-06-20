@@ -61,6 +61,36 @@ class SyntenyResponse(BaseModel):
     ortholog_connections: list[OrthologConnection] = []
 
 
+class SyntenyResolveCandidate(BaseModel):
+    """A Candida ortholog the cross-link could open in the synteny browser."""
+    feature_name: str  # the locus to load (e.g. C2_03330C_A)
+    gene_name: typing.Optional[str] = None
+    organism: str
+    headline: typing.Optional[str] = None  # gene description
+
+
+class SyntenyResolveResponse(BaseModel):
+    """
+    Response for /api/synteny/resolve endpoint.
+
+    Maps an external (e.g. SGD) gene identifier to the Candida ortholog(s) whose
+    synteny neighborhood the cross-link should open. ``status`` is one of:
+
+    - ``one``  -> exactly one ortholog set; ``target`` is the locus to load.
+    - ``many`` -> multiple distinct Candida loci; ``candidates`` lists the choices.
+    - ``none`` -> no Candida ortholog found; ``message`` explains why.
+    """
+    status: str  # "one" | "many" | "none"
+    source: str  # external source the identifier came from, e.g. "SGD"
+    input_id: str  # the identifier supplied in the link
+    input_gene_name: typing.Optional[str] = None  # resolved S. cerevisiae gene name
+    input_systematic_name: typing.Optional[str] = None  # resolved ORF/systematic name
+    input_sgdid: typing.Optional[str] = None
+    target: typing.Optional[SyntenyResolveCandidate] = None  # set when status == "one"
+    candidates: list[SyntenyResolveCandidate] = []  # set when status == "many"
+    message: typing.Optional[str] = None  # set when status == "none"
+
+
 # ============================================================================
 # Genome Synteny Browser Schemas
 # ============================================================================

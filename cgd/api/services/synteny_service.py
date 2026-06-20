@@ -20,6 +20,7 @@ from cgd.models.models import (
     Alias,
     DbxrefHomology,
     Dbxref,
+    DbxrefFeat,
 )
 from cgd.schemas.synteny_schema import (
     Exon,
@@ -28,7 +29,12 @@ from cgd.schemas.synteny_schema import (
     OrthologConnection,
     QueryGene,
     SyntenyResponse,
+    SyntenyResolveCandidate,
+    SyntenyResolveResponse,
 )
+# Reuse the SGD entity resolver so ORF/systematic-name links resolve the same
+# way the ortholog converter does (CGD stores no S. cerevisiae ORF names).
+from cgd.api.services.ortholog_converter_service import _resolve_sgd_ids
 
 logger = logging.getLogger(__name__)
 
@@ -795,4 +801,158 @@ def get_synteny_data(
         query_gene=query_gene,
         synteny_regions=synteny_regions,
         ortholog_connections=connections,
+    )
+
+
+# C. albicans is CGD's reference organism; when an SGD gene maps to one ortholog
+# per Candida species (the common case), the synteny view is centered there.
+_PREFERRED_ANCHOR_ORGANISM = 'Candida albicans SC5314'
+
+
+def _find_candida_features_for_sgd_gene(
+    db: Session,
+    tokens: set[str],
+) -> tuple[list[Feature], dict]:
+    """Find Candida ORF features cross-referenced to an S. cerevisiae gene.
+
+    SGD orthologs are stored as ``Dbxref`` rows with ``source='SGD'`` where
+    ``dbxref_id`` is the SGDID and ``description`` is the standard gene name; the
+    link to Candida features is through ``DbxrefFeat``. Systematic/ORF names are
+    not stored, so ``tokens`` should hold SGDID and/or gene-name forms.
+
+    Returns ``(features, sgd_info)`` where ``sgd_info`` is
+    ``{'sgdid': ..., 'gene_name': ...}`` taken from a matched dbxref (lets the
+    happy path populate display fields without an SGD API call).
+    """
+    upper = {t.strip().upper() for t in tokens if t and t.strip()}
+    if not upper:
+        return [], {}
+
+    rows = (
+        db.query(Feature, Dbxref)
+        .select_from(Dbxref)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .join(Feature, DbxrefFeat.feature_no == Feature.feature_no)
+        .options(joinedload(Feature.organism))
+        .filter(
+            func.upper(Dbxref.source) == 'SGD',
+            or_(
+                func.upper(Dbxref.dbxref_id).in_(upper),
+                func.upper(Dbxref.description).in_(upper),
+            ),
+            func.lower(Feature.feature_type) == 'orf',
+        )
+        .all()
+    )
+
+    seen: set[int] = set()
+    features: list[Feature] = []
+    sgd_info: dict = {}
+    for feat, dbx in rows:
+        if not sgd_info and dbx is not None:
+            sgd_info = {"sgdid": dbx.dbxref_id, "gene_name": dbx.description}
+        if feat.feature_no not in seen:
+            seen.add(feat.feature_no)
+            features.append(feat)
+    return features, sgd_info
+
+
+def resolve_synteny_target(
+    db: Session,
+    identifier: str,
+    source: str = 'SGD',
+) -> SyntenyResolveResponse:
+    """Resolve an external gene identifier to the Candida ortholog(s) to view.
+
+    Used by the SGD -> CGD synteny cross-link (e.g.
+    ``/synteny-browser?gene=HOG1&source=SGD``). Gene names and SGDIDs match CGD's
+    stored SGD dbxrefs directly; ORF/systematic names are resolved to their SGDID
+    and gene name via the SGD API first. CGD remains the source of truth for the
+    ortholog relationship.
+    """
+    identifier = (identifier or "").strip()
+    if not identifier:
+        raise ValueError("No gene identifier supplied")
+    src = (source or "").strip().upper() or 'SGD'
+
+    # 1) Direct match against CGD's stored SGD dbxrefs (gene name or SGDID).
+    #    No external call; ORF/systematic names won't match here.
+    features, sgd_info = _find_candida_features_for_sgd_gene(db, {identifier})
+
+    input_gene_name: Optional[str] = None
+    input_systematic_name: Optional[str] = None
+    input_sgdid: Optional[str] = None
+
+    # 2) Fall back to the SGD API for ORF names / aliases, then retry the match
+    #    with the canonical SGDID and gene name CGD does store.
+    if not features:
+        resolved = _resolve_sgd_ids([identifier]).get(identifier.upper())
+        if resolved:
+            input_gene_name = resolved.get("gene_name")
+            input_systematic_name = resolved.get("systematic_name")
+            input_sgdid = resolved.get("sgdid")
+            retry_tokens = {t for t in (input_sgdid, input_gene_name) if t}
+            features, sgd_info = _find_candida_features_for_sgd_gene(db, retry_tokens)
+
+    # Prefer SGD-API values for display; otherwise use the matched dbxref.
+    input_sgdid = input_sgdid or sgd_info.get("sgdid")
+    input_gene_name = input_gene_name or sgd_info.get("gene_name")
+
+    if not features:
+        label = input_gene_name or identifier
+        return SyntenyResolveResponse(
+            status="none",
+            source=src,
+            input_id=identifier,
+            input_gene_name=input_gene_name,
+            input_systematic_name=input_systematic_name,
+            input_sgdid=input_sgdid,
+            message=f"No Candida ortholog found in CGD for {src} gene {label}.",
+        )
+
+    def _candidate(f: Feature) -> SyntenyResolveCandidate:
+        return SyntenyResolveCandidate(
+            feature_name=f.feature_name,
+            gene_name=f.gene_name,
+            organism=_get_organism_info(f)[0],
+            headline=getattr(f, "headline", None),
+        )
+
+    def _anchor_sort_key(f: Feature):
+        org = _get_organism_info(f)[0]
+        return (
+            0 if org == _PREFERRED_ANCHOR_ORGANISM else 1,
+            0 if f.gene_name else 1,
+            f.feature_name or "",
+        )
+
+    features_sorted = sorted(features, key=_anchor_sort_key)
+
+    # The SGD dbxref links one Candida ortholog per species (a single ortholog
+    # set) -> one choice. A genuine choice only arises when a species has more
+    # than one paralog mapped to the same SGD gene.
+    per_org: dict[str, list[Feature]] = {}
+    for f in features:
+        per_org.setdefault(_get_organism_info(f)[0], []).append(f)
+    multiple_loci = any(len(v) > 1 for v in per_org.values())
+
+    if multiple_loci:
+        return SyntenyResolveResponse(
+            status="many",
+            source=src,
+            input_id=identifier,
+            input_gene_name=input_gene_name,
+            input_systematic_name=input_systematic_name,
+            input_sgdid=input_sgdid,
+            candidates=[_candidate(f) for f in features_sorted],
+        )
+
+    return SyntenyResolveResponse(
+        status="one",
+        source=src,
+        input_id=identifier,
+        input_gene_name=input_gene_name,
+        input_systematic_name=input_systematic_name,
+        input_sgdid=input_sgdid,
+        target=_candidate(features_sorted[0]),
     )
