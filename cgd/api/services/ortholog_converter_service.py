@@ -382,16 +382,18 @@ def _find_cgd_feature_for_sgd_gene(
     Returns (Feature, Dbxref) tuple or (None, None) if not found.
 
     SGD genes are stored in Dbxref with source='SGD':
-    - dbxref_id = systematic name (e.g., YFL039C)
+    - dbxref_id = SGDID (e.g., S000001855)
     - description = gene name (e.g., ACT1)
 
-    The link to CGD features is through DbxrefFeat.
+    Systematic/ORF names (e.g., YFL039C) are not stored, so Strategy 1 matches
+    SGDIDs and Strategy 2 matches gene names. The link to CGD features is
+    through DbxrefFeat.
     """
     gene_id = gene_id.strip().upper()
     if not gene_id:
         return None, None
 
-    # Strategy 1: Match by systematic name (dbxref_id) with source='SGD'
+    # Strategy 1: Match by SGDID (dbxref_id) with source='SGD'
     result = (
         db.query(Feature, Dbxref)
         .select_from(Dbxref)
