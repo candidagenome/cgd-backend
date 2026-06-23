@@ -100,6 +100,14 @@ class Settings(BaseSettings):
         validation_alias="BOWTIE_INDEX_DIR"
     )
 
+    # SGD backend API (used to fetch S. cerevisiae gene neighborhoods for the
+    # synteny viewer's external reference row)
+    sgd_backend_url: str = Field(
+        default="https://backend.yeastgenome.org",
+        validation_alias="SGD_BACKEND_URL",
+        description="Base URL of the SGD backend REST API",
+    )
+
     # JBrowse configuration
     jbrowse_base_url: str = Field(
         default="/jbrowse2/",

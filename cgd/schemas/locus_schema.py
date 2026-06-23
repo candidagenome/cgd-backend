@@ -134,6 +134,10 @@ class FeatureOut(ORMSchema):
     cug_codons: t.Optional[int] = None  # Number of CUG codons
     allelic_variation: t.Optional[str] = None  # Allelic variation info
 
+    # Related-tools gating flags for the Summary-tab action bar
+    ortholog_count: int = 0  # candida + external orthologs; gates the "orthologs" link
+    crispr_available: bool = False  # organism supported by the CRISPR guide designer
+
     # Additional Info links (from web_display with label_location='Additional Info')
     additional_info_links: list[ExternalLinkOut] = []
 

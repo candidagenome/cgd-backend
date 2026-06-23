@@ -243,6 +243,56 @@ EXPRESSION_STUDIES = {
                 "SRR27911485": {"label": "Iracane et al short RNA control (biol rep 6)", "bucket": "control"},
             },
         },
+        "Du_2015": {
+            "category": "Nutrient Response",
+            "pmid": "26350972",
+            "ncbi_id": "GSE64659",
+            "path_style": "direct",
+            "control": "SRR2062587",
+            "conditions": {
+                # 5h timepoint
+                "SRR2062587": {"label": "Glucose 5h", "bucket": "control", "group": "5h"},
+                "SRR2062588": {"label": "GlcNAc 5h", "bucket": "basic_biology", "group": "5h"},
+                "SRR2062586": {"label": "Sorbitol 5h", "bucket": "basic_biology", "group": "5h"},
+                # 24h timepoint
+                "SRR1740387": {"label": "Glucose 24h", "bucket": "control", "group": "24h"},
+                "SRR1740388": {"label": "GlcNAc 24h", "bucket": "basic_biology", "group": "24h"},
+                "SRR1740386": {"label": "Sorbitol 24h", "bucket": "basic_biology", "group": "24h"},
+            },
+        },
+        "Menon_2026": {
+            "category": "Gene Regulation",
+            "pmid": "42003610",
+            "ncbi_id": "GSE294295",
+            "path_style": "direct",
+            "control": "SRR33095670",
+            "conditions": {
+                # SC5314 WT: SLD baseline vs sulfur sources
+                "SRR33095670": {"label": "WT SLD (rep 1)", "bucket": "control", "group": "WT sulfur"},
+                "SRR33095671": {"label": "WT SLD (rep 2)", "bucket": "control", "group": "WT sulfur"},
+                "SRR33095672": {"label": "WT SLD+Met/Cys (rep 1)", "bucket": "basic_biology", "group": "WT sulfur"},
+                "SRR33095673": {"label": "WT SLD+Met/Cys (rep 2)", "bucket": "basic_biology", "group": "WT sulfur"},
+                "SRR33095674": {"label": "WT SLD+taurine (rep 1)", "bucket": "basic_biology", "group": "WT sulfur"},
+                "SRR33095675": {"label": "WT SLD+taurine (rep 2)", "bucket": "basic_biology", "group": "WT sulfur"},
+                "SRR33095664": {"label": "WT SLD+ammonium sulfate (rep 1)", "bucket": "basic_biology", "group": "WT sulfur"},
+                "SRR33095665": {"label": "WT SLD+ammonium sulfate (rep 2)", "bucket": "basic_biology", "group": "WT sulfur"},
+                # SN250-gsh: SLD baseline vs glutathione
+                "SRR33095663": {"label": "SN250 SLD (rep 1)", "bucket": "control", "group": "SN250 glutathione"},
+                "SRR33095662": {"label": "SN250 SLD (rep 2)", "bucket": "control", "group": "SN250 glutathione"},
+                "SRR33095661": {"label": "SN250 SLD+glutathione (rep 1)", "bucket": "basic_biology", "group": "SN250 glutathione"},
+                "SRR33095660": {"label": "SN250 SLD+glutathione (rep 2)", "bucket": "basic_biology", "group": "SN250 glutathione"},
+                # met32Δ-gsh: SLD baseline vs glutathione
+                "SRR33095653": {"label": "met32Δ SLD (rep 1)", "bucket": "control", "group": "met32 glutathione"},
+                "SRR33095652": {"label": "met32Δ SLD (rep 2)", "bucket": "control", "group": "met32 glutathione"},
+                "SRR33095659": {"label": "met32Δ SLD+glutathione (rep 1)", "bucket": "basic_biology", "group": "met32 glutathione"},
+                "SRR33095658": {"label": "met32Δ SLD+glutathione (rep 2)", "bucket": "basic_biology", "group": "met32 glutathione"},
+                # Taurine: WT(SN250) vs met32Δ
+                "SRR33095666": {"label": "WT(SN250) SLD+taurine (rep 1)", "bucket": "control", "group": "taurine met32"},
+                "SRR33095667": {"label": "WT(SN250) SLD+taurine (rep 2)", "bucket": "control", "group": "taurine met32"},
+                "SRR33095668": {"label": "met32Δ SLD+taurine (rep 1)", "bucket": "basic_biology", "group": "taurine met32"},
+                "SRR33095669": {"label": "met32Δ SLD+taurine (rep 2)", "bucket": "basic_biology", "group": "taurine met32"},
+            },
+        },
     },
     "C_auris_B8441": {
         "Shivarathri_2022": {

@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
-from cgd.api.services import genome_synteny_service
+from cgd.api.services import genome_synteny_service, synteny_service
 from cgd.schemas.synteny_schema import (
     ChromosomeListResponse,
     ChromosomeGenesResponse,
+    SyntenyResolveResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,38 @@ def get_chromosomes(db: Session = Depends(get_db)):
         return genome_synteny_service.get_all_chromosomes(db)
     except Exception as e:
         logger.error(f"Error fetching chromosomes: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/resolve", response_model=SyntenyResolveResponse)
+def resolve_synteny_target(
+    gene: Optional[str] = None,
+    sgdid: Optional[str] = None,
+    source: str = "SGD",
+    db: Session = Depends(get_db),
+):
+    """
+    Resolve an external (e.g. SGD) gene identifier to the Candida ortholog(s)
+    whose synteny neighborhood to open.
+
+    Backs the SGD -> CGD synteny cross-link, e.g.
+    ``/api/synteny/resolve?gene=HOG1&source=SGD`` or ``?sgdid=S000004103``.
+    Accepts a gene name, SGDID, or ORF/systematic name (the last is resolved via
+    the SGD API). Returns status ``one`` (load ``target``), ``many`` (show
+    ``candidates``), or ``none`` (show ``message``).
+    """
+    identifier = (sgdid or gene or "").strip()
+    if not identifier:
+        raise HTTPException(
+            status_code=400, detail="A 'gene' or 'sgdid' parameter is required"
+        )
+    try:
+        return synteny_service.resolve_synteny_target(db, identifier, source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error resolving synteny target for {identifier}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

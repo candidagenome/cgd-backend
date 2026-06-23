@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import httpx
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from cgd.core.settings import settings
 from cgd.models.models import (
     Feature,
     FeatLocation,
@@ -16,6 +18,9 @@ from cgd.models.models import (
     Seq,
     FeatAlias,
     Alias,
+    DbxrefHomology,
+    Dbxref,
+    DbxrefFeat,
 )
 from cgd.schemas.synteny_schema import (
     Exon,
@@ -24,7 +29,12 @@ from cgd.schemas.synteny_schema import (
     OrthologConnection,
     QueryGene,
     SyntenyResponse,
+    SyntenyResolveCandidate,
+    SyntenyResolveResponse,
 )
+# Reuse the SGD entity resolver so ORF/systematic-name links resolve the same
+# way the ortholog converter does (CGD stores no S. cerevisiae ORF names).
+from cgd.api.services.ortholog_converter_service import _resolve_sgd_ids
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +47,159 @@ CGD_SPECIES = [
     'Candida auris B8441',
     'Candida glabrata CBS138',
 ]
+
+# External reference species shown above the Candida group in the synteny viewer.
+# S. cerevisiae gene neighborhoods are fetched live from the SGD backend; only
+# the ortholog mapping (which SGD gene corresponds to a Candida gene) is local.
+SC_REFERENCE_ORGANISM = 'Saccharomyces cerevisiae'
+SGD_SYNTENY_TIMEOUT = 8.0
+
+# Process-lifetime cache of successful SGD neighborhood lookups, keyed by
+# (sgdid, flanking_count). Only successes are cached so a transient SGD outage
+# does not poison later requests. SGD genome coordinates change rarely, and the
+# cache is cleared on every deploy/restart.
+_sgd_synteny_cache: dict[tuple[str, int], dict] = {}
+
+
+def _fetch_sgd_synteny(sgdid: str, flanking_count: int) -> Optional[dict]:
+    """Fetch a gene's neighborhood from the SGD backend. Best-effort: returns
+    None if SGD is unavailable or the gene is not found."""
+    key = (sgdid.upper(), flanking_count)
+    if key in _sgd_synteny_cache:
+        return _sgd_synteny_cache[key]
+
+    url = f"{settings.sgd_backend_url.rstrip('/')}/locus/{sgdid}/synteny_neighbors"
+    try:
+        resp = httpx.get(
+            url,
+            params={"flanking": flanking_count},
+            timeout=SGD_SYNTENY_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "SGD synteny lookup for %s returned status %s", sgdid, resp.status_code
+            )
+            return None
+        data = resp.json()
+    except (httpx.RequestError, ValueError) as exc:
+        logger.warning("SGD synteny lookup for %s failed: %s", sgdid, exc)
+        return None
+
+    if data and data.get("neighbors"):
+        _sgd_synteny_cache[key] = data
+        return data
+    return None
+
+
+def _normalize_strand(strand: Optional[str]) -> str:
+    """Normalize SGD '+'/'-' strands to CGD's 'W'/'C' for consistent display."""
+    if strand == '+':
+        return 'W'
+    if strand == '-':
+        return 'C'
+    return strand or 'W'
+
+
+def _sgd_orthologs_in_cluster(cluster: HomologyGroup) -> list[str]:
+    """Return S. cerevisiae ortholog identifiers stored on a cluster.
+
+    CGD records these as DbxrefHomology rows whose ``name`` is the organism
+    ("Saccharomyces cerevisiae S288C") and whose ``dbxref.source`` is the CGOB
+    pillar source (not 'SGD'), so match on the organism name like the ortholog
+    converter does. The ``dbxref_id`` is the CGOB identifier, typically the
+    systematic/ORF name (e.g. YLR113W) rather than an SGDID; the SGD endpoint
+    resolves either form."""
+    ids: list[str] = []
+    for dh in cluster.dbxref_homology:
+        dbx = dh.dbxref
+        if dbx and dbx.dbxref_id and 'saccharomyces cerevisiae' in (dh.name or '').lower():
+            ids.append(dbx.dbxref_id)
+    return ids
+
+
+def _build_sc_reference_region(
+    query_clusters: list[HomologyGroup],
+    sgdid_to_ortholog_id: dict[str, str],
+    ortholog_connections: dict[str, set],
+    flanking_count: int,
+) -> Optional[SyntenyRegion]:
+    """
+    Build the S. cerevisiae external-reference region for the synteny viewer.
+
+    The query gene's S. cerevisiae ortholog (SGDID) is resolved from local
+    ortholog clusters; its gene neighborhood is then fetched live from the SGD
+    backend. Each SGD neighbor is connected back to the Candida genes via the
+    shared ortholog_id when one exists. Best-effort: returns None when the query
+    gene has no S. cerevisiae ortholog or SGD is unavailable.
+    """
+    # Resolve the query gene's S. cerevisiae ortholog to center the SGD view.
+    # This identifier (and the connection map keys) are CGOB ids, typically
+    # systematic/ORF names (e.g. YLR113W) rather than SGDIDs.
+    query_sc_id = None
+    for cluster in query_clusters:
+        sc_ids = _sgd_orthologs_in_cluster(cluster)
+        if sc_ids:
+            query_sc_id = sc_ids[0]
+            break
+    if not query_sc_id:
+        return None
+
+    data = _fetch_sgd_synteny(query_sc_id, flanking_count)
+    if not data:
+        return None
+
+    query_sc_id_upper = query_sc_id.upper()
+
+    genes: list[SyntenyGene] = []
+    for n in data.get("neighbors", []):
+        sgdid = (n.get("sgdid") or "").strip()
+        systematic = (n.get("systematic_name") or "").strip()
+        feature_name = systematic or sgdid
+        if not feature_name:
+            continue
+
+        # CGOB stores S. cerevisiae orthologs by systematic name, but fall back
+        # to SGDID so connections resolve regardless of which form was recorded.
+        ortholog_id = None
+        for key in (systematic, sgdid):
+            if key and key.upper() in sgdid_to_ortholog_id:
+                ortholog_id = sgdid_to_ortholog_id[key.upper()]
+                break
+
+        is_query = bool(n.get("is_query")) or (
+            query_sc_id_upper in {systematic.upper(), sgdid.upper()}
+        )
+
+        if ortholog_id:
+            ortholog_connections.setdefault(ortholog_id, set()).add(feature_name)
+
+        exons = [
+            Exon(start=e["start"], stop=e["stop"])
+            for e in n.get("exons", [])
+            if e.get("start") is not None and e.get("stop") is not None
+        ]
+
+        genes.append(SyntenyGene(
+            feature_name=feature_name,
+            gene_name=n.get("gene_name"),
+            start=n.get("start"),
+            stop=n.get("stop"),
+            strand=_normalize_strand(n.get("strand")),
+            is_query=is_query,
+            ortholog_id=ortholog_id,
+            exons=exons,
+            external_url=f"https://www.yeastgenome.org/locus/{sgdid}" if sgdid else None,
+        ))
+
+    if not genes:
+        return None
+
+    return SyntenyRegion(
+        organism_name=SC_REFERENCE_ORGANISM,
+        chromosome=data.get("chromosome") or "",
+        genes=genes,
+        is_reference=True,
+    )
 
 
 def _get_organism_info(f) -> tuple[str, int]:
@@ -437,6 +600,7 @@ def get_synteny_data(
     synteny_regions: dict[str, SyntenyRegion] = {}
     ortholog_connections: dict[str, set] = {}  # ortholog_id -> set of feature_names
     feature_to_ortholog: dict[int, str] = {}  # feature_no -> ortholog_id
+    sgdid_to_ortholog_id: dict[str, str] = {}  # S. cerevisiae CGOB id (e.g. YLR113W) -> ortholog_id
 
     # If we have a CGOB cluster, get all orthologs and their locations
     orthologs_by_species: dict[str, list] = {sp: [] for sp in CGD_SPECIES}
@@ -476,6 +640,11 @@ def get_synteny_data(
                     if effective_id not in ortholog_connections:
                         ortholog_connections[effective_id] = set()
                     ortholog_connections[effective_id].add(other_feat.feature_name)
+
+        # Map this cluster's S. cerevisiae orthologs to the same ortholog_id so
+        # the SGD reference row can be connected back to these Candida genes.
+        for sgdid in _sgd_orthologs_in_cluster(cluster):
+            sgdid_to_ortholog_id.setdefault(sgdid.upper(), effective_id)
 
     # Get ALL ortholog clusters for the query gene (not just the first one)
     # This is important for C. tropicalis which has separate pairwise BLAST RBH
@@ -581,6 +750,9 @@ def get_synteny_data(
                             if fh.feature:
                                 ortholog_connections[ortholog_id].add(fh.feature.feature_name)
                                 feature_to_ortholog[fh.feature.feature_no] = ortholog_id
+                        # Connect this flanking gene's S. cerevisiae orthologs too
+                        for sgdid in _sgd_orthologs_in_cluster(cluster):
+                            sgdid_to_ortholog_id.setdefault(sgdid.upper(), ortholog_id)
 
             # Get exons for this gene (empty list if no introns)
             gene_exons = exons_by_feature.get(feat_no, [])
@@ -602,6 +774,20 @@ def get_synteny_data(
             genes=genes,
         )
 
+    # Add the S. cerevisiae external-reference region (best-effort, live from SGD).
+    # Must run before the connections list is finalized so SGD genes are linked.
+    try:
+        sc_region = _build_sc_reference_region(
+            all_query_clusters,
+            sgdid_to_ortholog_id,
+            ortholog_connections,
+            flanking_count,
+        )
+        if sc_region is not None:
+            synteny_regions[SC_REFERENCE_ORGANISM] = sc_region
+    except Exception as exc:  # never let the reference row break core synteny
+        logger.warning("Failed to build S. cerevisiae reference region: %s", exc)
+
     # Build ortholog connections list (only include groups with genes in multiple species)
     connections = []
     for orth_id, gene_set in ortholog_connections.items():
@@ -615,4 +801,158 @@ def get_synteny_data(
         query_gene=query_gene,
         synteny_regions=synteny_regions,
         ortholog_connections=connections,
+    )
+
+
+# C. albicans is CGD's reference organism; when an SGD gene maps to one ortholog
+# per Candida species (the common case), the synteny view is centered there.
+_PREFERRED_ANCHOR_ORGANISM = 'Candida albicans SC5314'
+
+
+def _find_candida_features_for_sgd_gene(
+    db: Session,
+    tokens: set[str],
+) -> tuple[list[Feature], dict]:
+    """Find Candida ORF features cross-referenced to an S. cerevisiae gene.
+
+    SGD orthologs are stored as ``Dbxref`` rows with ``source='SGD'`` where
+    ``dbxref_id`` is the SGDID and ``description`` is the standard gene name; the
+    link to Candida features is through ``DbxrefFeat``. Systematic/ORF names are
+    not stored, so ``tokens`` should hold SGDID and/or gene-name forms.
+
+    Returns ``(features, sgd_info)`` where ``sgd_info`` is
+    ``{'sgdid': ..., 'gene_name': ...}`` taken from a matched dbxref (lets the
+    happy path populate display fields without an SGD API call).
+    """
+    upper = {t.strip().upper() for t in tokens if t and t.strip()}
+    if not upper:
+        return [], {}
+
+    rows = (
+        db.query(Feature, Dbxref)
+        .select_from(Dbxref)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .join(Feature, DbxrefFeat.feature_no == Feature.feature_no)
+        .options(joinedload(Feature.organism))
+        .filter(
+            func.upper(Dbxref.source) == 'SGD',
+            or_(
+                func.upper(Dbxref.dbxref_id).in_(upper),
+                func.upper(Dbxref.description).in_(upper),
+            ),
+            func.lower(Feature.feature_type) == 'orf',
+        )
+        .all()
+    )
+
+    seen: set[int] = set()
+    features: list[Feature] = []
+    sgd_info: dict = {}
+    for feat, dbx in rows:
+        if not sgd_info and dbx is not None:
+            sgd_info = {"sgdid": dbx.dbxref_id, "gene_name": dbx.description}
+        if feat.feature_no not in seen:
+            seen.add(feat.feature_no)
+            features.append(feat)
+    return features, sgd_info
+
+
+def resolve_synteny_target(
+    db: Session,
+    identifier: str,
+    source: str = 'SGD',
+) -> SyntenyResolveResponse:
+    """Resolve an external gene identifier to the Candida ortholog(s) to view.
+
+    Used by the SGD -> CGD synteny cross-link (e.g.
+    ``/synteny-browser?gene=HOG1&source=SGD``). Gene names and SGDIDs match CGD's
+    stored SGD dbxrefs directly; ORF/systematic names are resolved to their SGDID
+    and gene name via the SGD API first. CGD remains the source of truth for the
+    ortholog relationship.
+    """
+    identifier = (identifier or "").strip()
+    if not identifier:
+        raise ValueError("No gene identifier supplied")
+    src = (source or "").strip().upper() or 'SGD'
+
+    # 1) Direct match against CGD's stored SGD dbxrefs (gene name or SGDID).
+    #    No external call; ORF/systematic names won't match here.
+    features, sgd_info = _find_candida_features_for_sgd_gene(db, {identifier})
+
+    input_gene_name: Optional[str] = None
+    input_systematic_name: Optional[str] = None
+    input_sgdid: Optional[str] = None
+
+    # 2) Fall back to the SGD API for ORF names / aliases, then retry the match
+    #    with the canonical SGDID and gene name CGD does store.
+    if not features:
+        resolved = _resolve_sgd_ids([identifier]).get(identifier.upper())
+        if resolved:
+            input_gene_name = resolved.get("gene_name")
+            input_systematic_name = resolved.get("systematic_name")
+            input_sgdid = resolved.get("sgdid")
+            retry_tokens = {t for t in (input_sgdid, input_gene_name) if t}
+            features, sgd_info = _find_candida_features_for_sgd_gene(db, retry_tokens)
+
+    # Prefer SGD-API values for display; otherwise use the matched dbxref.
+    input_sgdid = input_sgdid or sgd_info.get("sgdid")
+    input_gene_name = input_gene_name or sgd_info.get("gene_name")
+
+    if not features:
+        label = input_gene_name or identifier
+        return SyntenyResolveResponse(
+            status="none",
+            source=src,
+            input_id=identifier,
+            input_gene_name=input_gene_name,
+            input_systematic_name=input_systematic_name,
+            input_sgdid=input_sgdid,
+            message=f"No Candida ortholog found in CGD for {src} gene {label}.",
+        )
+
+    def _candidate(f: Feature) -> SyntenyResolveCandidate:
+        return SyntenyResolveCandidate(
+            feature_name=f.feature_name,
+            gene_name=f.gene_name,
+            organism=_get_organism_info(f)[0],
+            headline=getattr(f, "headline", None),
+        )
+
+    def _anchor_sort_key(f: Feature):
+        org = _get_organism_info(f)[0]
+        return (
+            0 if org == _PREFERRED_ANCHOR_ORGANISM else 1,
+            0 if f.gene_name else 1,
+            f.feature_name or "",
+        )
+
+    features_sorted = sorted(features, key=_anchor_sort_key)
+
+    # The SGD dbxref links one Candida ortholog per species (a single ortholog
+    # set) -> one choice. A genuine choice only arises when a species has more
+    # than one paralog mapped to the same SGD gene.
+    per_org: dict[str, list[Feature]] = {}
+    for f in features:
+        per_org.setdefault(_get_organism_info(f)[0], []).append(f)
+    multiple_loci = any(len(v) > 1 for v in per_org.values())
+
+    if multiple_loci:
+        return SyntenyResolveResponse(
+            status="many",
+            source=src,
+            input_id=identifier,
+            input_gene_name=input_gene_name,
+            input_systematic_name=input_systematic_name,
+            input_sgdid=input_sgdid,
+            candidates=[_candidate(f) for f in features_sorted],
+        )
+
+    return SyntenyResolveResponse(
+        status="one",
+        source=src,
+        input_id=identifier,
+        input_gene_name=input_gene_name,
+        input_systematic_name=input_systematic_name,
+        input_sgdid=input_sgdid,
+        target=_candidate(features_sorted[0]),
     )

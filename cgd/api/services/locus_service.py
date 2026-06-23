@@ -1049,6 +1049,11 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
 
     out: dict[str, FeatureOut] = {}
 
+    # Imported here rather than at module top to avoid pulling the heavy CRISPR
+    # service into the import graph (mirrors the lazy-import pattern used for
+    # string_service / go_term_finder_service below).
+    from cgd.api.services.crispr_service import is_crispr_supported
+
     for f in features:
         organism_name, taxon_id = _get_organism_info(f)
 
@@ -1577,6 +1582,13 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             for a in aliases_with_refs
         ]
 
+        # Related-tools gating flags for the Summary-tab action bar.
+        # ortholog_count reuses the lists already computed above (no extra query).
+        ortholog_count = len(candida_orthologs) + len(external_orthologs)
+        crispr_available = is_crispr_supported(
+            getattr(f.organism, "organism_abbrev", None)
+        )
+
         feature_out = FeatureOut(
             feature_no=f.feature_no,
             organism_no=f.organism_no,
@@ -1610,6 +1622,8 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             ortholog_cluster_url=ortholog_cluster_url,
             cug_codons=cug_codons,
             allelic_variation=allelic_variation,
+            ortholog_count=ortholog_count,
+            crispr_available=crispr_available,
         )
         out[organism_name] = feature_out
 

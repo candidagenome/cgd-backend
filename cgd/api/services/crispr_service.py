@@ -63,6 +63,34 @@ def _map_organism_tag_to_abbrev(organism_tag: str) -> str:
     return result
 
 
+# Curated list of organisms supported for CRISPR guide design.
+# Each tuple: (organism_tag, display_name). Single source of truth shared by
+# get_crispr_config() and is_crispr_supported().
+CRISPR_ORGANISMS = [
+    ("C_albicans_SC5314_A22", "Candida albicans SC5314 (Assembly 22)"),
+    ("C_albicans_SC5314_A21", "Candida albicans SC5314 (Assembly 21)"),
+    ("C_albicans_SC5314_A19", "Candida albicans SC5314 (Assembly 19)"),
+    ("C_dubliniensis_CD36", "Candida dubliniensis CD36"),
+    ("C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
+    ("C_auris_B8441", "Candida auris B8441"),
+    ("C_glabrata_CBS138", "Candida glabrata CBS138"),
+    ("C_tropicalis_MYA-3404", "Candida tropicalis MYA-3404"),
+]
+
+# Database organism_abbrev values CRISPR supports (assembly/strain suffixes
+# stripped so they compare directly against Feature.organism.organism_abbrev).
+CRISPR_SUPPORTED_ABBREVS = frozenset(
+    _map_organism_tag_to_abbrev(tag) for tag, _ in CRISPR_ORGANISMS
+)
+
+
+def is_crispr_supported(organism_abbrev: Optional[str]) -> bool:
+    """Return True if CRISPR guide design is available for this organism_abbrev."""
+    if not organism_abbrev:
+        return False
+    return organism_abbrev in CRISPR_SUPPORTED_ABBREVS
+
+
 # ============================================================================
 # Configuration and Limits
 # ============================================================================
@@ -2579,19 +2607,6 @@ def _calculate_specificity_score(offtargets: List[OffTargetHit]) -> float:
 
 def get_crispr_config() -> CrisprConfigResponse:
     """Get CRISPR tool configuration options."""
-    # Curated list of organisms supported for CRISPR guide design
-    # Each tuple: (tag, display_name)
-    CRISPR_ORGANISMS = [
-        ("C_albicans_SC5314_A22", "Candida albicans SC5314 (Assembly 22)"),
-        ("C_albicans_SC5314_A21", "Candida albicans SC5314 (Assembly 21)"),
-        ("C_albicans_SC5314_A19", "Candida albicans SC5314 (Assembly 19)"),
-        ("C_dubliniensis_CD36", "Candida dubliniensis CD36"),
-        ("C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
-        ("C_auris_B8441", "Candida auris B8441"),
-        ("C_glabrata_CBS138", "Candida glabrata CBS138"),
-        ("C_tropicalis_MYA-3404", "Candida tropicalis MYA-3404"),
-    ]
-
     organisms = [
         {"tag": tag, "name": name}
         for tag, name in CRISPR_ORGANISMS
