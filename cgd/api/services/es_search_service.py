@@ -268,6 +268,8 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                     {"constant_score": {"filter": {"wildcard": {"feature_name": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 4000}},
                     # CGDID prefix match
                     {"constant_score": {"filter": {"wildcard": {"dbxref_id": {"value": f"{query_upper}*", "case_insensitive": True}}}, "boost": 3500}},
+                    # Alias match (e.g. GAPDH -> TDH3)
+                    {"constant_score": {"filter": {"wildcard": {"aliases": {"value": f"*{query_upper}*", "case_insensitive": True}}}, "boost": 3000}},
                     # Prefix match for GO terms
                     {"constant_score": {"filter": {"prefix": {"go_term.keyword": {"value": query_lower}}}, "boost": 1500}},
                     # Prefix match for phenotypes
@@ -310,6 +312,7 @@ def _build_autocomplete_query(query: str, size: int = 50) -> dict:
                 "name": {},
                 "gene_name": {},
                 "dbxref_id": {},
+                "aliases": {},
                 "go_term": {},
                 "observable": {},
                 "headline": {},
@@ -2099,6 +2102,8 @@ def text_search(
             gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
             feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
             dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=True)
+            # Match aliases too (e.g. GAPDH -> TDH3), mirroring the Oracle gene search
+            aliases_wc = _build_wildcard_query_for_match_mode("aliases.keyword", query, "exact", case_insensitive=True)
             gene_query = {
                 "query": {
                     "bool": {
@@ -2109,13 +2114,14 @@ def text_search(
                             gene_name_wc,
                             feature_name_wc,
                             dbxref_wc,
+                            aliases_wc,
                         ],
                         "minimum_should_match": 1,
                     }
                 },
                 "size": limit,
                 "highlight": {
-                    "fields": {"gene_name": {}, "feature_name": {}},
+                    "fields": {"gene_name": {}, "feature_name": {}, "aliases": {}},
                     "pre_tags": ["<mark>"],
                     "post_tags": ["</mark>"],
                 },
@@ -2510,6 +2516,8 @@ def text_search_category(
         gene_name_wc = _build_wildcard_query_for_match_mode("gene_name.keyword", query, "exact")
         feature_name_wc = _build_wildcard_query_for_match_mode("feature_name", query, "exact", case_insensitive=False)
         dbxref_wc = _build_wildcard_query_for_match_mode("dbxref_id", query, "exact", case_insensitive=True)
+        # Match aliases too (e.g. GAPDH -> TDH3), mirroring the Oracle gene search
+        aliases_wc = _build_wildcard_query_for_match_mode("aliases.keyword", query, "exact", case_insensitive=True)
         es_query = {
             "query": {
                 "bool": {
@@ -2520,13 +2528,14 @@ def text_search_category(
                         gene_name_wc,
                         feature_name_wc,
                         dbxref_wc,
+                        aliases_wc,
                     ],
                     "minimum_should_match": 1,
                 }
             },
             "size": 10000,
             "highlight": {
-                "fields": {"gene_name": {}, "feature_name": {}},
+                "fields": {"gene_name": {}, "feature_name": {}, "aliases": {}},
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
             },
