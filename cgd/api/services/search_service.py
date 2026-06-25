@@ -882,6 +882,39 @@ def get_autocomplete_suggestions(
                     ))
                     seen_genes.add(display)
 
+        # If we still need more genes, try matching aliases (e.g. GAPDH -> TDH3)
+        if len(suggestions) < gene_limit:
+            extra_needed = gene_limit - len(suggestions)
+            alias_prefix_query = (
+                db.query(Feature.gene_name, Feature.feature_name, Feature.headline, Alias.alias_name)
+                .join(FeatAlias, Feature.feature_no == FeatAlias.feature_no)
+                .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+                .filter(
+                    Feature.feature_type.in_(GENE_FEATURE_TYPES),
+                    func.upper(Alias.alias_name).like(prefix_pattern)
+                )
+                .distinct()
+                .limit(extra_needed + len(seen_genes))
+                .all()
+            )
+
+            for gene_name, feature_name, headline, alias_name in alias_prefix_query:
+                display = gene_name or feature_name
+                if display not in seen_genes and len(suggestions) < gene_limit:
+                    description = f"Alias: {alias_name}"
+                    if headline:
+                        description += f" - {headline[:60]}..." if len(headline) > 60 else f" - {headline}"
+                    link_name = gene_name or feature_name
+                    suggestions.append(AutocompleteSuggestion(
+                        text=display,
+                        category="gene",
+                        link=f"/locus/{link_name}",
+                        description=description,
+                        highlighted_text=_highlight_text(display, query),
+                        highlighted_description=_highlight_text(description, query),
+                    ))
+                    seen_genes.add(display)
+
         remaining = limit - len(suggestions)
 
     # 2. Search GO terms - prefix match on go_term
