@@ -613,6 +613,7 @@ class TestGetAutocompleteSuggestions:
             MockQuery([("ALS1", "CAL0001", "Cell adhesin")]),  # gene prefix
             MockQuery([]),  # gene feature prefix
             MockQuery([]),  # CGDID prefix
+            MockQuery([]),  # gene alias prefix
             MockQuery([]),  # GO terms
             MockQuery([]),  # phenotypes
         ]
