@@ -1615,6 +1615,97 @@ def _is_control_condition(study_info: dict, cond_id: str) -> bool:
     return cond_info.get("bucket") == "control"
 
 
+def _build_study_conditions(
+    study_info: dict,
+    study_id: str,
+    base_path,
+    chromosome: str,
+    start: int,
+    end: int,
+    organism_key: str,
+    control_values: Dict[str, float],
+    group_control_map: Dict[str, str],
+) -> Tuple[List["ExpressionCondition"], List[float]]:
+    """
+    Build the ExpressionCondition list for a single study at one locus.
+
+    Shared by the gene-expression and per-organism expression-details endpoints
+    so they stay in lockstep.
+
+    - Grouped studies (study uses per-group controls, i.e. group_control_map is
+      non-empty): INCLUDE control conditions so each group can be shown as a unit
+      (control baseline + treatment), tag every condition with its ``group`` and
+      the ``control_label`` it is compared against, and order by
+      (group, controls-first, label) so the frontend can render per-group blocks.
+    - Ungrouped studies: legacy behaviour — exclude controls and sort by fold
+      change descending; ``group``/``control_label`` stay None.
+
+    Returns (conditions, non_control_fold_changes). Only non-control fold changes
+    feed the headline summary stats / total_conditions, so adding control rows to
+    grouped studies doesn't distort those numbers.
+    """
+    is_grouped = bool(group_control_map)
+    conditions: List[ExpressionCondition] = []
+    non_control_fold_changes: List[float] = []
+
+    for cond_id, cond_info in study_info["conditions"].items():
+        is_control = _is_control_condition(study_info, cond_id)
+
+        # Ungrouped studies hide controls (baseline == 1x is uninformative there).
+        if is_control and not is_grouped:
+            continue
+
+        control_id = _get_control_for_condition(
+            study_info, cond_id, group_control_map
+        )
+        if not control_id or control_id not in control_values:
+            continue
+
+        control_value = control_values[control_id]
+
+        cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
+        cond_value = _get_expression_value(cond_path, chromosome, start, end)
+        if cond_value is None:
+            continue
+
+        fold_change, _ = _calculate_fold_change(
+            cond_value=cond_value,
+            control_value=control_value,
+            organism_key=organism_key,
+            study_id=study_id,
+            cond_id=cond_id,
+            control_id=control_id,
+        )
+
+        conditions.append(ExpressionCondition(
+            condition_id=cond_id,
+            label=cond_info["label"],
+            value=round(cond_value, 2),
+            fold_change=fold_change,
+            bucket=cond_info.get("bucket", ""),
+            group=cond_info.get("group") if is_grouped else None,
+            control_label=(
+                study_info["conditions"].get(control_id, {}).get("label", control_id)
+                if is_grouped else None
+            ),
+        ))
+
+        if not is_control:
+            non_control_fold_changes.append(fold_change)
+
+    if is_grouped:
+        # Per-group blocks: group, controls first, then by label (rep order).
+        conditions.sort(key=lambda c: (
+            c.group or "",
+            0 if c.bucket == "control" else 1,
+            c.label,
+        ))
+    else:
+        conditions.sort(key=lambda c: c.fold_change, reverse=True)
+
+    return conditions, non_control_fold_changes
+
+
 def _calculate_fold_change(
     cond_value: float,
     control_value: float,
@@ -1853,51 +1944,13 @@ def get_gene_expression(
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
-        # Process conditions
-        conditions: List[ExpressionCondition] = []
-
-        for cond_id, cond_info in study_info["conditions"].items():
-            # Skip control conditions
-            if _is_control_condition(study_info, cond_id):
-                continue
-
-            # Get the appropriate control for this condition
-            control_id = _get_control_for_condition(
-                study_info, cond_id, group_control_map
-            )
-            if not control_id or control_id not in control_values:
-                continue
-
-            control_value = control_values[control_id]
-
-            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-            cond_value = _get_expression_value(cond_path, chromosome, start, end)
-
-            if cond_value is None:
-                continue
-
-            fold_change, _ = _calculate_fold_change(
-                cond_value=cond_value,
-                control_value=control_value,
-                organism_key=organism_key,
-                study_id=study_id,
-                cond_id=cond_id,
-                control_id=control_id,
-            )
-
-            conditions.append(ExpressionCondition(
-                condition_id=cond_id,
-                label=cond_info["label"],
-                value=round(cond_value, 2),
-                fold_change=fold_change,
-                bucket=cond_info.get("bucket", "")
-            ))
-
-            all_fold_changes.append(fold_change)
-            total_conditions += 1
-
-        # Sort conditions by fold change (descending)
-        conditions.sort(key=lambda x: x.fold_change, reverse=True)
+        # Process conditions (grouped studies include controls + per-group labels)
+        conditions, study_fold_changes = _build_study_conditions(
+            study_info, study_id, base_path, chromosome, start, end,
+            organism_key, control_values, group_control_map,
+        )
+        all_fold_changes.extend(study_fold_changes)
+        total_conditions += len(study_fold_changes)
 
         if conditions:
             # For display, use the first/default control
@@ -2063,51 +2116,13 @@ def _get_expression_for_organism(
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
-        # Process conditions
-        conditions: List[ExpressionCondition] = []
-
-        for cond_id, cond_info in study_info["conditions"].items():
-            # Skip control conditions
-            if _is_control_condition(study_info, cond_id):
-                continue
-
-            # Get the appropriate control for this condition
-            control_id = _get_control_for_condition(
-                study_info, cond_id, group_control_map
-            )
-            if not control_id or control_id not in control_values:
-                continue
-
-            control_value = control_values[control_id]
-
-            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-            cond_value = _get_expression_value(cond_path, chromosome, start, end)
-
-            if cond_value is None:
-                continue
-
-            fold_change, _ = _calculate_fold_change(
-                cond_value=cond_value,
-                control_value=control_value,
-                organism_key=hts_key,
-                study_id=study_id,
-                cond_id=cond_id,
-                control_id=control_id,
-            )
-
-            conditions.append(ExpressionCondition(
-                condition_id=cond_id,
-                label=cond_info["label"],
-                value=round(cond_value, 2),
-                fold_change=fold_change,
-                bucket=cond_info.get("bucket", "")
-            ))
-
-            all_fold_changes.append(fold_change)
-            total_conditions += 1
-
-        # Sort conditions by fold change (descending)
-        conditions.sort(key=lambda x: x.fold_change, reverse=True)
+        # Process conditions (grouped studies include controls + per-group labels)
+        conditions, study_fold_changes = _build_study_conditions(
+            study_info, study_id, base_path, chromosome, start, end,
+            hts_key, control_values, group_control_map,
+        )
+        all_fold_changes.extend(study_fold_changes)
+        total_conditions += len(study_fold_changes)
 
         if conditions:
             # For display, use the first/default control
