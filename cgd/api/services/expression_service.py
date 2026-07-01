@@ -293,6 +293,133 @@ EXPRESSION_STUDIES = {
                 "SRR33095669": {"label": "met32Δ SLD+taurine (rep 2)", "bucket": "basic_biology", "group": "taurine met32"},
             },
         },
+        "Cravener_2023": {
+            "category": "Strain Comparison",
+            "pmid": "36696432",
+            "ncbi_id": "PRJNA857655",
+            "path_style": "direct",
+            "control": "SRR20077262",
+            "conditions": {
+                # strain 12C
+                "SRR20077262": {"label": "Cravener et al control strain 12C (Rep 1, HapA)", "bucket": "control", "group": "12C"},
+                "SRR20077261": {"label": "Cravener et al control strain 12C (Rep 2, HapA)", "bucket": "control", "group": "12C"},
+                "SRR20077260": {"label": "Cravener et al control strain 12C (Rep 3, HapA)", "bucket": "control", "group": "12C"},
+                "SRR20077294": {"label": "Cravener et al efg1 strain 12C (Rep 1, HapA)", "bucket": "basic_biology", "group": "12C"},
+                "SRR20077293": {"label": "Cravener et al efg1 strain 12C (Rep 2, HapA)", "bucket": "basic_biology", "group": "12C"},
+                "SRR20077292": {"label": "Cravener et al efg1 strain 12C (Rep 3, HapA)", "bucket": "basic_biology", "group": "12C"},
+                # strain 19F
+                "SRR20077285": {"label": "Cravener et al control strain 19F (Rep 1, HapA)", "bucket": "control", "group": "19F"},
+                "SRR20077259": {"label": "Cravener et al control strain 19F (Rep 2, HapA)", "bucket": "control", "group": "19F"},
+                "SRR20077258": {"label": "Cravener et al control strain 19F (Rep 3, HapA)", "bucket": "control", "group": "19F"},
+                "SRR20077254": {"label": "Cravener et al efg1 strain 19F (Rep 1, HapA)", "bucket": "basic_biology", "group": "19F"},
+                "SRR20077253": {"label": "Cravener et al efg1 strain 19F (Rep 2, HapA)", "bucket": "basic_biology", "group": "19F"},
+                "SRR20077252": {"label": "Cravener et al efg1 strain 19F (Rep 3, HapA)", "bucket": "basic_biology", "group": "19F"},
+                # strain GC75
+                "SRR20077210": {"label": "Cravener et al control strain GC75 (Rep 1, HapA)", "bucket": "control", "group": "GC75"},
+                "SRR20077209": {"label": "Cravener et al control strain GC75 (Rep 2, HapA)", "bucket": "control", "group": "GC75"},
+                "SRR20077208": {"label": "Cravener et al control strain GC75 (Rep 3, HapA)", "bucket": "control", "group": "GC75"},
+                "SRR20077207": {"label": "Cravener et al efg1 strain GC75 (Rep 1, HapA)", "bucket": "basic_biology", "group": "GC75"},
+                "SRR20077305": {"label": "Cravener et al efg1 strain GC75 (Rep 2, HapA)", "bucket": "basic_biology", "group": "GC75"},
+                "SRR20077304": {"label": "Cravener et al efg1 strain GC75 (Rep 3, HapA)", "bucket": "basic_biology", "group": "GC75"},
+                # strain L26
+                "SRR20077288": {"label": "Cravener et al control strain L26 (Rep 1, HapA)", "bucket": "control", "group": "L26"},
+                "SRR20077287": {"label": "Cravener et al control strain L26 (Rep 2, HapA)", "bucket": "control", "group": "L26"},
+                "SRR20077286": {"label": "Cravener et al control strain L26 (Rep 3, HapA)", "bucket": "control", "group": "L26"},
+                "SRR20077257": {"label": "Cravener et al efg1 strain L26 (Rep 1, HapA)", "bucket": "basic_biology", "group": "L26"},
+                "SRR20077256": {"label": "Cravener et al efg1 strain L26 (Rep 2, HapA)", "bucket": "basic_biology", "group": "L26"},
+                "SRR20077255": {"label": "Cravener et al efg1 strain L26 (Rep 3, HapA)", "bucket": "basic_biology", "group": "L26"},
+                # strain P37005
+                "SRR20077302": {"label": "Cravener et al control strain P37005 (Rep 1, HapA)", "bucket": "control", "group": "P37005"},
+                "SRR20077301": {"label": "Cravener et al control strain P37005 (Rep 2, HapA)", "bucket": "control", "group": "P37005"},
+                "SRR20077300": {"label": "Cravener et al control strain P37005 (Rep 3, HapA)", "bucket": "control", "group": "P37005"},
+                "SRR20077296": {"label": "Cravener et al efg1 strain P37005 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P37005"},
+                "SRR20077271": {"label": "Cravener et al efg1 strain P37005 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P37005"},
+                "SRR20077269": {"label": "Cravener et al efg1 strain P37005 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P37005"},
+                # strain P37037
+                "SRR20077299": {"label": "Cravener et al control strain P37037 (Rep 1, HapA)", "bucket": "control", "group": "P37037"},
+                "SRR20077298": {"label": "Cravener et al control strain P37037 (Rep 2, HapA)", "bucket": "control", "group": "P37037"},
+                "SRR20077297": {"label": "Cravener et al control strain P37037 (Rep 3, HapA)", "bucket": "control", "group": "P37037"},
+                "SRR20077268": {"label": "Cravener et al efg1 strain P37037 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P37037"},
+                "SRR20077267": {"label": "Cravener et al efg1 strain P37037 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P37037"},
+                "SRR20077266": {"label": "Cravener et al efg1 strain P37037 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P37037"},
+                # strain P37039
+                "SRR20077265": {"label": "Cravener et al control strain P37039 (Rep 1, HapA)", "bucket": "control", "group": "P37039"},
+                "SRR20077264": {"label": "Cravener et al control strain P37039 (Rep 2, HapA)", "bucket": "control", "group": "P37039"},
+                "SRR20077263": {"label": "Cravener et al control strain P37039 (Rep 3, HapA)", "bucket": "control", "group": "P37039"},
+                "SRR20077291": {"label": "Cravener et al efg1 strain P37039 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P37039"},
+                "SRR20077290": {"label": "Cravener et al efg1 strain P37039 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P37039"},
+                "SRR20077289": {"label": "Cravener et al efg1 strain P37039 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P37039"},
+                # strain P57055
+                "SRR20077282": {"label": "Cravener et al control strain P57055 (Rep 1, HapA)", "bucket": "control", "group": "P57055"},
+                "SRR20077281": {"label": "Cravener et al control strain P57055 (Rep 2, HapA)", "bucket": "control", "group": "P57055"},
+                "SRR20077280": {"label": "Cravener et al control strain P57055 (Rep 3, HapA)", "bucket": "control", "group": "P57055"},
+                "SRR20077276": {"label": "Cravener et al efg1 strain P57055 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P57055"},
+                "SRR20077274": {"label": "Cravener et al efg1 strain P57055 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P57055"},
+                "SRR20077273": {"label": "Cravener et al efg1 strain P57055 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P57055"},
+                # strain P57072
+                "SRR20077237": {"label": "Cravener et al control strain P57072 (Rep 1, HapA)", "bucket": "control", "group": "P57072"},
+                "SRR20077236": {"label": "Cravener et al control strain P57072 (Rep 2, HapA)", "bucket": "control", "group": "P57072"},
+                "SRR20077283": {"label": "Cravener et al control strain P57072 (Rep 3, HapA)", "bucket": "control", "group": "P57072"},
+                "SRR20077279": {"label": "Cravener et al efg1 strain P57072 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P57072"},
+                "SRR20077278": {"label": "Cravener et al efg1 strain P57072 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P57072"},
+                "SRR20077277": {"label": "Cravener et al efg1 strain P57072 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P57072"},
+                # strain P75010
+                "SRR20077251": {"label": "Cravener et al control strain P75010 (Rep 1, HapA)", "bucket": "control", "group": "P75010"},
+                "SRR20077250": {"label": "Cravener et al control strain P75010 (Rep 2, HapA)", "bucket": "control", "group": "P75010"},
+                "SRR20077248": {"label": "Cravener et al control strain P75010 (Rep 3, HapA)", "bucket": "control", "group": "P75010"},
+                "SRR20077244": {"label": "Cravener et al efg1 strain P75010 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P75010"},
+                "SRR20077243": {"label": "Cravener et al efg1 strain P75010 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P75010"},
+                "SRR20077242": {"label": "Cravener et al efg1 strain P75010 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P75010"},
+                # strain P75016
+                "SRR20077223": {"label": "Cravener et al control strain P75016 (Rep 1, HapA)", "bucket": "control", "group": "P75016"},
+                "SRR20077222": {"label": "Cravener et al control strain P75016 (Rep 2, HapA)", "bucket": "control", "group": "P75016"},
+                "SRR20077221": {"label": "Cravener et al control strain P75016 (Rep 3, HapA)", "bucket": "control", "group": "P75016"},
+                "SRR20077216": {"label": "Cravener et al efg1 strain P75016 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P75016"},
+                "SRR20077215": {"label": "Cravener et al efg1 strain P75016 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P75016"},
+                "SRR20077214": {"label": "Cravener et al efg1 strain P75016 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P75016"},
+                # strain P75063
+                "SRR20077220": {"label": "Cravener et al control strain P75063 (Rep 1, HapA)", "bucket": "control", "group": "P75063"},
+                "SRR20077219": {"label": "Cravener et al control strain P75063 (Rep 2, HapA)", "bucket": "control", "group": "P75063"},
+                "SRR20077218": {"label": "Cravener et al control strain P75063 (Rep 3, HapA)", "bucket": "control", "group": "P75063"},
+                "SRR20077213": {"label": "Cravener et al efg1 strain P75063 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P75063"},
+                "SRR20077212": {"label": "Cravener et al efg1 strain P75063 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P75063"},
+                "SRR20077211": {"label": "Cravener et al efg1 strain P75063 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P75063"},
+                # strain P76067
+                "SRR20077247": {"label": "Cravener et al control strain P76067 (Rep 1, HapA)", "bucket": "control", "group": "P76067"},
+                "SRR20077246": {"label": "Cravener et al control strain P76067 (Rep 2, HapA)", "bucket": "control", "group": "P76067"},
+                "SRR20077245": {"label": "Cravener et al control strain P76067 (Rep 3, HapA)", "bucket": "control", "group": "P76067"},
+                "SRR20077241": {"label": "Cravener et al efg1 strain P76067 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P76067"},
+                "SRR20077240": {"label": "Cravener et al efg1 strain P76067 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P76067"},
+                "SRR20077239": {"label": "Cravener et al efg1 strain P76067 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P76067"},
+                # strain P78042
+                "SRR20077233": {"label": "Cravener et al control strain P78042 (Rep 1, HapA)", "bucket": "control", "group": "P78042"},
+                "SRR20077232": {"label": "Cravener et al control strain P78042 (Rep 2, HapA)", "bucket": "control", "group": "P78042"},
+                "SRR20077231": {"label": "Cravener et al control strain P78042 (Rep 3, HapA)", "bucket": "control", "group": "P78042"},
+                "SRR20077226": {"label": "Cravener et al efg1 strain P78042 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P78042"},
+                "SRR20077225": {"label": "Cravener et al efg1 strain P78042 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P78042"},
+                "SRR20077224": {"label": "Cravener et al efg1 strain P78042 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P78042"},
+                # strain P78048
+                "SRR20077217": {"label": "Cravener et al control strain P78048 (Rep 1, HapA)", "bucket": "control", "group": "P78048"},
+                "SRR20077306": {"label": "Cravener et al control strain P78048 (Rep 2, HapA)", "bucket": "control", "group": "P78048"},
+                "SRR20077303": {"label": "Cravener et al control strain P78048 (Rep 3, HapA)", "bucket": "control", "group": "P78048"},
+                "SRR20077238": {"label": "Cravener et al efg1 strain P78048 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P78048"},
+                "SRR20077275": {"label": "Cravener et al efg1 strain P78048 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P78048"},
+                "SRR20077228": {"label": "Cravener et al efg1 strain P78048 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P78048"},
+                # strain P87
+                "SRR20077272": {"label": "Cravener et al control strain P87 (Rep 1, HapA)", "bucket": "control", "group": "P87"},
+                "SRR20077235": {"label": "Cravener et al control strain P87 (Rep 2, HapA)", "bucket": "control", "group": "P87"},
+                "SRR20077234": {"label": "Cravener et al control strain P87 (Rep 3, HapA)", "bucket": "control", "group": "P87"},
+                "SRR20077230": {"label": "Cravener et al efg1 strain P87 (Rep 1, HapA)", "bucket": "basic_biology", "group": "P87"},
+                "SRR20077229": {"label": "Cravener et al efg1 strain P87 (Rep 2, HapA)", "bucket": "basic_biology", "group": "P87"},
+                "SRR20077227": {"label": "Cravener et al efg1 strain P87 (Rep 3, HapA)", "bucket": "basic_biology", "group": "P87"},
+                # strain SC5314
+                "SRR20077307": {"label": "Cravener et al control strain SC5314 (Rep 2, HapA)", "bucket": "control", "group": "SC5314"},
+                "SRR20077270": {"label": "Cravener et al control strain SC5314 (Rep 3, HapA)", "bucket": "control", "group": "SC5314"},
+                "SRR20077295": {"label": "Cravener et al efg1 strain SC5314 (Rep 1, HapA)", "bucket": "basic_biology", "group": "SC5314"},
+                "SRR20077284": {"label": "Cravener et al efg1 strain SC5314 (Rep 2, HapA)", "bucket": "basic_biology", "group": "SC5314"},
+                "SRR20077249": {"label": "Cravener et al efg1 strain SC5314 (Rep 3, HapA)", "bucket": "basic_biology", "group": "SC5314"},
+            },
+        },
     },
     "C_auris_B8441": {
         "Shivarathri_2022": {
@@ -1488,6 +1615,97 @@ def _is_control_condition(study_info: dict, cond_id: str) -> bool:
     return cond_info.get("bucket") == "control"
 
 
+def _build_study_conditions(
+    study_info: dict,
+    study_id: str,
+    base_path,
+    chromosome: str,
+    start: int,
+    end: int,
+    organism_key: str,
+    control_values: Dict[str, float],
+    group_control_map: Dict[str, str],
+) -> Tuple[List["ExpressionCondition"], List[float]]:
+    """
+    Build the ExpressionCondition list for a single study at one locus.
+
+    Shared by the gene-expression and per-organism expression-details endpoints
+    so they stay in lockstep.
+
+    - Grouped studies (study uses per-group controls, i.e. group_control_map is
+      non-empty): INCLUDE control conditions so each group can be shown as a unit
+      (control baseline + treatment), tag every condition with its ``group`` and
+      the ``control_label`` it is compared against, and order by
+      (group, controls-first, label) so the frontend can render per-group blocks.
+    - Ungrouped studies: legacy behaviour — exclude controls and sort by fold
+      change descending; ``group``/``control_label`` stay None.
+
+    Returns (conditions, non_control_fold_changes). Only non-control fold changes
+    feed the headline summary stats / total_conditions, so adding control rows to
+    grouped studies doesn't distort those numbers.
+    """
+    is_grouped = bool(group_control_map)
+    conditions: List[ExpressionCondition] = []
+    non_control_fold_changes: List[float] = []
+
+    for cond_id, cond_info in study_info["conditions"].items():
+        is_control = _is_control_condition(study_info, cond_id)
+
+        # Ungrouped studies hide controls (baseline == 1x is uninformative there).
+        if is_control and not is_grouped:
+            continue
+
+        control_id = _get_control_for_condition(
+            study_info, cond_id, group_control_map
+        )
+        if not control_id or control_id not in control_values:
+            continue
+
+        control_value = control_values[control_id]
+
+        cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
+        cond_value = _get_expression_value(cond_path, chromosome, start, end)
+        if cond_value is None:
+            continue
+
+        fold_change, _ = _calculate_fold_change(
+            cond_value=cond_value,
+            control_value=control_value,
+            organism_key=organism_key,
+            study_id=study_id,
+            cond_id=cond_id,
+            control_id=control_id,
+        )
+
+        conditions.append(ExpressionCondition(
+            condition_id=cond_id,
+            label=cond_info["label"],
+            value=round(cond_value, 2),
+            fold_change=fold_change,
+            bucket=cond_info.get("bucket", ""),
+            group=cond_info.get("group") if is_grouped else None,
+            control_label=(
+                study_info["conditions"].get(control_id, {}).get("label", control_id)
+                if is_grouped else None
+            ),
+        ))
+
+        if not is_control:
+            non_control_fold_changes.append(fold_change)
+
+    if is_grouped:
+        # Per-group blocks: group, controls first, then by label (rep order).
+        conditions.sort(key=lambda c: (
+            c.group or "",
+            0 if c.bucket == "control" else 1,
+            c.label,
+        ))
+    else:
+        conditions.sort(key=lambda c: c.fold_change, reverse=True)
+
+    return conditions, non_control_fold_changes
+
+
 def _calculate_fold_change(
     cond_value: float,
     control_value: float,
@@ -1726,51 +1944,13 @@ def get_gene_expression(
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
-        # Process conditions
-        conditions: List[ExpressionCondition] = []
-
-        for cond_id, cond_info in study_info["conditions"].items():
-            # Skip control conditions
-            if _is_control_condition(study_info, cond_id):
-                continue
-
-            # Get the appropriate control for this condition
-            control_id = _get_control_for_condition(
-                study_info, cond_id, group_control_map
-            )
-            if not control_id or control_id not in control_values:
-                continue
-
-            control_value = control_values[control_id]
-
-            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-            cond_value = _get_expression_value(cond_path, chromosome, start, end)
-
-            if cond_value is None:
-                continue
-
-            fold_change, _ = _calculate_fold_change(
-                cond_value=cond_value,
-                control_value=control_value,
-                organism_key=organism_key,
-                study_id=study_id,
-                cond_id=cond_id,
-                control_id=control_id,
-            )
-
-            conditions.append(ExpressionCondition(
-                condition_id=cond_id,
-                label=cond_info["label"],
-                value=round(cond_value, 2),
-                fold_change=fold_change,
-                bucket=cond_info.get("bucket", "")
-            ))
-
-            all_fold_changes.append(fold_change)
-            total_conditions += 1
-
-        # Sort conditions by fold change (descending)
-        conditions.sort(key=lambda x: x.fold_change, reverse=True)
+        # Process conditions (grouped studies include controls + per-group labels)
+        conditions, study_fold_changes = _build_study_conditions(
+            study_info, study_id, base_path, chromosome, start, end,
+            organism_key, control_values, group_control_map,
+        )
+        all_fold_changes.extend(study_fold_changes)
+        total_conditions += len(study_fold_changes)
 
         if conditions:
             # For display, use the first/default control
@@ -1936,51 +2116,13 @@ def _get_expression_for_organism(
             warnings.append(f"Could not read control data for {study_id}")
             continue
 
-        # Process conditions
-        conditions: List[ExpressionCondition] = []
-
-        for cond_id, cond_info in study_info["conditions"].items():
-            # Skip control conditions
-            if _is_control_condition(study_info, cond_id):
-                continue
-
-            # Get the appropriate control for this condition
-            control_id = _get_control_for_condition(
-                study_info, cond_id, group_control_map
-            )
-            if not control_id or control_id not in control_values:
-                continue
-
-            control_value = control_values[control_id]
-
-            cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-            cond_value = _get_expression_value(cond_path, chromosome, start, end)
-
-            if cond_value is None:
-                continue
-
-            fold_change, _ = _calculate_fold_change(
-                cond_value=cond_value,
-                control_value=control_value,
-                organism_key=hts_key,
-                study_id=study_id,
-                cond_id=cond_id,
-                control_id=control_id,
-            )
-
-            conditions.append(ExpressionCondition(
-                condition_id=cond_id,
-                label=cond_info["label"],
-                value=round(cond_value, 2),
-                fold_change=fold_change,
-                bucket=cond_info.get("bucket", "")
-            ))
-
-            all_fold_changes.append(fold_change)
-            total_conditions += 1
-
-        # Sort conditions by fold change (descending)
-        conditions.sort(key=lambda x: x.fold_change, reverse=True)
+        # Process conditions (grouped studies include controls + per-group labels)
+        conditions, study_fold_changes = _build_study_conditions(
+            study_info, study_id, base_path, chromosome, start, end,
+            hts_key, control_values, group_control_map,
+        )
+        all_fold_changes.extend(study_fold_changes)
+        total_conditions += len(study_fold_changes)
 
         if conditions:
             # For display, use the first/default control

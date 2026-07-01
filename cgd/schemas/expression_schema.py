@@ -14,6 +14,8 @@ class ExpressionCondition(BaseModel):
     value: float = Field(description="Raw expression value (mean coverage)")
     fold_change: float = Field(description="Fold change vs control")
     bucket: str = Field(description="Category: control, basic_biology, kill_candida, stress")
+    group: Optional[str] = Field(None, description="Group name for grouped studies (e.g. strain); None if ungrouped")
+    control_label: Optional[str] = Field(None, description="Label of the control this condition is compared against (per-group); None if ungrouped")
 
 
 class ExpressionStudy(BaseModel):
