@@ -217,16 +217,21 @@ def delete_go_reference(
 def get_go_annotations(
     feature_name: str,
     current_user: CurrentUser,
+    organism: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """
     Get all GO annotations for a feature.
 
     Returns annotations grouped with their references, qualifiers, and evidence.
+
+    The optional ``organism`` query parameter (an organism_abbrev) restricts the
+    feature lookup to a single organism, so gene names shared across species
+    (e.g. WOR1) resolve to the intended organism's feature.
     """
     service = GoCurationService(db)
 
-    feature = service.get_feature_by_name(feature_name)
+    feature = service.get_feature_by_name(feature_name, organism_abbrev=organism)
     if not feature:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -248,6 +253,7 @@ def create_go_annotation(
     feature_name: str,
     request: CreateAnnotationRequest,
     current_user: CurrentUser,
+    organism: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -257,10 +263,13 @@ def create_go_annotation(
     GO annotation rules.
 
     Reference can be specified via reference_no, pubmed, or dbxref_id (CGDID).
+
+    The optional ``organism`` query parameter (an organism_abbrev) restricts the
+    feature lookup to a single organism so shared gene names resolve correctly.
     """
     service = GoCurationService(db)
 
-    feature = service.get_feature_by_name(feature_name)
+    feature = service.get_feature_by_name(feature_name, organism_abbrev=organism)
     if not feature:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

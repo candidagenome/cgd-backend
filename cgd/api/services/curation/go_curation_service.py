@@ -25,6 +25,7 @@ from cgd.models.models import (
     GoQualifier,
     GoRef,
     GorefDbxref,
+    Organism,
     Reference,
     RefUnlink,
     Seq,
@@ -85,25 +86,35 @@ class GoCurationService:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_feature_by_name(self, name: str) -> Optional[Feature]:
+    def get_feature_by_name(
+        self, name: str, organism_abbrev: Optional[str] = None
+    ) -> Optional[Feature]:
         """
         Look up feature by name or gene_name.
 
-        When multiple features match (e.g., Assembly 19 and Assembly 22 versions
-        with the same gene_name), prioritize features with current sequences
-        (is_seq_current='Y') to return the active version.
+        When an organism_abbrev is provided, restrict the search to features of
+        that organism. This is essential because the same gene_name (e.g. WOR1)
+        exists across multiple organisms (C. albicans, C. tropicalis, ...); without
+        the filter the first match wins and the wrong species is returned.
+
+        When multiple features still match (e.g., Assembly 19 and Assembly 22
+        versions with the same gene_name), prioritize features with current
+        sequences (is_seq_current='Y') to return the active version.
         """
         # Get all matching features
-        features = (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == name.upper(),
-                    func.upper(Feature.gene_name) == name.upper(),
-                )
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
             )
-            .all()
         )
+
+        if organism_abbrev:
+            query = query.join(
+                Organism, Feature.organism_no == Organism.organism_no
+            ).filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
+
+        features = query.all()
 
         if not features:
             return None
