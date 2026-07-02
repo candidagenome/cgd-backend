@@ -172,7 +172,7 @@ EXPRESSION_STUDIES = {
             },
         },
         "Rai_2024": {
-            "category": "Biofilm/Gene Regulation",
+            "category": "Biofilm",
             "pmid": "38905306",
             "path_style": "new",
             "control": "ERR8278349",
@@ -244,7 +244,7 @@ EXPRESSION_STUDIES = {
             },
         },
         "Du_2015": {
-            "category": "Nutrient Response",
+            "category": "Stress Response",
             "pmid": "26350972",
             "ncbi_id": "GSE64659",
             "path_style": "direct",
@@ -421,7 +421,7 @@ EXPRESSION_STUDIES = {
             },
         },
         "Wang_2021": {
-            "category": "strain comparison",
+            "category": "Strain Comparison",
             "pmid": "33879584",
             "path_style": "direct",
             "control": "SRR11671454",
@@ -891,7 +891,7 @@ EXPRESSION_STUDIES = {
     },
     "C_parapsilosis_CDC317": {
         "Holland_2014": {
-            "category": "Biofilm/Transcription Factors",
+            "category": "Biofilm",
             "pmid": "25233198",
             "path_style": "old_direct",  # old style without HapA subdirectory
             "control": "wt_plnk_1",
@@ -923,7 +923,7 @@ EXPRESSION_STUDIES = {
             },
         },
         "Connolly_2013": {
-            "category": "Colony Morphology",
+            "category": "Morphology",
             "pmid": "23895281",
             "path_style": "direct",
             "control": "SRR575493",
