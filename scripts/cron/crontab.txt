@@ -201,11 +201,6 @@
 # Contains gene product metadata: IDs, symbols, names, synonyms, taxon
 0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
 
-# Regenerate External_id_mappings download files for all species
-# gp2protein (CGD->UniProtKB) x6 + master, CGDID_2_GeneID, CGDID_2_RefSeqID
-# (CGDID_2_RefSeqID streams NCBI gene2refseq, ~2.3 GB, on each run)
-0 14 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
-
 # Dump genome annotations in GFF3 format for all species
 # Used for genome browsers and bioinformatics pipelines
 0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh
@@ -271,3 +266,9 @@
 #   - orf2locus.table: ORF to gene name mapping
 #   - locus2orf.table: Gene name to ORF mapping
 0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh
+
+# Regenerate External_id_mappings download files for all species:
+#   - gp2protein (CGD->UniProtKB) x6 + master gp2protein.cgd
+#   - CGDID_2_GeneID.tab, CGDID_2_RefSeqID.tab
+# CGDID_2_RefSeqID streams NCBI gene2refseq (~2.3 GB) on each run.
+0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh

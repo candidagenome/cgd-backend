@@ -36,6 +36,8 @@
 0 11 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
 0 12 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
 0 13 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
+
+# MONTHLY (1st of the month)
 # Regenerate External_id_mappings download files (gp2protein x6 + master,
 # CGDID_2_GeneID, CGDID_2_RefSeqID; RefSeq streams NCBI gene2refseq ~2.3 GB)
-0 14 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
+0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
