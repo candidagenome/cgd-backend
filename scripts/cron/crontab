@@ -31,6 +31,7 @@
 0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh        # Validate ORF sequences (start/stop codons)
 0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh                 # Load new PubMed references
 0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh                    # Generate GPI files for GO Consortium
+0 14 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh  # Regenerate External_id_mappings (gp2protein, CGDID_2_GeneID/RefSeqID)
 0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh                    # Dump GFF3 format annotations
 0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh                    # Dump GTF format annotations
 0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh   # Dump chromosomal feature tables
