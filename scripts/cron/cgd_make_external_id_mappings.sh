@@ -40,7 +40,9 @@ run_step() {
     shift
     echo ""
     echo "Running $label..."
-    if ! python3 "$@" 2>&1 | grep -v "^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}.*-" | grep -v "^$"; then
+    # Check python's own exit status directly (do not pipe into grep, whose exit
+    # status would mask python's and misreport success as failure).
+    if ! python3 "$@" 2>&1; then
         echo "ERROR: $label failed"
         errors=$((errors + 1))
     fi
