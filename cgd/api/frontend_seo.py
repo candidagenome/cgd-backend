@@ -126,6 +126,7 @@ def _seo_head(seo: LocusSeo) -> str:
         "isPartOf": {
             "@type": "Dataset",
             "name": DEFAULT_SITE_TITLE,
+            "description": "Curated genomic, gene, protein, phenotype, literature, and sequence data for Candida species.",
             "url": CANONICAL_ORIGIN,
         },
     }
