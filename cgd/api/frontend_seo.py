@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 DEFAULT_SITE_TITLE = "Candida Genome Database"
+LOCUS_TITLE_SUFFIX = "CGD"
 CANONICAL_ORIGIN = "https://www.candidagenome.org"
 FRONTEND_DIST_DIR = Path(os.getenv("FRONTEND_DIST_DIR", "/opt/cgd_frontend/dist"))
 
@@ -105,7 +106,7 @@ def build_locus_seo(name: str, locus_data: Any) -> LocusSeo | None:
     )
 
     return LocusSeo(
-        title=f"{display_name} | {DEFAULT_SITE_TITLE}",
+        title=f"{display_name} | {LOCUS_TITLE_SUFFIX}",
         description=description,
         canonical_url=f"{CANONICAL_ORIGIN}/locus/{quote(name, safe='')}",
         display_name=display_name,
