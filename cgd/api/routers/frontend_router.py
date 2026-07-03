@@ -10,7 +10,12 @@ from cgd.db.deps import get_db
 router = APIRouter(tags=["frontend"])
 
 
-@router.get("/locus/{name}", response_class=HTMLResponse, include_in_schema=False)
+@router.api_route(
+    "/locus/{name}",
+    methods=["GET", "HEAD"],
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
 def locus_page(name: str, db: Session = Depends(get_db)):
     """
     Serve the SPA shell for locus pages with source-visible SEO metadata.
