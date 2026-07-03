@@ -15,6 +15,7 @@ from cgd.auth import auth_router
 
 # Import routers (routers should NOT call app.include_router() themselves)
 from cgd.api.routers.health_router import router as health_router
+from cgd.api.routers.frontend_router import router as frontend_router
 from cgd.api.routers.locus_router import router as locus_router
 from cgd.api.routers.reference_router import router as reference_router
 from cgd.api.routers.chromosome_router import router as chromosome_router
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
     # Routers
     app.include_router(auth_router)
     app.include_router(health_router)
+    app.include_router(frontend_router)
     app.include_router(locus_router)
     app.include_router(reference_router)
     app.include_router(chromosome_router)
@@ -174,5 +176,4 @@ def create_app() -> FastAPI:
 
 # Uvicorn entrypoint: uvicorn cgd.main:app --reload
 app = create_app()
-
 
