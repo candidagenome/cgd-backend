@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 DEFAULT_SITE_TITLE = "Candida Genome Database"
-LOCUS_TITLE_SUFFIX = "CGD"
+LOCUS_TITLE_SUFFIX = "Candida Genome Database (CGD)"
 CANONICAL_ORIGIN = "https://www.candidagenome.org"
 FRONTEND_DIST_DIR = Path(os.getenv("FRONTEND_DIST_DIR", "/opt/cgd_frontend/dist"))
 

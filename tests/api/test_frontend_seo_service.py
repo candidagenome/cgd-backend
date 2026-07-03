@@ -24,7 +24,7 @@ def test_build_locus_seo_uses_query_organism_feature():
 
     seo = build_locus_seo("ACT1", locus_data)
 
-    assert seo.title == "ACT1 | CGD"
+    assert seo.title == "ACT1 | Candida Genome Database (CGD)"
     assert seo.canonical_url == "https://www.candidagenome.org/locus/ACT1"
     assert "C1_13700W_A" in seo.description
     assert "Candida albicans SC5314" in seo.description
@@ -62,7 +62,7 @@ def test_inject_locus_seo_replaces_default_tags_and_adds_noscript():
 
     rendered = inject_locus_seo(html, seo)
 
-    assert "<title>ACT1 | CGD</title>" in rendered
+    assert "<title>ACT1 | Candida Genome Database (CGD)</title>" in rendered
     assert 'content="Default"' not in rendered
     assert 'href="https://www.candidagenome.org/locus/ACT1"' in rendered
     assert '<noscript id="seo-locus-summary">' in rendered
