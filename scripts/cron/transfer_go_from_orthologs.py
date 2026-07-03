@@ -397,6 +397,14 @@ def main() -> int:
             ref_no = resolve_reference_no(session)
             logger.info("Ortholog reference %s = reference_no %d", ORTHOLOG_REF_DBXREF, ref_no)
 
+            # Delete the script-owned intra-CGD transfers FIRST (within this
+            # transaction) so the recompute below does not see them as
+            # pre-existing IEAs and skip them -- makes the replace idempotent.
+            # In --dry-run the delete is rolled back at the end.
+            deleted = delete_owned_transfers(session)
+            logger.info("%s %d existing intra-CGD transfer annotations",
+                        "Would delete" if args.dry_run else "Deleted", deleted)
+
             transfers, src_ev = build_transfers(session)
             logger.info("Transfers to apply: %d annotations across %d target genes",
                         len(transfers), len({t for t, _ in transfers}))
@@ -404,10 +412,6 @@ def main() -> int:
             if args.report:
                 n = write_report(session, transfers, src_ev, args.report)
                 logger.info("Wrote report: %s (%d rows)", args.report, n)
-
-            deleted = delete_owned_transfers(session)
-            logger.info("%s %d existing intra-CGD transfer annotations",
-                        "Would delete" if args.dry_run else "Deleted", deleted)
 
             if args.dry_run:
                 # still compute insert stats without writing
