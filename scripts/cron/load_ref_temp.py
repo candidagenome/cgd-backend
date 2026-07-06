@@ -4,9 +4,12 @@ from __future__ import annotations
 """
 Load recent PubMed references into ref_temp table.
 
-This script searches PubMed for recent papers (past week) containing
+This script searches PubMed for recently indexed papers containing
 species-specific terms and loads them into the ref_temp table for
-curator review. It excludes papers already in reference or ref_bad tables.
+curator review. Recency is measured by Entrez date (edat, i.e. when the
+record became searchable in PubMed) rather than publication date (pdat),
+because a paper's pdat can precede its appearance in PubMed by weeks. It
+excludes papers already in reference or ref_bad tables.
 
 Based on loadRefTemp.pl by Stan Dong (Feb 2006)
 
@@ -52,8 +55,9 @@ NCBI_EMAIL = os.getenv("NCBI_EMAIL", "admin@candidagenome.org")
 NCBI_API_KEY = os.getenv("NCBI_API_KEY")
 ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 
-# How many days back to search
-RELDATE = 10
+# How many days back to search. Kept comfortably larger than the weekly cron
+# interval so a skipped/failed run does not permanently drop papers.
+RELDATE = 21
 
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
@@ -136,10 +140,12 @@ def get_fulltext_url(pmid: int) -> str | None:
 class RefTempLoader:
     """Load recent PubMed references into ref_temp table."""
 
-    def __init__(self, session, species_query: str, exclude_list: list[str] | None = None):
+    def __init__(self, session, species_query: str, exclude_list: list[str] | None = None,
+                 reldate: int = RELDATE):
         self.session = session
         self.species_query = species_query
         self.exclude_list = exclude_list or []
+        self.reldate = reldate
 
         # Counters
         self.insert_count = 0
@@ -180,8 +186,8 @@ class RefTempLoader:
             handle = Entrez.esearch(
                 db="pubmed",
                 term=query,
-                reldate=RELDATE,
-                datetype="pdat",
+                reldate=self.reldate,
+                datetype="edat",
                 usehistory="y",
                 retmax=10000
             )
@@ -323,13 +329,16 @@ class RefTempLoader:
         }
 
 
-def load_ref_temp(species_query: str, exclude_list: list[str] | None = None) -> bool:
+def load_ref_temp(species_query: str, exclude_list: list[str] | None = None,
+                  reldate: int = RELDATE) -> bool:
     """
     Main function to load recent PubMed references.
 
     Args:
         species_query: Species query string for PubMed
         exclude_list: List of terms to exclude from search
+        reldate: How many days back to search (by Entrez date). Defaults to
+            the weekly-cron value; override for a one-time wider backfill.
 
     Returns:
         True on success, False on failure
@@ -351,7 +360,7 @@ def load_ref_temp(species_query: str, exclude_list: list[str] | None = None) -> 
 
     try:
         with SessionLocal() as session:
-            loader = RefTempLoader(session, species_query, exclude_list)
+            loader = RefTempLoader(session, species_query, exclude_list, reldate)
             results = loader.run()
 
             logger.info(f"\nSuccess count: {results['success']}")
@@ -380,6 +389,15 @@ def main() -> int:
         "--exclude",
         help="Comma-separated list of terms to exclude",
     )
+    parser.add_argument(
+        "--reldate",
+        type=int,
+        default=RELDATE,
+        help=(
+            "How many days back to search by Entrez date "
+            f"(default: {RELDATE}). Use a larger value for a one-time backfill."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -387,7 +405,7 @@ def main() -> int:
     if args.exclude:
         exclude_list = [x.strip() for x in args.exclude.split(",")]
 
-    success = load_ref_temp(args.query, exclude_list)
+    success = load_ref_temp(args.query, exclude_list, args.reldate)
     return 0 if success else 1
 
 
