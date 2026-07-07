@@ -307,7 +307,6 @@ class FeatureMergeService:
         orf_entry = self._reversion_feature(
             survivor, surv_loc, new_start, new_stop, strand,
             new_genomic, now, creator, use_table_12,
-            regenerate_protein=survivor.feature_type in CODING_FEATURE_TYPES,
         )
         extended.append(orf_entry)
 
@@ -317,7 +316,6 @@ class FeatureMergeService:
             child_entry = self._reversion_feature(
                 child, child_loc, new_start, new_stop, strand,
                 child_genomic, now, creator, use_table_12,
-                regenerate_protein=child.feature_type in CODING_FEATURE_TYPES,
             )
             extended.append(child_entry)
 
@@ -402,9 +400,13 @@ class FeatureMergeService:
     # ------------------------------------------------------------------
     def _reversion_feature(
         self, feature, loc, new_start, new_stop, strand,
-        new_genomic, now, creator, use_table_12, regenerate_protein,
+        new_genomic, now, creator, use_table_12,
     ) -> dict:
-        """Version a feature's genomic (+protein) seq and its feat_location."""
+        """Version a feature's genomic (+protein) seq and its feat_location.
+
+        Protein is regenerated whenever the feature already has a current protein
+        sequence (true for both ORF and allele features, false for CDS children),
+        rather than keying off feature_type."""
         entry = {
             "feature_no": feature.feature_no,
             "feature_name": feature.feature_name,
@@ -451,16 +453,15 @@ class FeatureMergeService:
         self.db.flush()
         entry["new_feat_location_no"] = new_loc.feat_location_no
 
-        if regenerate_protein:
+        cur_prot = self._current_seq(feature.feature_no, "protein")
+        if cur_prot is not None:
             protein = translate_dna(
                 new_genomic, codon_table=(CODON_TABLE_12 if use_table_12 else CODON_TABLE)
             )
             entry["internal_stops"] = protein.rstrip("*").count("*")
             if protein.endswith("*"):
                 protein = protein[:-1]
-            cur_prot = self._current_seq(feature.feature_no, "protein")
-            if cur_prot:
-                cur_prot.is_seq_current = "N"
+            cur_prot.is_seq_current = "N"
             new_pseq = Seq(
                 feature_no=feature.feature_no,
                 seq_version=now,
