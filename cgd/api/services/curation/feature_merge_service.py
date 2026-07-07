@@ -213,7 +213,9 @@ class FeatureMergeService:
         """
         reference_nos = reference_nos or []
         creator = (curator_userid or "")[:12]
-        if not note_text or not note_text.strip():
+        note_text_clean = (note_text or "").strip()
+        # A note is required to commit, but a dry-run preview may omit it.
+        if not dry_run and not note_text_clean:
             raise FeatureMergeError("A note describing the merge is required.")
 
         survivor = self._load_feature(survivor_name)
@@ -339,20 +341,23 @@ class FeatureMergeService:
             retired_summary.append(self._soft_retire_feature(feat))
         dropped_annotations = self._drop_remaining_annotations(retire.feature_no)
 
-        # 5. Note (+ references), linked to the survivor feature.
-        note_text_clean = note_text.strip()
-        note = (
-            self.db.query(Note)
-            .filter(Note.note_type == NOTE_TYPE, Note.note == note_text_clean)
-            .first()
-        )
-        if note is None:
-            note = Note(note=note_text_clean, note_type=NOTE_TYPE, created_by=creator)
-            self.db.add(note)
-            self.db.flush()
-        self._ensure_note_link(note.note_no, "FEATURE", survivor.feature_no, creator)
-        for ref_no in reference_nos:
-            self._ensure_ref_link(ref_no, note.note_no, creator)
+        # 5. Note (+ references), linked to the survivor feature. Skipped when a
+        #    dry-run preview supplies no note text.
+        note_no = None
+        if note_text_clean:
+            note = (
+                self.db.query(Note)
+                .filter(Note.note_type == NOTE_TYPE, Note.note == note_text_clean)
+                .first()
+            )
+            if note is None:
+                note = Note(note=note_text_clean, note_type=NOTE_TYPE, created_by=creator)
+                self.db.add(note)
+                self.db.flush()
+            self._ensure_note_link(note.note_no, "FEATURE", survivor.feature_no, creator)
+            for ref_no in reference_nos:
+                self._ensure_ref_link(ref_no, note.note_no, creator)
+            note_no = note.note_no
 
         plan = {
             "survivor": {
@@ -373,7 +378,7 @@ class FeatureMergeService:
             "identifiers_preserved": preserved,
             "features_retired": retired_summary,
             "redundant_annotations_dropped": dropped_annotations,
-            "note_no": note.note_no,
+            "note_no": note_no,
             "reference_nos": reference_nos,
             "dry_run": dry_run,
         }
