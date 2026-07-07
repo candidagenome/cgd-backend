@@ -127,7 +127,28 @@ class PhenotypeCurationService:
             )
             return feature
 
-        # Multiple features found - prioritize features with current sequences
+        # If the name is ambiguous ACROSS organisms and no organism was
+        # specified, refuse to guess. Silently picking one species corrupts
+        # data: e.g. "MCU1" exists in both C. albicans and C. auris, and the
+        # Assembly-22 naming heuristic below would attach the annotation to the
+        # C. albicans feature. Require the caller to disambiguate by organism.
+        if not organism_abbrev:
+            distinct_org_nos = {f.organism_no for f in features}
+            if len(distinct_org_nos) > 1:
+                org_abbrevs = sorted(
+                    abbrev
+                    for (abbrev,) in self.db.query(Organism.organism_abbrev)
+                    .filter(Organism.organism_no.in_(distinct_org_nos))
+                    .all()
+                )
+                raise PhenotypeCurationError(
+                    f"Gene/feature name '{name}' is ambiguous across multiple "
+                    f"organisms ({', '.join(org_abbrevs)}). "
+                    "Please specify the organism."
+                )
+
+        # Multiple features found within a single organism - prioritize
+        # features with current sequences
         # This handles cases like ADH1 where both orf19.3997 (Assembly 19) and
         # C5_05050W_A (Assembly 22) exist with the same gene_name
         features_with_current_seq = []

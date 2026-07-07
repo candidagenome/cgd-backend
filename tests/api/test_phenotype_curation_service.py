@@ -169,6 +169,9 @@ class MockQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def join(self, *args, **kwargs):
+        return self
+
     def order_by(self, *args, **kwargs):
         return self
 
@@ -250,6 +253,46 @@ class TestGetFeatureByName:
         result = service.get_feature_by_name("UNKNOWN")
 
         assert result is None
+
+    def test_raises_when_ambiguous_across_organisms(self, mock_db):
+        """A name shared across organisms with no organism must raise, not guess.
+
+        Regression: "MCU1" exists in both C. albicans (C1_13520C_A) and
+        C. auris (B9J08_000481); the old Assembly-22 naming heuristic silently
+        returned the C. albicans feature, attaching annotations to the wrong
+        species.
+        """
+        feat_albicans = MockFeature(133269, "C1_13520C_A", "MCU1")
+        feat_albicans.organism_no = 3
+        feat_auris = MockFeature(160476, "B9J08_000481", "MCU1")
+        feat_auris.organism_no = 11
+
+        # First query returns the matching features; the second resolves the
+        # ambiguous organism abbreviations for the error message.
+        mock_db.query.side_effect = [
+            MockQuery([feat_albicans, feat_auris]),
+            MockQuery([("C_albicans_SC5314",), ("C_auris_B8441",)]),
+        ]
+
+        service = PhenotypeCurationService(mock_db)
+        with pytest.raises(PhenotypeCurationError) as exc_info:
+            service.get_feature_by_name("MCU1")
+
+        message = str(exc_info.value)
+        assert "ambiguous" in message.lower()
+        assert "C_auris_B8441" in message
+
+    def test_ambiguous_name_resolves_when_organism_given(self, mock_db):
+        """Providing organism disambiguates a cross-organism name."""
+        feat_auris = MockFeature(160476, "B9J08_000481", "MCU1")
+        feat_auris.organism_no = 11
+        mock_db.query.return_value = MockQuery([feat_auris])
+
+        service = PhenotypeCurationService(mock_db)
+        result = service.get_feature_by_name("MCU1", "C_auris_B8441")
+
+        assert result is not None
+        assert result.feature_no == 160476
 
 
 class TestValidateReference:
