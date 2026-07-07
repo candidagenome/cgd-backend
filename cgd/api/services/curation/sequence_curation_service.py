@@ -17,9 +17,12 @@ from cgd.models.models import (
     FeatLocation,
     Seq,
     Note,
+    NoteLink,
     RefLink,
     Reference,
     Dbxref,
+    Organism,
+    SeqChangeArchive,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,81 @@ logger = logging.getLogger(__name__)
 # Constants
 NOTE_TYPE = "Sequence change"
 SOURCE = "CGD"
+
+# Feature types whose protein sequence is regenerated after a root-sequence edit.
+CODING_FEATURE_TYPES = {"ORF", "pseudogene"}
+
+# Organisms that use translation table 12 (CTG -> Ser). Mirrors
+# locus_service.TRANSLATION_TABLE_12_ORGANISMS; kept local to avoid importing
+# the heavy locus_service module here.
+TRANSLATION_TABLE_12_ORGANISMS = {
+    "Candida albicans",
+    "Candida albicans SC5314",
+    "Candida dubliniensis",
+    "Candida dubliniensis CD36",
+    "Candida tropicalis",
+    "Candida tropicalis MYA-3404",
+    "Candida parapsilosis",
+    "Candida parapsilosis CDC317",
+    "Lodderomyces elongisporus",
+    "Lodderomyces elongisporus NRRL YB-4239",
+    "Candida auris",
+}
+
+# Standard genetic code (kept local; the shared cgd.utils.sequence module is not
+# imported here because its package __init__ is not Python 3.9 compatible).
+CODON_TABLE = {
+    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+    "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
+    "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
+    "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
+    "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
+    "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
+    "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
+    "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
+    "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
+    "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
+    "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
+    "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
+    "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
+    "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
+    "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
+    "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
+}
+
+# Standard code with the table-12 CTG -> Ser reassignment.
+CODON_TABLE_12 = {**CODON_TABLE, "CTG": "S"}
+
+_COMPLEMENT = {
+    "A": "T", "T": "A", "G": "C", "C": "G", "N": "N",
+    "R": "Y", "Y": "R", "M": "K", "K": "M", "S": "S", "W": "W",
+    "B": "V", "V": "B", "D": "H", "H": "D",
+}
+
+
+def reverse_complement(seq: str) -> str:
+    return "".join(_COMPLEMENT.get(b, b) for b in reversed(seq.upper()))
+
+
+def extract_subsequence(seq: str, start: int, stop: int, strand: str) -> str:
+    """Extract 1-based inclusive coords; reverse-complement for Crick strand."""
+    lo, hi = (start, stop) if start <= stop else (stop, start)
+    subseq = seq[lo - 1:hi]
+    if str(strand).upper() in ("C", "-"):
+        subseq = reverse_complement(subseq)
+    return subseq
+
+
+def translate_dna(dna_seq: str, codon_table: dict) -> str:
+    dna_seq = dna_seq.upper()
+    return "".join(
+        codon_table.get(dna_seq[i:i + 3], "X")
+        for i in range(0, len(dna_seq) - 2, 3)
+    )
+
+
+class SequenceCurationError(Exception):
+    """Raised when a sequence-curation apply operation is invalid or fails."""
 
 
 class SequenceCurationService:
@@ -421,3 +499,325 @@ class SequenceCurationService:
             }
             for f, loc in results
         ]
+
+    # ------------------------------------------------------------------
+    # Commit path (ported from legacy UpdateRootSequence.pm / RootSequence.pm)
+    #
+    # v1 scope: equal-length SUBSTITUTIONS only. Because no base is added or
+    # removed, every feature keeps its coordinates and only needs its
+    # feat_location re-pointed to the new root-sequence version; the coordinate
+    # propagation machinery of the legacy tool (for insertions/deletions) is
+    # intentionally not reproduced here.
+    # ------------------------------------------------------------------
+    def apply_changes(
+        self,
+        feature_name: str,
+        changes: list[dict],
+        note_text: str,
+        curator_userid: str,
+        reference_nos: Optional[list[int]] = None,
+        dry_run: bool = True,
+    ) -> dict:
+        """
+        Apply equal-length substitution edits to a root (chromosome/contig)
+        sequence, following the legacy UpdateRootSequence semantics.
+
+        Steps (single transaction):
+          1. Validate every change is an equal-length substitution.
+          2. Verify the current residues at each window match what the caller
+             believes is there (guards against a stale preview).
+          3. Insert a new current SEQ version with corrected residues and
+             deprecate the old one.
+          4. Re-point every current feat_location on the old root_seq to the
+             new SEQ (and the root feature's own seq_no).
+          5. Regenerate genomic (and protein, for coding features) sequences
+             for any feature whose residues actually changed.
+          6. Record seq_change_archive rows + a note (+ optional references).
+
+        With dry_run=True the transaction is rolled back and a plan is returned.
+        """
+        reference_nos = reference_nos or []
+        creator = (curator_userid or "")[:12]
+
+        # --- 1. validate scope ---
+        if not changes:
+            raise SequenceCurationError("No changes supplied.")
+        subs = []
+        for c in changes:
+            if c.get("type") != "substitution":
+                raise SequenceCurationError(
+                    "This tool currently supports substitution changes only "
+                    "(equal length). Insertions/deletions are not yet enabled."
+                )
+            start = int(c["start"])
+            end = int(c["end"])
+            new_frag = (c.get("sequence") or "").upper()
+            if end < start:
+                raise SequenceCurationError(
+                    f"Substitution end ({end}) is before start ({start})."
+                )
+            if len(new_frag) != (end - start + 1):
+                raise SequenceCurationError(
+                    f"Substitution at {start}-{end} changes length "
+                    f"({end - start + 1} -> {len(new_frag)}); only equal-length "
+                    "substitutions are supported."
+                )
+            subs.append({"start": start, "end": end, "new": new_frag,
+                         "expected_old": (c.get("old_sequence") or "").upper() or None})
+        if not note_text or not note_text.strip():
+            raise SequenceCurationError("A note describing the change is required.")
+
+        # --- 2. load current root sequence ---
+        row = (
+            self.db.query(Feature, Seq)
+            .join(Seq, Feature.feature_no == Seq.feature_no)
+            .filter(
+                func.upper(Feature.feature_name) == feature_name.upper(),
+                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.is_seq_current == "Y",
+            )
+            .first()
+        )
+        if not row:
+            raise SequenceCurationError(
+                f"No current genomic sequence found for '{feature_name}'."
+            )
+        chr_feature, old_seq = row
+        old_root_seq_no = old_seq.seq_no
+        old_residues = old_seq.residues
+        seq_len = len(old_residues)
+
+        # organism -> translation table selection for protein regeneration
+        organism = (
+            self.db.query(Organism)
+            .filter(Organism.organism_no == chr_feature.organism_no)
+            .first()
+        )
+        use_table_12 = bool(organism and organism.organism_name in TRANSLATION_TABLE_12_ORGANISMS)
+
+        # --- verify + compute new residues ---
+        new_residues = old_residues
+        archive_specs = []
+        for s in subs:
+            cur_old = old_residues[s["start"] - 1:s["end"]].upper()
+            if s["expected_old"] and s["expected_old"] != cur_old:
+                raise SequenceCurationError(
+                    f"Current residues at {s['start']}-{s['end']} are '{cur_old}', "
+                    f"but the preview expected '{s['expected_old']}'. The reference "
+                    "may have changed; re-run the preview."
+                )
+            new_residues = new_residues[:s["start"] - 1] + s["new"] + new_residues[s["end"]:]
+            archive_specs.append({"start": s["start"], "end": s["end"],
+                                  "old": cur_old, "new": s["new"]})
+        if len(new_residues) != seq_len:
+            raise SequenceCurationError(
+                "Internal error: corrected sequence length changed; aborting."
+            )
+        if new_residues == old_residues:
+            raise SequenceCurationError("The edits produce no change to the sequence.")
+
+        min_pos = min(s["start"] for s in subs)
+        max_pos = max(s["end"] for s in subs)
+
+        # --- features overlapping the edited window (residues may change) ---
+        overlap_rows = (
+            self.db.query(Feature, FeatLocation)
+            .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+            .filter(
+                FeatLocation.root_seq_no == old_root_seq_no,
+                FeatLocation.is_loc_current == "Y",
+                func.least(FeatLocation.start_coord, FeatLocation.stop_coord) <= max_pos,
+                func.greatest(FeatLocation.start_coord, FeatLocation.stop_coord) >= min_pos,
+                Feature.feature_no != chr_feature.feature_no,
+            )
+            .all()
+        )
+
+        # ================= writes =================
+        now = datetime.now()
+
+        # 3. insert new current root SEQ, deprecate old
+        new_root_seq = Seq(
+            feature_no=chr_feature.feature_no,
+            seq_version=now,
+            seq_type="genomic",
+            genome_version_no=old_seq.genome_version_no,
+            is_seq_current="Y",
+            seq_length=seq_len,
+            residues=new_residues,
+            source=old_seq.source,
+            created_by=creator,
+        )
+        self.db.add(new_root_seq)
+        self.db.flush()
+        new_root_seq_no = new_root_seq.seq_no
+
+        old_seq.is_seq_current = "N"
+
+        # 4. re-point all current feat_locations on this root to the new SEQ
+        repointed = (
+            self.db.query(FeatLocation)
+            .filter(
+                FeatLocation.root_seq_no == old_root_seq_no,
+                FeatLocation.is_loc_current == "Y",
+            )
+            .update({FeatLocation.root_seq_no: new_root_seq_no},
+                    synchronize_session=False)
+        )
+        # the root feature's own feat_location.seq_no also points at the root SEQ
+        self.db.query(FeatLocation).filter(
+            FeatLocation.feature_no == chr_feature.feature_no,
+            FeatLocation.is_loc_current == "Y",
+        ).update({FeatLocation.seq_no: new_root_seq_no}, synchronize_session=False)
+
+        # 5. regenerate genomic/protein for features whose residues changed
+        regenerated = self._regenerate_feature_sequences(
+            overlap_rows, old_residues, new_residues, now, creator, use_table_12
+        )
+
+        # 6. seq_change_archive + note (+ references)
+        note = Note(note=note_text.strip(), note_type=NOTE_TYPE, created_by=creator)
+        self.db.add(note)
+        self.db.flush()
+        for spec in archive_specs:
+            arch = SeqChangeArchive(
+                seq_no=old_root_seq_no,
+                seq_change_type="Substitution",
+                change_start_coord=spec["start"],
+                change_stop_coord=spec["end"],
+                old_seq=spec["old"],
+                new_seq=spec["new"],
+                created_by=creator,
+            )
+            self.db.add(arch)
+            self.db.flush()
+            self.db.add(NoteLink(
+                note_no=note.note_no,
+                tab_name="SEQ_CHANGE_ARCHIVE",
+                primary_key=arch.seq_change_archive_no,
+                created_by=creator,
+            ))
+        for ref_no in reference_nos:
+            self.db.add(RefLink(
+                reference_no=ref_no,
+                tab_name="NOTE",
+                col_name="NOTE_NO",
+                primary_key=note.note_no,
+                created_by=creator,
+            ))
+
+        plan = {
+            "feature_name": chr_feature.feature_name,
+            "feature_no": chr_feature.feature_no,
+            "old_root_seq_no": old_root_seq_no,
+            "new_root_seq_no": new_root_seq_no,
+            "seq_length": seq_len,
+            "substitutions": archive_specs,
+            "feat_locations_repointed": repointed,
+            "features_regenerated": regenerated,
+            "note_no": note.note_no,
+            "reference_nos": reference_nos,
+            "dry_run": dry_run,
+        }
+
+        if dry_run:
+            self.db.rollback()
+            logger.info("apply_changes dry-run rolled back for %s", feature_name)
+        else:
+            self.db.commit()
+            logger.info(
+                "apply_changes committed for %s: new_root_seq_no=%s, %d feat_locations re-pointed, %d features regenerated",
+                feature_name, new_root_seq_no, repointed, len(regenerated),
+            )
+        return plan
+
+    def _regenerate_feature_sequences(
+        self, overlap_rows, old_residues, new_residues, now, creator, use_table_12,
+    ) -> list[dict]:
+        """Regenerate genomic (+protein) SEQ for features whose residues changed."""
+        regenerated = []
+        for feature, loc in overlap_rows:
+            new_genomic = extract_subsequence(
+                new_residues, loc.start_coord, loc.stop_coord, loc.strand
+            )
+            cur_genomic_seq = (
+                self.db.query(Seq)
+                .filter(
+                    Seq.feature_no == feature.feature_no,
+                    func.upper(Seq.seq_type) == "GENOMIC",
+                    Seq.is_seq_current == "Y",
+                )
+                .first()
+            )
+            # No residue change for this feature -> nothing to regenerate.
+            if cur_genomic_seq and cur_genomic_seq.residues == new_genomic:
+                continue
+
+            # new genomic version
+            if cur_genomic_seq:
+                cur_genomic_seq.is_seq_current = "N"
+            new_gseq = Seq(
+                feature_no=feature.feature_no,
+                seq_version=now,
+                seq_type="genomic",
+                genome_version_no=(cur_genomic_seq.genome_version_no
+                                   if cur_genomic_seq else None),
+                is_seq_current="Y",
+                seq_length=len(new_genomic),
+                residues=new_genomic,
+                source=(cur_genomic_seq.source if cur_genomic_seq else None),
+                created_by=creator,
+            )
+            self.db.add(new_gseq)
+            self.db.flush()
+            # point this feature's current feat_location at the new genomic seq
+            self.db.query(FeatLocation).filter(
+                FeatLocation.feature_no == feature.feature_no,
+                FeatLocation.is_loc_current == "Y",
+            ).update({FeatLocation.seq_no: new_gseq.seq_no}, synchronize_session=False)
+
+            entry = {
+                "feature_no": feature.feature_no,
+                "feature_name": feature.feature_name,
+                "feature_type": feature.feature_type,
+                "new_genomic_seq_no": new_gseq.seq_no,
+                "genomic_length": len(new_genomic),
+            }
+
+            # protein for coding features
+            if feature.feature_type in CODING_FEATURE_TYPES:
+                protein = translate_dna(
+                    new_genomic, codon_table=(CODON_TABLE_12 if use_table_12 else CODON_TABLE)
+                )
+                if protein.endswith("*"):
+                    protein = protein[:-1]
+                cur_prot = (
+                    self.db.query(Seq)
+                    .filter(
+                        Seq.feature_no == feature.feature_no,
+                        func.upper(Seq.seq_type) == "PROTEIN",
+                        Seq.is_seq_current == "Y",
+                    )
+                    .first()
+                )
+                if cur_prot:
+                    cur_prot.is_seq_current = "N"
+                new_pseq = Seq(
+                    feature_no=feature.feature_no,
+                    seq_version=now,
+                    seq_type="protein",
+                    genome_version_no=(cur_prot.genome_version_no if cur_prot
+                                       else new_gseq.genome_version_no),
+                    is_seq_current="Y",
+                    seq_length=len(protein),
+                    residues=protein,
+                    source=(cur_prot.source if cur_prot else new_gseq.source),
+                    created_by=creator,
+                )
+                self.db.add(new_pseq)
+                self.db.flush()
+                entry["new_protein_seq_no"] = new_pseq.seq_no
+                entry["protein_length"] = len(protein)
+
+            regenerated.append(entry)
+        return regenerated

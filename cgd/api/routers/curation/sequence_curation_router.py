@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 
 from cgd.auth.deps import CurrentUser
 from cgd.db.deps import get_db
-from cgd.api.services.curation.sequence_curation_service import SequenceCurationService
+from cgd.api.services.curation.sequence_curation_service import (
+    SequenceCurationService,
+    SequenceCurationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +144,48 @@ class PreviewChangesResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ApplyChangesRequest(BaseModel):
+    """Request to commit sequence changes (v1: equal-length substitutions)."""
+
+    feature_name: str
+    changes: list[SequenceChange]
+    note: str = Field(..., description="Required note describing the change")
+    reference_nos: list[int] = Field(
+        default_factory=list, description="Optional CGD reference_no(s) to link to the note"
+    )
+    dry_run: bool = Field(
+        False, description="If true, perform all writes then roll back (validation only)"
+    )
+
+
+class RegeneratedFeature(BaseModel):
+    """A feature whose sequence was regenerated after the edit."""
+
+    feature_no: int
+    feature_name: str
+    feature_type: str
+    new_genomic_seq_no: int
+    genomic_length: int
+    new_protein_seq_no: Optional[int] = None
+    protein_length: Optional[int] = None
+
+
+class ApplyChangesResponse(BaseModel):
+    """Response for an applied (or dry-run) sequence change."""
+
+    feature_name: str
+    feature_no: int
+    old_root_seq_no: int
+    new_root_seq_no: int
+    seq_length: int
+    substitutions: list[dict]
+    feat_locations_repointed: int
+    features_regenerated: list[RegeneratedFeature]
+    note_no: int
+    reference_nos: list[int]
+    dry_run: bool
+
+
 class NearbyFeature(BaseModel):
     """A feature near a coordinate."""
 
@@ -259,6 +304,70 @@ def preview_changes(
         )
 
     return PreviewChangesResponse(**result)
+
+
+@router.post("/apply", response_model=ApplyChangesResponse)
+def apply_changes(
+    request: ApplyChangesRequest,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """
+    Commit sequence changes to a root (chromosome/contig) sequence.
+
+    v1 supports equal-length **substitutions** only. This inserts a new current
+    SEQ version with the corrected residues, deprecates the old one, re-points
+    every current feat_location to the new root sequence, records
+    seq_change_archive rows plus a note (and any referenced publications), and
+    regenerates genomic/protein sequences for features whose residues changed.
+
+    Requires curator authentication. Use `dry_run=true` to validate against the
+    live database and roll back without persisting.
+    """
+    # Enforce v1 scope (substitution-only) at the edge for a clear error.
+    for change in request.changes:
+        if change.type != "substitution":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This tool currently supports substitution changes only. "
+                    "Insertions/deletions are not yet enabled."
+                ),
+            )
+        if change.start is None or change.end is None or not change.sequence:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Substitution requires start, end, and sequence",
+            )
+
+    service = SequenceCurationService(db)
+    changes_dicts = [c.model_dump() for c in request.changes]
+    try:
+        result = service.apply_changes(
+            feature_name=request.feature_name,
+            changes=changes_dicts,
+            note_text=request.note,
+            curator_userid=current_user.userid,
+            reference_nos=request.reference_nos,
+            dry_run=request.dry_run,
+        )
+    except SequenceCurationError as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        db.rollback()
+        logger.exception("apply_changes failed for %s", request.feature_name)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Sequence update failed; the transaction was rolled back.",
+        )
+
+    logger.info(
+        "Sequence %s applied to %s by %s (dry_run=%s)",
+        "change" if not request.dry_run else "change (dry-run)",
+        request.feature_name, current_user.userid, request.dry_run,
+    )
+    return ApplyChangesResponse(**result)
 
 
 @router.get("/nearby-features", response_model=NearbyFeaturesResponse)
