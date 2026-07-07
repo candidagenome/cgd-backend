@@ -1039,6 +1039,47 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             features.append(feat)
             found_feature_nos.add(feat.feature_no)
 
+    # Merged-feature fallback: if every direct match is a soft-retired feature
+    # (no current location — e.g. its ORF was merged into another gene), also
+    # surface any *current* feature that now carries the searched identifier via
+    # a dbxref_feat link. This lets an old/secondary CGDID resolve to the
+    # surviving gene instead of an empty retired stub. Scoped to the retired case
+    # so normal lookups are unaffected.
+    def _has_current_location(feature_no: int) -> bool:
+        return (
+            db.query(FeatLocation.feat_location_no)
+            .filter(
+                FeatLocation.feature_no == feature_no,
+                FeatLocation.is_loc_current == 'Y',
+            )
+            .first()
+            is not None
+        )
+
+    if direct_features and not any(
+        _has_current_location(f.feature_no) for f in direct_features
+    ):
+        dbxref_features = (
+            db.query(Feature)
+            .options(
+                joinedload(Feature.organism),
+                joinedload(Feature.feat_alias).joinedload(FeatAlias.alias),
+                joinedload(Feature.feat_url).joinedload(FeatUrl.url),
+                joinedload(Feature.feat_homology).joinedload(FeatHomology.homology_group),
+            )
+            .join(DbxrefFeat, Feature.feature_no == DbxrefFeat.feature_no)
+            .join(Dbxref, DbxrefFeat.dbxref_no == Dbxref.dbxref_no)
+            .filter(func.upper(Dbxref.dbxref_id) == upper_n)
+            .filter(func.lower(Feature.feature_type) != 'allele')
+            .all()
+        )
+        for feat in dbxref_features:
+            if feat.feature_no not in found_feature_nos and _has_current_location(
+                feat.feature_no
+            ):
+                features.append(feat)
+                found_feature_nos.add(feat.feature_no)
+
     # Determine query_organism from the first direct match (the gene the user searched for)
     query_organism: str | None = None
     if direct_features:
