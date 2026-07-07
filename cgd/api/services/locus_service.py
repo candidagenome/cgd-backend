@@ -1668,7 +1668,23 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         )
         out[organism_name] = feature_out
 
-    return LocusByOrganismResponse(results=out, query_organism=query_organism)
+    # If the queried identifier's own feature is soft-retired (no current
+    # location) and it resolved to a current survivor (different feature_name),
+    # signal the canonical name so the frontend can redirect. Restricted to the
+    # retired case, so gene-name / alias lookups are never redirected.
+    canonical_feature_name = None
+    if direct_features and not any(
+        _has_current_location(f.feature_no) for f in direct_features
+    ):
+        primary = out.get(query_organism) if query_organism else None
+        if primary and primary.feature_name and primary.feature_name.upper() != n.upper():
+            canonical_feature_name = primary.feature_name
+
+    return LocusByOrganismResponse(
+        results=out,
+        query_organism=query_organism,
+        canonical_feature_name=canonical_feature_name,
+    )
 
 
 def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:

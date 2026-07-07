@@ -169,6 +169,10 @@ class LocusByOrganismResponse(BaseModel):
     """
     results: dict[str, FeatureOut]
     query_organism: t.Optional[str] = None  # organism that the queried gene belongs to
+    # Set when the queried identifier belongs to a soft-retired feature (e.g. an
+    # ORF merged into another gene) that resolves to a current survivor; the
+    # frontend redirects to this canonical feature_name. None for normal lookups.
+    canonical_feature_name: t.Optional[str] = None
 
 
 # --- Sequence Info ---
