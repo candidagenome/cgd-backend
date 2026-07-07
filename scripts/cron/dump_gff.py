@@ -258,6 +258,12 @@ def get_features(session, organism_no: int, seq_source: str) -> list[dict]:
             'CDS', 'intron', 'noncoding_exon', 'adjustment', 'gap',
             'three_prime_UTR', 'five_prime_UTR',
             'three_prime_UTR_intron', 'five_prime_UTR_intron')
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_property dq
+            WHERE dq.feature_no = f.feature_no
+            AND dq.property_type = 'feature_qualifier'
+            AND (dq.property_value LIKE 'Deleted%' OR dq.property_value LIKE 'Merged/Split%')
+        )
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 

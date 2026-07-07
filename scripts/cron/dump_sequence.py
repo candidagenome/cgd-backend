@@ -292,6 +292,12 @@ def get_features_with_locations(
         LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE f.organism_no = :organism_no
         AND f.feature_type NOT IN ('chromosome', 'contig')
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_property dq
+            WHERE dq.feature_no = f.feature_no
+            AND dq.property_type = 'feature_qualifier'
+            AND (dq.property_value LIKE 'Deleted%' OR dq.property_value LIKE 'Merged/Split%')
+        )
         ORDER BY root_feat.feature_name, fl.start_coord
     """)
 

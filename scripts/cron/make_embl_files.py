@@ -275,7 +275,12 @@ def get_chromosome_orfs(session, chr_name: str, seq_source: str) -> list[dict]:
         LEFT JOIN {DB_SCHEMA}.feat_property fp ON (f.feature_no = fp.feature_no AND fp.property_type = 'feature_qualifier')
         WHERE root_feat.feature_name = :chr_name
         AND f.feature_type IN ('ORF', 'allele')
-        AND (fp.property_value IS NULL OR fp.property_value NOT LIKE 'Deleted%')
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_property dq
+            WHERE dq.feature_no = f.feature_no
+            AND dq.property_type = 'feature_qualifier'
+            AND (dq.property_value LIKE 'Deleted%' OR dq.property_value LIKE 'Merged/Split%')
+        )
         ORDER BY fl.start_coord
     """)
 

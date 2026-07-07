@@ -133,7 +133,7 @@ def get_orf_coordinates(
             SELECT feature_no
             FROM {DB_SCHEMA}.feat_property
             WHERE property_type = 'feature_qualifier'
-            AND property_value LIKE 'Deleted%'
+            AND (property_value LIKE 'Deleted%' OR property_value LIKE 'Merged/Split%')
         )
         AND l.is_loc_current = 'Y'
         AND s.is_seq_current = 'Y'

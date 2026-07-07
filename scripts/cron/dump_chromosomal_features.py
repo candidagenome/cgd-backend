@@ -308,6 +308,12 @@ def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
             'noncoding_exon', 'adjustment', 'gap', 'telomeric_repeat'
         )
         AND f.feature_name NOT LIKE 'orf19.%'
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_property dq
+            WHERE dq.feature_no = f.feature_no
+            AND dq.property_type = 'feature_qualifier'
+            AND (dq.property_value LIKE 'Deleted%' OR dq.property_value LIKE 'Merged/Split%')
+        )
         ORDER BY chr.feature_name, fl.start_coord, f.feature_name
     """)
 
@@ -352,6 +358,12 @@ def get_all_features(session, organism_no: int, seq_source: str) -> list[dict]:
         WHERE b.organism_no = :organism_no
         AND b.feature_type = 'allele'
         AND b.feature_name LIKE '%\\_B' ESCAPE '\\'
+        AND NOT EXISTS (
+            SELECT 1 FROM {DB_SCHEMA}.feat_property dq
+            WHERE dq.feature_no = b.feature_no
+            AND dq.property_type = 'feature_qualifier'
+            AND (dq.property_value LIKE 'Deleted%' OR dq.property_value LIKE 'Merged/Split%')
+        )
         ORDER BY chr.feature_name, fl.start_coord, b.feature_name
     """)
 
