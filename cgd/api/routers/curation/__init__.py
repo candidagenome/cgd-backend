@@ -17,6 +17,7 @@ from .litreview_curation_router import router as litreview_curation_router
 from .ref_annotation_curation_router import router as ref_annotation_curation_router
 from .db_search_router import router as db_search_router
 from .sequence_curation_router import router as sequence_curation_router
+from .feature_merge_router import router as feature_merge_router
 from .coordinate_curation_router import router as coordinate_curation_router
 from .seq_alignment_router import router as seq_alignment_router
 
@@ -38,6 +39,7 @@ __all__ = [
     "ref_annotation_curation_router",
     "db_search_router",
     "sequence_curation_router",
+    "feature_merge_router",
     "coordinate_curation_router",
     "seq_alignment_router",
 ]

@@ -65,6 +65,7 @@ from cgd.api.routers.curation import (
     ref_annotation_curation_router,
     db_search_router,
     sequence_curation_router,
+    feature_merge_router,
     coordinate_curation_router,
     seq_alignment_router,
 )
@@ -168,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(ref_annotation_curation_router)
     app.include_router(db_search_router)
     app.include_router(sequence_curation_router)
+    app.include_router(feature_merge_router)
     app.include_router(coordinate_curation_router)
     app.include_router(seq_alignment_router)
 
