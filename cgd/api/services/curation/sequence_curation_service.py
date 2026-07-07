@@ -676,9 +676,19 @@ class SequenceCurationService:
         )
 
         # 6. seq_change_archive + note (+ references)
-        note = Note(note=note_text.strip(), note_type=NOTE_TYPE, created_by=creator)
-        self.db.add(note)
-        self.db.flush()
+        # NOTE_UK is UNIQUE(note_type, note): the same curatorial note text may
+        # already exist (e.g. the identical note applied to the other haplotype).
+        # Reuse it instead of inserting a duplicate, which would violate NOTE_UK.
+        note_text_clean = note_text.strip()
+        note = (
+            self.db.query(Note)
+            .filter(Note.note_type == NOTE_TYPE, Note.note == note_text_clean)
+            .first()
+        )
+        if note is None:
+            note = Note(note=note_text_clean, note_type=NOTE_TYPE, created_by=creator)
+            self.db.add(note)
+            self.db.flush()
         for spec in archive_specs:
             arch = SeqChangeArchive(
                 seq_no=old_root_seq_no,
@@ -698,13 +708,27 @@ class SequenceCurationService:
                 created_by=creator,
             ))
         for ref_no in reference_nos:
-            self.db.add(RefLink(
-                reference_no=ref_no,
-                tab_name="NOTE",
-                col_name="NOTE_NO",
-                primary_key=note.note_no,
-                created_by=creator,
-            ))
+            # REF_LINK_UK is UNIQUE(tab_name, primary_key, reference_no, col_name):
+            # when the note is reused, its ref links may already exist, so only
+            # add ones that are missing.
+            existing_ref_link = (
+                self.db.query(RefLink)
+                .filter(
+                    RefLink.reference_no == ref_no,
+                    RefLink.tab_name == "NOTE",
+                    RefLink.col_name == "NOTE_NO",
+                    RefLink.primary_key == note.note_no,
+                )
+                .first()
+            )
+            if existing_ref_link is None:
+                self.db.add(RefLink(
+                    reference_no=ref_no,
+                    tab_name="NOTE",
+                    col_name="NOTE_NO",
+                    primary_key=note.note_no,
+                    created_by=creator,
+                ))
 
         plan = {
             "feature_name": chr_feature.feature_name,
