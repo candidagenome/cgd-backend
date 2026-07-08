@@ -227,7 +227,15 @@ def get_seq_source(session, organism_no: int) -> str | None:
 
 
 def get_genome_version(session, seq_source: str) -> str | None:
-    """Get current genome version for the sequence source."""
+    """Get current genome version for the sequence source.
+
+    A source can map to more than one current genome_version when the
+    organelle genome is versioned separately (e.g. C. auris B8441 has both
+    the nuclear 's02-m01-r12' and the mitochondrial 'mito-s01-m01-r01').
+    The whole-genome dump names its output after this version, so prefer the
+    nuclear/primary assembly version and fall back to a 'mito%' version only
+    if that is all there is.
+    """
     query = text(f"""
         SELECT gv.genome_version
         FROM {DB_SCHEMA}.genome_version gv
@@ -238,6 +246,9 @@ def get_genome_version(session, seq_source: str) -> str | None:
             WHERE s.is_seq_current = 'Y'
             AND s.source = :seq_source
         )
+        ORDER BY CASE WHEN LOWER(gv.genome_version) LIKE 'mito%' THEN 1 ELSE 0 END,
+                 gv.genome_version
+        FETCH FIRST 1 ROW ONLY
     """)
     result = session.execute(query, {"seq_source": seq_source}).fetchone()
     return result[0] if result else None
