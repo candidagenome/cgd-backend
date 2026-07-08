@@ -44,7 +44,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from cgd.db.engine import SessionLocal  # noqa: E402
 from load_domain_data import (  # noqa: E402
-    delete_existing_domain_data,
     get_organism,
     load_domain_data,
     setup_logging,
@@ -87,6 +86,31 @@ def resolve_feature_name(session, gene: str, organism) -> tuple[str, str]:
             "Pass the systematic feature name via --gene."
         )
     return rows[0][1], rows[0][2]
+
+
+def delete_existing_domains(session, organism, feature_name: str) -> int:
+    """Delete the feature's existing DOMAIN/MOTIF/STRUCTURAL REGION protein_detail rows.
+
+    Local replacement for load_domain_data.delete_existing_domain_data, whose
+    ``IN :groups`` bind does not work with the installed SQLAlchemy. The group
+    names are fixed literals here (no user input), so this is injection-safe.
+    """
+    result = session.execute(
+        text("""
+            DELETE FROM protein_detail
+            WHERE protein_detail_no IN (
+                SELECT pd.protein_detail_no
+                FROM protein_detail pd
+                JOIN protein_info pi ON pd.protein_info_no = pi.protein_info_no
+                JOIN feature f ON pi.feature_no = f.feature_no
+                WHERE f.feature_name = :feat_name
+                  AND f.organism_no = :org_no
+                  AND pd.protein_detail_group IN ('DOMAIN', 'MOTIF', 'STRUCTURAL REGION')
+            )
+        """),
+        {"feat_name": feature_name, "org_no": organism.organism_no},
+    )
+    return result.rowcount
 
 
 def main():
@@ -146,7 +170,7 @@ def main():
             # record ids, so scope everything to that single name.
             feature_list = {feature_name}
 
-            deleted = delete_existing_domain_data(session, organism, [feature_name])
+            deleted = delete_existing_domains(session, organism, feature_name)
             logger.info(f"Deleted {deleted} existing domain/motif row(s) for {feature_name}")
 
             stats = load_domain_data(
