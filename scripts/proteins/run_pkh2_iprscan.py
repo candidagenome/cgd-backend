@@ -32,10 +32,12 @@ from Bio.SeqRecord import SeqRecord
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-# Resolve imports: sibling modules (submit_iprscan) and the repo root (cgd).
+# Resolve imports: the generic protein modules live in scripts/untested/proteins/;
+# the `cgd` package lives at the repo root.
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
-sys.path.insert(0, str(SCRIPT_DIR.parent.parent.parent))
+REPO_ROOT = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "untested" / "proteins"))
+sys.path.insert(0, str(REPO_ROOT))
 
 from cgd.db.engine import SessionLocal  # noqa: E402
 from submit_iprscan import (  # noqa: E402
