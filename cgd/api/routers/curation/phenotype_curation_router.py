@@ -86,6 +86,7 @@ class FeaturePhenotypeResponse(BaseModel):
     feature_no: Optional[int] = None  # Primary feature (may be None for multi-feature)
     feature_name: str  # Search term or primary feature name
     gene_name: Optional[str] = None
+    organism_abbrev: Optional[str] = None  # Organism of the primary feature (single-feature only)
     features_searched: Optional[int] = None  # Number of features searched (for all-species)
     annotations: list[PhenotypeAnnotationOut]
 
@@ -363,10 +364,22 @@ def get_phenotype_annotations(
         # Use first feature's info for display
         primary_feature = features[0]
 
+        # Expose the resolved organism only when the name maps to a single
+        # feature, so the curator's session can disambiguate additional genes
+        # (e.g. entries typed on the "add another gene" line) that share a name
+        # across species without requiring an organism in the URL.
+        single_feature = len(features) == 1
+        organism_abbrev = (
+            primary_feature.organism.organism_abbrev
+            if single_feature and primary_feature.organism
+            else None
+        )
+
         return FeaturePhenotypeResponse(
-            feature_no=primary_feature.feature_no if len(features) == 1 else None,
+            feature_no=primary_feature.feature_no if single_feature else None,
             feature_name=primary_feature.feature_name,  # Use actual feature name
             gene_name=primary_feature.gene_name,
+            organism_abbrev=organism_abbrev,
             features_searched=len(features),
             annotations=[
                 PhenotypeAnnotationOut(
