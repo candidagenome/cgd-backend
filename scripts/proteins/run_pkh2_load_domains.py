@@ -20,7 +20,7 @@ Note:
 Usage:
     python run_pkh2_load_domains.py --data results/PKH2_iprscan.tsv \
         --created-by DBUSER --dry-run
-    python run_pkh2_load_domains.py --gene PKH2 --strain-abbrev SC5314 \
+    python run_pkh2_load_domains.py --gene PKH2 --strain-abbrev C_albicans_SC5314 \
         --data results/PKH2_iprscan.tsv --created-by DBUSER
 """
 
@@ -56,24 +56,37 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_feature_name(session, gene: str, organism) -> tuple[str, str]:
-    """Resolve a gene name or systematic feature name to (feature_name, gene_name)."""
-    row = session.execute(
+    """Resolve a gene name or systematic feature name to (feature_name, gene_name).
+
+    Excludes old Assembly-19/21 features (orf19.* / orf21.*) so a gene name
+    resolves to the current Assembly-22 feature -- the same rule the locus page
+    uses. Raises if the name is still ambiguous.
+    """
+    rows = session.execute(
         text("""
-            SELECT f.feature_name, f.gene_name
+            SELECT f.feature_no, f.feature_name, f.gene_name
             FROM feature f
             WHERE (UPPER(f.gene_name) = UPPER(:gene)
                    OR UPPER(f.feature_name) = UPPER(:gene))
               AND f.organism_no = :org_no
               AND f.feature_type = 'ORF'
+              AND UPPER(f.feature_name) NOT LIKE 'ORF19.%'
+              AND UPPER(f.feature_name) NOT LIKE 'ORF21.%'
         """),
         {"gene": gene, "org_no": organism.organism_no},
-    ).fetchone()
+    ).fetchall()
 
-    if not row:
+    if not rows:
         raise ValueError(
-            f"No ORF feature found for '{gene}' in {organism.organism_abbrev}"
+            f"No current-assembly ORF feature found for '{gene}' in {organism.organism_abbrev}"
         )
-    return row[0], row[1]
+    if len(rows) > 1:
+        cands = ", ".join(f"{r[1]} (feature_no={r[0]})" for r in rows)
+        raise ValueError(
+            f"'{gene}' is ambiguous in {organism.organism_abbrev}: {cands}. "
+            "Pass the systematic feature name via --gene."
+        )
+    return rows[0][1], rows[0][2]
 
 
 def main():
@@ -87,8 +100,8 @@ def main():
     )
     parser.add_argument(
         "--strain-abbrev",
-        default="SC5314",
-        help="Strain abbreviation / organism abbreviation (default: SC5314)",
+        default="C_albicans_SC5314",
+        help="Organism abbreviation (default: C_albicans_SC5314)",
     )
     parser.add_argument(
         "--data",

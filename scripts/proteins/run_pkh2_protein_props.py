@@ -23,7 +23,7 @@ Codon-usage note:
 
 Usage:
     python run_pkh2_protein_props.py --created-by DBUSER
-    python run_pkh2_protein_props.py --gene PKH2 --strain-abbrev SC5314 \
+    python run_pkh2_protein_props.py --gene PKH2 --strain-abbrev C_albicans_SC5314 \
         --created-by DBUSER --dry-run
     python run_pkh2_protein_props.py --gene PKH2 --created-by DBUSER \
         --coding-ref /path/to/SC5314_verified_orf_coding.fasta
@@ -67,8 +67,13 @@ CODING_SEQ_TYPES = ("coding", "cds")
 
 
 def resolve_feature(session, gene: str, strain_abbrev: str):
-    """Resolve a gene name or systematic feature name to (feature_no, feature_name, gene_name)."""
-    row = session.execute(
+    """Resolve a gene name or systematic feature name to (feature_no, feature_name, gene_name).
+
+    Excludes old Assembly-19/21 features (orf19.* / orf21.*) so a gene name
+    resolves to the current Assembly-22 feature -- the same rule the locus page
+    uses. Raises if the name is still ambiguous.
+    """
+    rows = session.execute(
         text(f"""
             SELECT f.feature_no, f.feature_name, f.gene_name
             FROM {DB_SCHEMA}.feature f
@@ -77,15 +82,23 @@ def resolve_feature(session, gene: str, strain_abbrev: str):
                    OR UPPER(f.feature_name) = UPPER(:gene))
               AND o.organism_abbrev = :strain
               AND f.feature_type = 'ORF'
+              AND UPPER(f.feature_name) NOT LIKE 'ORF19.%'
+              AND UPPER(f.feature_name) NOT LIKE 'ORF21.%'
         """),
         {"gene": gene, "strain": strain_abbrev},
-    ).fetchone()
+    ).fetchall()
 
-    if not row:
+    if not rows:
         raise ValueError(
-            f"No ORF feature found for '{gene}' in strain {strain_abbrev}"
+            f"No current-assembly ORF feature found for '{gene}' in {strain_abbrev}"
         )
-    return row[0], row[1], row[2]
+    if len(rows) > 1:
+        cands = ", ".join(f"{r[1]} (feature_no={r[0]})" for r in rows)
+        raise ValueError(
+            f"'{gene}' is ambiguous in {strain_abbrev}: {cands}. "
+            "Pass the systematic feature name via --gene."
+        )
+    return rows[0][0], rows[0][1], rows[0][2]
 
 
 def fetch_current_seq(session, feature_no: int, seq_types) -> str | None:
@@ -142,8 +155,8 @@ def main():
     )
     parser.add_argument(
         "--strain-abbrev",
-        default="SC5314",
-        help="Strain abbreviation (default: SC5314)",
+        default="C_albicans_SC5314",
+        help="Organism abbreviation (default: C_albicans_SC5314)",
     )
     parser.add_argument(
         "--created-by",
