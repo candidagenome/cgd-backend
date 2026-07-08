@@ -76,6 +76,14 @@ find_gff_source() {
         search_dir="$search_dir/$gff_subdir"
     fi
 
+    # Prefer the flat per-strain GFF produced by the current dump_gff pipeline
+    # (cgd_dump_gff.sh writes "$GFF_DIR/${strain}.gff"). Fall back to the legacy
+    # versioned files under the assembly subdirectory if the flat file is absent.
+    if [ -f "$GFF_DIR/${strain}.gff" ]; then
+        echo "$GFF_DIR/${strain}.gff"
+        return
+    fi
+
     # Find *_features.gff (not intergenic, not with_chromosome_sequences)
     local found
     found=$(find "$search_dir" -maxdepth 1 -name "${strain}_version_*_features.gff" -type f 2>/dev/null | head -1)
