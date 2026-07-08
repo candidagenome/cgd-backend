@@ -75,6 +75,13 @@ NCBI_JOURNAL_URL = "ftp://ftp.ncbi.nih.gov/pubmed/J_Medline.txt"
 PDF_STATUS_N = "N"
 PDF_STATUS_NAP = "NAP"
 
+# Suffixes appended to a gene/alias name to catch papers that refer to the
+# deletion allele (e.g. "bud32Δ", "bud32Delta") or the protein product
+# ("Bud32p") rather than the plain gene name. PubMed indexes the Δ glyph
+# inconsistently, so the spelled-out "Delta"/"delta" forms are what recover
+# most of these matches.
+ALLELE_SUFFIXES = ("Δ", "Delta", "delta", "p")
+
 # Configure Entrez
 Entrez.email = NCBI_EMAIL
 if NCBI_API_KEY:
@@ -469,6 +476,16 @@ class PubMedLoader:
 
         self.log(f"Retrieved PubMed IDs for {len(self.local_pmids_by_feat)} features")
 
+    @staticmethod
+    def _name_variants(name: str) -> set[str]:
+        """Return allele/protein spelling variants of a gene or alias name.
+
+        e.g. "BUD32" -> {"BUD32Δ", "BUD32Delta", "BUD32delta", "BUD32p"}
+        so papers that only cite the deletion allele or protein product are
+        still retrieved.
+        """
+        return {f"{name}{suffix}" for suffix in ALLELE_SUFFIXES}
+
     def get_query_terms(self) -> None:
         """Get gene names and aliases for querying PubMed."""
         query = text(f"""
@@ -513,6 +530,10 @@ class PubMedLoader:
                 self.query_terms_by_feat[feature_name].add(
                     f"{self.gene_prefix}{gene_name}"
                 )
+                # Add allele/protein variants (e.g. bud32Δ, bud32Delta, Bud32p)
+                self.query_terms_by_feat[feature_name].update(
+                    self._name_variants(gene_name)
+                )
 
             # Add alias
             if alias_name and alias_name not in self.ignore_words:
@@ -521,6 +542,10 @@ class PubMedLoader:
                 if re.match(r"^[A-Za-z]{3}\d+$", alias_name):
                     self.query_terms_by_feat[feature_name].add(
                         f"{self.gene_prefix}{alias_name}"
+                    )
+                    # Add allele/protein variants for standard-format aliases
+                    self.query_terms_by_feat[feature_name].update(
+                        self._name_variants(alias_name)
                     )
 
         self.log(f"Retrieved query terms for {len(self.query_terms_by_feat)} features")
