@@ -13,6 +13,8 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
+    Dbxref,
+    DbxrefFeat,
     Feature,
     FeatLocation,
     FeatRelationship,
@@ -696,8 +698,37 @@ class FeatureCurationService:
             ).delete()
             self.db.query(Seq).filter(Seq.feature_no == feature_no).delete()
 
-            # Delete the feature
-            self.db.delete(feature)
+            # Delete the feature's dbxref links, then any dbxref rows (e.g. the
+            # CGDID Primary created with the feature) that are no longer
+            # referenced by any other feature.
+            dbxref_nos = [
+                row.dbxref_no
+                for row in self.db.query(DbxrefFeat.dbxref_no)
+                .filter(DbxrefFeat.feature_no == feature_no)
+                .all()
+            ]
+            self.db.query(DbxrefFeat).filter(
+                DbxrefFeat.feature_no == feature_no
+            ).delete()
+            self.db.flush()
+            for dbxref_no in dbxref_nos:
+                still_linked = (
+                    self.db.query(DbxrefFeat)
+                    .filter(DbxrefFeat.dbxref_no == dbxref_no)
+                    .count()
+                )
+                if not still_linked:
+                    self.db.query(Dbxref).filter(
+                        Dbxref.dbxref_no == dbxref_no
+                    ).delete()
+
+            # Delete the feature itself with a bulk delete rather than an ORM
+            # object delete: the latter eagerly loads Feature relationships to
+            # process cascades (e.g. subfeature), which fails where those
+            # optional tables are absent. All child rows are removed above.
+            self.db.query(Feature).filter(
+                Feature.feature_no == feature_no
+            ).delete()
             self.db.commit()
 
             logger.info(f"Deleted feature {feature_no} by {curator_userid}")
