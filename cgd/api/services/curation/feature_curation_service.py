@@ -97,7 +97,15 @@ class FeatureCurationService:
         ]
 
     def get_chromosomes(self, organism_abbrev: str) -> list[dict]:
-        """Get chromosomes for an organism."""
+        """
+        Get the sequence-level features an organism's features can be mapped to.
+
+        Prefers chromosomes. For organisms with a contig-level assembly and no
+        chromosome features (e.g. C. tropicalis, C. parapsilosis), falls back to
+        contigs so curators can still place coordinates. Chromosomes are never
+        mixed with contigs: assemblies that have chromosomes (e.g. C. albicans,
+        C. auris) also carry many contigs, and those should stay hidden.
+        """
         # Get organism
         organism = (
             self.db.query(Organism)
@@ -108,26 +116,32 @@ class FeatureCurationService:
         if not organism:
             return []
 
-        # Get chromosome features for this organism
-        chromosomes = (
-            self.db.query(Feature)
-            .filter(
-                Feature.organism_no == organism.organism_no,
-                or_(
-                    Feature.feature_type == "chromosome",
-                    Feature.feature_type.like("Chr%"),
-                ),
+        def _query(type_filter):
+            return (
+                self.db.query(Feature)
+                .filter(Feature.organism_no == organism.organism_no, type_filter)
+                .order_by(Feature.feature_name)
+                .all()
             )
-            .order_by(Feature.feature_name)
-            .all()
+
+        # Chromosome features for this organism
+        features = _query(
+            or_(
+                Feature.feature_type == "chromosome",
+                Feature.feature_type.like("Chr%"),
+            )
         )
+
+        # Fall back to contigs for contig-level assemblies with no chromosomes
+        if not features:
+            features = _query(Feature.feature_type == "contig")
 
         return [
             {
-                "feature_no": chr.feature_no,
-                "feature_name": chr.feature_name,
+                "feature_no": feat.feature_no,
+                "feature_name": feat.feature_name,
             }
-            for chr in chromosomes
+            for feat in features
         ]
 
     def check_feature_exists(self, feature_name: str) -> Optional[dict]:
