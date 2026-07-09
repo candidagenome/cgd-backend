@@ -484,6 +484,48 @@ class TestCreateFeature:
         mock_db.flush.assert_called_once()
         mock_db.commit.assert_called_once()
 
+    def test_creates_feature_with_gene_name(self, mock_db, sample_organisms):
+        """Should store the supplied standard gene name on the new feature."""
+        mock_db.query.side_effect = [
+            MockQuery([]),  # Feature name doesn't exist
+            MockQuery([]),  # Gene name doesn't exist
+            MockQuery([sample_organisms[0]]),  # Organism found
+        ]
+
+        service = FeatureCurationService(mock_db)
+        service.create_feature(
+            feature_name="NEW001",
+            feature_type="ORF",
+            organism_abbrev="C_albicans_SC5314",
+            curator_userid="curator1",
+            gene_name="MYGENE1",
+        )
+
+        mock_db.add.assert_called_once()
+        created_feature = mock_db.add.call_args[0][0]
+        assert created_feature.gene_name == "MYGENE1"
+        mock_db.commit.assert_called_once()
+
+    def test_raises_for_existing_gene_name(self, mock_db, sample_features):
+        """Should raise error when the supplied gene name is already taken."""
+        mock_db.query.side_effect = [
+            MockQuery([]),  # Feature name doesn't exist
+            MockQuery([sample_features[1]]),  # Gene name already exists (ALS1)
+        ]
+
+        service = FeatureCurationService(mock_db)
+
+        with pytest.raises(FeatureCurationError) as exc_info:
+            service.create_feature(
+                feature_name="NEW001",
+                feature_type="ORF",
+                organism_abbrev="C_albicans_SC5314",
+                curator_userid="curator1",
+                gene_name="ALS1",
+            )
+
+        assert "already exists" in str(exc_info.value)
+
 
 class TestAddLocationToFeature:
     """Tests for adding location to existing feature."""

@@ -95,6 +95,9 @@ class CreateFeatureRequest(BaseModel):
     feature_name: str = Field(..., description="Systematic name for the feature")
     feature_type: str = Field(..., description="Feature type (ORF, pseudogene, etc.)")
     organism_abbrev: str = Field(..., description="Organism abbreviation")
+    gene_name: Optional[str] = Field(
+        None, description="Standard gene name for the feature"
+    )
     chromosome_name: Optional[str] = Field(
         None, description="Chromosome name (required for mapped features)"
     )
@@ -344,6 +347,7 @@ def create_feature(
             feature_type=request.feature_type,
             organism_abbrev=request.organism_abbrev,
             curator_userid=current_user.userid,
+            gene_name=request.gene_name,
             chromosome_name=request.chromosome_name,
             start_coord=request.start_coord,
             stop_coord=request.stop_coord,

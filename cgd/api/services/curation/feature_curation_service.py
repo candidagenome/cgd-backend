@@ -163,6 +163,7 @@ class FeatureCurationService:
         feature_type: str,
         organism_abbrev: str,
         curator_userid: str,
+        gene_name: Optional[str] = None,
         chromosome_name: Optional[str] = None,
         start_coord: Optional[int] = None,
         stop_coord: Optional[int] = None,
@@ -181,6 +182,16 @@ class FeatureCurationService:
             raise FeatureCurationError(
                 f"Feature '{feature_name}' already exists as '{existing['feature_name']}'"
             )
+
+        # Validate the standard gene name (if provided) isn't already taken
+        gene_name = gene_name.strip() if gene_name else None
+        if gene_name:
+            existing_gene = self.check_feature_exists(gene_name)
+            if existing_gene:
+                raise FeatureCurationError(
+                    f"Gene name '{gene_name}' already exists as "
+                    f"'{existing_gene['feature_name']}'"
+                )
 
         # Validate feature type
         if feature_type not in self.FEATURE_TYPES:
@@ -234,9 +245,12 @@ class FeatureCurationService:
                     "For Watson strand, start_coord should be < stop_coord"
                 )
 
-        # For "not in systematic" types, gene_name = feature_name
-        gene_name = None
-        if feature_type in ["not physically mapped", "not in systematic sequence"]:
+        # For "not in systematic" types, default gene_name to feature_name
+        # when the curator did not supply one.
+        if not gene_name and feature_type in [
+            "not physically mapped",
+            "not in systematic sequence",
+        ]:
             gene_name = feature_name
 
         # Generate dbxref_id (typically same as feature_name for CGD)
