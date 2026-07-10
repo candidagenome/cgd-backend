@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
@@ -1533,38 +1534,144 @@ def _get_bigwig_path(
         return base_path / study / haplotype / condition / f"{condition}_sorted_hits.bigwig"
 
 
+def _bigwig_is_readable(bigwig_path: Path) -> bool:
+    """
+    True only if the file exists and is non-empty.
+
+    A 0-byte bigwig (e.g. an aborted data copy) makes libBigWig print
+    "[bwHdrRead] There was an error while reading in the header!" and can abort
+    the interpreter (SIGABRT) rather than raise a catchable Python error, so
+    such files must be filtered out before pyBigWig.open() ever sees them.
+    """
+    try:
+        return bigwig_path.is_file() and bigwig_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _stats_mean(bw, chromosome: str, start: int, end: int) -> Optional[float]:
+    """Mean coverage over a region from an already-open bigWig handle."""
+    # Handle minus strand genes where start > end
+    if start > end:
+        start, end = end, start
+    # pyBigWig uses 0-based coordinates
+    stats = bw.stats(chromosome, start - 1, end, type="mean")
+    if stats and stats[0] is not None:
+        return stats[0]
+    return 0.0
+
+
+class _BigWigPool:
+    """
+    Per-request cache of open bigWig handles.
+
+    The batch and matrix endpoints read the *same* set of bigWig files once per
+    gene. Without pooling, a 200-gene matrix reopens each (often 300+ MB) file
+    ~200 times -- tens of thousands of opens that blow past the gunicorn request
+    timeout. Opening each file once per request and reusing the handle across
+    genes reduces that to at most one open per distinct file.
+
+    NOT thread-safe: a single libBigWig handle keeps internal read state, so
+    handles must never be shared across threads. Create one pool per request --
+    sync FastAPI endpoints each run in their own threadpool thread, so a
+    request-scoped pool is never touched concurrently.
+    """
+
+    def __init__(self, max_handles: int = 600):
+        self._handles: "OrderedDict[str, object]" = OrderedDict()
+        self._max_handles = max_handles
+
+    def _handle(self, bigwig_path: Path):
+        key = str(bigwig_path)
+        bw = self._handles.get(key)
+        if bw is not None:
+            self._handles.move_to_end(key)
+            return bw
+
+        if not PYBIGWIG_AVAILABLE or not _bigwig_is_readable(bigwig_path):
+            return None
+        try:
+            bw = pyBigWig.open(key)
+        except Exception as e:
+            logger.debug(f"Error opening bigwig {bigwig_path}: {e}")
+            return None
+        if bw is None:
+            return None
+
+        self._handles[key] = bw
+        # Bound open file descriptors; evict least-recently-used if over cap.
+        if len(self._handles) > self._max_handles:
+            _, old = self._handles.popitem(last=False)
+            try:
+                old.close()
+            except Exception:
+                pass
+        return bw
+
+    def value(
+        self, bigwig_path: Path, chromosome: str, start: int, end: int
+    ) -> Optional[float]:
+        bw = self._handle(bigwig_path)
+        if bw is None:
+            return None
+        try:
+            return _stats_mean(bw, chromosome, start, end)
+        except Exception as e:
+            logger.debug(f"Error reading bigwig {bigwig_path}: {e}")
+            return None
+
+    def close(self):
+        for bw in self._handles.values():
+            try:
+                bw.close()
+            except Exception:
+                pass
+        self._handles.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 def _get_expression_value(
     bigwig_path: Path,
     chromosome: str,
     start: int,
-    end: int
+    end: int,
+    pool: Optional["_BigWigPool"] = None,
 ) -> Optional[float]:
-    """Get mean expression value for a genomic region from bigwig file."""
+    """
+    Get mean expression value for a genomic region from a bigwig file.
+
+    When a per-request ``pool`` is supplied the open handle is reused across
+    calls; otherwise the file is opened and closed for this single read.
+    """
+    if pool is not None:
+        return pool.value(bigwig_path, chromosome, start, end)
+
     if not PYBIGWIG_AVAILABLE:
         return None
 
-    if not bigwig_path.exists():
+    if not _bigwig_is_readable(bigwig_path):
         return None
 
+    bw = None
     try:
         bw = pyBigWig.open(str(bigwig_path))
         if bw is None:
             return None
-
-        # Handle minus strand genes where start > end
-        if start > end:
-            start, end = end, start
-
-        # pyBigWig uses 0-based coordinates
-        stats = bw.stats(chromosome, start - 1, end, type="mean")
-        bw.close()
-
-        if stats and stats[0] is not None:
-            return stats[0]
-        return 0.0
+        return _stats_mean(bw, chromosome, start, end)
     except Exception as e:
         logger.debug(f"Error reading bigwig {bigwig_path}: {e}")
         return None
+    finally:
+        if bw is not None:
+            try:
+                bw.close()
+            except Exception:
+                pass
 
 
 def _get_library_size(
@@ -1675,6 +1782,7 @@ def _build_study_conditions(
     organism_key: str,
     control_values: Dict[str, float],
     group_control_map: Dict[str, str],
+    pool: Optional["_BigWigPool"] = None,
 ) -> Tuple[List["ExpressionCondition"], List[float]]:
     """
     Build the ExpressionCondition list for a single study at one locus.
@@ -1714,7 +1822,7 @@ def _build_study_conditions(
         control_value = control_values[control_id]
 
         cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-        cond_value = _get_expression_value(cond_path, chromosome, start, end)
+        cond_value = _get_expression_value(cond_path, chromosome, start, end, pool=pool)
         if cond_value is None:
             continue
 
@@ -2107,12 +2215,17 @@ def _get_organism_no_from_key(db: Session, organism_key: str) -> Optional[int]:
 def _get_expression_for_organism(
     db: Session,
     feature: Feature,
-    organism_name: str
+    organism_name: str,
+    pool: Optional["_BigWigPool"] = None,
 ) -> Optional[ExpressionDetailsForOrganism]:
     """
     Get expression data for a specific feature/organism.
 
     Returns ExpressionDetailsForOrganism or None if no data available.
+
+    ``pool`` is an optional per-request bigWig handle cache; callers that fetch
+    many genes (batch/matrix) should pass a shared pool so each bigWig file is
+    opened once per request rather than once per gene.
     """
     if not PYBIGWIG_AVAILABLE:
         return None
@@ -2158,7 +2271,7 @@ def _get_expression_for_organism(
 
         for ctrl_id in control_ids_needed:
             ctrl_path = _get_bigwig_path(base_path, study_id, ctrl_id, study_info)
-            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end)
+            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end, pool=pool)
             if ctrl_value is not None and ctrl_value > 0:
                 control_values[ctrl_id] = ctrl_value
 
@@ -2169,7 +2282,7 @@ def _get_expression_for_organism(
         # Process conditions (grouped studies include controls + per-group labels)
         conditions, study_fold_changes = _build_study_conditions(
             study_info, study_id, base_path, chromosome, start, end,
-            hts_key, control_values, group_control_map,
+            hts_key, control_values, group_control_map, pool=pool,
         )
         all_fold_changes.extend(study_fold_changes)
         total_conditions += len(study_fold_changes)
@@ -2343,21 +2456,22 @@ def get_expression_details_by_organism(
     results: dict[str, ExpressionDetailsForOrganism] = {}
     seen_organisms: set[str] = set()
 
-    for feature in features:
-        # Get organism name
-        organism = feature.organism
-        if not organism:
-            continue
+    with _BigWigPool() as pool:
+        for feature in features:
+            # Get organism name
+            organism = feature.organism
+            if not organism:
+                continue
 
-        organism_name = organism.organism_name
-        if organism_name in seen_organisms:
-            continue
-        seen_organisms.add(organism_name)
+            organism_name = organism.organism_name
+            if organism_name in seen_organisms:
+                continue
+            seen_organisms.add(organism_name)
 
-        # Get expression data for this feature/organism
-        expr_data = _get_expression_for_organism(db, feature, organism_name)
-        if expr_data:
-            results[organism_name] = expr_data
+            # Get expression data for this feature/organism
+            expr_data = _get_expression_for_organism(db, feature, organism_name, pool=pool)
+            if expr_data:
+                results[organism_name] = expr_data
 
     return ExpressionDetailsResponse(results=results)
 
@@ -2592,12 +2706,17 @@ def _build_expression_profile(
     organism_key: str,
     base_path: Path,
     studies_config: dict,
-    hts_key: str
+    hts_key: str,
+    pool: Optional["_BigWigPool"] = None,
 ) -> Optional[Dict[str, float]]:
     """
     Build expression profile (fold changes) for a single gene across all conditions.
 
     Returns a dict mapping condition_id to fold_change, or None if location not found.
+
+    ``pool`` is an optional per-run bigWig handle cache; the whole-organism
+    rebuild reads every study file for every gene, so a shared pool avoids
+    reopening each file once per gene.
     """
     # Get gene location
     location_info = _get_gene_location_for_feature(db, feature, hts_key)
@@ -2620,7 +2739,7 @@ def _build_expression_profile(
 
         for ctrl_id in control_ids_needed:
             ctrl_path = _get_bigwig_path(base_path, study_id, ctrl_id, study_info)
-            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end)
+            ctrl_value = _get_expression_value(ctrl_path, chromosome, start, end, pool=pool)
             if ctrl_value is not None and ctrl_value > 0:
                 control_values[ctrl_id] = ctrl_value
 
@@ -2643,7 +2762,7 @@ def _build_expression_profile(
             control_value = control_values[control_id]
 
             cond_path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
-            cond_value = _get_expression_value(cond_path, chromosome, start, end)
+            cond_value = _get_expression_value(cond_path, chromosome, start, end, pool=pool)
 
             if cond_value is None:
                 continue
@@ -2736,16 +2855,20 @@ def _build_all_expression_profiles(
     profiles: Dict[str, Dict[str, float]] = {}
     processed = 0
 
-    for feature in features:
-        profile = _build_expression_profile(
-            db, feature, organism_key, base_path, studies_config, hts_key
-        )
-        if profile:
-            profiles[feature.feature_name] = profile
-            processed += 1
+    # Shared handle pool: reuse each study's bigWig across all genes instead of
+    # reopening it per gene during a full-organism rebuild.
+    with _BigWigPool() as pool:
+        for feature in features:
+            profile = _build_expression_profile(
+                db, feature, organism_key, base_path, studies_config, hts_key,
+                pool=pool,
+            )
+            if profile:
+                profiles[feature.feature_name] = profile
+                processed += 1
 
-        if processed % 500 == 0:
-            logger.info(f"Processed {processed} genes for {organism_key}")
+            if processed % 500 == 0:
+                logger.info(f"Processed {processed} genes for {organism_key}")
 
     logger.info(f"Built profiles for {len(profiles)} genes in {organism_key}")
 
@@ -3147,44 +3270,48 @@ def get_batch_expression_data(
     genes_found = 0
     genes_missing = 0
 
-    # Process each gene
-    for gene_name in gene_names:
-        # Find the feature
-        feature = (
-            db.query(Feature)
-            .filter(
-                (func.upper(Feature.gene_name) == func.upper(gene_name)) |
-                (func.upper(Feature.feature_name) == func.upper(gene_name))
+    # One shared handle pool for the whole request: every gene reads the same
+    # set of bigWig files, so opening each once (instead of once per gene) is
+    # what keeps a large batch/matrix under the request timeout.
+    with _BigWigPool() as pool:
+        # Process each gene
+        for gene_name in gene_names:
+            # Find the feature
+            feature = (
+                db.query(Feature)
+                .filter(
+                    (func.upper(Feature.gene_name) == func.upper(gene_name)) |
+                    (func.upper(Feature.feature_name) == func.upper(gene_name))
+                )
+                .first()
             )
-            .first()
-        )
 
-        if not feature:
-            results.append(BatchGeneExpression(
-                gene_name=gene_name,
-                data=None,
-                error="Gene not found"
-            ))
-            genes_missing += 1
-            continue
+            if not feature:
+                results.append(BatchGeneExpression(
+                    gene_name=gene_name,
+                    data=None,
+                    error="Gene not found"
+                ))
+                genes_missing += 1
+                continue
 
-        # Get expression data for this feature
-        expr_data = _get_expression_for_organism(db, feature, organism)
+            # Get expression data for this feature
+            expr_data = _get_expression_for_organism(db, feature, organism, pool=pool)
 
-        if expr_data:
-            results.append(BatchGeneExpression(
-                gene_name=gene_name,
-                data=expr_data,
-                error=None
-            ))
-            genes_found += 1
-        else:
-            results.append(BatchGeneExpression(
-                gene_name=gene_name,
-                data=None,
-                error="No expression data for organism"
-            ))
-            genes_missing += 1
+            if expr_data:
+                results.append(BatchGeneExpression(
+                    gene_name=gene_name,
+                    data=expr_data,
+                    error=None
+                ))
+                genes_found += 1
+            else:
+                results.append(BatchGeneExpression(
+                    gene_name=gene_name,
+                    data=None,
+                    error="No expression data for organism"
+                ))
+                genes_missing += 1
 
     computation_time = (time.time() - start_time) * 1000
 
