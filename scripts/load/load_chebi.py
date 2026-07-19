@@ -105,6 +105,37 @@ def _unescape(text: str) -> str:
     )
 
 
+# The CGD database character set is WE8MSWIN1252 (single-byte Windows-1252),
+# which cannot store the Unicode punctuation ChEBI uses -- notably the
+# typographic HYPHEN (U+2010) and MINUS SIGN (U+2212). On insert Oracle
+# best-fit-converts these to ASCII, so e.g. 'N‐beta' (U+2010) is *stored* as
+# 'N-beta' (U+002D). If we keep the raw Unicode in memory, the add-only dedup
+# compares raw Unicode against the ASCII form read back from the DB, never
+# matches, and re-inserts -- which collides on CVTERM_SYNONYM_UK. Normalizing
+# here makes our in-memory strings equal what the DB actually stores, so dedup
+# works and distinct aliases that differ only by such a character collapse
+# correctly. (Verified: term names and synonyms in the 3-STAR OWL contain only
+# U+2010 and U+2212; the cp1252 fold below is a safety net for definitions.)
+_CHAR_NORMALIZE = {
+    0x2010: "-", 0x2011: "-", 0x2012: "-", 0x2013: "-", 0x2014: "-",
+    0x2015: "-", 0x2212: "-",  # hyphens / dashes / minus -> ASCII hyphen
+    0x2018: "'", 0x2019: "'", 0x201B: "'", 0x2032: "'",  # single quotes / prime
+    0x201C: '"', 0x201D: '"', 0x2033: '"',  # double quotes / double prime
+    0x00A0: " ",  # non-breaking space -> space
+}
+
+
+def _normalize_for_db(text: str) -> str:
+    """Fold characters the WE8MSWIN1252 DB cannot hold to the ASCII/best-fit
+    forms Oracle stores, so in-memory values equal the stored values."""
+    if text is None:
+        return None
+    text = text.translate(_CHAR_NORMALIZE)
+    # Anything still outside cp1252 gets a consistent replacement so the loader
+    # only ever sends storable characters (no silent Oracle conversion).
+    return text.encode("cp1252", "replace").decode("cp1252")
+
+
 def parse_chebi_owl(filepath: Path) -> list[dict]:
     """
     Parse a ChEBI OWL file into a list of 3-STAR term dicts.
@@ -148,8 +179,10 @@ def parse_chebi_owl(filepath: Path) -> list[dict]:
                     data.append(
                         {
                             "id": term_id,
-                            "term": _unescape(term),
-                            "definition": _unescape(definition) if definition else None,
+                            "term": _normalize_for_db(_unescape(term)),
+                            "definition": _normalize_for_db(_unescape(definition))
+                            if definition
+                            else None,
                             "aliases": aliases,
                         }
                     )
@@ -186,7 +219,7 @@ def parse_chebi_owl(filepath: Path) -> list[dict]:
                 if alias_name:
                     raw_type = line.split("Synonym")[0].split("has")[-1].upper()
                     syn_type = SYNONYM_TYPE_MAP.get(raw_type, DEFAULT_SYNONYM_TYPE)
-                    aliases.append((_unescape(alias_name), syn_type))
+                    aliases.append((_normalize_for_db(_unescape(alias_name)), syn_type))
 
             # Obsoletion markers
             elif "<owl:deprecated" in line or "reason_for_obsolescence" in line:
