@@ -13,6 +13,8 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
+    Dbxref,
+    DbxrefFeat,
     Feature,
     FeatLocation,
     FeatRelationship,
@@ -97,7 +99,15 @@ class FeatureCurationService:
         ]
 
     def get_chromosomes(self, organism_abbrev: str) -> list[dict]:
-        """Get chromosomes for an organism."""
+        """
+        Get the sequence-level features an organism's features can be mapped to.
+
+        Prefers chromosomes. For organisms with a contig-level assembly and no
+        chromosome features (e.g. C. tropicalis, C. parapsilosis), falls back to
+        contigs so curators can still place coordinates. Chromosomes are never
+        mixed with contigs: assemblies that have chromosomes (e.g. C. albicans,
+        C. auris) also carry many contigs, and those should stay hidden.
+        """
         # Get organism
         organism = (
             self.db.query(Organism)
@@ -108,26 +118,32 @@ class FeatureCurationService:
         if not organism:
             return []
 
-        # Get chromosome features for this organism
-        chromosomes = (
-            self.db.query(Feature)
-            .filter(
-                Feature.organism_no == organism.organism_no,
-                or_(
-                    Feature.feature_type == "chromosome",
-                    Feature.feature_type.like("Chr%"),
-                ),
+        def _query(type_filter):
+            return (
+                self.db.query(Feature)
+                .filter(Feature.organism_no == organism.organism_no, type_filter)
+                .order_by(Feature.feature_name)
+                .all()
             )
-            .order_by(Feature.feature_name)
-            .all()
+
+        # Chromosome features for this organism
+        features = _query(
+            or_(
+                Feature.feature_type == "chromosome",
+                Feature.feature_type.like("Chr%"),
+            )
         )
+
+        # Fall back to contigs for contig-level assemblies with no chromosomes
+        if not features:
+            features = _query(Feature.feature_type == "contig")
 
         return [
             {
-                "feature_no": chr.feature_no,
-                "feature_name": chr.feature_name,
+                "feature_no": feat.feature_no,
+                "feature_name": feat.feature_name,
             }
-            for chr in chromosomes
+            for feat in features
         ]
 
     def check_feature_exists(self, feature_name: str) -> Optional[dict]:
@@ -163,6 +179,7 @@ class FeatureCurationService:
         feature_type: str,
         organism_abbrev: str,
         curator_userid: str,
+        gene_name: Optional[str] = None,
         chromosome_name: Optional[str] = None,
         start_coord: Optional[int] = None,
         stop_coord: Optional[int] = None,
@@ -181,6 +198,16 @@ class FeatureCurationService:
             raise FeatureCurationError(
                 f"Feature '{feature_name}' already exists as '{existing['feature_name']}'"
             )
+
+        # Validate the standard gene name (if provided) isn't already taken
+        gene_name = gene_name.strip() if gene_name else None
+        if gene_name:
+            existing_gene = self.check_feature_exists(gene_name)
+            if existing_gene:
+                raise FeatureCurationError(
+                    f"Gene name '{gene_name}' already exists as "
+                    f"'{existing_gene['feature_name']}'"
+                )
 
         # Validate feature type
         if feature_type not in self.FEATURE_TYPES:
@@ -234,9 +261,12 @@ class FeatureCurationService:
                     "For Watson strand, start_coord should be < stop_coord"
                 )
 
-        # For "not in systematic" types, gene_name = feature_name
-        gene_name = None
-        if feature_type in ["not physically mapped", "not in systematic sequence"]:
+        # For "not in systematic" types, default gene_name to feature_name
+        # when the curator did not supply one.
+        if not gene_name and feature_type in [
+            "not physically mapped",
+            "not in systematic sequence",
+        ]:
             gene_name = feature_name
 
         # Generate dbxref_id (typically same as feature_name for CGD)
@@ -668,8 +698,37 @@ class FeatureCurationService:
             ).delete()
             self.db.query(Seq).filter(Seq.feature_no == feature_no).delete()
 
-            # Delete the feature
-            self.db.delete(feature)
+            # Delete the feature's dbxref links, then any dbxref rows (e.g. the
+            # CGDID Primary created with the feature) that are no longer
+            # referenced by any other feature.
+            dbxref_nos = [
+                row.dbxref_no
+                for row in self.db.query(DbxrefFeat.dbxref_no)
+                .filter(DbxrefFeat.feature_no == feature_no)
+                .all()
+            ]
+            self.db.query(DbxrefFeat).filter(
+                DbxrefFeat.feature_no == feature_no
+            ).delete()
+            self.db.flush()
+            for dbxref_no in dbxref_nos:
+                still_linked = (
+                    self.db.query(DbxrefFeat)
+                    .filter(DbxrefFeat.dbxref_no == dbxref_no)
+                    .count()
+                )
+                if not still_linked:
+                    self.db.query(Dbxref).filter(
+                        Dbxref.dbxref_no == dbxref_no
+                    ).delete()
+
+            # Delete the feature itself with a bulk delete rather than an ORM
+            # object delete: the latter eagerly loads Feature relationships to
+            # process cascades (e.g. subfeature), which fails where those
+            # optional tables are absent. All child rows are removed above.
+            self.db.query(Feature).filter(
+                Feature.feature_no == feature_no
+            ).delete()
             self.db.commit()
 
             logger.info(f"Deleted feature {feature_no} by {curator_userid}")

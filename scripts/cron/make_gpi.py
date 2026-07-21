@@ -5,8 +5,18 @@ from __future__ import annotations
 Generate GPI (Gene Product Information) files for GO annotation.
 
 This script generates GPI 2.0 format files for submission to the GO Consortium.
-It outputs feature information including IDs, names, descriptions, aliases,
-SO type codes, taxon IDs, and UniProt cross-references.
+Each feature is written as an 11-column, tab-separated row: DB_Object_ID,
+DB_Object_Symbol, DB_Object_Name, DB_Object_Synonym(s), DB_Object_Type,
+DB_Object_Taxon, Encoded_by, Parent_Object_ID, Protein_Containing_Complex_Members,
+DB_Xref(s), and Gene_Product_Properties.
+
+The column conventions mirror SGD's dump_gpi.py so both MODs submit comparable
+files: protein-coding features use the DB_Object_Type PR:000000001, the standard
+gene name is the symbol (systematic name and aliases become synonyms), DB_Xrefs
+carry UniProtKB and RefSeq protein accessions, and Gene_Product_Properties
+records db_subset, go_annotation_complete (latest manual review date), and
+uniprot_proteome. Two columns are intentionally left empty: Encoded_by, and
+Protein_Containing_Complex_Members (CGD does not curate protein complexes).
 
 For diploid strains (C. albicans SC5314), two files are generated:
 - {strain}.gpi - A alleles only (backwards compatible)
@@ -76,10 +86,17 @@ ENV_STATE = os.getenv("ENV_STATE", "dev")
 MIN_FEATURES = 100  # Absolute minimum features expected per strain
 MAX_FEATURE_CHANGE_PERCENT = 10.0  # Maximum allowed change from previous file
 
-# SO type codes for different feature types
-SO_CODE_FOR_TYPE = {
-    "ORF": "SO:0001217",
-    "allele": "SO:0001217",  # B alleles use same SO code as ORF
+# DB_Object_Type codes (GPI column 5).
+#
+# These identify the *entity* being described, matching SGD's dump_gpi.py so
+# both MODs submit comparable files to the GO Consortium:
+#   - protein-coding features (ORF and its B alleles) are protein entities,
+#     PR:000000001
+#   - RNA-coding features use the generic ncRNA-gene subtype SO:0001263
+#   - pseudogenes keep the SO pseudogene term (they encode no gene product)
+TYPE_TO_OBJECT_TYPE = {
+    "ORF": "PR:000000001",
+    "allele": "PR:000000001",  # B alleles are protein entities, same as ORF
     "ncRNA": "SO:0001263",
     "rRNA": "SO:0001263",
     "snRNA": "SO:0001263",
@@ -87,6 +104,23 @@ SO_CODE_FOR_TYPE = {
     "tRNA": "SO:0001263",
     "pseudogene": "SO:0000336",
 }
+
+# Feature types that are protein-coding (get UniProt/RefSeq xrefs and the
+# Swiss-Prot db_subset property).
+PROTEIN_FEATURE_TYPES = ("ORF", "allele")
+
+# UniProt dbxref selection. CGD stores EBI-loaded accessions under three
+# dbxref_type values: reviewed 'SwissProt', unreviewed 'TrEMBL', and a generic
+# 'UniProtKB'. All three are accepted (matching the accessions the original
+# script emitted); only 'SwissProt' counts as reviewed for the Swiss-Prot
+# db_subset property.
+UNIPROT_SOURCE = "EBI"
+SWISSPROT_TYPE = "SwissProt"
+UNIPROT_TYPES = ("SwissProt", "TrEMBL", "UniProtKB")
+
+# RefSeq protein accessions stored against features (matches ftp_dump/gp2protein).
+# CGD does not currently load these, so this yields nothing until it does.
+REFSEQ_PROTEIN_TYPE = "RefSeq protein version ID"
 
 # Strain configurations
 STRAIN_CONFIGS = {
@@ -285,17 +319,74 @@ def get_aliases(session, feature_no: int) -> list[str]:
     return [row[0] for row in result if row[0]]
 
 
-def get_uniprot_ids(session, feature_no: int) -> list[str]:
-    """Get UniProt IDs for a feature."""
+def get_uniprot_id(session, feature_no: int) -> tuple[str | None, bool]:
+    """Get the best UniProt accession for a feature.
+
+    Returns a (accession, is_swissprot) tuple. A reviewed Swiss-Prot accession
+    is preferred over the unreviewed TrEMBL/UniProtKB ones; ties are broken by
+    the lowest accession for determinism. Returns (None, False) when the feature
+    has no EBI-loaded UniProt cross-reference.
+    """
+    types_clause = ", ".join(f"'{t}'" for t in UNIPROT_TYPES)
+    query = text(f"""
+        SELECT d.dbxref_type, d.dbxref_id
+        FROM {DB_SCHEMA}.dbxref d
+        JOIN {DB_SCHEMA}.dbxref_feat df ON (d.dbxref_no = df.dbxref_no AND df.feature_no = :feature_no)
+        WHERE d.source = :src
+          AND d.dbxref_type IN ({types_clause})
+    """)
+
+    # best = (rank, accession); rank 0 = reviewed Swiss-Prot (preferred), 1 = other.
+    best: tuple[int, str] | None = None
+    result = session.execute(
+        query, {"feature_no": feature_no, "src": UNIPROT_SOURCE},
+    )
+    for dbxref_type, accession in result:
+        if not accession:
+            continue
+        rank = 0 if dbxref_type == SWISSPROT_TYPE else 1
+        candidate = (rank, accession)
+        if best is None or candidate < best:
+            best = candidate
+
+    if best is None:
+        return None, False
+    return best[1], best[0] == 0
+
+
+def get_refseq_protein_ids(session, feature_no: int) -> list[str]:
+    """Get RefSeq protein version accessions for a feature."""
     query = text(f"""
         SELECT d.dbxref_id
         FROM {DB_SCHEMA}.dbxref d
         JOIN {DB_SCHEMA}.dbxref_feat df ON (d.dbxref_no = df.dbxref_no AND df.feature_no = :feature_no)
-        WHERE d.dbxref_type IN ('SwissProt', 'UniProtKB')
+        WHERE d.dbxref_type = :refseq_type
     """)
 
-    result = session.execute(query, {"feature_no": feature_no})
-    return [row[0] for row in result if row[0]]
+    result = session.execute(
+        query, {"feature_no": feature_no, "refseq_type": REFSEQ_PROTEIN_TYPE}
+    )
+    return sorted({row[0] for row in result if row[0]})
+
+
+def get_go_annotation_complete_date(session, feature_no: int) -> str:
+    """Return the most recent manual GO annotation review date (YYYYMMDD).
+
+    Mirrors SGD's go_annotation_complete: the date of the latest manually
+    curated (non-computational) GO annotation for the feature. Returns an empty
+    string when the feature has no manual GO annotations.
+    """
+    query = text(f"""
+        SELECT MAX(ga.date_last_reviewed)
+        FROM {DB_SCHEMA}.go_annotation ga
+        WHERE ga.feature_no = :feature_no
+          AND ga.annotation_type != 'computational'
+    """)
+
+    row = session.execute(query, {"feature_no": feature_no}).fetchone()
+    if not row or not row[0]:
+        return ""
+    return row[0].strftime("%Y%m%d")
 
 
 def clean_description(headline: str | None) -> str:
@@ -350,7 +441,6 @@ def generate_gpi(
 
     gpi_filename = f"{strain_abbrev}{file_suffix}.gpi"
     final_file = output_dir / gpi_filename
-    today = datetime.now().strftime("%Y-%m-%d")
     today_tag = datetime.now().strftime("%Y%m%d")
 
     # Create temp directory for safe generation
@@ -375,9 +465,12 @@ def generate_gpi(
                 # Write header
                 f.write("!gpi-version: 2.0\n")
                 f.write(f"!generated-by: {PROJECT_ACRONYM}\n")
-                f.write(f"!date-generated: {today}\n")
+                f.write(f"!date-generated: {today_tag}\n")
                 f.write("!URL: http://www.candidagenome.org\n")
+                f.write("!Contact Email: candida@lists.stanford.edu\n")
+                f.write("!Funding: NIDCR at US NIH, grant number R01-DE015873\n")
                 f.write(f"!Project-release: {seq_source} genome version {genome_version}\n")
+                f.write("!\n")
 
                 # Write feature lines
                 for feat in features:
@@ -387,36 +480,64 @@ def generate_gpi(
                     feature_type = feat["feature_type"]
                     gene_name = feat["gene_name"] or ""
                     headline = feat["headline"]
+                    is_protein = feature_type in PROTEIN_FEATURE_TYPES
 
-                    # Get SO code
-                    so_code = SO_CODE_FOR_TYPE.get(feature_type, "")
+                    # col5: DB_Object_Type (protein PR: / RNA or pseudogene SO:)
+                    object_type = TYPE_TO_OBJECT_TYPE.get(feature_type, "")
 
-                    # Get taxon
+                    # col6: taxon
                     taxon = f"NCBITaxon:{taxon_id}"
 
-                    # Clean description
+                    # col3: gene product description
                     description = clean_description(headline)
 
-                    # Get aliases and build name list
-                    aliases = get_aliases(session, feature_no)
-                    name_list = gene_name
-                    for alias in aliases:
-                        if name_list:
-                            name_list += " | "
-                        name_list += alias
+                    # col2/col4: symbol is the standard gene name (falling back to
+                    # the systematic name); the systematic name plus aliases go in
+                    # the synonym list. Mirrors SGD's display_name / systematic_name
+                    # split.
+                    symbol = gene_name or feature_name
+                    synonyms = [feature_name] if feature_name else []
+                    for alias in get_aliases(session, feature_no):
+                        if alias not in synonyms:
+                            synonyms.append(alias)
+                    synonym_list = "|".join(synonyms)
 
-                    # Get UniProt IDs (for ORFs and alleles)
-                    up_list = ""
-                    if feature_type in ("ORF", "allele"):
-                        uniprot_ids = get_uniprot_ids(session, feature_no)
-                        up_list = " | ".join(f"UniProtKB:{up}" for up in uniprot_ids)
+                    # col10: DB_Xref(s) — UniProt (protein features) then RefSeq
+                    uniprot_acc, is_swissprot = (
+                        get_uniprot_id(session, feature_no) if is_protein else (None, False)
+                    )
+                    dbxrefs = []
+                    if uniprot_acc:
+                        dbxrefs.append(f"UniProtKB:{uniprot_acc}")
+                    if is_protein:
+                        dbxrefs.extend(
+                            f"RefSeq:{acc}" for acc in get_refseq_protein_ids(session, feature_no)
+                        )
+                    dbxref_list = "|".join(dbxrefs)
 
-                    # Write GPI line (tab-separated)
-                    # Columns: DB_Object_ID, DB_Object_Symbol, DB_Object_Name,
-                    #          DB_Object_Synonym(s), DB_Object_Type, Taxon,
-                    #          Parent_Object_ID, DB_Xref(s), Gene_Product_Properties
-                    f.write(f"{dbxref_id}\t{feature_name}\t{description}\t{name_list}\t"
-                            f"{so_code}\t{taxon}\t\t{dbxref_id}\t\t{up_list}\t\n")
+                    # col11: Gene_Product_Properties
+                    props = []
+                    if is_swissprot:
+                        props.append("db_subset=Swiss-Prot")
+                    props.append(
+                        f"go_annotation_complete={get_go_annotation_complete_date(session, feature_no)}"
+                    )
+                    if uniprot_acc:
+                        props.append(f"uniprot_proteome=UniProtKB:{uniprot_acc}")
+                    property_list = "|".join(props)
+
+                    # Write GPI 2.0 line (tab-separated, 11 columns):
+                    #  1 DB_Object_ID          7 Encoded_by (empty)
+                    #  2 DB_Object_Symbol      8 Parent_Object_ID
+                    #  3 DB_Object_Name        9 Protein_Containing_Complex_Members
+                    #  4 DB_Object_Synonym(s)    (empty; CGD does not curate complexes)
+                    #  5 DB_Object_Type       10 DB_Xref(s)
+                    #  6 DB_Object_Taxon      11 Gene_Product_Properties
+                    f.write(
+                        f"{dbxref_id}\t{symbol}\t{description}\t{synonym_list}\t"
+                        f"{object_type}\t{taxon}\t\t{dbxref_id}\t\t{dbxref_list}\t"
+                        f"{property_list}\n"
+                    )
 
             logger.info(f"Generated temp file: {temp_file}")
 
