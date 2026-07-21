@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from Bio.Seq import Seq as BioSeq
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
@@ -312,6 +313,8 @@ class FeatureCurationService:
                 stop_coord=stop_coord,
                 strand=strand,
                 curator_userid=curator_userid,
+                # Intronless ORFs get a translated protein sequence.
+                generate_protein=(feature_type == "ORF"),
             )
 
         # Add reference if provided
@@ -327,6 +330,18 @@ class FeatureCurationService:
 
         return feature.feature_no
 
+    # Organisms that use the standard genetic code (NCBI translation table 1).
+    # Every other CGD species is in the CTG clade and uses the alternative
+    # yeast nuclear code (table 12, CTG->Ser). Mirrors the per-organism
+    # trans_table values in cgd/core/blast_config.py.
+    STANDARD_CODE_ORGANISMS = frozenset({"C_GLABRATA_CBS138"})
+
+    def _trans_table_for_organism(self, organism_abbrev: str) -> int:
+        """Return the NCBI genetic-code id for an organism (1 or 12)."""
+        if organism_abbrev.upper() in self.STANDARD_CODE_ORGANISMS:
+            return 1
+        return 12
+
     def _add_feature_location(
         self,
         feature_no: int,
@@ -336,8 +351,13 @@ class FeatureCurationService:
         stop_coord: int,
         strand: Optional[str],
         curator_userid: str,
+        generate_protein: bool = False,
     ) -> int:
-        """Add location/coordinates for a feature."""
+        """Add location/coordinates for a feature.
+
+        When ``generate_protein`` is set (a newly created ORF), a protein
+        sequence is translated from the feature's coding sequence and stored.
+        """
         # Get chromosome feature
         chromosome = (
             self.db.query(Feature)
@@ -385,18 +405,22 @@ class FeatureCurationService:
                 f"No current genome version found for organism '{organism_abbrev}'"
             )
 
-        # Extract sequence for this feature
-        if strand == "C":
-            # Crick strand - reverse complement
-            seq_start = min(start_coord, stop_coord)
-            seq_end = max(start_coord, stop_coord)
-        else:
-            seq_start = min(start_coord, stop_coord)
-            seq_end = max(start_coord, stop_coord)
+        # Extract this feature's genomic sequence from the chromosome/contig.
+        # Coordinates are 1-based inclusive; Crick-strand features are stored
+        # with start_coord > stop_coord and are reverse-complemented so the
+        # residues read 5'->3' on the feature's own strand.
+        seq_start = min(start_coord, stop_coord)
+        seq_end = max(start_coord, stop_coord)
+        seq_length = seq_end - seq_start + 1
 
-        # Get sequence from chromosome (simplified - actual implementation would
-        # extract subsequence and possibly reverse complement)
-        seq_length = abs(stop_coord - start_coord) + 1
+        residues = chr_seq.residues[seq_start - 1:seq_end]
+        if len(residues) != seq_length:
+            raise FeatureCurationError(
+                f"Coordinates {start_coord}-{stop_coord} fall outside "
+                f"'{chromosome_name}' (length {chr_seq.seq_length})"
+            )
+        if strand == "C":
+            residues = str(BioSeq(residues).reverse_complement())
 
         # Create SEQ entry for this feature
         feature_seq = Seq(
@@ -407,11 +431,41 @@ class FeatureCurationService:
             source=chr_seq.source,
             is_seq_current="Y",
             seq_length=seq_length,
-            residues="N" * seq_length,  # Placeholder - actual sequence TBD
+            residues=residues,
             created_by=curator_userid,
         )
         self.db.add(feature_seq)
         self.db.flush()
+
+        # For a newly created intronless ORF, translate the coding sequence
+        # (== the genomic residues while there are no introns) and store the
+        # protein. The organism's genetic code is used (CTG clade -> table 12,
+        # C. glabrata -> table 1). NOTE: once introns/CDS subfeatures are
+        # annotated, the protein must be regenerated from the spliced CDS.
+        if generate_protein:
+            trans_table = self._trans_table_for_organism(organism_abbrev)
+            protein = str(BioSeq(residues).translate(table=trans_table))
+            core = protein[:-1] if protein.endswith("*") else protein
+            if "*" in core:
+                logger.warning(
+                    "Feature %s translates with an internal stop codon; "
+                    "check its coordinates/strand.", feature_no
+                )
+            protein = protein.rstrip("*")
+            if protein:
+                protein_seq = Seq(
+                    feature_no=feature_no,
+                    genome_version_no=genome_version.genome_version_no,
+                    seq_version=datetime.now(),
+                    seq_type="protein",
+                    source=chr_seq.source,
+                    is_seq_current="Y",
+                    seq_length=len(protein),
+                    residues=protein,
+                    created_by=curator_userid,
+                )
+                self.db.add(protein_seq)
+                self.db.flush()
 
         # Create FEAT_LOCATION entry
         feat_location = FeatLocation(
