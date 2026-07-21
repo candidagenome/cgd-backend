@@ -313,8 +313,8 @@ class FeatureCurationService:
                 stop_coord=stop_coord,
                 strand=strand,
                 curator_userid=curator_userid,
-                # Intronless ORFs get a translated protein sequence.
-                generate_protein=(feature_type == "ORF"),
+                # Intronless ORFs get a CDS subfeature and a translated protein.
+                build_orf_features=(feature_type == "ORF"),
             )
 
         # Add reference if provided
@@ -351,12 +351,15 @@ class FeatureCurationService:
         stop_coord: int,
         strand: Optional[str],
         curator_userid: str,
-        generate_protein: bool = False,
+        build_orf_features: bool = False,
     ) -> int:
         """Add location/coordinates for a feature.
 
-        When ``generate_protein`` is set (a newly created ORF), a protein
-        sequence is translated from the feature's coding sequence and stored.
+        When ``build_orf_features`` is set (a newly created ORF), a single
+        spanning CDS subfeature is created and a protein sequence is translated
+        from the coding sequence and stored, so an intronless ORF's
+        transcript/mRNA and protein resolve. Once real intron/CDS structure is
+        annotated, both the CDS subfeature and the protein must be regenerated.
         """
         # Get chromosome feature
         chromosome = (
@@ -442,7 +445,7 @@ class FeatureCurationService:
         # protein. The organism's genetic code is used (CTG clade -> table 12,
         # C. glabrata -> table 1). NOTE: once introns/CDS subfeatures are
         # annotated, the protein must be regenerated from the spliced CDS.
-        if generate_protein:
+        if build_orf_features:
             trans_table = self._trans_table_for_organism(organism_abbrev)
             protein = str(BioSeq(residues).translate(table=trans_table))
             core = protein[:-1] if protein.endswith("*") else protein
@@ -503,12 +506,88 @@ class FeatureCurationService:
             )
             self.db.add(feat_rel)
 
+        # For a newly created intronless ORF, add a single CDS subfeature
+        # spanning the ORF so the transcript/mRNA (introns spliced out) sequence
+        # resolves. Real ORFs carry a rank-2 "part of" CDS child (e.g.
+        # <name>_cds1); the curator refines the CDS/intron structure later.
+        if build_orf_features:
+            self._add_cds_subfeature(
+                parent_feature_no=feature_no,
+                organism_no=organism.organism_no,
+                root_seq_no=chr_seq.seq_no,
+                start_coord=start_coord,
+                stop_coord=stop_coord,
+                strand=strand or "W",
+                source=chr_seq.source,
+                curator_userid=curator_userid,
+            )
+
         logger.info(
             f"Added location for feature {feature_no}: "
             f"{chromosome_name}:{start_coord}-{stop_coord} ({strand})"
         )
 
         return feat_location.feat_location_no
+
+    def _add_cds_subfeature(
+        self,
+        parent_feature_no: int,
+        organism_no: int,
+        root_seq_no: int,
+        start_coord: int,
+        stop_coord: int,
+        strand: str,
+        source: str,
+        curator_userid: str,
+    ) -> int:
+        """Create a single CDS subfeature spanning an intronless ORF.
+
+        Adds a child CDS feature (``<parent>_cds1``), its current location on
+        the parent's root sequence, and a rank-2 "part of" relationship to the
+        parent ORF. Returns the new CDS feature_no.
+        """
+        parent = (
+            self.db.query(Feature)
+            .filter(Feature.feature_no == parent_feature_no)
+            .first()
+        )
+        cds_name = f"{parent.feature_name}_cds1"
+
+        cds = Feature(
+            organism_no=organism_no,
+            feature_name=cds_name,
+            dbxref_id=cds_name,
+            feature_type="CDS",
+            source=source,
+            created_by=curator_userid,
+        )
+        self.db.add(cds)
+        self.db.flush()
+
+        cds_location = FeatLocation(
+            feature_no=cds.feature_no,
+            root_seq_no=root_seq_no,
+            coord_version=datetime.now(),
+            start_coord=start_coord,
+            stop_coord=stop_coord,
+            strand=strand,
+            is_loc_current="Y",
+            created_by=curator_userid,
+        )
+        self.db.add(cds_location)
+
+        self.db.add(
+            FeatRelationship(
+                parent_feature_no=parent_feature_no,
+                child_feature_no=cds.feature_no,
+                relationship_type="part of",
+                rank=2,
+                created_by=curator_userid,
+            )
+        )
+        self.db.flush()
+
+        return cds.feature_no
 
     def _add_feature_reference(
         self,
