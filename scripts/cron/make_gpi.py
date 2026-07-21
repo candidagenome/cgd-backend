@@ -389,6 +389,18 @@ def get_go_annotation_complete_date(session, feature_no: int) -> str:
     return row[0].strftime("%Y%m%d")
 
 
+def sanitize_field(value: str | None) -> str:
+    """Make a value safe for a tab-delimited, newline-terminated GPI row.
+
+    Collapses any embedded whitespace (tabs, carriage returns, newlines, runs
+    of spaces) to single spaces so a stray newline in the source data cannot
+    split one feature's record across multiple lines.
+    """
+    if not value:
+        return ""
+    return " ".join(value.split())
+
+
 def clean_description(headline: str | None) -> str:
     """Clean headline for GPI description field."""
     if not headline:
@@ -404,7 +416,8 @@ def clean_description(headline: str | None) -> str:
     desc = desc.replace("<sub>", "").replace("</sub>", "")
     desc = desc.replace("<sup>", "").replace("</sup>", "")
 
-    return desc.strip()
+    # Collapse embedded newlines/tabs so the description stays on one column.
+    return sanitize_field(desc)
 
 
 def generate_gpi(
@@ -495,12 +508,12 @@ def generate_gpi(
                     # the systematic name); the systematic name plus aliases go in
                     # the synonym list. Mirrors SGD's display_name / systematic_name
                     # split.
-                    symbol = gene_name or feature_name
+                    symbol = sanitize_field(gene_name or feature_name)
                     synonyms = [feature_name] if feature_name else []
                     for alias in get_aliases(session, feature_no):
                         if alias not in synonyms:
                             synonyms.append(alias)
-                    synonym_list = "|".join(synonyms)
+                    synonym_list = "|".join(sanitize_field(s) for s in synonyms)
 
                     # col10: DB_Xref(s) — UniProt (protein features) then RefSeq
                     uniprot_acc, is_swissprot = (
