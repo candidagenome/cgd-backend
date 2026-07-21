@@ -146,22 +146,29 @@ class FeatureCurationService:
             for feat in features
         ]
 
-    def check_feature_exists(self, feature_name: str) -> Optional[dict]:
+    def check_feature_exists(
+        self, name: str, organism_no: Optional[int] = None
+    ) -> Optional[dict]:
         """
         Check if a feature already exists in the database.
 
+        Matches ``name`` against either the systematic feature name or the
+        standard gene name. When ``organism_no`` is given, the search is
+        restricted to that organism (used for gene-name uniqueness, since
+        standard gene names are shared across species); otherwise it is global.
+
         Returns feature info if found, None if not found.
         """
-        feature = (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == feature_name.upper(),
-                    func.upper(Feature.gene_name) == feature_name.upper(),
-                )
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
             )
-            .first()
         )
+        if organism_no is not None:
+            query = query.filter(Feature.organism_no == organism_no)
+
+        feature = query.first()
 
         if feature:
             return {
@@ -192,31 +199,22 @@ class FeatureCurationService:
 
         Returns the feature_no of the created feature.
         """
-        # Validate feature doesn't already exist
+        # Validate the systematic feature name isn't already taken. These are
+        # unique across all of CGD, so this stays a global check.
         existing = self.check_feature_exists(feature_name)
         if existing:
             raise FeatureCurationError(
                 f"Feature '{feature_name}' already exists as '{existing['feature_name']}'"
             )
 
-        # Validate the standard gene name (if provided) isn't already taken
-        gene_name = gene_name.strip() if gene_name else None
-        if gene_name:
-            existing_gene = self.check_feature_exists(gene_name)
-            if existing_gene:
-                raise FeatureCurationError(
-                    f"Gene name '{gene_name}' already exists as "
-                    f"'{existing_gene['feature_name']}'"
-                )
-
-        # Validate feature type
+        # Validate feature type (static check; fail fast before DB lookups).
         if feature_type not in self.FEATURE_TYPES:
             raise FeatureCurationError(
                 f"Invalid feature type: {feature_type}. "
                 f"Valid types: {', '.join(self.FEATURE_TYPES[:5])}..."
             )
 
-        # Get organism
+        # Get organism (needed to scope the gene-name uniqueness check below).
         organism = (
             self.db.query(Organism)
             .filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
@@ -225,6 +223,21 @@ class FeatureCurationService:
 
         if not organism:
             raise FeatureCurationError(f"Organism '{organism_abbrev}' not found")
+
+        # Validate the standard gene name (if provided) isn't already taken
+        # within the same organism. Standard gene names are shared across
+        # species (e.g. EFG1 exists in both C. albicans and C. tropicalis), so
+        # this check must be scoped to the selected organism.
+        gene_name = gene_name.strip() if gene_name else None
+        if gene_name:
+            existing_gene = self.check_feature_exists(
+                gene_name, organism_no=organism.organism_no
+            )
+            if existing_gene:
+                raise FeatureCurationError(
+                    f"Gene name '{gene_name}' already exists as "
+                    f"'{existing_gene['feature_name']}'"
+                )
 
         # Validate coordinates if provided
         if chromosome_name:
