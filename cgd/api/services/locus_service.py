@@ -3522,6 +3522,17 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
         branch_lengths = re.findall(r':([0-9.]+)', newick_tree)
         tree_length = sum(float(bl) for bl in branch_lengths) if branch_lengths else None
 
+        # Tree-building method. The original precomputed trees were built with
+        # SEMPHY; a cluster regenerated with a different tool (e.g. after adding
+        # a newly curated gene) records its method in a sidecar file. Default to
+        # SEMPHY when no sidecar exists.
+        method = "SEMPHY"
+        method_file = alignment_dir / f"{dbid}_tree_method.txt"
+        if method_file.exists():
+            sidecar_method = method_file.read_text().strip()
+            if sidecar_method:
+                method = sidecar_method
+
         # Build download links for all available tree formats
         download_links = []
         if unrooted_tree_file.exists():
