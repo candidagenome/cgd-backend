@@ -519,6 +519,9 @@ class FeatureCurationService:
                 stop_coord=stop_coord,
                 strand=strand or "W",
                 source=chr_seq.source,
+                residues=residues,
+                genome_version_no=genome_version.genome_version_no,
+                seq_length=seq_length,
                 curator_userid=curator_userid,
             )
 
@@ -538,13 +541,19 @@ class FeatureCurationService:
         stop_coord: int,
         strand: str,
         source: str,
+        residues: str,
+        genome_version_no: int,
+        seq_length: int,
         curator_userid: str,
     ) -> int:
         """Create a single CDS subfeature spanning an intronless ORF.
 
-        Adds a child CDS feature (``<parent>_cds1``), its current location on
-        the parent's root sequence, and a rank-2 "part of" relationship to the
-        parent ORF. Returns the new CDS feature_no.
+        Adds a child CDS feature (``<parent>_cds1``), its own current genomic
+        sequence (equal to the ORF's genomic residues while intronless), its
+        location on the parent's root sequence with ``seq_no`` pointing at that
+        CDS sequence, and a rank-2 "part of" relationship to the parent ORF -
+        mirroring how curated ORFs model their CDS children (e.g.
+        Cd36_33750 -> Cd36_33750_78614). Returns the new CDS feature_no.
         """
         parent = (
             self.db.query(Feature)
@@ -564,9 +573,28 @@ class FeatureCurationService:
         self.db.add(cds)
         self.db.flush()
 
+        # The CDS carries its own genomic sequence. While the ORF is intronless
+        # the CDS spans the whole ORF, so its residues equal the ORF's genomic
+        # residues. The curator regenerates this once real CDS/intron structure
+        # is annotated.
+        cds_seq = Seq(
+            feature_no=cds.feature_no,
+            genome_version_no=genome_version_no,
+            seq_version=datetime.now(),
+            seq_type="genomic",
+            source=source,
+            is_seq_current="Y",
+            seq_length=seq_length,
+            residues=residues,
+            created_by=curator_userid,
+        )
+        self.db.add(cds_seq)
+        self.db.flush()
+
         cds_location = FeatLocation(
             feature_no=cds.feature_no,
             root_seq_no=root_seq_no,
+            seq_no=cds_seq.seq_no,
             coord_version=datetime.now(),
             start_coord=start_coord,
             stop_coord=stop_coord,
