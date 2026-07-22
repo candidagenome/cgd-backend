@@ -3560,7 +3560,7 @@ def _load_phylogenetic_tree(dbid: str) -> Optional[PhylogeneticTreeOut]:
             newick_tree=newick_tree,
             tree_length=round(tree_length, 4) if tree_length else None,
             leaf_count=leaf_count,
-            method="SEMPHY",
+            method=method,
             download_links=download_links,
         )
 
