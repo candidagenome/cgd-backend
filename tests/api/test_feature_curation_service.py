@@ -16,6 +16,7 @@ from cgd.api.services.curation.feature_curation_service import (
     FeatureCurationService,
     FeatureCurationError,
 )
+from cgd.models.models import Feature
 
 
 class MockOrganism:
@@ -700,13 +701,21 @@ class TestDeleteFeature:
 
     def test_deletes_feature(self, mock_db, sample_features):
         """Should delete feature and related records."""
-        mock_db.query.return_value = MockQuery([sample_features[1]])
+        # delete_feature looks up the Feature, then bulk-deletes the child
+        # rows (feat_location, dbxref links, etc.). Return the feature for
+        # Feature queries and empty results for everything else (no dbxref
+        # rows to clean up).
+        mock_db.query.side_effect = lambda *args: (
+            MockQuery([sample_features[1]])
+            if args and args[0] is Feature
+            else MockQuery([])
+        )
 
         service = FeatureCurationService(mock_db)
         service.delete_feature(2, "curator1")
 
-        mock_db.delete.assert_called_once()
         mock_db.commit.assert_called_once()
+        mock_db.rollback.assert_not_called()
 
 
 class TestServiceInitialization:
