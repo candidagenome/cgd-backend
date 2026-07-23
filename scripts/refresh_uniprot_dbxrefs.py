@@ -14,9 +14,10 @@ current UniProt) rejects them.  The failures were dominated by C. auris
 
 What the refresh does (per species, idempotent)
 ------------------------------------------------
-  * REMOVE - drop EBI UniProt dbxref links whose accession is genuinely DELETED
-             in UniProt.  A dbxref row left with no remaining feature links (and
-             its dbxref_url rows) is deleted too, so it stops appearing in
+  * REMOVE - drop EBI UniProt dbxref links whose accession is Inactive in
+             UniProt (DELETED, MERGED or DEMERGED) -- GOA cannot map any of
+             these.  A dbxref row left with no remaining feature links (and its
+             dbxref_url rows) is deleted too, so it stops appearing in
              gp2protein / GPI output.
   * ADD    - for features that are left with NO active UniProt link by the
              removal (i.e. their only accession(s) were deleted), restore a
@@ -26,14 +27,14 @@ What the refresh does (per species, idempotent)
 
 Two design choices that matter
 ------------------------------
-1. Deletion is decided per accession via the UniProt entry's own status, NOT by
+1. Removal is decided per accession via the UniProt entry's own status, NOT by
    "absent from the reference proteome".  C. albicans SC5314 has several UniProt
    proteomes (A21 reference + A22 haplotypes) and its accessions are spread
    across taxon ids, so many valid, active accessions are absent from the single
    reference proteome; removing those would destroy good cross-references.  Only
-   entries that are actually Inactive/DELETED are removed.  (A secondary
-   accession that now redirects to an active entry resolves to active and is
-   kept.)
+   entries that are actually Inactive (DELETED/MERGED/DEMERGED) are removed;
+   active accessions -- including ones outside the reference proteome -- are
+   kept.
 
 2. Matching for the ADD step is by exact protein-sequence identity, never locus
    tag.  For C. auris CGD's 6-digit RefSeq tag B9J08_###### and UniProt's
@@ -135,19 +136,37 @@ def fetch_proteome_fasta(proteome_id: str) -> str:
         return response.read().decode("utf-8")
 
 
-def is_accession_deleted(accession: str) -> bool | None:
-    """Return True if the accession is Inactive/DELETED in UniProt.
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Suppress redirect-following so a merge 303 surfaces as an HTTPError."""
 
-    The per-accession endpoint follows merges: a secondary accession that now
-    redirects to an active entry reports as active and returns False.  Returns
-    None on lookup error (treated as "keep" by the caller, never removed).
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def is_accession_inactive(accession: str) -> bool | None:
+    """Return True if the accession is Inactive in UniProt (any reason).
+
+    Covers DELETED, MERGED and DEMERGED entries -- GOA cannot map any of them,
+    and for a merged/demerged accession the gap-fill step recovers the current
+    primary accession by protein-sequence match.  Returns None on lookup error
+    (treated as "keep" by the caller, never removed).
+
+    Redirects are NOT followed: a MERGED/DEMERGED accession responds with a 3xx
+    to its replacement, so following it would wrongly resolve to the active
+    target and report the (still-unmappable) secondary as active.  A DELETED
+    accession responds 200 with entryType "Inactive".
     """
     url = (f"{UNIPROT_ENTRY_URL}/{urllib.parse.quote(accession)}"
            f"?fields=accession&format=json")
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with _NO_REDIRECT_OPENER.open(url, timeout=30) as r:
             d = json.load(r)
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            return True  # merged / demerged into another accession
         # 400/404 for a genuinely unknown accession is rare here (these came
         # from UniProt originally); be conservative and do not remove.
         logger.debug("status lookup HTTP %s for %s", e.code, accession)
@@ -155,25 +174,22 @@ def is_accession_deleted(accession: str) -> bool | None:
     except Exception as e:  # noqa: BLE001
         logger.debug("status lookup failed for %s: %s", accession, e)
         return None
-    if d.get("entryType") != "Inactive":
-        return False
-    reason = (d.get("inactiveReason") or {}).get("inactiveReasonType")
-    return reason == "DELETED"
+    return d.get("entryType") == "Inactive"
 
 
-def classify_deleted(accessions: set[str]) -> set[str]:
-    """Return the subset of accessions that are genuinely DELETED in UniProt."""
+def classify_inactive(accessions: set[str]) -> set[str]:
+    """Return the subset of accessions that are Inactive in UniProt."""
     if not accessions:
         return set()
     logger.info("Checking UniProt status of %d candidate accessions...",
                 len(accessions))
     accs = list(accessions)
-    deleted: set[str] = set()
+    inactive: set[str] = set()
     with ThreadPoolExecutor(max_workers=STATUS_WORKERS) as ex:
-        for acc, result in zip(accs, ex.map(is_accession_deleted, accs)):
+        for acc, result in zip(accs, ex.map(is_accession_inactive, accs)):
             if result is True:
-                deleted.add(acc)
-    return deleted
+                inactive.add(acc)
+    return inactive
 
 
 def normalize_seq(seq: str | None) -> str:
@@ -407,7 +423,7 @@ def refresh_species(session, organism_abbrev: str, config: dict, created_by: str
     stats = {
         "existing_links": 0,
         "candidates_checked": 0,
-        "accessions_deleted": 0,
+        "accessions_inactive": 0,
         "accessions_active_kept": 0,
         "stale_links_removed": 0,
         "orphan_dbxrefs_deleted": 0,
@@ -434,13 +450,13 @@ def refresh_species(session, organism_abbrev: str, config: dict, created_by: str
     linked_accs = {acc for _dx, _fn, _dt, acc in species_links}
     candidates = {a for a in linked_accs if a not in ref_accessions}
     stats["candidates_checked"] = len(candidates)
-    deleted_accs = set() if keep_stale else classify_deleted(candidates)
-    stats["accessions_deleted"] = len(deleted_accs)
-    stats["accessions_active_kept"] = len(candidates) - len(deleted_accs)
+    inactive_accs = set() if keep_stale else classify_inactive(candidates)
+    stats["accessions_inactive"] = len(inactive_accs)
+    stats["accessions_active_kept"] = len(candidates) - len(inactive_accs)
     logger.info(
-        "[%s] %d links, %d accns outside ref proteome, %d DELETED, %d active-kept",
+        "[%s] %d links, %d accns outside ref proteome, %d inactive, %d active-kept",
         organism_abbrev, len(species_links), len(candidates),
-        len(deleted_accs), stats["accessions_active_kept"],
+        len(inactive_accs), stats["accessions_active_kept"],
     )
 
     # ---- REMOVE deleted links ------------------------------------------------
@@ -448,7 +464,7 @@ def refresh_species(session, organism_abbrev: str, config: dict, created_by: str
     features_with_active: set[int] = set()
     features_touched_by_removal: set[int] = set()
     for dbxref_no, feature_no, _dtype, accession in species_links:
-        if accession in deleted_accs:
+        if accession in inactive_accs:
             features_touched_by_removal.add(feature_no)
             if not dry_run:
                 delete_dbxref_feat(session, dbxref_no, feature_no)
@@ -463,7 +479,7 @@ def refresh_species(session, organism_abbrev: str, config: dict, created_by: str
                 remaining = count_feat_links(session, dbxref_no)
                 removed_here = sum(
                     1 for dx, _fn, _dt, acc in species_links
-                    if dx == dbxref_no and acc in deleted_accs
+                    if dx == dbxref_no and acc in inactive_accs
                 )
                 if remaining - removed_here <= 0:
                     stats["orphan_dbxrefs_deleted"] += 1
@@ -543,7 +559,7 @@ def log_summary(organism_abbrev: str, stats: dict) -> None:
     logger.info("Summary [%s]:", organism_abbrev)
     logger.info("  existing EBI UniProt links : %d", stats["existing_links"])
     logger.info("  accns checked (non-ref)    : %d", stats["candidates_checked"])
-    logger.info("  accns genuinely DELETED    : %d", stats["accessions_deleted"])
+    logger.info("  accns inactive (removed)   : %d", stats["accessions_inactive"])
     logger.info("  accns active (kept)        : %d", stats["accessions_active_kept"])
     logger.info("  stale links removed        : %d", stats["stale_links_removed"])
     logger.info("  orphan dbxrefs deleted     : %d", stats["orphan_dbxrefs_deleted"])
