@@ -488,9 +488,9 @@ class TestCreateFeature:
     def test_creates_feature_with_gene_name(self, mock_db, sample_organisms):
         """Should store the supplied standard gene name on the new feature."""
         mock_db.query.side_effect = [
-            MockQuery([]),  # Feature name doesn't exist
-            MockQuery([]),  # Gene name doesn't exist
+            MockQuery([]),  # Feature name doesn't exist (global)
             MockQuery([sample_organisms[0]]),  # Organism found
+            MockQuery([]),  # Gene name doesn't exist in this organism
         ]
 
         service = FeatureCurationService(mock_db)
@@ -507,11 +507,12 @@ class TestCreateFeature:
         assert created_feature.gene_name == "MYGENE1"
         mock_db.commit.assert_called_once()
 
-    def test_raises_for_existing_gene_name(self, mock_db, sample_features):
-        """Should raise error when the supplied gene name is already taken."""
+    def test_raises_for_existing_gene_name(self, mock_db, sample_organisms, sample_features):
+        """Should raise error when the gene name is already taken in the organism."""
         mock_db.query.side_effect = [
-            MockQuery([]),  # Feature name doesn't exist
-            MockQuery([sample_features[1]]),  # Gene name already exists (ALS1)
+            MockQuery([]),  # Feature name doesn't exist (global)
+            MockQuery([sample_organisms[0]]),  # Organism found
+            MockQuery([sample_features[1]]),  # Gene name exists in this organism (ALS1)
         ]
 
         service = FeatureCurationService(mock_db)
@@ -526,6 +527,42 @@ class TestCreateFeature:
             )
 
         assert "already exists" in str(exc_info.value)
+
+    def test_gene_name_check_is_scoped_to_organism(self, mock_db, sample_organisms):
+        """Gene-name uniqueness must be scoped to the selected organism.
+
+        Standard gene names are shared across species (e.g. EFG1 exists on a
+        C. albicans ORF), so an existing name in another organism must not block
+        creating a feature with that name in the chosen organism. Regression for
+        the curator report about creating EFG1 on C. tropicalis.
+        """
+        mock_db.query.side_effect = [
+            MockQuery([]),  # Feature name doesn't exist (global)
+            MockQuery([sample_organisms[0]]),  # Organism found
+            MockQuery([]),  # Gene name not found *within this organism*
+        ]
+
+        service = FeatureCurationService(mock_db)
+        calls = []
+        real_check = service.check_feature_exists
+
+        def spy(name, organism_no=None):
+            calls.append((name, organism_no))
+            return real_check(name, organism_no)
+
+        service.check_feature_exists = spy
+        service.create_feature(
+            feature_name="CTRG_00421.5",
+            feature_type="ORF",
+            organism_abbrev="C_albicans_SC5314",
+            curator_userid="curator1",
+            gene_name="EFG1",
+        )
+
+        # Systematic-name check is global; gene-name check is organism-scoped.
+        assert ("CTRG_00421.5", None) in calls
+        assert ("EFG1", sample_organisms[0].organism_no) in calls
+        mock_db.add.assert_called_once()
 
 
 class TestAddLocationToFeature:

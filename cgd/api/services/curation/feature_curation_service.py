@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from Bio.Seq import Seq as BioSeq
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
@@ -146,22 +147,29 @@ class FeatureCurationService:
             for feat in features
         ]
 
-    def check_feature_exists(self, feature_name: str) -> Optional[dict]:
+    def check_feature_exists(
+        self, name: str, organism_no: Optional[int] = None
+    ) -> Optional[dict]:
         """
         Check if a feature already exists in the database.
 
+        Matches ``name`` against either the systematic feature name or the
+        standard gene name. When ``organism_no`` is given, the search is
+        restricted to that organism (used for gene-name uniqueness, since
+        standard gene names are shared across species); otherwise it is global.
+
         Returns feature info if found, None if not found.
         """
-        feature = (
-            self.db.query(Feature)
-            .filter(
-                or_(
-                    func.upper(Feature.feature_name) == feature_name.upper(),
-                    func.upper(Feature.gene_name) == feature_name.upper(),
-                )
+        query = self.db.query(Feature).filter(
+            or_(
+                func.upper(Feature.feature_name) == name.upper(),
+                func.upper(Feature.gene_name) == name.upper(),
             )
-            .first()
         )
+        if organism_no is not None:
+            query = query.filter(Feature.organism_no == organism_no)
+
+        feature = query.first()
 
         if feature:
             return {
@@ -192,31 +200,22 @@ class FeatureCurationService:
 
         Returns the feature_no of the created feature.
         """
-        # Validate feature doesn't already exist
+        # Validate the systematic feature name isn't already taken. These are
+        # unique across all of CGD, so this stays a global check.
         existing = self.check_feature_exists(feature_name)
         if existing:
             raise FeatureCurationError(
                 f"Feature '{feature_name}' already exists as '{existing['feature_name']}'"
             )
 
-        # Validate the standard gene name (if provided) isn't already taken
-        gene_name = gene_name.strip() if gene_name else None
-        if gene_name:
-            existing_gene = self.check_feature_exists(gene_name)
-            if existing_gene:
-                raise FeatureCurationError(
-                    f"Gene name '{gene_name}' already exists as "
-                    f"'{existing_gene['feature_name']}'"
-                )
-
-        # Validate feature type
+        # Validate feature type (static check; fail fast before DB lookups).
         if feature_type not in self.FEATURE_TYPES:
             raise FeatureCurationError(
                 f"Invalid feature type: {feature_type}. "
                 f"Valid types: {', '.join(self.FEATURE_TYPES[:5])}..."
             )
 
-        # Get organism
+        # Get organism (needed to scope the gene-name uniqueness check below).
         organism = (
             self.db.query(Organism)
             .filter(func.upper(Organism.organism_abbrev) == organism_abbrev.upper())
@@ -225,6 +224,21 @@ class FeatureCurationService:
 
         if not organism:
             raise FeatureCurationError(f"Organism '{organism_abbrev}' not found")
+
+        # Validate the standard gene name (if provided) isn't already taken
+        # within the same organism. Standard gene names are shared across
+        # species (e.g. EFG1 exists in both C. albicans and C. tropicalis), so
+        # this check must be scoped to the selected organism.
+        gene_name = gene_name.strip() if gene_name else None
+        if gene_name:
+            existing_gene = self.check_feature_exists(
+                gene_name, organism_no=organism.organism_no
+            )
+            if existing_gene:
+                raise FeatureCurationError(
+                    f"Gene name '{gene_name}' already exists as "
+                    f"'{existing_gene['feature_name']}'"
+                )
 
         # Validate coordinates if provided
         if chromosome_name:
@@ -299,6 +313,8 @@ class FeatureCurationService:
                 stop_coord=stop_coord,
                 strand=strand,
                 curator_userid=curator_userid,
+                # Intronless ORFs get a CDS subfeature and a translated protein.
+                build_orf_features=(feature_type == "ORF"),
             )
 
         # Add reference if provided
@@ -314,6 +330,18 @@ class FeatureCurationService:
 
         return feature.feature_no
 
+    # Organisms that use the standard genetic code (NCBI translation table 1).
+    # Every other CGD species is in the CTG clade and uses the alternative
+    # yeast nuclear code (table 12, CTG->Ser). Mirrors the per-organism
+    # trans_table values in cgd/core/blast_config.py.
+    STANDARD_CODE_ORGANISMS = frozenset({"C_GLABRATA_CBS138"})
+
+    def _trans_table_for_organism(self, organism_abbrev: str) -> int:
+        """Return the NCBI genetic-code id for an organism (1 or 12)."""
+        if organism_abbrev.upper() in self.STANDARD_CODE_ORGANISMS:
+            return 1
+        return 12
+
     def _add_feature_location(
         self,
         feature_no: int,
@@ -323,8 +351,16 @@ class FeatureCurationService:
         stop_coord: int,
         strand: Optional[str],
         curator_userid: str,
+        build_orf_features: bool = False,
     ) -> int:
-        """Add location/coordinates for a feature."""
+        """Add location/coordinates for a feature.
+
+        When ``build_orf_features`` is set (a newly created ORF), a single
+        spanning CDS subfeature is created and a protein sequence is translated
+        from the coding sequence and stored, so an intronless ORF's
+        transcript/mRNA and protein resolve. Once real intron/CDS structure is
+        annotated, both the CDS subfeature and the protein must be regenerated.
+        """
         # Get chromosome feature
         chromosome = (
             self.db.query(Feature)
@@ -372,18 +408,22 @@ class FeatureCurationService:
                 f"No current genome version found for organism '{organism_abbrev}'"
             )
 
-        # Extract sequence for this feature
-        if strand == "C":
-            # Crick strand - reverse complement
-            seq_start = min(start_coord, stop_coord)
-            seq_end = max(start_coord, stop_coord)
-        else:
-            seq_start = min(start_coord, stop_coord)
-            seq_end = max(start_coord, stop_coord)
+        # Extract this feature's genomic sequence from the chromosome/contig.
+        # Coordinates are 1-based inclusive; Crick-strand features are stored
+        # with start_coord > stop_coord and are reverse-complemented so the
+        # residues read 5'->3' on the feature's own strand.
+        seq_start = min(start_coord, stop_coord)
+        seq_end = max(start_coord, stop_coord)
+        seq_length = seq_end - seq_start + 1
 
-        # Get sequence from chromosome (simplified - actual implementation would
-        # extract subsequence and possibly reverse complement)
-        seq_length = abs(stop_coord - start_coord) + 1
+        residues = chr_seq.residues[seq_start - 1:seq_end]
+        if len(residues) != seq_length:
+            raise FeatureCurationError(
+                f"Coordinates {start_coord}-{stop_coord} fall outside "
+                f"'{chromosome_name}' (length {chr_seq.seq_length})"
+            )
+        if strand == "C":
+            residues = str(BioSeq(residues).reverse_complement())
 
         # Create SEQ entry for this feature
         feature_seq = Seq(
@@ -394,11 +434,41 @@ class FeatureCurationService:
             source=chr_seq.source,
             is_seq_current="Y",
             seq_length=seq_length,
-            residues="N" * seq_length,  # Placeholder - actual sequence TBD
+            residues=residues,
             created_by=curator_userid,
         )
         self.db.add(feature_seq)
         self.db.flush()
+
+        # For a newly created intronless ORF, translate the coding sequence
+        # (== the genomic residues while there are no introns) and store the
+        # protein. The organism's genetic code is used (CTG clade -> table 12,
+        # C. glabrata -> table 1). NOTE: once introns/CDS subfeatures are
+        # annotated, the protein must be regenerated from the spliced CDS.
+        if build_orf_features:
+            trans_table = self._trans_table_for_organism(organism_abbrev)
+            protein = str(BioSeq(residues).translate(table=trans_table))
+            core = protein[:-1] if protein.endswith("*") else protein
+            if "*" in core:
+                logger.warning(
+                    "Feature %s translates with an internal stop codon; "
+                    "check its coordinates/strand.", feature_no
+                )
+            protein = protein.rstrip("*")
+            if protein:
+                protein_seq = Seq(
+                    feature_no=feature_no,
+                    genome_version_no=genome_version.genome_version_no,
+                    seq_version=datetime.now(),
+                    seq_type="protein",
+                    source=chr_seq.source,
+                    is_seq_current="Y",
+                    seq_length=len(protein),
+                    residues=protein,
+                    created_by=curator_userid,
+                )
+                self.db.add(protein_seq)
+                self.db.flush()
 
         # Create FEAT_LOCATION entry
         feat_location = FeatLocation(
@@ -436,12 +506,116 @@ class FeatureCurationService:
             )
             self.db.add(feat_rel)
 
+        # For a newly created intronless ORF, add a single CDS subfeature
+        # spanning the ORF so the transcript/mRNA (introns spliced out) sequence
+        # resolves. Real ORFs carry a rank-2 "part of" CDS child (e.g.
+        # <name>_cds1); the curator refines the CDS/intron structure later.
+        if build_orf_features:
+            self._add_cds_subfeature(
+                parent_feature_no=feature_no,
+                organism_no=organism.organism_no,
+                root_seq_no=chr_seq.seq_no,
+                start_coord=start_coord,
+                stop_coord=stop_coord,
+                strand=strand or "W",
+                source=chr_seq.source,
+                residues=residues,
+                genome_version_no=genome_version.genome_version_no,
+                seq_length=seq_length,
+                curator_userid=curator_userid,
+            )
+
         logger.info(
             f"Added location for feature {feature_no}: "
             f"{chromosome_name}:{start_coord}-{stop_coord} ({strand})"
         )
 
         return feat_location.feat_location_no
+
+    def _add_cds_subfeature(
+        self,
+        parent_feature_no: int,
+        organism_no: int,
+        root_seq_no: int,
+        start_coord: int,
+        stop_coord: int,
+        strand: str,
+        source: str,
+        residues: str,
+        genome_version_no: int,
+        seq_length: int,
+        curator_userid: str,
+    ) -> int:
+        """Create a single CDS subfeature spanning an intronless ORF.
+
+        Adds a child CDS feature (``<parent>_cds1``), its own current genomic
+        sequence (equal to the ORF's genomic residues while intronless), its
+        location on the parent's root sequence with ``seq_no`` pointing at that
+        CDS sequence, and a rank-2 "part of" relationship to the parent ORF -
+        mirroring how curated ORFs model their CDS children (e.g.
+        Cd36_33750 -> Cd36_33750_78614). Returns the new CDS feature_no.
+        """
+        parent = (
+            self.db.query(Feature)
+            .filter(Feature.feature_no == parent_feature_no)
+            .first()
+        )
+        cds_name = f"{parent.feature_name}_cds1"
+
+        cds = Feature(
+            organism_no=organism_no,
+            feature_name=cds_name,
+            dbxref_id=cds_name,
+            feature_type="CDS",
+            source=source,
+            created_by=curator_userid,
+        )
+        self.db.add(cds)
+        self.db.flush()
+
+        # The CDS carries its own genomic sequence. While the ORF is intronless
+        # the CDS spans the whole ORF, so its residues equal the ORF's genomic
+        # residues. The curator regenerates this once real CDS/intron structure
+        # is annotated.
+        cds_seq = Seq(
+            feature_no=cds.feature_no,
+            genome_version_no=genome_version_no,
+            seq_version=datetime.now(),
+            seq_type="genomic",
+            source=source,
+            is_seq_current="Y",
+            seq_length=seq_length,
+            residues=residues,
+            created_by=curator_userid,
+        )
+        self.db.add(cds_seq)
+        self.db.flush()
+
+        cds_location = FeatLocation(
+            feature_no=cds.feature_no,
+            root_seq_no=root_seq_no,
+            seq_no=cds_seq.seq_no,
+            coord_version=datetime.now(),
+            start_coord=start_coord,
+            stop_coord=stop_coord,
+            strand=strand,
+            is_loc_current="Y",
+            created_by=curator_userid,
+        )
+        self.db.add(cds_location)
+
+        self.db.add(
+            FeatRelationship(
+                parent_feature_no=parent_feature_no,
+                child_feature_no=cds.feature_no,
+                relationship_type="part of",
+                rank=2,
+                created_by=curator_userid,
+            )
+        )
+        self.db.flush()
+
+        return cds.feature_no
 
     def _add_feature_reference(
         self,
