@@ -18,9 +18,11 @@ records db_subset, go_annotation_complete (latest manual review date), and
 uniprot_proteome. Two columns are intentionally left empty: Encoded_by, and
 Protein_Containing_Complex_Members (CGD does not curate protein complexes).
 
+Output files are gzipped (.gpi.gz), the format GO Central requires for ingest.
+
 For diploid strains (C. albicans SC5314), two files are generated:
-- {strain}.gpi - A alleles only (backwards compatible)
-- {strain}_with_B_alleles.gpi - Both A and B alleles
+- {strain}.gpi.gz - A alleles only (backwards compatible)
+- {strain}_with_B_alleles.gpi.gz - Both A and B alleles
 
 Validation checks before copying to final location:
 ---------------------------------------------------------------------------
@@ -45,6 +47,7 @@ Environment Variables:
 """
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -187,12 +190,13 @@ def send_slack_message(message: str, is_error: bool = False) -> None:
 
 
 def count_features_in_file(file_path: Path) -> int:
-    """Count non-header lines (features) in a GPI file."""
+    """Count non-header lines (features) in a GPI file (plain or gzipped)."""
     if not file_path.exists():
         return 0
 
+    opener = gzip.open if file_path.suffix == ".gz" else open
     count = 0
-    with open(file_path) as f:
+    with opener(file_path, "rt") as f:
         for line in f:
             if not line.startswith("!"):
                 count += 1
@@ -452,7 +456,8 @@ def generate_gpi(
     output_dir.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    gpi_filename = f"{strain_abbrev}{file_suffix}.gpi"
+    # GO Central ingests these gzipped, so the published file is .gpi.gz.
+    gpi_filename = f"{strain_abbrev}{file_suffix}.gpi.gz"
     final_file = output_dir / gpi_filename
     today_tag = datetime.now().strftime("%Y%m%d")
 
@@ -473,8 +478,8 @@ def generate_gpi(
             allele_note = " (with B alleles)" if include_alleles else ""
             logger.info(f"Found {len(features)} features for {strain_abbrev}{allele_note}")
 
-            # Write GPI file to temp location
-            with open(temp_file, "w") as f:
+            # Write GPI file to temp location (gzipped)
+            with gzip.open(temp_file, "wt") as f:
                 # Write header
                 f.write("!gpi-version: 2.0\n")
                 f.write(f"!generated-by: {PROJECT_ACRONYM}\n")
@@ -569,7 +574,7 @@ def generate_gpi(
 
             # Archive existing file before replacing
             if final_file.exists():
-                archive_file = ARCHIVE_DIR / f"{strain_abbrev}{file_suffix}_{today_tag}.gpi"
+                archive_file = ARCHIVE_DIR / f"{strain_abbrev}{file_suffix}_{today_tag}.gpi.gz"
                 try:
                     shutil.copy(str(final_file), str(archive_file))
                     logger.info(f"Archived {final_file} to {archive_file}")
