@@ -192,6 +192,8 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     1. Feature gene_name (exact, case-insensitive)
     2. Feature feature_name (exact, case-insensitive)
     3. Feature dbxref_id (exact, case-insensitive) - e.g., CAL0001571
+    3b. Feature alias (exact, case-insensitive) - e.g., retired name CTRG_06249;
+        only when the alias maps to a single feature
     4. Reference dbxref_id (exact, case-insensitive) - e.g., CAL0080639
 
     Returns ResolveResponse with redirect_url if found.
@@ -237,6 +239,29 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
         .first()
     )
     if feature:
+        return ResolveResponse(
+            query=query,
+            resolved=True,
+            redirect_url=f"/locus/{feature.feature_name}",
+            entity_type="locus",
+            entity_name=feature.gene_name or feature.feature_name,
+        )
+
+    # 3b. Check alias (exact match, case-insensitive) - e.g. retired systematic
+    # names like CTRG_06249 that researchers find on NCBI/UniProt. Only resolve
+    # when the alias maps to a single feature; if it is shared by several
+    # features, fall through to search results rather than guessing one.
+    alias_features = (
+        db.query(Feature)
+        .join(FeatAlias, FeatAlias.feature_no == Feature.feature_no)
+        .join(Alias, Alias.alias_no == FeatAlias.alias_no)
+        .filter(func.upper(Alias.alias_name) == upper_query)
+        .distinct()
+        .limit(2)
+        .all()
+    )
+    if len(alias_features) == 1:
+        feature = alias_features[0]
         return ResolveResponse(
             query=query,
             resolved=True,
