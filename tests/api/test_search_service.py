@@ -413,6 +413,7 @@ class TestResolveIdentifier:
             MockQuery([]),  # gene_name
             MockQuery([]),  # feature_name
             MockQuery([]),  # feature dbxref_id
+            MockQuery([]),  # alias lookup
             MockQuery([sample_reference]),  # reference dbxref_id
         ]
 
