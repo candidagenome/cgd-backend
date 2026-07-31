@@ -310,13 +310,9 @@ class Enricher:
             VALUES (:o, :n, :x, :ft, 'CGD', :u)
         """), {"o": self.org, "n": child_name, "x": dbxref, "ft": subtype, "u": ADMIN_USER})
         child_no = self._feature_no(child_name)
-        self.s.execute(text(f"""
-            INSERT INTO {DB_SCHEMA}.feat_location
-                (feature_no, root_seq_no, coord_version, start_coord, stop_coord,
-                 strand, is_loc_current, created_by)
-            VALUES (:f, :r, SYSDATE, :a, :b, :s, 'Y', :u)
-        """), {"f": child_no, "r": root_seq_no, "a": start, "b": stop,
-               "s": db_strand, "u": ADMIN_USER})
+        # Genomic SEQ first so we can point feat_location.seq_no at it (CGD
+        # convention: child feat_location.seq_no = the child's own genomic seq,
+        # root_seq_no = the chromosome). dump_gff.py / other consumers require it.
         self.s.execute(text(f"""
             INSERT INTO {DB_SCHEMA}.seq
                 (feature_no, genome_version_no, seq_version, seq_type, source,
@@ -324,10 +320,23 @@ class Enricher:
             VALUES (:f, :gv, SYSDATE, 'genomic', :src, 'Y', :len, :res, :u)
         """), {"f": child_no, "gv": self.gv, "src": SEQ_SOURCE,
                "len": len(res), "res": res, "u": ADMIN_USER})
+        child_seq_no = self.s.execute(text(f"""
+            SELECT seq_no FROM {DB_SCHEMA}.seq
+            WHERE feature_no=:f AND seq_type='genomic' AND is_seq_current='Y'
+        """), {"f": child_no}).scalar()
+        self.s.execute(text(f"""
+            INSERT INTO {DB_SCHEMA}.feat_location
+                (feature_no, root_seq_no, seq_no, coord_version, start_coord, stop_coord,
+                 strand, is_loc_current, created_by)
+            VALUES (:f, :r, :sq, SYSDATE, :a, :b, :s, 'Y', :u)
+        """), {"f": child_no, "r": root_seq_no, "sq": child_seq_no, "a": start, "b": stop,
+               "s": db_strand, "u": ADMIN_USER})
+        # rank=2 marks a sub-feature ('part of' level 2); required by dump_gff.py's
+        # subfeature query and matches how existing tRNAs (glabrata/albicans) are stored.
         self.s.execute(text(f"""
             INSERT INTO {DB_SCHEMA}.feat_relationship
-                (parent_feature_no, child_feature_no, relationship_type, created_by)
-            VALUES (:p, :c, 'part of', :u)
+                (parent_feature_no, child_feature_no, relationship_type, rank, created_by)
+            VALUES (:p, :c, 'part of', 2, :u)
         """), {"p": parent_no, "c": child_no, "u": ADMIN_USER})
 
 
