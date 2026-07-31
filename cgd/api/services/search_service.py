@@ -35,8 +35,8 @@ from cgd.models.models import (
 # Matching the locus page valid types
 GENE_FEATURE_TYPES = [
     'ORF', 'blocked_reading_frame', 'pseudogene',
-    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
-    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+    'transposable_element_gene', 'gene_group', 'ncRNA',
+    'rRNA', 'snoRNA', 'snRNA', 'tRNA',
 ]
 
 # Organism display priority (lower index = higher priority)
