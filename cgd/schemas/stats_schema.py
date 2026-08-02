@@ -21,6 +21,31 @@ class StatsSummaryResponse(BaseModel):
     error: Optional[str] = Field(None)
 
 
+class OrganismCategoryCounts(BaseModel):
+    """Per-organism category totals for the Explore page filter."""
+
+    organism_abbrev: str
+    organism_name: str
+    genes: int = 0
+    references: int = 0
+    phenotypes: int = 0
+    phenotype_annotations: int = 0
+    go_annotations: int = 0
+    ortholog_clusters: int = 0
+    interactions: int = 0
+
+
+class CountsByOrganismResponse(BaseModel):
+    """Category totals broken down by reference strain."""
+
+    by_organism: dict = Field(
+        default_factory=dict,
+        description="Map of organism_abbrev -> OrganismCategoryCounts",
+    )
+    success: bool = Field(True)
+    error: Optional[str] = Field(None)
+
+
 class GeneOfTheDayResponse(BaseModel):
     """A deterministic per-day featured gene for the Explore/landing page."""
 
