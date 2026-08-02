@@ -195,11 +195,42 @@ def get_recent_ortholog_clusters(
         .limit(limit)
         .all()
     )
+    group_nos = [group.homology_group_no for group, _ in rows]
+    members_by_group: dict[int, list[dict]] = {group_no: [] for group_no in group_nos}
+    if group_nos:
+        member_rows = (
+            db.query(
+                FeatHomology.homology_group_no,
+                Feature.feature_name,
+                Feature.gene_name,
+                Organism.organism_name,
+            )
+            .join(Feature, Feature.feature_no == FeatHomology.feature_no)
+            .join(Organism, Organism.organism_no == Feature.organism_no)
+            .filter(FeatHomology.homology_group_no.in_(group_nos))
+            .order_by(FeatHomology.homology_group_no, Organism.organism_name, Feature.feature_name)
+            .all()
+        )
+        for group_no, feature_name, gene_name, organism_name in member_rows:
+            members_by_group[group_no].append(
+                {
+                    "feature_name": feature_name,
+                    "gene_name": gene_name,
+                    "organism": organism_name,
+                }
+            )
+    method_rows = (
+        db.query(HomologyGroup.method, func.count(HomologyGroup.homology_group_no))
+        .filter(HomologyGroup.date_created >= cutoff)
+        .group_by(HomologyGroup.method)
+        .all()
+    )
     return RecentOrthologClustersResponse(
         days=days,
         total_count=total_count,
         page=page,
         limit=limit,
+        method_counts={method: count for method, count in method_rows},
         clusters=[
             {
                 "homology_group_no": group.homology_group_no,
@@ -207,6 +238,7 @@ def get_recent_ortholog_clusters(
                 "group_type": group.homology_group_type,
                 "method": group.method,
                 "member_count": member_count,
+                "members": members_by_group.get(group.homology_group_no, []),
                 "date_created": group.date_created.isoformat(),
             }
             for group, member_count in rows

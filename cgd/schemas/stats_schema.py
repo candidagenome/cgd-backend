@@ -50,12 +50,19 @@ class RecentActivityResponse(BaseModel):
     error: Optional[str] = Field(None)
 
 
+class RecentOrthologMember(BaseModel):
+    feature_name: str
+    gene_name: Optional[str] = None
+    organism: str
+
+
 class RecentOrthologCluster(BaseModel):
     homology_group_no: int
     cluster_id: Optional[str] = None
     group_type: str
     method: str
     member_count: int = 0
+    members: list[RecentOrthologMember] = Field(default_factory=list)
     date_created: str
 
 
@@ -64,6 +71,7 @@ class RecentOrthologClustersResponse(BaseModel):
     total_count: int
     page: int
     limit: int
+    method_counts: dict[str, int] = Field(default_factory=dict)
     clusters: list[RecentOrthologCluster] = Field(default_factory=list)
 
 
