@@ -117,6 +117,14 @@ def get_recent_activity(db: Session, days: int = 90) -> RecentActivityResponse:
     """Return creation counts for the Explore page's recent-activity panel."""
     cutoff = datetime.now() - timedelta(days=days)
     try:
+        recent_phenotypes = (
+            db.query(PhenoAnnotation, Feature, Phenotype)
+            .join(Feature, Feature.feature_no == PhenoAnnotation.feature_no)
+            .join(Phenotype, Phenotype.phenotype_no == PhenoAnnotation.phenotype_no)
+            .filter(PhenoAnnotation.date_created >= cutoff)
+            .order_by(PhenoAnnotation.date_created.desc())
+            .all()
+        )
         return RecentActivityResponse(
             days=days,
             references=(
@@ -125,18 +133,25 @@ def get_recent_activity(db: Session, days: int = 90) -> RecentActivityResponse:
                 .scalar()
                 or 0
             ),
-            phenotype_annotations=(
-                db.query(func.count(PhenoAnnotation.pheno_annotation_no))
-                .filter(PhenoAnnotation.date_created >= cutoff)
-                .scalar()
-                or 0
-            ),
+            phenotype_annotations=len(recent_phenotypes),
             ortholog_clusters=(
                 db.query(func.count(HomologyGroup.homology_group_no))
                 .filter(HomologyGroup.date_created >= cutoff)
                 .scalar()
                 or 0
             ),
+            recent_phenotype_annotations=[
+                {
+                    "annotation_no": annotation.pheno_annotation_no,
+                    "feature_name": feature.feature_name,
+                    "gene_name": feature.gene_name,
+                    "observable": phenotype.observable,
+                    "qualifier": phenotype.qualifier,
+                    "experiment_type": phenotype.experiment_type,
+                    "date_created": annotation.date_created.isoformat(),
+                }
+                for annotation, feature, phenotype in recent_phenotypes
+            ],
             success=True,
         )
     except Exception as exc:  # noqa: BLE001

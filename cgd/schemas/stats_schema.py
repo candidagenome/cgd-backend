@@ -21,6 +21,18 @@ class StatsSummaryResponse(BaseModel):
     error: Optional[str] = Field(None)
 
 
+class RecentPhenotypeAnnotation(BaseModel):
+    """One recently created feature-phenotype association."""
+
+    annotation_no: int
+    feature_name: str
+    gene_name: Optional[str] = None
+    observable: str
+    qualifier: Optional[str] = None
+    experiment_type: str
+    date_created: str
+
+
 class RecentActivityResponse(BaseModel):
     """Database records created during a shared recent-activity window."""
 
@@ -30,6 +42,10 @@ class RecentActivityResponse(BaseModel):
         0, description="Phenotype annotations created during the window"
     )
     ortholog_clusters: int = Field(0, description="Ortholog groups created during the window")
+    recent_phenotype_annotations: list[RecentPhenotypeAnnotation] = Field(
+        default_factory=list,
+        description="Phenotype annotations created during the window, newest first",
+    )
     success: bool = Field(True)
     error: Optional[str] = Field(None)
 
