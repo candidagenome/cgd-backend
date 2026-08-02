@@ -4,16 +4,35 @@ Site statistics API Router.
 import logging
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
-from cgd.schemas.stats_schema import StatsSummaryResponse, CountsByOrganismResponse
-from cgd.api.services.stats_service import get_stats_summary, get_counts_by_organism
+from cgd.schemas.stats_schema import (
+    CountsByOrganismResponse,
+    RecentActivityResponse,
+    StatsSummaryResponse,
+)
+from cgd.api.services.stats_service import (
+    get_counts_by_organism,
+    get_recent_activity,
+    get_stats_summary,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+
+@router.get("/recent-activity", response_model=RecentActivityResponse)
+def recent_activity(
+    days: int = Query(90, ge=1, le=365), db: Session = Depends(get_db)
+):
+    """Get recent reference, phenotype-annotation, and ortholog-cluster counts."""
+    result = get_recent_activity(db, days=days)
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error)
+    return result
 
 
 @router.get("/summary", response_model=StatsSummaryResponse)

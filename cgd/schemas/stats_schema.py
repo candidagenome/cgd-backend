@@ -21,6 +21,19 @@ class StatsSummaryResponse(BaseModel):
     error: Optional[str] = Field(None)
 
 
+class RecentActivityResponse(BaseModel):
+    """Database records created during a shared recent-activity window."""
+
+    days: int = Field(..., description="Lookback window in days")
+    references: int = Field(0, description="References created during the window")
+    phenotype_annotations: int = Field(
+        0, description="Phenotype annotations created during the window"
+    )
+    ortholog_clusters: int = Field(0, description="Ortholog groups created during the window")
+    success: bool = Field(True)
+    error: Optional[str] = Field(None)
+
+
 class OrganismCategoryCounts(BaseModel):
     """Per-organism category totals for the Explore page filter."""
 

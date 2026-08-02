@@ -7,6 +7,7 @@ fresh set of COUNT(*) queries on every visit.
 """
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import func
@@ -31,6 +32,7 @@ from cgd.api.services.genome_snapshot_service import _get_orf_counts
 from cgd.schemas.stats_schema import (
     CountsByOrganismResponse,
     OrganismCategoryCounts,
+    RecentActivityResponse,
     StatsSummaryResponse,
 )
 
@@ -109,6 +111,37 @@ def get_stats_summary(db: Session, refresh: bool = False) -> StatsSummaryRespons
     except Exception as exc:  # noqa: BLE001
         logger.error("Error computing stats summary: %s", exc)
         return StatsSummaryResponse(success=False, error=str(exc))
+
+
+def get_recent_activity(db: Session, days: int = 90) -> RecentActivityResponse:
+    """Return creation counts for the Explore page's recent-activity panel."""
+    cutoff = datetime.now() - timedelta(days=days)
+    try:
+        return RecentActivityResponse(
+            days=days,
+            references=(
+                db.query(func.count(Reference.reference_no))
+                .filter(Reference.date_created >= cutoff)
+                .scalar()
+                or 0
+            ),
+            phenotype_annotations=(
+                db.query(func.count(PhenoAnnotation.pheno_annotation_no))
+                .filter(PhenoAnnotation.date_created >= cutoff)
+                .scalar()
+                or 0
+            ),
+            ortholog_clusters=(
+                db.query(func.count(HomologyGroup.homology_group_no))
+                .filter(HomologyGroup.date_created >= cutoff)
+                .scalar()
+                or 0
+            ),
+            success=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error computing recent activity: %s", exc)
+        return RecentActivityResponse(days=days, success=False, error=str(exc))
 
 
 def _counts_for_organism(db: Session, org) -> OrganismCategoryCounts:
