@@ -92,6 +92,7 @@ class PhenotypeSearchResult(BaseModel):
     strain: typing.Optional[str] = None
     details: list[SearchResultDetail] = []  # Condition, Chemical, Details, etc.
     references: list[ReferenceForAnnotation] = []
+    date_created: typing.Optional[str] = None
 
 
 class PhenotypeSearchQuery(BaseModel):

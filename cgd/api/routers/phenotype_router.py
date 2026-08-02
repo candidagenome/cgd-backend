@@ -30,6 +30,7 @@ def search_phenotypes(
     property_type: Optional[str] = Query(None, description="Property type filter (e.g., chemical, condition)"),
     pubmed: Optional[str] = Query(None, description="PubMed ID search"),
     organism: Optional[str] = Query(None, description="Organism filter (organism abbreviation)"),
+    recent_days: Optional[int] = Query(None, ge=1, le=365, description="Creation-date lookback window"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     limit: int = Query(25, ge=1, le=100, description="Results per page (max 100)"),
     db: Session = Depends(get_db),
@@ -68,6 +69,7 @@ def search_phenotypes(
             property_type=property_type,
             pubmed=pubmed,
             organism=organism,
+            recent_days=recent_days,
             page=page,
             limit=limit,
         )
