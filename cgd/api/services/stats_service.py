@@ -10,12 +10,13 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
     Colleague,
     Feature,
+    FeatHomology,
     FeatHomology,
     FeatInteract,
     GoAnnotation,
@@ -33,6 +34,7 @@ from cgd.schemas.stats_schema import (
     CountsByOrganismResponse,
     OrganismCategoryCounts,
     RecentActivityResponse,
+    RecentOrthologClustersResponse,
     StatsSummaryResponse,
 )
 
@@ -157,6 +159,59 @@ def get_recent_activity(db: Session, days: int = 90) -> RecentActivityResponse:
     except Exception as exc:  # noqa: BLE001
         logger.error("Error computing recent activity: %s", exc)
         return RecentActivityResponse(days=days, success=False, error=str(exc))
+
+
+def get_recent_ortholog_clusters(
+    db: Session, days: int = 90, page: int = 1, limit: int = 25, query: str = ""
+) -> RecentOrthologClustersResponse:
+    """Return a paginated view of homology groups created in a recent window."""
+    cutoff = datetime.now() - timedelta(days=days)
+    member_counts = (
+        db.query(
+            FeatHomology.homology_group_no.label("group_no"),
+            func.count(FeatHomology.feat_homology_no).label("member_count"),
+        )
+        .group_by(FeatHomology.homology_group_no)
+        .subquery()
+    )
+    db_query = (
+        db.query(HomologyGroup, func.coalesce(member_counts.c.member_count, 0))
+        .outerjoin(member_counts, member_counts.c.group_no == HomologyGroup.homology_group_no)
+        .filter(HomologyGroup.date_created >= cutoff)
+    )
+    if query:
+        pattern = f"%{query.upper()}%"
+        db_query = db_query.filter(
+            or_(
+                func.upper(HomologyGroup.homology_group_id).like(pattern),
+                func.upper(HomologyGroup.homology_group_type).like(pattern),
+                func.upper(HomologyGroup.method).like(pattern),
+            )
+        )
+    total_count = db_query.count()
+    rows = (
+        db_query.order_by(HomologyGroup.date_created.desc(), HomologyGroup.homology_group_no)
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return RecentOrthologClustersResponse(
+        days=days,
+        total_count=total_count,
+        page=page,
+        limit=limit,
+        clusters=[
+            {
+                "homology_group_no": group.homology_group_no,
+                "cluster_id": group.homology_group_id,
+                "group_type": group.homology_group_type,
+                "method": group.method,
+                "member_count": member_count,
+                "date_created": group.date_created.isoformat(),
+            }
+            for group, member_count in rows
+        ],
+    )
 
 
 def _counts_for_organism(db: Session, org) -> OrganismCategoryCounts:

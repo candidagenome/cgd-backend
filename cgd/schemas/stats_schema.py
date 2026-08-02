@@ -50,6 +50,23 @@ class RecentActivityResponse(BaseModel):
     error: Optional[str] = Field(None)
 
 
+class RecentOrthologCluster(BaseModel):
+    homology_group_no: int
+    cluster_id: Optional[str] = None
+    group_type: str
+    method: str
+    member_count: int = 0
+    date_created: str
+
+
+class RecentOrthologClustersResponse(BaseModel):
+    days: int
+    total_count: int
+    page: int
+    limit: int
+    clusters: list[RecentOrthologCluster] = Field(default_factory=list)
+
+
 class OrganismCategoryCounts(BaseModel):
     """Per-organism category totals for the Explore page filter."""
 

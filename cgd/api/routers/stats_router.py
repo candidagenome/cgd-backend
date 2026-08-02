@@ -11,17 +11,31 @@ from cgd.db.deps import get_db
 from cgd.schemas.stats_schema import (
     CountsByOrganismResponse,
     RecentActivityResponse,
+    RecentOrthologClustersResponse,
     StatsSummaryResponse,
 )
 from cgd.api.services.stats_service import (
     get_counts_by_organism,
     get_recent_activity,
+    get_recent_ortholog_clusters,
     get_stats_summary,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+
+@router.get("/recent-ortholog-clusters", response_model=RecentOrthologClustersResponse)
+def recent_ortholog_clusters(
+    days: int = Query(90, ge=1, le=365),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    query: str = Query("", max_length=100),
+    db: Session = Depends(get_db),
+):
+    """List recently created ortholog/homology clusters."""
+    return get_recent_ortholog_clusters(db, days=days, page=page, limit=limit, query=query)
 
 
 @router.get("/recent-activity", response_model=RecentActivityResponse)
