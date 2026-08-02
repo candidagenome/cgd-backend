@@ -478,11 +478,27 @@ def _get_chromosomes_and_length(db: Session, organism_no: int) -> tuple:
 
 
 def _get_go_annotation_counts(db: Session, organism_no: int) -> GoAnnotationCounts:
-    """Get GO annotation counts by aspect."""
-    # Get feature numbers for this organism
+    """Count current, non-deleted gene products with GO annotations by aspect."""
+    deleted_subquery = (
+        db.query(FeatProperty.feature_no)
+        .filter(FeatProperty.property_value.like("Deleted%"))
+        .subquery()
+    )
+
+    # Match the current assembly filtering used by the snapshot feature counts.
     feature_nos_subquery = (
         db.query(Feature.feature_no)
-        .filter(Feature.organism_no == organism_no)
+        .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
+        .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+        .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
+        .filter(
+            Feature.organism_no == organism_no,
+            FeatLocation.is_loc_current == "Y",
+            Seq.is_seq_current == "Y",
+            GenomeVersion.is_ver_current == "Y",
+            ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
+        )
+        .distinct()
         .subquery()
     )
 
@@ -500,7 +516,14 @@ def _get_go_annotation_counts(db: Session, organism_no: int) -> GoAnnotationCoun
         .all()
     )
 
-    counts = GoAnnotationCounts()
+    unique_gene_products = (
+        db.query(func.count(distinct(GoAnnotation.feature_no)))
+        .filter(GoAnnotation.feature_no.in_(db.query(feature_nos_subquery.c.feature_no)))
+        .scalar()
+        or 0
+    )
+
+    counts = GoAnnotationCounts(unique_gene_products=unique_gene_products)
     total = 0
 
     for aspect, count in aspect_counts:
@@ -568,13 +591,8 @@ def get_go_slim_distribution(
 
         organism_no = organism.organism_no
 
-        # Get all feature_nos for this organism
-        feature_nos = (
-            db.query(Feature.feature_no)
-            .filter(Feature.organism_no == organism_no)
-            .all()
-        )
-        feature_no_set = set(f[0] for f in feature_nos)
+        # Use only current, non-deleted features from the active assembly.
+        feature_no_set = get_current_feature_nos(db, organism_no)
 
         if not feature_no_set:
             return GoSlimDistributionResponse(
@@ -673,15 +691,10 @@ def get_go_slim_distribution(
             "biological_process",
         }
 
-        # Get total number of features with GO annotations for percentage calc
-        all_annotated_features = set()
-        for feature_no, _ in feature_go_annotations:
-            all_annotated_features.add(feature_no)
-        total_annotated_features = len(all_annotated_features)
-
         # Build response
         distributions = {}
         for aspect, aspect_name in ASPECT_NAMES.items():
+            aspect_total = len(aspect_gene_sets[aspect])
             categories = []
             for go_no, feature_nos_set in slim_term_counts[aspect].items():
                 goid, go_term, _ = slim_term_map[go_no]
@@ -692,10 +705,10 @@ def get_go_slim_distribution(
                     continue
 
                 count = len(feature_nos_set)
-                # Calculate percentage of total annotated genes
+                # Calculate percentage within this GO aspect.
                 percentage = 0.0
-                if total_annotated_features > 0:
-                    percentage = round((count / total_annotated_features) * 100, 1)
+                if aspect_total > 0:
+                    percentage = round((count / aspect_total) * 100, 1)
 
                 categories.append(GoSlimCategory(
                     go_term=go_term,
@@ -711,7 +724,7 @@ def get_go_slim_distribution(
                 aspect=aspect,
                 aspect_name=aspect_name,
                 categories=categories,
-                total_genes=len(aspect_gene_sets[aspect]),
+                total_genes=aspect_total,
             )
 
         return GoSlimDistributionResponse(
@@ -892,13 +905,16 @@ def get_chromosome_inventory(
             )
             .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .join(Seq, FeatLocation.root_seq_no == Seq.seq_no)
+            .join(GenomeVersion, Seq.genome_version_no == GenomeVersion.genome_version_no)
             .filter(
                 Feature.organism_no == organism_no,
                 FeatLocation.is_loc_current == "Y",
                 Seq.is_seq_current == "Y",
+                GenomeVersion.is_ver_current == "Y",
                 Seq.feature_no.in_(chr_feature_nos),
                 ~Feature.feature_no.in_(db.query(deleted_subquery.c.feature_no)),
             )
+            .distinct()
             .all()
         )
 
@@ -1072,6 +1088,12 @@ def get_chromosome_inventory(
                 rrna=counts["rrna"],
                 ncrna=counts["ncrna"],
                 pseudogene=counts["pseudogene"],
+                snrna=counts["snrna"],
+                ltr=counts["ltr"],
+                retrotransposon=counts["retrotransposon"],
+                centromere=counts["centromere"],
+                repeat_region=counts["repeat_region"],
+                blocked_reading_frame=counts["blocked_reading_frame"],
                 total_features=counts["total_features"],
             )
 
@@ -1079,6 +1101,16 @@ def get_chromosome_inventory(
             chromosome_list.append(chr_data)
 
             # Add to appropriate totals for tracking
+            # C. albicans A chromosomes are the haploid representative set;
+            # B chromosomes describe the alternate homolog and must not be
+            # added again to the dashboard totals.
+            is_albicans_b = (
+                "albicans" in organism_abbrev.lower()
+                and not is_mito
+                and display_name.endswith("B")
+            )
+            if is_albicans_b:
+                continue
             if is_mito:
                 for key in mito_totals:
                     if key == "length_bp":
@@ -1109,6 +1141,12 @@ def get_chromosome_inventory(
             rrna=grand_totals["rrna"],
             ncrna=grand_totals["ncrna"],
             pseudogene=grand_totals["pseudogene"],
+            snrna=grand_totals["snrna"],
+            ltr=grand_totals["ltr"],
+            retrotransposon=grand_totals["retrotransposon"],
+            centromere=grand_totals["centromere"],
+            repeat_region=grand_totals["repeat_region"],
+            blocked_reading_frame=grand_totals["blocked_reading_frame"],
             total_features=grand_totals["total_features"],
         )
 
