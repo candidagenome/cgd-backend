@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class GoAnnotationCounts(BaseModel):
-    """GO annotation counts by aspect."""
-    molecular_function: int = Field(0, description="Molecular Function annotation count")
-    cellular_component: int = Field(0, description="Cellular Component annotation count")
-    biological_process: int = Field(0, description="Biological Process annotation count")
-    total: int = Field(0, description="Total GO annotations")
+    """Counts of distinct gene products with GO annotations."""
+    molecular_function: int = Field(0, description="Gene products annotated to Molecular Function")
+    cellular_component: int = Field(0, description="Gene products annotated to Cellular Component")
+    biological_process: int = Field(0, description="Gene products annotated to Biological Process")
+    total: int = Field(0, description="Sum of the three aspect coverage counts")
+    unique_gene_products: int = Field(0, description="Distinct gene products annotated in any GO aspect")
 
 
 class GoSlimCategory(BaseModel):
@@ -118,7 +119,13 @@ class ChromosomeFeatureCounts(BaseModel):
     rrna: int = Field(0, description="rRNA count")
     ncrna: int = Field(0, description="ncRNA count")
     pseudogene: int = Field(0, description="Pseudogene count")
-    total_features: int = Field(0, description="Total features")
+    snrna: int = Field(0, description="snRNA count")
+    ltr: int = Field(0, description="Long terminal repeat count")
+    retrotransposon: int = Field(0, description="Retrotransposon count")
+    centromere: int = Field(0, description="Centromere count")
+    repeat_region: int = Field(0, description="Repeat region count")
+    blocked_reading_frame: int = Field(0, description="Blocked reading frame count")
+    total_features: int = Field(0, description="Total current feature placements on this chromosome")
 
 
 class ChromosomeInventoryResponse(BaseModel):

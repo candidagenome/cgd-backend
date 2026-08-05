@@ -45,6 +45,8 @@ from cgd.api.routers.crispr_router import router as crispr_router
 from cgd.api.routers.expression_router import router as expression_router
 from cgd.api.routers.phenotype_enrichment_router import router as phenotype_enrichment_router
 from cgd.api.routers.ortholog_converter_router import router as ortholog_converter_router
+from cgd.api.routers.stats_router import router as stats_router
+from cgd.api.routers.gene_of_the_day_router import router as gene_of_the_day_router
 
 # Import curation routers (require authentication)
 from cgd.api.routers.curation import (
@@ -150,6 +152,8 @@ def create_app() -> FastAPI:
     app.include_router(expression_router)
     app.include_router(phenotype_enrichment_router)
     app.include_router(ortholog_converter_router)
+    app.include_router(stats_router)
+    app.include_router(gene_of_the_day_router)
 
     # Curation routers (require authentication)
     app.include_router(todo_list_router)

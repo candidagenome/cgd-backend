@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # Valid feature types for gene indexing
 GENE_FEATURE_TYPES = [
     'ORF', 'blocked_reading_frame', 'pseudogene',
-    'transposable_element_gene', 'gene_group', 'ncRNA_gene',
-    'rRNA_gene', 'snoRNA_gene', 'snRNA_gene', 'tRNA_gene',
+    'transposable_element_gene', 'gene_group', 'ncRNA',
+    'rRNA', 'snoRNA', 'snRNA', 'tRNA',
 ]
 
 # Sources to exclude from external_ids (they have their own categories)

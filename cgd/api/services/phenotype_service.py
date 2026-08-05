@@ -4,6 +4,7 @@ Phenotype Service - Business logic for phenotype search and observable tree endp
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 from collections import defaultdict
 
@@ -115,6 +116,7 @@ def search_phenotypes(
     property_type: Optional[str] = None,
     pubmed: Optional[str] = None,
     organism: Optional[str] = None,
+    recent_days: Optional[int] = None,
     page: int = 1,
     limit: int = 25,
 ) -> PhenotypeSearchResponse:
@@ -132,6 +134,7 @@ def search_phenotypes(
         property_type: Property type filter
         pubmed: PubMed ID search
         organism: Organism abbreviation filter
+        recent_days: Only annotations created within this many days
         page: Page number (1-indexed)
         limit: Results per page
 
@@ -210,6 +213,11 @@ def search_phenotypes(
     if organism:
         db_query = db_query.filter(func.upper(Organism.organism_abbrev) == func.upper(organism))
 
+    if recent_days:
+        db_query = db_query.filter(
+            PhenoAnnotation.date_created >= datetime.now() - timedelta(days=recent_days)
+        )
+
     # PubMed filter - need to join references
     if pubmed:
         db_query = db_query.join(
@@ -224,7 +232,12 @@ def search_phenotypes(
 
     # Apply pagination
     offset = (page - 1) * limit
-    annotations = db_query.order_by(Feature.gene_name, Feature.feature_name).offset(offset).limit(limit).all()
+    order_columns = (
+        (PhenoAnnotation.date_created.desc(), Feature.gene_name, Feature.feature_name)
+        if recent_days
+        else (Feature.gene_name, Feature.feature_name)
+    )
+    annotations = db_query.order_by(*order_columns).offset(offset).limit(limit).all()
 
     # Collect pheno_annotation_nos and experiment_nos for batch loading
     pheno_annotation_nos = [pa.pheno_annotation_no for pa in annotations]
@@ -354,6 +367,7 @@ def search_phenotypes(
             strain=strain,
             details=details,
             references=references,
+            date_created=pa.date_created.isoformat() if pa.date_created else None,
         ))
 
     return PhenotypeSearchResponse(
