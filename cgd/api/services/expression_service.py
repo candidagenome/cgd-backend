@@ -471,8 +471,60 @@ EXPRESSION_STUDIES = {
             "SRR11671484": {"label": "Wang et al oral strain L26 (Rep 2, HapA)", "bucket": "treatment"},
             },
         },
+        "Lok_2026": {
+            # Carbon source (glucose/galactose/fructose) x +/- fluconazole.
+            # Group-based control per carbon source: untreated = control,
+            # +fluconazole = experimental (kill_candida).
+            "category": "Morphology/Media",
+            "pmid": "41564980",  # PRJNA981293 (Lok et al)
+            "ncbi_id": "PRJNA981293",
+            "path_style": "direct",
+            "control": "SRR24872940",  # fallback; group controls take precedence
+            "conditions": {
+                # Glucose
+                "SRR24872940": {"label": "Glucose (rep 1a)", "bucket": "control", "group": "Glucose"},
+                "SRR26084647": {"label": "Glucose (rep 1b)", "bucket": "control", "group": "Glucose"},
+                "SRR26084646": {"label": "Glucose + fluconazole", "bucket": "kill_candida", "group": "Glucose"},
+                # Galactose
+                "SRR26084643": {"label": "Galactose", "bucket": "control", "group": "Galactose"},
+                "SRR26084642": {"label": "Galactose + fluconazole", "bucket": "kill_candida", "group": "Galactose"},
+                # Fructose
+                "SRR26084645": {"label": "Fructose", "bucket": "control", "group": "Fructose"},
+                "SRR26084644": {"label": "Fructose + fluconazole", "bucket": "kill_candida", "group": "Fructose"},
+            },
+        },
     },
     "C_auris_B8441": {
+        "Kean_2018": {
+            "category": "Biofilm",
+            "pmid": "29997121",
+            "path_style": "direct",
+            "control": "SRR7411227",
+            "conditions": {
+                "SRR7411227": {"label": "Kean et al planktonic control (Rep 3, HapA)", "bucket": "control"},
+                "SRR7411228": {"label": "Kean et al 4h biofilm (Rep 2, HapA)", "bucket": "treatment"},
+                "SRR7411229": {"label": "Kean et al 24h biofilm pleural fluid (Rep 2, HapA)", "bucket": "treatment"},
+                "SRR7411230": {"label": "Kean et al 24h biofilm pleural fluid (Rep 3, HapA)", "bucket": "treatment"},
+                "SRR7411231": {"label": "Kean et al planktonic control (Rep 1, HapA)", "bucket": "control"},
+                "SRR7411232": {"label": "Kean et al planktonic control (Rep 2, HapA)", "bucket": "control"},
+                "SRR7411233": {"label": "Kean et al 4h biofilm pleural fluid (Rep 2, HapA)", "bucket": "treatment"},
+                "SRR7411234": {"label": "Kean et al 12h biofilm pleural fluid (Rep 3, HapA)", "bucket": "treatment"},
+                "SRR7411235": {"label": "Kean et al 12h biofilm pleural fluid (Rep 2, HapA)", "bucket": "treatment"},
+                "SRR7411236": {"label": "Kean et al 12h biofilm pleural fluid (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411237": {"label": "Kean et al planktonic control pleural fluid (Rep 3, HapA)", "bucket": "control"},
+                "SRR7411238": {"label": "Kean et al 4h biofilm pleural fluid (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411239": {"label": "Kean et al 24h biofilm pleural fluid (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411240": {"label": "Kean et al 4h biofilm (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411241": {"label": "Kean et al 12h biofilm (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411242": {"label": "Kean et al 24h biofilm (Rep 1, HapA)", "bucket": "treatment"},
+                "SRR7411243": {"label": "Kean et al 24h biofilm (Rep 2, HapA)", "bucket": "treatment"},
+                "SRR7411244": {"label": "Kean et al 24h biofilm (Rep 3, HapA)", "bucket": "treatment"},
+                "SRR7411245": {"label": "Kean et al planktonic control pleural fluid (Rep 1, HapA)", "bucket": "control"},
+                "SRR7411246": {"label": "Kean et al planktonic control pleural fluid (Rep 2, HapA)", "bucket": "control"},
+                "SRR7411247": {"label": "Kean et al 12h biofilm (Rep 3, HapA)", "bucket": "treatment"},
+                "SRR7411248": {"label": "Kean et al 12h biofilm (Rep 2, HapA)", "bucket": "treatment"},
+            },
+        },
         "Shivarathri_2022": {
             "category": "Antifungal Response",
             "pmid": "35652307",
@@ -705,33 +757,36 @@ EXPRESSION_STUDIES = {
                 "SRR14758169": {"label": "Pyrvinium pamoate (rep 3b)", "bucket": "kill_candida"},
             },
         },
-        # Wang_2024 - commented out until published (PRJNA1086003)
-        # "Wang_2024": {
-        #     "category": "Biofilm",
-        #     "pmid": None,  # PRJNA1086003 - update when published
-        #     "ncbi_id": "PRJNA1086003",
-        #     "path_style": "direct",
-        #     "control": "SRR28790270",
-        #     "conditions": {
-        #         # AR0382 - In Vitro Biofilm (control)
-        #         "SRR28790270": {"label": "AR0382 In Vitro Biofilm (rep 1)", "bucket": "control"},
-        #         "SRR28790272": {"label": "AR0382 In Vitro Biofilm (rep 2)", "bucket": "control"},
-        #         "SRR28790274": {"label": "AR0382 In Vitro Biofilm (rep 3)", "bucket": "control"},
-        #         # AR0382 - In Vivo Catheter (experimental)
-        #         "SRR28791430": {"label": "AR0382 In Vivo Catheter (rep 1)", "bucket": "basic_biology"},
-        #         "SRR28791431": {"label": "AR0382 In Vivo Catheter (rep 2)", "bucket": "basic_biology"},
-        #         "SRR28791432": {"label": "AR0382 In Vivo Catheter (rep 3)", "bucket": "basic_biology"},
-        #         # AR0387 - In Vitro Biofilm (control)
-        #         "SRR28790276": {"label": "AR0387 In Vitro Biofilm (rep 1)", "bucket": "control"},
-        #         "SRR28790278": {"label": "AR0387 In Vitro Biofilm (rep 2)", "bucket": "control"},
-        #         "SRR28790280": {"label": "AR0387 In Vitro Biofilm (rep 3)", "bucket": "control"},
-        #         # AR0387 - In Vivo Catheter (experimental)
-        #         "SRR28791433": {"label": "AR0387 In Vivo Catheter (rep 1)", "bucket": "basic_biology"},
-        #         "SRR28791434": {"label": "AR0387 In Vivo Catheter (rep 2)", "bucket": "basic_biology"},
-        #         "SRR28791437": {"label": "AR0387 In Vivo Catheter (rep 3)", "bucket": "basic_biology"},
-        #         "SRR28791438": {"label": "AR0387 In Vivo Catheter (rep 4)", "bucket": "basic_biology"},
-        #     },
-        # },
+        "Wang_2024": {
+            # Strain comparison: non-aggregative AR0382 (B11109, control) vs
+            # aggregative AR0387 (B8441), matched within each biofilm condition
+            # (in vitro; in vivo mouse catheter). Group-based control so each
+            # AR0387 sample is compared to the same-condition AR0382 baseline.
+            "category": "Strain Comparison",
+            "pmid": "39455573",  # PRJNA1086003 (Wang TW et al., Nat Commun 2024)
+            "ncbi_id": "PRJNA1086003",
+            "path_style": "direct",
+            "control": "SRR28790270",  # fallback; group controls take precedence
+            "conditions": {
+                # In vitro biofilm -- AR0382 (non-aggregative) = control
+                "SRR28790270": {"label": "AR0382 non-aggregative, in vitro (rep 1)", "bucket": "control", "group": "In vitro"},
+                "SRR28790272": {"label": "AR0382 non-aggregative, in vitro (rep 2)", "bucket": "control", "group": "In vitro"},
+                "SRR28790274": {"label": "AR0382 non-aggregative, in vitro (rep 3)", "bucket": "control", "group": "In vitro"},
+                # In vitro biofilm -- AR0387 (aggregative) = experimental
+                "SRR28790276": {"label": "AR0387 aggregative, in vitro (rep 1)", "bucket": "basic_biology", "group": "In vitro"},
+                "SRR28790278": {"label": "AR0387 aggregative, in vitro (rep 2)", "bucket": "basic_biology", "group": "In vitro"},
+                "SRR28790280": {"label": "AR0387 aggregative, in vitro (rep 3)", "bucket": "basic_biology", "group": "In vitro"},
+                # In vivo mouse catheter -- AR0382 (non-aggregative) = control
+                "SRR28791430": {"label": "AR0382 non-aggregative, in vivo catheter (rep 1)", "bucket": "control", "group": "In vivo catheter"},
+                "SRR28791431": {"label": "AR0382 non-aggregative, in vivo catheter (rep 2)", "bucket": "control", "group": "In vivo catheter"},
+                "SRR28791432": {"label": "AR0382 non-aggregative, in vivo catheter (rep 3)", "bucket": "control", "group": "In vivo catheter"},
+                # In vivo mouse catheter -- AR0387 (aggregative) = experimental
+                "SRR28791433": {"label": "AR0387 aggregative, in vivo catheter (rep 1)", "bucket": "basic_biology", "group": "In vivo catheter"},
+                "SRR28791434": {"label": "AR0387 aggregative, in vivo catheter (rep 2)", "bucket": "basic_biology", "group": "In vivo catheter"},
+                "SRR28791437": {"label": "AR0387 aggregative, in vivo catheter (rep 3)", "bucket": "basic_biology", "group": "In vivo catheter"},
+                "SRR28791438": {"label": "AR0387 aggregative, in vivo catheter (rep 4)", "bucket": "basic_biology", "group": "In vivo catheter"},
+            },
+        },
     },
     "C_glabrata_CBS138": {
         "Linde_2015": {
@@ -1232,26 +1287,25 @@ LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
             "SRR14758168": 21.18,
             "SRR14758169": 24.78,
         },
-        # Wang_2024 - commented out until published
-        # "Wang_2024": {
-        #     # AR0382 - In Vitro Biofilm
-        #     "SRR28790270": 73.0,
-        #     "SRR28790272": 83.0,
-        #     "SRR28790274": 73.43,
-        #     # AR0382 - In Vivo Catheter
-        #     "SRR28791430": 49.86,
-        #     "SRR28791431": 41.69,
-        #     "SRR28791432": 51.14,
-        #     # AR0387 - In Vitro Biofilm
-        #     "SRR28790276": 64.31,
-        #     "SRR28790278": 63.52,
-        #     "SRR28790280": 57.68,
-        #     # AR0387 - In Vivo Catheter
-        #     "SRR28791433": 52.47,
-        #     "SRR28791434": 42.40,
-        #     "SRR28791437": 43.19,
-        #     "SRR28791438": 50.38,
-        # },
+        "Wang_2024": {
+            # AR0382 - In Vitro Biofilm
+            "SRR28790270": 73.0,
+            "SRR28790272": 83.0,
+            "SRR28790274": 73.43,
+            # AR0382 - In Vivo Catheter
+            "SRR28791430": 49.86,
+            "SRR28791431": 41.69,
+            "SRR28791432": 51.14,
+            # AR0387 - In Vitro Biofilm
+            "SRR28790276": 64.31,
+            "SRR28790278": 63.52,
+            "SRR28790280": 57.68,
+            # AR0387 - In Vivo Catheter
+            "SRR28791433": 52.47,
+            "SRR28791434": 42.40,
+            "SRR28791437": 43.19,
+            "SRR28791438": 50.38,
+        },
     },
     "C_glabrata_CBS138": {
         "Linde_2015": {
