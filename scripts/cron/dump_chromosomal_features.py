@@ -509,6 +509,8 @@ def get_genome_version(session, organism_no: int, seq_source: str) -> str | None
         AND s.source = :seq_source
         AND s.is_seq_current = 'Y'
         AND gv.is_ver_current = 'Y'
+        ORDER BY CASE WHEN LOWER(gv.genome_version) LIKE 'mito%' THEN 1 ELSE 0 END,
+                 gv.genome_version
         FETCH FIRST 1 ROW ONLY
     """)
     result = session.execute(
