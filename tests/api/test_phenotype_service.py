@@ -112,12 +112,14 @@ class MockPhenoAnnotation:
         feature: MockFeature,
         phenotype: MockPhenotype,
         experiment: MockExperiment = None,
+        date_created=None,
     ):
         self.pheno_annotation_no = pheno_annotation_no
         self.feature = feature
         self.phenotype = phenotype
         self.experiment = experiment
         self.experiment_no = experiment.experiment_no if experiment else None
+        self.date_created = date_created
 
 
 class MockCv:
