@@ -6,14 +6,12 @@ Tests the GeneSpring format file generation functionality.
 """
 
 import gzip
+import sys
+
 import pytest
-from pathlib import Path
 from unittest.mock import patch
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
-
-from cron.genespring_format import (
+from scripts.untested.cron.genespring_format import (
     read_gene_association,
     write_genespring_file,
 )
@@ -216,7 +214,7 @@ class TestMainFunction:
 
     def test_main_success(self, temp_dir):
         """Test main with successful execution."""
-        from cron.genespring_format import main
+        from scripts.untested.cron.genespring_format import main
 
         # Create input file
         gaf_content = """!header
@@ -239,7 +237,7 @@ CGD\torf19.1\tACT1\t\tGO:0005524\tPMID:12345\tIDA\t\tF\t\torf19.1|ACT1\tprotein\
 
     def test_main_input_not_found(self, temp_dir):
         """Test main with missing input file."""
-        from cron.genespring_format import main
+        from scripts.untested.cron.genespring_format import main
 
         with patch.object(sys, 'argv', [
             'prog',
@@ -252,7 +250,7 @@ CGD\torf19.1\tACT1\t\tGO:0005524\tPMID:12345\tIDA\t\tF\t\torf19.1|ACT1\tprotein\
 
     def test_main_creates_output_directory(self, temp_dir):
         """Test that output directory is created."""
-        from cron.genespring_format import main
+        from scripts.untested.cron.genespring_format import main
 
         gaf_content = """!header
 CGD\torf19.1\tACT1\t\tGO:0005524\tPMID:12345\tIDA\t\tF\t\torf19.1|ACT1\tprotein\ttaxon:5476\t20200101\tCGD

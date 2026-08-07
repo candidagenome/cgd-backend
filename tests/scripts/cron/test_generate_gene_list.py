@@ -6,13 +6,9 @@ Tests the gene list HTML page generation functionality.
 """
 
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
-
-from cron.generate_gene_list import (
+from scripts.untested.cron.generate_gene_list import (
     escape_html,
     generate_gene_list,
     main,
@@ -67,7 +63,7 @@ class TestEscapeHtml:
 class TestGenerateGeneList:
     """Tests for generate_gene_list function."""
 
-    @patch('cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
     def test_generate_basic(self, mock_session_local, temp_dir):
         """Test basic gene list generation."""
         output_file = temp_dir / "genelist.shtml"
@@ -82,7 +78,7 @@ class TestGenerateGeneList:
         ]
 
         # Patch the OUTPUT_FILE to write to our temp file
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             result = generate_gene_list()
 
         assert result is True
@@ -93,8 +89,8 @@ class TestGenerateGeneList:
         assert "TUB1" in content
         assert "Actin protein" in content
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_generate_escapes_html(self, mock_output, mock_session_local, temp_dir):
         """Test that HTML is properly escaped in output."""
         output_file = temp_dir / "genelist.shtml"
@@ -107,7 +103,7 @@ class TestGenerateGeneList:
             ("orf19.1", "CAL0001", "Gene<1>", "Description & Info", "Species"),
         ]
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             result = generate_gene_list()
 
         assert result is True
@@ -116,8 +112,8 @@ class TestGenerateGeneList:
         assert "&gt;" in content
         assert "&amp;" in content
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_generate_header_rows(self, mock_output, mock_session_local, temp_dir):
         """Test that header rows are added every 20 genes."""
         output_file = temp_dir / "genelist.shtml"
@@ -133,7 +129,7 @@ class TestGenerateGeneList:
         ]
         mock_session.execute.return_value.fetchall.return_value = genes
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             result = generate_gene_list()
 
         assert result is True
@@ -141,8 +137,8 @@ class TestGenerateGeneList:
         # Should have 2 header rows (at position 0 and 20)
         assert content.count("Locus Id") == 2
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_generate_empty_genes(self, mock_output, mock_session_local, temp_dir):
         """Test generation with no genes."""
         output_file = temp_dir / "genelist.shtml"
@@ -152,7 +148,7 @@ class TestGenerateGeneList:
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
         mock_session.execute.return_value.fetchall.return_value = []
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             result = generate_gene_list()
 
         assert result is True
@@ -160,8 +156,8 @@ class TestGenerateGeneList:
         assert "<table" in content
         assert "</table>" in content
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_generate_handles_none_values(self, mock_output, mock_session_local, temp_dir):
         """Test handling of None values in gene data."""
         output_file = temp_dir / "genelist.shtml"
@@ -174,14 +170,14 @@ class TestGenerateGeneList:
             ("orf19.1", "CAL0001", None, None, None),
         ]
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             result = generate_gene_list()
 
         assert result is True
         content = output_file.read_text()
         assert "orf19.1" in content
 
-    @patch('cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
     def test_generate_handles_exception(self, mock_session_local):
         """Test that exceptions are handled."""
         mock_session_local.side_effect = Exception("Database error")
@@ -194,7 +190,7 @@ class TestGenerateGeneList:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.generate_gene_list.generate_gene_list')
+    @patch('scripts.untested.cron.generate_gene_list.generate_gene_list')
     def test_main_success(self, mock_generate):
         """Test main returns 0 on success."""
         mock_generate.return_value = True
@@ -203,7 +199,7 @@ class TestMainFunction:
 
         assert result == 0
 
-    @patch('cron.generate_gene_list.generate_gene_list')
+    @patch('scripts.untested.cron.generate_gene_list.generate_gene_list')
     def test_main_failure(self, mock_generate):
         """Test main returns 1 on failure."""
         mock_generate.return_value = False
@@ -216,8 +212,8 @@ class TestMainFunction:
 class TestHtmlStructure:
     """Tests for HTML structure of output."""
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_html_has_ssi_include(self, mock_output, mock_session_local, temp_dir):
         """Test that HTML includes SSI header."""
         output_file = temp_dir / "genelist.shtml"
@@ -227,14 +223,14 @@ class TestHtmlStructure:
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
         mock_session.execute.return_value.fetchall.return_value = []
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             generate_gene_list()
 
         content = output_file.read_text()
         assert "<!--#include virtual=" in content
 
-    @patch('cron.generate_gene_list.SessionLocal')
-    @patch('cron.generate_gene_list.OUTPUT_FILE')
+    @patch('scripts.untested.cron.generate_gene_list.SessionLocal')
+    @patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE')
     def test_html_has_links(self, mock_output, mock_session_local, temp_dir):
         """Test that HTML includes proper links."""
         output_file = temp_dir / "genelist.shtml"
@@ -247,7 +243,7 @@ class TestHtmlStructure:
             ("orf19.1", "CAL0001", "ACT1", "Description", "Species"),
         ]
 
-        with patch('cron.generate_gene_list.OUTPUT_FILE', output_file):
+        with patch('scripts.untested.cron.generate_gene_list.OUTPUT_FILE', output_file):
             generate_gene_list()
 
         content = output_file.read_text()

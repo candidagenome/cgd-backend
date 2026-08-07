@@ -6,15 +6,13 @@ Tests the chromosomal feature data dumping functionality.
 """
 
 import gzip
+import sys
+
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 from datetime import datetime
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
-
-from cron.dump_chromosomal_features import (
+from scripts.cron.dump_chromosomal_features import (
     get_strain_config,
     get_all_features,
     get_feature_aliases,
@@ -245,18 +243,18 @@ class TestArchiveOldFile:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.dump_chromosomal_features.shutil.copy2')
-    @patch('cron.dump_chromosomal_features.SessionLocal')
+    @patch('scripts.cron.dump_chromosomal_features.shutil.copy2')
+    @patch('scripts.cron.dump_chromosomal_features.SessionLocal')
     def test_main_success(self, mock_session_local, mock_copy2, temp_dir):
         """Test main with successful execution."""
-        from cron.dump_chromosomal_features import main
+        from scripts.cron.dump_chromosomal_features import main
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
 
         # Mock get_strain_config
-        with patch('cron.dump_chromosomal_features.get_strain_config') as mock_config:
+        with patch('scripts.cron.dump_chromosomal_features.get_strain_config') as mock_config:
             mock_config.return_value = {
                 "organism_no": 1,
                 "organism_abbrev": "C_albicans_SC5314",
@@ -264,25 +262,25 @@ class TestMainFunction:
                 "seq_source": "Assembly22",
             }
 
-            with patch('cron.dump_chromosomal_features.get_genome_version', return_value="A22"):
-                with patch('cron.dump_chromosomal_features.write_chromosomal_features'):
-                    with patch('cron.dump_chromosomal_features.send_slack_message'):
+            with patch('scripts.cron.dump_chromosomal_features.get_genome_version', return_value="A22"):
+                with patch('scripts.cron.dump_chromosomal_features.write_chromosomal_features'):
+                    with patch('scripts.cron.dump_chromosomal_features.send_slack_message'):
                         with patch.object(sys, 'argv', ['prog', 'C_albicans_SC5314', '--output-dir', str(temp_dir), '--no-archive', '--skip-validation']):
                             result = main()
 
         assert result == 0
 
-    @patch('cron.dump_chromosomal_features.send_slack_message')
-    @patch('cron.dump_chromosomal_features.SessionLocal')
+    @patch('scripts.cron.dump_chromosomal_features.send_slack_message')
+    @patch('scripts.cron.dump_chromosomal_features.SessionLocal')
     def test_main_strain_not_found(self, mock_session_local, mock_slack):
         """Test main when strain not found."""
-        from cron.dump_chromosomal_features import main
+        from scripts.cron.dump_chromosomal_features import main
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch('cron.dump_chromosomal_features.get_strain_config') as mock_config:
+        with patch('scripts.cron.dump_chromosomal_features.get_strain_config') as mock_config:
             mock_config.return_value = None
 
             with patch.object(sys, 'argv', ['prog', 'NonexistentStrain']):
@@ -290,17 +288,17 @@ class TestMainFunction:
 
         assert result == 1
 
-    @patch('cron.dump_chromosomal_features.send_slack_message')
-    @patch('cron.dump_chromosomal_features.SessionLocal')
+    @patch('scripts.cron.dump_chromosomal_features.send_slack_message')
+    @patch('scripts.cron.dump_chromosomal_features.SessionLocal')
     def test_main_no_seq_source(self, mock_session_local, mock_slack):
         """Test main when no seq_source found."""
-        from cron.dump_chromosomal_features import main
+        from scripts.cron.dump_chromosomal_features import main
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch('cron.dump_chromosomal_features.get_strain_config') as mock_config:
+        with patch('scripts.cron.dump_chromosomal_features.get_strain_config') as mock_config:
             mock_config.return_value = {
                 "organism_no": 1,
                 "organism_abbrev": "C_albicans_SC5314",

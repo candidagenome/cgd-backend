@@ -6,14 +6,11 @@ Tests the SGD BLAST database formatting functionality.
 """
 
 import gzip
+
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts"))
-
-from cron.CGOB.format_sgd_blastdb import (
+from scripts.untested.cron.CGOB.format_sgd_blastdb import (
     decompress_if_needed,
     create_blast_database,
     SEQUENCE_SETS,
@@ -72,7 +69,7 @@ class TestDecompressIfNeeded:
 class TestCreateBlastDatabase:
     """Tests for create_blast_database function."""
 
-    @patch('cron.CGOB.format_sgd_blastdb.subprocess.run')
+    @patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run')
     def test_successful_creation(self, mock_run, temp_dir):
         """Test successful BLAST database creation."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -92,7 +89,7 @@ class TestCreateBlastDatabase:
         assert "-dbtype" in call_args
         assert "prot" in call_args
 
-    @patch('cron.CGOB.format_sgd_blastdb.subprocess.run')
+    @patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run')
     def test_failed_creation(self, mock_run, temp_dir):
         """Test failed BLAST database creation."""
         mock_run.return_value = MagicMock(
@@ -108,7 +105,7 @@ class TestCreateBlastDatabase:
 
         assert "ERROR" in result
 
-    @patch('cron.CGOB.format_sgd_blastdb.subprocess.run')
+    @patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run')
     def test_removes_existing_database(self, mock_run, temp_dir):
         """Test that existing database files are removed."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -127,7 +124,7 @@ class TestCreateBlastDatabase:
         assert not (temp_dir / "test_db.phr").exists()
         assert not (temp_dir / "test_db.pin").exists()
 
-    @patch('cron.CGOB.format_sgd_blastdb.subprocess.run')
+    @patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run')
     def test_nucleotide_database(self, mock_run, temp_dir):
         """Test creating nucleotide database."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -146,7 +143,7 @@ class TestCreateBlastDatabase:
         fasta_file = temp_dir / "nonexistent.fasta"
         db_name = temp_dir / "test_db"
 
-        with patch('cron.CGOB.format_sgd_blastdb.subprocess.run', side_effect=Exception("Test error")):
+        with patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run', side_effect=Exception("Test error")):
             result = create_blast_database(fasta_file, db_name, "prot")
 
         assert "ERROR" in result
@@ -187,7 +184,7 @@ class TestMainFunction:
 
     def test_main_runs(self):
         """Test that main function can be imported and called structure is correct."""
-        from cron.CGOB.format_sgd_blastdb import main
+        from scripts.untested.cron.CGOB.format_sgd_blastdb import main
         import inspect
 
         # Verify main is callable
@@ -215,7 +212,7 @@ class TestEdgeCases:
         assert result.exists()
         assert len(result.read_text()) == len(content)
 
-    @patch('cron.CGOB.format_sgd_blastdb.subprocess.run')
+    @patch('scripts.untested.cron.CGOB.format_sgd_blastdb.subprocess.run')
     def test_create_db_with_special_path(self, mock_run, temp_dir):
         """Test database creation with path containing spaces."""
         mock_run.return_value = MagicMock(returncode=0)

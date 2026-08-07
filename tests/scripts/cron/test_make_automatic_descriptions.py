@@ -5,14 +5,12 @@ Unit tests for scripts/cron/make_automatic_descriptions.py
 Tests the automatic description generation functionality.
 """
 
+import sys
+
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
-
-from cron.make_automatic_descriptions import (
+from scripts.untested.cron.make_automatic_descriptions import (
     AutomaticDescriptionGenerator,
     ASPECT_DESCRIPTIONS,
     MAX_DESCRIPTION_LENGTH,
@@ -405,10 +403,10 @@ class TestConstants:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.make_automatic_descriptions.make_automatic_descriptions')
+    @patch('scripts.untested.cron.make_automatic_descriptions.make_automatic_descriptions')
     def test_main_success(self, mock_make_desc):
         """Test main with successful execution."""
-        from cron.make_automatic_descriptions import main
+        from scripts.untested.cron.make_automatic_descriptions import main
 
         mock_make_desc.return_value = True
 
@@ -418,10 +416,10 @@ class TestMainFunction:
         assert result == 0
         mock_make_desc.assert_called_once()
 
-    @patch('cron.make_automatic_descriptions.make_automatic_descriptions')
+    @patch('scripts.untested.cron.make_automatic_descriptions.make_automatic_descriptions')
     def test_main_failure(self, mock_make_desc):
         """Test main with failed execution."""
-        from cron.make_automatic_descriptions import main
+        from scripts.untested.cron.make_automatic_descriptions import main
 
         mock_make_desc.return_value = False
 
@@ -430,10 +428,10 @@ class TestMainFunction:
 
         assert result == 1
 
-    @patch('cron.make_automatic_descriptions.make_automatic_descriptions')
+    @patch('scripts.untested.cron.make_automatic_descriptions.make_automatic_descriptions')
     def test_main_dry_run(self, mock_make_desc):
         """Test main with dry-run flag."""
-        from cron.make_automatic_descriptions import main
+        from scripts.untested.cron.make_automatic_descriptions import main
 
         mock_make_desc.return_value = True
 

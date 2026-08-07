@@ -5,17 +5,15 @@ Unit tests for scripts/cron/update_biogrid_xref.py
 Tests the BioGRID cross-reference update functionality.
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
+
+import pytest
+from unittest.mock import patch, MagicMock
 
 # Skip if requests not installed
 pytest.importorskip("requests")
 
-from cron.update_biogrid_xref import (
+from scripts.untested.cron.update_biogrid_xref import (
     get_strain_config,
     get_valid_features,
     download_biogrid_data,
@@ -90,8 +88,8 @@ class TestGetValidFeatures:
 class TestDownloadBiogridData:
     """Tests for download_biogrid_data function."""
 
-    @patch('cron.update_biogrid_xref.requests.get')
-    @patch('cron.update_biogrid_xref.BIOGRID_API_KEY', 'test_key')
+    @patch('scripts.untested.cron.update_biogrid_xref.requests.get')
+    @patch('scripts.untested.cron.update_biogrid_xref.BIOGRID_API_KEY', 'test_key')
     def test_successful_download(self, mock_get, temp_dir):
         """Test successful download."""
         mock_response = MagicMock()
@@ -107,7 +105,7 @@ class TestDownloadBiogridData:
         assert output_file.exists()
         assert output_file.read_text() == "data1\tdata2\n"
 
-    @patch('cron.update_biogrid_xref.BIOGRID_API_KEY', '')
+    @patch('scripts.untested.cron.update_biogrid_xref.BIOGRID_API_KEY', '')
     def test_missing_api_key(self, temp_dir):
         """Test with missing API key."""
         output_file = temp_dir / "biogrid_data.tab"
@@ -116,8 +114,8 @@ class TestDownloadBiogridData:
 
         assert result is False
 
-    @patch('cron.update_biogrid_xref.requests.get')
-    @patch('cron.update_biogrid_xref.BIOGRID_API_KEY', 'test_key')
+    @patch('scripts.untested.cron.update_biogrid_xref.requests.get')
+    @patch('scripts.untested.cron.update_biogrid_xref.BIOGRID_API_KEY', 'test_key')
     def test_request_failure(self, mock_get, temp_dir):
         """Test with request failure."""
         import requests
@@ -297,10 +295,10 @@ class TestDeleteDefunctRefs:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.update_biogrid_xref.update_biogrid_xref')
+    @patch('scripts.untested.cron.update_biogrid_xref.update_biogrid_xref')
     def test_main_success(self, mock_update):
         """Test main with successful execution."""
-        from cron.update_biogrid_xref import main
+        from scripts.untested.cron.update_biogrid_xref import main
 
         mock_update.return_value = True
 
@@ -310,10 +308,10 @@ class TestMainFunction:
         assert result == 0
         mock_update.assert_called_with("C_albicans_SC5314")
 
-    @patch('cron.update_biogrid_xref.update_biogrid_xref')
+    @patch('scripts.untested.cron.update_biogrid_xref.update_biogrid_xref')
     def test_main_failure(self, mock_update):
         """Test main with failed execution."""
-        from cron.update_biogrid_xref import main
+        from scripts.untested.cron.update_biogrid_xref import main
 
         mock_update.return_value = False
 
@@ -324,7 +322,7 @@ class TestMainFunction:
 
     def test_main_missing_strain(self):
         """Test main with missing strain argument."""
-        from cron.update_biogrid_xref import main
+        from scripts.untested.cron.update_biogrid_xref import main
 
         with patch.object(sys, 'argv', ['prog']):
             with pytest.raises(SystemExit):
