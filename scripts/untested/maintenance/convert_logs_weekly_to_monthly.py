@@ -48,16 +48,25 @@ LOG_DATE_PATTERN = re.compile(
     r"^\d+\.\d+\.\d+\.\d+ - - \[\d+/(\w+)/(\d+):"
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, mode="a"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
 logger = logging.getLogger(__name__)
+
+
+def setup_logging() -> None:
+    """Configure logging handlers.
+
+    Kept out of module import scope so that importing this module has no
+    filesystem side effects (creating/opening LOG_FILE would fail when
+    LOG_DIR is not writable, e.g. a stale root-owned file under /tmp).
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, mode="a"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
 
 
 def send_error_email(message: str) -> None:
@@ -181,6 +190,7 @@ def convert_logs() -> bool:
 
 def main() -> int:
     """Main entry point."""
+    setup_logging()
     try:
         success = convert_logs()
         return 0 if success else 1

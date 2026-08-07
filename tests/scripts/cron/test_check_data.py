@@ -6,13 +6,9 @@ Tests the data checking functionality for business rule violations.
 """
 
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
-
-from cron.check_data import (
+from scripts.cron.check_data import (
     DataChecker,
     send_report_email,
 )
@@ -295,7 +291,7 @@ class TestRunAllChecks:
 class TestSendReportEmail:
     """Tests for send_report_email function."""
 
-    @patch('cron.check_data.CURATOR_EMAIL', None)
+    @patch('scripts.cron.check_data.CURATOR_EMAIL', None)
     def test_no_curator_email(self, caplog):
         """Test when CURATOR_EMAIL is not set."""
         issues = [{"category": "Test", "message": "Issue"}]
@@ -304,17 +300,17 @@ class TestSendReportEmail:
 
         assert "CURATOR_EMAIL not set" in caplog.text
 
-    @patch('cron.check_data.CURATOR_EMAIL', 'test@example.com')
-    @patch('cron.check_data.logger')
+    @patch('scripts.cron.check_data.CURATOR_EMAIL', 'test@example.com')
+    @patch('scripts.cron.check_data.logger')
     def test_no_issues(self, mock_logger):
         """Test when there are no issues."""
         send_report_email([])
 
         mock_logger.info.assert_called_with("No issues to report")
 
-    @patch('cron.check_data.smtplib.SMTP')
-    @patch('cron.check_data.CURATOR_EMAIL', 'test@example.com')
-    @patch('cron.check_data.logger')
+    @patch('scripts.cron.check_data.smtplib.SMTP')
+    @patch('scripts.cron.check_data.CURATOR_EMAIL', 'test@example.com')
+    @patch('scripts.cron.check_data.logger')
     def test_with_issues(self, mock_logger, mock_smtp):
         """Test with issues to report."""
         issues = [
@@ -329,9 +325,9 @@ class TestSendReportEmail:
         mock_logger.info.assert_called()
         mock_smtp.return_value.__enter__.return_value.send_message.assert_called_once()
 
-    @patch('cron.check_data.smtplib.SMTP')
-    @patch('cron.check_data.CURATOR_EMAIL', 'curator@cgd.org')
-    @patch('cron.check_data.logger')
+    @patch('scripts.cron.check_data.smtplib.SMTP')
+    @patch('scripts.cron.check_data.CURATOR_EMAIL', 'curator@cgd.org')
+    @patch('scripts.cron.check_data.logger')
     def test_groups_by_category(self, mock_logger, mock_smtp):
         """Test that issues are grouped by category."""
         issues = [
@@ -349,10 +345,10 @@ class TestSendReportEmail:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.check_data.SessionLocal')
+    @patch('scripts.cron.check_data.SessionLocal')
     def test_main_no_issues(self, mock_session_local):
         """Test main with no issues found."""
-        from cron.check_data import main
+        from scripts.cron.check_data import main
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -361,7 +357,7 @@ class TestMainFunction:
         # Mock all database queries to return empty
         mock_session.execute.return_value = iter([])
 
-        with patch('cron.check_data.DataChecker') as mock_checker_class:
+        with patch('scripts.cron.check_data.DataChecker') as mock_checker_class:
             mock_checker = MagicMock()
             mock_checker.issues = []
             mock_checker.run_all_checks.return_value = {"total_issues": 0, "checks_run": 5}
@@ -371,30 +367,30 @@ class TestMainFunction:
 
         assert result == 0
 
-    @patch('cron.check_data.SessionLocal')
+    @patch('scripts.cron.check_data.SessionLocal')
     def test_main_with_issues(self, mock_session_local):
         """Test main with issues found."""
-        from cron.check_data import main
+        from scripts.cron.check_data import main
 
         mock_session = MagicMock()
         mock_session_local.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_session_local.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch('cron.check_data.DataChecker') as mock_checker_class:
+        with patch('scripts.cron.check_data.DataChecker') as mock_checker_class:
             mock_checker = MagicMock()
             mock_checker.issues = [{"category": "Test", "message": "Issue"}]
             mock_checker.run_all_checks.return_value = {"total_issues": 1, "checks_run": 5}
             mock_checker_class.return_value = mock_checker
 
-            with patch('cron.check_data.send_report_email'):
+            with patch('scripts.cron.check_data.send_report_email'):
                 result = main()
 
         assert result == 1  # Issues found
 
-    @patch('cron.check_data.SessionLocal')
+    @patch('scripts.cron.check_data.SessionLocal')
     def test_main_handles_exception(self, mock_session_local, caplog):
         """Test main handles exceptions."""
-        from cron.check_data import main
+        from scripts.cron.check_data import main
 
         mock_session_local.side_effect = Exception("Database error")
 

@@ -6,13 +6,9 @@ Tests the CGOB to CGD identifier mapping functionality.
 """
 
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts"))
-
-from cron.CGOB.cgob_to_cgd import (
+from scripts.untested.cron.CGOB.cgob_to_cgd import (
     get_strain_from_prefix,
     normalize_id,
     parse_fasta_ids,

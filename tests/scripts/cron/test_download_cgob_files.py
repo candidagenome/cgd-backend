@@ -5,15 +5,13 @@ Unit tests for scripts/cron/CGOB/download_cgob_files.py
 Tests the CGOB file download functionality.
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+import sys
 import urllib.error
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
+import pytest
+from unittest.mock import patch, MagicMock
 
-from cron.CGOB.download_cgob_files import (
+from scripts.untested.cron.CGOB.download_cgob_files import (
     download_file,
     CGOB_FILES,
     YGOB_FILES,
@@ -50,7 +48,7 @@ class TestConstants:
 class TestDownloadFile:
     """Tests for download_file function."""
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_success(self, mock_urlretrieve, temp_dir):
         """Test successful file download."""
         local_path = temp_dir / "test.txt"
@@ -60,7 +58,7 @@ class TestDownloadFile:
         assert result is True
         mock_urlretrieve.assert_called_once_with("http://example.com/test.txt", local_path)
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_creates_parent_directory(self, mock_urlretrieve, temp_dir):
         """Test that parent directories are created."""
         local_path = temp_dir / "subdir" / "nested" / "test.txt"
@@ -69,7 +67,7 @@ class TestDownloadFile:
 
         assert local_path.parent.exists()
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_removes_existing_file(self, mock_urlretrieve, temp_dir):
         """Test that existing files are removed before download."""
         local_path = temp_dir / "test.txt"
@@ -82,7 +80,7 @@ class TestDownloadFile:
         # File should have been removed (urlretrieve mock doesn't create it)
         mock_urlretrieve.assert_called_once()
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_failure(self, mock_urlretrieve, temp_dir, capsys):
         """Test handling of download failure."""
         mock_urlretrieve.side_effect = urllib.error.URLError("Connection failed")
@@ -92,7 +90,7 @@ class TestDownloadFile:
 
         assert result is False
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_http_error(self, mock_urlretrieve, temp_dir):
         """Test handling of HTTP errors."""
         mock_urlretrieve.side_effect = urllib.error.HTTPError(
@@ -108,10 +106,10 @@ class TestDownloadFile:
 class TestMainFunction:
     """Tests for the main function."""
 
-    @patch('cron.CGOB.download_cgob_files.download_file')
-    @patch('cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
-    @patch('cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
-    @patch('cron.CGOB.download_cgob_files.LOG_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.download_file')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.LOG_DIR')
     def test_main_success(
         self,
         mock_log_dir,
@@ -138,10 +136,10 @@ class TestMainFunction:
         expected_calls = len(CGOB_FILES) + len(YGOB_FILES) + len(SGD_FILES)
         assert mock_download.call_count == expected_calls
 
-    @patch('cron.CGOB.download_cgob_files.download_file')
-    @patch('cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
-    @patch('cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
-    @patch('cron.CGOB.download_cgob_files.LOG_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.download_file')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.LOG_DIR')
     def test_main_with_failures(
         self,
         mock_log_dir,
@@ -166,10 +164,10 @@ class TestMainFunction:
 
         assert result == 1  # Should return 1 due to failures
 
-    @patch('cron.CGOB.download_cgob_files.download_file')
-    @patch('cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
-    @patch('cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
-    @patch('cron.CGOB.download_cgob_files.LOG_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.download_file')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_DATA_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.CGOB_SEQ_DIR')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.LOG_DIR')
     def test_main_debug_mode(
         self,
         mock_log_dir,
@@ -232,7 +230,7 @@ class TestLocalPathFormat:
 class TestEdgeCases:
     """Tests for edge cases."""
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_empty_url(self, mock_urlretrieve, temp_dir):
         """Test downloading with empty URL."""
         mock_urlretrieve.side_effect = ValueError("Invalid URL")
@@ -240,7 +238,7 @@ class TestEdgeCases:
         result = download_file("", temp_dir / "test.txt")
         assert result is False
 
-    @patch('cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
+    @patch('scripts.untested.cron.CGOB.download_cgob_files.urllib.request.urlretrieve')
     def test_download_timeout(self, mock_urlretrieve, temp_dir):
         """Test handling of timeout errors."""
         mock_urlretrieve.side_effect = TimeoutError("Connection timed out")
