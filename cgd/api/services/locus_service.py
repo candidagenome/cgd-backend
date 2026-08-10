@@ -4040,6 +4040,7 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                 }
 
                 # Collect SGD and EnsemblFungi orthologs separately for ordering
+                promoted_cgd_orthologs = []
                 sgd_orthologs = []
                 ensembl_orthologs = []
 
@@ -4055,6 +4056,49 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
 
                     # Skip "alien" organisms (matches Perl FormatHomolog.pm behavior)
                     if ext_org in alien_organisms:
+                        continue
+
+                    # A CGD-hosted gene can still be recorded as an EXTERNAL cluster
+                    # member when its species joined CGD after the CGOB load (e.g.
+                    # C. tropicalis CTRG_* members predate the tropicalis import).
+                    # Promote such rows to CGD entries with locus link and status.
+                    cgd_feat = (
+                        db.query(Feature)
+                        .options(joinedload(Feature.organism))
+                        .filter(
+                            func.upper(Feature.feature_name) == func.upper(dbxref.dbxref_id),
+                            func.lower(Feature.feature_type) != 'allele',
+                        )
+                        .first()
+                    )
+                    if cgd_feat:
+                        already = any(
+                            o.feature_name == cgd_feat.feature_name
+                            for o in orthologs + promoted_cgd_orthologs
+                        )
+                        if not already:
+                            promoted_org_name, _ = _get_organism_info(cgd_feat)
+                            promoted_status = None
+                            promoted_qualifier = (
+                                db.query(FeatProperty.property_value)
+                                .filter(
+                                    FeatProperty.feature_no == cgd_feat.feature_no,
+                                    FeatProperty.property_type == 'feature_qualifier',
+                                )
+                                .first()
+                            )
+                            if promoted_qualifier:
+                                promoted_status = (
+                                    promoted_qualifier[0].upper() if promoted_qualifier[0] else None
+                                )
+                            promoted_cgd_orthologs.append(OrthologOut(
+                                sequence_id=format_seq_id(cgd_feat.gene_name, cgd_feat.feature_name),
+                                feature_name=cgd_feat.feature_name,
+                                organism_name=promoted_org_name,
+                                source='CGD',
+                                status=promoted_status,
+                                is_query=False,
+                            ))
                         continue
 
                     # Determine source based on organism name (matching Perl CGOB.pm)
@@ -4106,7 +4150,8 @@ def get_locus_homology_details(db: Session, name: str) -> HomologyDetailsRespons
                             url=ext_url,
                         ))
 
-                # Add SGD orthologs first (after CGD), then EnsemblFungi
+                # Add promoted CGD rows first, then SGD, then EnsemblFungi
+                orthologs.extend(promoted_cgd_orthologs)
                 orthologs.extend(sgd_orthologs)
                 orthologs.extend(ensembl_orthologs)
 
