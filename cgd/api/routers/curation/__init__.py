@@ -20,6 +20,8 @@ from .sequence_curation_router import router as sequence_curation_router
 from .feature_merge_router import router as feature_merge_router
 from .coordinate_curation_router import router as coordinate_curation_router
 from .seq_alignment_router import router as seq_alignment_router
+from .cv_admin_router import router as cv_admin_router
+from .curator_report_router import router as curator_report_router
 
 __all__ = [
     "todo_list_router",
@@ -42,4 +44,6 @@ __all__ = [
     "feature_merge_router",
     "coordinate_curation_router",
     "seq_alignment_router",
+    "cv_admin_router",
+    "curator_report_router",
 ]
