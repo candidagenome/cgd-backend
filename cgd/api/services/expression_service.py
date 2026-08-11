@@ -907,6 +907,21 @@ EXPRESSION_STUDIES = {
                 "SRR15532688": {"label": "upc2a G898D (rep 3)", "bucket": "basic_biology"},
             },
         },
+        "Raj_2024": {
+            "category": "Biofilm",
+            "pmid": "38641593",
+            "path_style": "direct",
+            "control": "SRR12047068",
+            "conditions": {
+                # Planktonic (control; rep 2 excluded, 58.5% alignment)
+                "SRR12047068": {"label": "Planktonic (rep 1)", "bucket": "control"},
+                "SRR12047070": {"label": "Planktonic (rep 3)", "bucket": "control"},
+                # Mature biofilm
+                "SRR12047065": {"label": "Biofilm (rep 1)", "bucket": "basic_biology"},
+                "SRR12047066": {"label": "Biofilm (rep 2)", "bucket": "basic_biology"},
+                "SRR12047067": {"label": "Biofilm (rep 3)", "bucket": "basic_biology"},
+            },
+        },
     },
     "C_dubliniensis_CD36": {
         "Grumaz_2013": {
