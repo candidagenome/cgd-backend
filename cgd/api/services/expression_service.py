@@ -2008,11 +2008,16 @@ def _get_gene_location(
     For C. albicans, we prioritize Ca21/Ca22 locations over contigs because
     the bigwig files use Ca22 assembly coordinates.
     """
-    # Find the feature by gene name or feature name
+    # Find the feature by gene name or feature name, scoped to the requested
+    # organism — common gene names (e.g. CTA1) exist in several species, and
+    # an unscoped lookup can resolve to the wrong organism's feature.
+    organism_key = _get_organism_from_tag(organism_tag)
     feature = (
         db.query(Feature)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
-            (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name)
+            (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name),
+            Organism.organism_abbrev == organism_key,
         )
         .first()
     )
