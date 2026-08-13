@@ -43,6 +43,15 @@ except ImportError:
 # Configuration
 # ============================================================================
 
+# Feature types whose interval coverage is dominated by multi-mapping reads,
+# making bigwig-derived expression values misleading — suppress the preview.
+REPEAT_FEATURE_TYPES = {
+    "repeat_region",
+    "long_terminal_repeat",
+    "retrotransposon",
+    "transposable_element",
+}
+
 # Base path for HTS data (bigwig files)
 # This should be configured per environment
 HTS_BASE_PATHS = {
@@ -2000,10 +2009,11 @@ def _get_gene_location(
     db: Session,
     gene_name: str,
     organism_tag: str
-) -> Optional[Tuple[str, str, str, int, int, str]]:
+) -> Optional[Tuple[str, str, str, int, int, str, str]]:
     """
     Get gene location info from database.
-    Returns: (gene_name, feature_name, chromosome, start, end, description) or None
+    Returns: (gene_name, feature_name, chromosome, start, end, description,
+    feature_type) or None
 
     For C. albicans, we prioritize Ca21/Ca22 locations over contigs because
     the bigwig files use Ca22 assembly coordinates.
@@ -2091,7 +2101,8 @@ def _get_gene_location(
         ca22_chromosome,
         best_location.start_coord,
         best_location.stop_coord,
-        feature.headline
+        feature.headline,
+        feature.feature_type
     )
 
 
@@ -2129,7 +2140,17 @@ def get_gene_expression(
             error=f"Gene '{gene_name}' not found or has no location data"
         )
 
-    gene_name_db, feature_name, chromosome, start, end, description = location_info
+    gene_name_db, feature_name, chromosome, start, end, description, feature_type = location_info
+
+    if feature_type and feature_type.lower() in REPEAT_FEATURE_TYPES:
+        return GeneExpressionResponse(
+            success=False,
+            error=(
+                f"Expression data is not shown for {feature_type} features: "
+                "read coverage over repetitive sequence is dominated by "
+                "multi-mapping reads and does not reflect expression"
+            )
+        )
 
     # Get organism directory
     organism_key = _get_organism_from_tag(organism)
