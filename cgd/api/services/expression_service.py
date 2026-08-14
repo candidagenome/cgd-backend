@@ -60,6 +60,14 @@ HTS_BASE_PATHS = {
     "C_glabrata_CBS138": Path("/data/HTS/C_glabrata_CBS138/bam"),
     "C_dubliniensis_CD36": Path("/data/HTS/C_dubliniensis_CD36/bam"),
     "C_parapsilosis_CDC317": Path("/data/HTS/C_parapsilosis_CDC317/bam"),
+    "C_tropicalis_MYA3404": Path("/data/HTS/C_tropicalis_MYA3404/bam"),
+}
+
+# HTS keys usually equal the ORGANISM table's organism_abbrev, but not
+# always: C. tropicalis is keyed C_tropicalis_MYA3404 on disk but
+# C_tropicalis in the database. Used only for gene/location lookups.
+DB_ORGANISM_ABBREV = {
+    "C_tropicalis_MYA3404": "C_tropicalis",
 }
 
 # Study configurations with metadata
@@ -1062,6 +1070,32 @@ EXPRESSION_STUDIES = {
             },
         },
     },
+    "C_tropicalis_MYA3404": {
+        "Namiki_2026": {
+            # Biofilm formation under the secondary bile salt sodium
+            # deoxycholate (NaDCA 0.1%) across 5 clinical/reference strains,
+            # aligned to the MYA3404 reference. Group per strain so each
+            # treated sample compares to its own strain's untreated control.
+            # No replicates (1 control + 1 treated per strain).
+            "category": "Biofilm",
+            "pmid": "41559447",  # PRJNA1395136 / GSE315217
+            "ncbi_id": "PRJNA1395136",
+            "path_style": "direct",
+            "control": "SRR36627501",  # fallback; group controls take precedence
+            "conditions": {
+                "SRR36627501": {"label": "Strain 1822 control", "bucket": "control", "group": "1822"},
+                "SRR36627500": {"label": "Strain 1822 + NaDCA 0.1%", "bucket": "stress", "group": "1822"},
+                "SRR36627503": {"label": "Strain 1712 control", "bucket": "control", "group": "1712"},
+                "SRR36627502": {"label": "Strain 1712 + NaDCA 0.1%", "bucket": "stress", "group": "1712"},
+                "SRR36627505": {"label": "Strain 8 control", "bucket": "control", "group": "8"},
+                "SRR36627504": {"label": "Strain 8 + NaDCA 0.1%", "bucket": "stress", "group": "8"},
+                "SRR36627507": {"label": "Strain A control", "bucket": "control", "group": "A"},
+                "SRR36627506": {"label": "Strain A + NaDCA 0.1%", "bucket": "stress", "group": "A"},
+                "SRR36627509": {"label": "Strain JCM1541 control", "bucket": "control", "group": "JCM1541"},
+                "SRR36627508": {"label": "Strain JCM1541 + NaDCA 0.1%", "bucket": "stress", "group": "JCM1541"},
+            },
+        },
+    },
 }
 
 # Bucket category labels
@@ -1485,6 +1519,9 @@ def _get_organism_from_tag(organism_tag: str) -> str:
         "C_glabrata_CBS138": "C_glabrata_CBS138",
         "C_dubliniensis_CD36": "C_dubliniensis_CD36",
         "C_parapsilosis_CDC317": "C_parapsilosis_CDC317",
+        "C_tropicalis_MYA3404": "C_tropicalis_MYA3404",
+        # alias: the frontend and DB use the abbrev C_tropicalis
+        "C_tropicalis": "C_tropicalis_MYA3404",
     }
     return tag_mapping.get(organism_tag, organism_tag)
 
@@ -2022,12 +2059,13 @@ def _get_gene_location(
     # organism — common gene names (e.g. CTA1) exist in several species, and
     # an unscoped lookup can resolve to the wrong organism's feature.
     organism_key = _get_organism_from_tag(organism_tag)
+    db_abbrev = DB_ORGANISM_ABBREV.get(organism_key, organism_key)
     feature = (
         db.query(Feature)
         .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
             (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name),
-            Organism.organism_abbrev == organism_key,
+            Organism.organism_abbrev == db_abbrev,
         )
         .first()
     )
@@ -2284,6 +2322,9 @@ ORGANISM_TO_HTS_KEY = {
     "Candida glabrata CBS138": "C_glabrata_CBS138",
     "Candida dubliniensis CD36": "C_dubliniensis_CD36",
     "Candida parapsilosis CDC317": "C_parapsilosis_CDC317",
+    # C. tropicalis has no strain-level organism row; its single row is
+    # abbrev C_tropicalis with the strain in the display name.
+    "Candida tropicalis MYA-3404": "C_tropicalis_MYA3404",
 }
 
 # Reverse mapping from HTS directory keys to database organism names
