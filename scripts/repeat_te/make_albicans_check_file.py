@@ -21,8 +21,11 @@ def jbrowse_url(locus):
         return "-"
     contig, span = locus.rsplit(":", 1)
     span = span.replace("-", "..")
+    # Pre-activate the reference sequence + gene track so the curator does
+    # not land on an empty "No tracks active" view.
     return (f"https://frontend.dev.candidagenome.org/jbrowse2/"
-            f"?assembly=C_albicans_SC5314&loc={contig}:{span}")
+            f"?assembly=C_albicans_SC5314&loc={contig}:{span}"
+            f"&tracks=DNA,TranscribedFeatures")
 
 out_rows = []
 for r in rows:
