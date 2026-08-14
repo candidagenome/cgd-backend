@@ -1,74 +1,50 @@
 #!/usr/bin/env python3
-"""Albicans curator check file for the repeat/TE gap analysis.
+"""Albicans curator check file for the repeat/TE dev load.
 
-Same column layout as the other species' *_repeat_load_check.tsv, but
-albicans candidates are NOT loaded yet (gap-diff finished 2026-08-13), so
-status is CANDIDATE / CANDIDATE_BELOW_FLOOR (D6 floor: >=5 copies or
->=5 kb per family) and example_url is a JBrowse region link rather than
-a locus page. One row per novel family from the gap diff.
+Same per-family layout as the other species' *_repeat_load_check.tsv
+(make_repeat_check_files.py), built from load_plan_C_albicans_SC5314.json
+after the dev DB load. Albicans-specific: features are haplotype-paired
+_A/_B alleles sharing an alias, so n_copies counts LOCI (serials) and the
+evidence column notes the feature count. Run on cgd-frontend-dev.
 """
-import csv
+import json
+import re
 
 D = "/data/HTS/repeat_te"
-SUMMARY = f"{D}/C_albicans_SC5314_novel_family_summary.tsv"
-OUT = f"{D}/C_albicans_SC5314_repeat_load_check.tsv"
+plan = json.load(open(f"{D}/load_plan_C_albicans_SC5314.json"))
 
-rows = list(csv.DictReader(open(SUMMARY), delimiter="\t"))
+fams = {}
+for r in plan["rows"]:
+    base = re.sub(r"-\d+$", "", r["alias"])
+    f = fams.setdefault(base, dict(ftype=r["ftype"], loci=set(), nfeat=0, bp=0,
+                                   maxlen=0, first=r["feature_name"],
+                                   family=r["family"], head=r["headline"],
+                                   overlaps=0))
+    f["loci"].add(r["alias"])
+    f["nfeat"] += 1
+    ln = int(r["end"]) - int(r["start"]) + 1
+    f["bp"] += ln
+    f["maxlen"] = max(f["maxlen"], ln)
+    if "overlaps" in r["headline"]:
+        f["overlaps"] += 1
 
-def jbrowse_url(locus):
-    # example_locus like Ca22chr1A_C_albicans_SC5314:6623-10271
-    if not locus or ":" not in locus:
-        return "-"
-    contig, span = locus.rsplit(":", 1)
-    span = span.replace("-", "..")
-    # Pre-activate the reference sequence + gene track so the curator does
-    # not land on an empty "No tracks active" view.
-    return (f"https://frontend.dev.candidagenome.org/jbrowse2/"
-            f"?assembly=C_albicans_SC5314&loc={contig}:{span}"
-            f"&tracks=DNA,TranscribedFeatures")
+out = f"{D}/C_albicans_SC5314_repeat_load_check.tsv"
+with open(out, "w") as fh:
+    fh.write("family_display\tstatus\tfeature_type\tn_copies\ttotal_bp\tmax_len"
+             "\tfirst_feature\texample_url\tevidence\tREVIEW(Accept/Revert)\n")
+    for base, f in sorted(fams.items(), key=lambda x: (x[1]["ftype"], -len(x[1]["loci"]))):
+        ev = f["head"].split("; ")[1] if "; " in f["head"] else f["head"]
+        ev += f"; {f['nfeat']} features across {len(f['loci'])} loci (A/B allele pairs)"
+        if f["overlaps"]:
+            ev += f"; {f['overlaps']} features overlap annotated genes (paralog check)"
+        url = f"https://frontend.dev.candidagenome.org/locus/{f['first']}"
+        fh.write(f"{base}\tLOADED\t{f['ftype']}\t{len(f['loci'])}\t{f['bp']}\t{f['maxlen']}"
+                 f"\t{f['first']}\t{url}\t{ev}\t\n")
+    for s in plan["skipped_families"]:
+        fh.write(f"{s['family']}\tNOT_LOADED\trepeat_region\t{s['n_copies']}\t{s['total_bp']}"
+                 f"\t-\t-\t-\t{s['reason']}\t\n")
 
-out_rows = []
-for r in rows:
-    n = int(r["n_novel"])
-    bp = int(r["total_bp"])
-    below_floor = n < 5 and bp < 5000
-    status = "CANDIDATE_BELOW_FLOOR" if below_floor else "CANDIDATE"
-    cls = r["rm_class"] or "Unknown"
-    ev_bits = [f"RepeatModeler family {r['family']} ({cls})"]
-    if r.get("tesorter"):
-        ev_bits.append(f"TEsorter: {r['tesorter']}")
-    if r.get("ltr_part"):
-        ev_bits.append(f"LTR part: {r['ltr_part']}")
-    ngene = int(r.get("n_novel_genefam") or 0)
-    if ngene:
-        genes = r.get("example_genes") or ""
-        ev_bits.append(f"{ngene} copies overlap gene features"
-                       + (f" (e.g. {genes})" if genes else ""))
-    out_rows.append({
-        "family_display": r["family"],
-        "status": status,
-        "feature_type": r["proposed_feature_type"],
-        "n_copies": n,
-        "total_bp": bp,
-        "max_len": r["max_len"],
-        "first_feature": "-",
-        "example_url": jbrowse_url(r.get("example_locus", "")),
-        "evidence": "; ".join(ev_bits),
-        "REVIEW(Accept/Reject)": "",
-    })
-
-# Mirror the other check files' ordering: feature_type, then copy count desc
-out_rows.sort(key=lambda x: (x["feature_type"], -x["n_copies"]))
-
-cols = ["family_display", "status", "feature_type", "n_copies", "total_bp",
-        "max_len", "first_feature", "example_url", "evidence",
-        "REVIEW(Accept/Reject)"]
-with open(OUT, "w", newline="") as fh:
-    w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t")
-    w.writeheader()
-    w.writerows(out_rows)
-
-n_cand = sum(1 for r in out_rows if r["status"] == "CANDIDATE")
-n_floor = len(out_rows) - n_cand
-print(f"wrote {OUT}: {len(out_rows)} families "
-      f"({n_cand} CANDIDATE, {n_floor} CANDIDATE_BELOW_FLOOR)")
+n_loaded = len(fams)
+n_feat = sum(f["nfeat"] for f in fams.values())
+print(f"wrote {out}: {n_loaded} loaded families ({n_feat} features) + "
+      f"{len(plan['skipped_families'])} skipped")
