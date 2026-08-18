@@ -38,6 +38,7 @@ ORGANISMS = [
     "C_glabrata_CBS138",
     "C_dubliniensis_CD36",
     "C_parapsilosis_CDC317",
+    "C_tropicalis_MYA3404",
 ]
 
 # Supported metrics

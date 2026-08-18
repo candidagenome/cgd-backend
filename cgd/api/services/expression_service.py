@@ -2095,7 +2095,13 @@ def _get_gene_location(
         if not loc.root_seq_no:
             continue
 
-        root_seq = db.query(Seq).filter(Seq.seq_no == loc.root_seq_no).first()
+        # Select only feature_no: a full Seq row drags the chromosome's
+        # multi-megabase residues CLOB across the wire (~10 s per lookup).
+        root_seq = (
+            db.query(Seq.feature_no)
+            .filter(Seq.seq_no == loc.root_seq_no)
+            .first()
+        )
         if not root_seq:
             continue
 
@@ -2497,7 +2503,13 @@ def _get_gene_location_for_feature(
         if not loc.root_seq_no:
             continue
 
-        root_seq = db.query(Seq).filter(Seq.seq_no == loc.root_seq_no).first()
+        # Select only feature_no: a full Seq row drags the chromosome's
+        # multi-megabase residues CLOB across the wire (~10 s per lookup).
+        root_seq = (
+            db.query(Seq.feature_no)
+            .filter(Seq.seq_no == loc.root_seq_no)
+            .first()
+        )
         if not root_seq:
             continue
 
@@ -2844,6 +2856,7 @@ def _build_expression_profile(
     studies_config: dict,
     hts_key: str,
     pool: Optional["_BigWigPool"] = None,
+    location_info: Optional[Tuple[str, int, int]] = None,
 ) -> Optional[Dict[str, float]]:
     """
     Build expression profile (fold changes) for a single gene across all conditions.
@@ -2853,9 +2866,14 @@ def _build_expression_profile(
     ``pool`` is an optional per-run bigWig handle cache; the whole-organism
     rebuild reads every study file for every gene, so a shared pool avoids
     reopening each file once per gene.
+
+    ``location_info`` is an optional pre-fetched (chromosome, start, end);
+    the per-gene location lookup is several DB round-trips, so whole-organism
+    rebuilds batch-fetch locations and pass them in.
     """
     # Get gene location
-    location_info = _get_gene_location_for_feature(db, feature, hts_key)
+    if location_info is None:
+        location_info = _get_gene_location_for_feature(db, feature, hts_key)
     if not location_info:
         return None
 
