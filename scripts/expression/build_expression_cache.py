@@ -36,8 +36,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repo root to path for imports (script lives in scripts/expression/)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, aliased
