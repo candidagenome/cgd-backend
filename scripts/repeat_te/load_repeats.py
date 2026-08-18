@@ -17,8 +17,9 @@ from cgd.db.engine import SessionLocal
 CFG = {
     "C_tropicalis":          dict(org=12, fsrc="C. tropicalis MYA-3404"),
     "C_albicans_SC5314":     dict(org=3,  fsrc="CGD",
-                                  seq_src="C. albicans SC5314 Assembly 22"),
-    "C_auris_B8441":         dict(org=11, fsrc="CGD"),
+                                  seq_src="C. albicans SC5314 Assembly 22",
+                                  gv_prefix="A22"),
+    "C_auris_B8441":         dict(org=11, fsrc="CGD", gv_prefix="s"),
     "C_parapsilosis_CDC317": dict(org=7,  fsrc="CGD"),
     "C_glabrata_CBS138":     dict(org=5,  fsrc="CGD"),
     "C_dubliniensis_CD36":   dict(org=9,  fsrc="CGD"),
@@ -39,8 +40,19 @@ ex = lambda sql, **k: db.execute(text(sql), k)
 COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 rc = lambda s: s.translate(COMP)[::-1]
 
-gv = q(f"SELECT genome_version_no FROM {S}.genome_version WHERE organism_no=:o AND is_ver_current='Y'",
-       o=C["org"])[0][0]
+# Some organisms keep several is_ver_current='Y' rows (albicans: one per
+# assembly A19/A20/A21/A22; auris: nuclear + mito) — filter by gv_prefix so
+# the load never attaches to the wrong version (blind [0][0] picked A20 /
+# mito before; dev was retagged 2026-08-18).
+gv_rows = q(f"SELECT genome_version_no, genome_version FROM {S}.genome_version "
+            f"WHERE organism_no=:o AND is_ver_current='Y' ORDER BY genome_version_no DESC",
+            o=C["org"])
+if C.get("gv_prefix"):
+    gv_rows = [r for r in gv_rows if r[1].startswith(C["gv_prefix"])]
+assert gv_rows, f"no current genome_version matching prefix {C.get('gv_prefix')!r}"
+if len(gv_rows) > 1:
+    print(f"WARNING: {len(gv_rows)} matching current genome_versions {gv_rows}; using {gv_rows[0]}")
+gv = gv_rows[0][0]
 seq_src = C.get("seq_src") or q(f"""SELECT s.source FROM {S}.seq s JOIN {S}.feature f ON f.feature_no=s.feature_no
     WHERE f.organism_no=:o AND f.feature_type='ORF' AND s.seq_type='genomic'
     AND s.is_seq_current='Y' GROUP BY s.source ORDER BY COUNT(*) DESC FETCH FIRST 1 ROWS ONLY""",
