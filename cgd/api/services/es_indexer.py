@@ -44,6 +44,9 @@ GENE_FEATURE_TYPES = [
     'ORF', 'blocked_reading_frame', 'pseudogene',
     'transposable_element_gene', 'gene_group', 'ncRNA',
     'rRNA', 'snoRNA', 'snRNA', 'tRNA',
+    # repeat/TE features (curated + 2026 RepeatModeler loads) — indexed so
+    # locus pages like CALB_RPT_0011_A and family aliases (CaRLX1) are findable
+    'long_terminal_repeat', 'retrotransposon', 'repeat_region',
 ]
 
 # Sources to exclude from external_ids (they have their own categories)
