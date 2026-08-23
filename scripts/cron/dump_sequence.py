@@ -165,8 +165,13 @@ def validate_output_file(
     existing_file: Path | None,
     file_type: str,
     strain_abbrev: str,
+    force: bool = False,
 ) -> tuple[bool, str]:
-    """Validate the generated FASTA file."""
+    """Validate the generated FASTA file.
+
+    With force=True the count-change guard is bypassed (for expected jumps
+    after a bulk feature load); the minimum-count check still applies.
+    """
     if not new_file.exists():
         return False, f"Output file does not exist: {new_file}"
 
@@ -184,9 +189,15 @@ def validate_output_file(
         if existing_count > 0:
             change_pct = abs(new_count - existing_count) / existing_count * 100
             if change_pct > MAX_FEATURE_CHANGE_PERCENT:
+                if force:
+                    return True, (
+                        f"Validation passed (change guard bypassed by --force): "
+                        f"{existing_count} -> {new_count} ({change_pct:.1f}% change)"
+                    )
                 return False, (
                     f"Sequence count changed too much for {strain_abbrev} {file_type}: "
-                    f"{existing_count} -> {new_count} ({change_pct:.1f}% change)"
+                    f"{existing_count} -> {new_count} ({change_pct:.1f}% change). "
+                    f"If this change is expected (e.g. after a bulk load), re-run with --force"
                 )
 
     return True, f"Validation passed: {new_count} sequences"
@@ -1203,7 +1214,9 @@ def gzip_file(file_path: Path) -> None:
     file_path.unlink()
 
 
-def generate_sequences(strain_abbrev: str, seq_source: str | None = None) -> bool:
+def generate_sequences(
+    strain_abbrev: str, seq_source: str | None = None, force: bool = False
+) -> bool:
     """
     Generate sequence files for a strain with validation and safety checks.
 
@@ -1278,7 +1291,7 @@ def generate_sequences(strain_abbrev: str, seq_source: str | None = None) -> boo
                 final_gz = final_dir / f"{file_prefix}_{file_type}.fasta.gz"
                 is_valid, msg = validate_output_file(
                     temp_gz, final_gz if final_gz.exists() else None,
-                    file_type, strain_abbrev
+                    file_type, strain_abbrev, force=force
                 )
 
                 if not is_valid:
@@ -1356,6 +1369,16 @@ def main() -> int:
         default=None,
         help="Output directory (overrides default location)",
     )
+    parser.add_argument(
+        "--force", "--accept-change",
+        action="store_true",
+        dest="force",
+        help=(
+            "Accept sequence-count changes beyond the "
+            f"{MAX_FEATURE_CHANGE_PERCENT:.0f}%% guard (use after an expected "
+            "bulk feature load); the minimum-count check still applies"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1372,12 +1395,12 @@ def main() -> int:
         ]
         success = True
         for strain, seq_source in strains:
-            if not generate_sequences(strain, seq_source):
+            if not generate_sequences(strain, seq_source, force=args.force):
                 success = False
         return 0 if success else 1
 
     elif args.strain_abbrev:
-        if generate_sequences(args.strain_abbrev, args.seq_source):
+        if generate_sequences(args.strain_abbrev, args.seq_source, force=args.force):
             return 0
         return 1
 
