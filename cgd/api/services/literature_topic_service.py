@@ -177,8 +177,8 @@ def search_by_topics(
 
     Returns:
         LiteratureTopicSearchResponse with references and genes per topic.
-        Note: Returns ALL genes associated with each reference (via any topic),
-        not just genes linked to the searched topic specifically.
+        Only genes curated under the searched topic are returned for each
+        reference (not all genes associated with the paper via other topics).
     """
     if not topic_cv_term_nos:
         return LiteratureTopicSearchResponse(
@@ -197,88 +197,69 @@ def search_by_topics(
     topic_name_map = {t.cv_term_no: t.term_name for t in topics}
     topic_names = list(topic_name_map.values())
 
-    # Query ref_property for matching topics with references
+    # Query ref_property for matching topics with references, including the
+    # genes curated under each (reference, topic) link
     ref_properties = (
         db.query(RefProperty)
-        .options(joinedload(RefProperty.reference))
+        .options(
+            joinedload(RefProperty.reference),
+            joinedload(RefProperty.refprop_feat)
+            .joinedload(RefpropFeat.feature)
+            .joinedload(Feature.organism),
+        )
         .filter(RefProperty.property_value.in_(topic_names))
         .all()
     )
 
-    # Collect all unique reference_no values
-    ref_no_set: set[int] = set()
-    for rp in ref_properties:
-        if rp.reference:
-            ref_no_set.add(rp.reference.reference_no)
-
-    # Get ALL genes for these references (via any RefProperty, not just searched topics)
-    # This ensures we show all genes associated with a paper, regardless of which topic
-    # they were curated under
-    ref_genes_map: dict[int, list[GeneForLitTopic]] = defaultdict(list)
+    # Build genes per (topic, reference). Each RefProperty row is one
+    # (reference, topic) link and its refprop_feat are the genes curated
+    # under that specific topic — genes the paper carries only under OTHER
+    # topics are deliberately not included (curator request).
+    topic_ref_genes: dict[tuple, list[GeneForLitTopic]] = defaultdict(list)
     all_genes: set[int] = set()
 
-    if ref_no_set:
-        # Query all RefProperty for these references to get all associated genes
-        # Oracle has a limit of 1000 items in an IN clause, so we chunk the query
-        CHUNK_SIZE = 999
-        ref_no_list = list(ref_no_set)
-        all_ref_properties = []
+    # Drop Assembly 21 (orf19.*) features that have Assembly 22 equivalents,
+    # otherwise C. albicans genes appear twice per reference (C1_08450C_A
+    # and orf19.390 are the same gene curated on both assemblies)
+    candidate_feature_nos = {
+        rpf.feature.feature_no
+        for rp in ref_properties
+        for rpf in rp.refprop_feat
+        if rpf.feature
+    }
+    excluded_a21 = _get_assembly21_feature_nos_to_exclude(db, candidate_feature_nos)
 
-        for i in range(0, len(ref_no_list), CHUNK_SIZE):
-            chunk = ref_no_list[i:i + CHUNK_SIZE]
-            chunk_results = (
-                db.query(RefProperty)
-                .options(
-                    joinedload(RefProperty.refprop_feat)
-                    .joinedload(RefpropFeat.feature)
-                    .joinedload(Feature.organism),
-                )
-                .filter(RefProperty.reference_no.in_(chunk))
-                .all()
-            )
-            all_ref_properties.extend(chunk_results)
+    for rp in ref_properties:
+        if not rp.reference:
+            continue
+        key = (rp.property_value, rp.reference.reference_no)
+        seen_gene_nos = {g.feature_no for g in topic_ref_genes[key]}
 
-        # Drop Assembly 21 (orf19.*) features that have Assembly 22 equivalents,
-        # otherwise C. albicans genes appear twice per reference (C1_08450C_A
-        # and orf19.390 are the same gene curated on both assemblies)
-        candidate_feature_nos = {
-            rpf.feature.feature_no
-            for rp in all_ref_properties
-            for rpf in rp.refprop_feat
-            if rpf.feature
-        }
-        excluded_a21 = _get_assembly21_feature_nos_to_exclude(db, candidate_feature_nos)
+        for rpf in rp.refprop_feat:
+            feat = rpf.feature
+            if (
+                feat
+                and feat.feature_no not in seen_gene_nos
+                and feat.feature_no not in excluded_a21
+            ):
+                all_genes.add(feat.feature_no)
+                seen_gene_nos.add(feat.feature_no)
 
-        # Build genes list per reference
-        for rp in all_ref_properties:
-            ref_no = rp.reference_no
-            seen_gene_nos = {g.feature_no for g in ref_genes_map[ref_no]}
-
-            for rpf in rp.refprop_feat:
-                feat = rpf.feature
-                if (
-                    feat
-                    and feat.feature_no not in seen_gene_nos
-                    and feat.feature_no not in excluded_a21
-                ):
-                    all_genes.add(feat.feature_no)
-                    seen_gene_nos.add(feat.feature_no)
-
-                    org = feat.organism
-                    organism_name = None
-                    if org:
-                        organism_name = (
-                            getattr(org, "organism_name", None)
-                            or getattr(org, "display_name", None)
-                        )
-
-                    gene_obj = GeneForLitTopic(
-                        feature_no=feat.feature_no,
-                        feature_name=feat.feature_name,
-                        gene_name=feat.gene_name,
-                        organism=organism_name,
+                org = feat.organism
+                organism_name = None
+                if org:
+                    organism_name = (
+                        getattr(org, "organism_name", None)
+                        or getattr(org, "display_name", None)
                     )
-                    ref_genes_map[ref_no].append(gene_obj)
+
+                gene_obj = GeneForLitTopic(
+                    feature_no=feat.feature_no,
+                    feature_name=feat.feature_name,
+                    gene_name=feat.gene_name,
+                    organism=organism_name,
+                )
+                topic_ref_genes[key].append(gene_obj)
 
     # Build results grouped by topic, then by reference
     # Structure: topic -> reference_no -> (ref_obj, links)
@@ -339,8 +320,8 @@ def search_by_topics(
 
         for ref_no in refs_dict:
             ref, links = refs_dict[ref_no]
-            # Get ALL genes for this reference (from any topic)
-            genes = list(ref_genes_map.get(ref_no, []))
+            # Genes curated under this specific topic for this reference
+            genes = list(topic_ref_genes.get((topic, ref_no), []))
             # Sort genes
             genes.sort(key=lambda g: (g.gene_name or g.feature_name or ''))
 
