@@ -49,6 +49,7 @@ REPEAT_FEATURE_TYPES = {
     "repeat_region",
     "long_terminal_repeat",
     "retrotransposon",
+    "DNA_transposon",
     "transposable_element",
 }
 
@@ -939,6 +940,36 @@ EXPRESSION_STUDIES = {
                 "SRR12047067": {"label": "Biofilm (rep 3)", "bucket": "basic_biology"},
             },
         },
+        "Rana_2025": {
+            "category": "Mutation Comparison",
+            "pmid": "40677213",
+            "path_style": "direct",
+            "control": "SRR31615675",
+            "conditions": {
+                # WT (BG2) untreated - control for all comparisons
+                "SRR31615675": {"label": "WT Untreated (rep 1)", "bucket": "control"},
+                "SRR31615674": {"label": "WT Untreated (rep 2)", "bucket": "control"},
+                "SRR31615673": {"label": "WT Untreated (rep 3)", "bucket": "control"},
+                # WT + 10 mM H2O2 (only 2 reps in the study)
+                "SRR31615663": {"label": "WT H2O2 (rep 1)", "bucket": "stress"},
+                "SRR31615662": {"label": "WT H2O2 (rep 2)", "bucket": "stress"},
+                # WT + 5 mM 3AT
+                "SRR31615669": {"label": "WT 3AT (rep 1)", "bucket": "stress"},
+                "SRR31615668": {"label": "WT 3AT (rep 2)", "bucket": "stress"},
+                "SRR31615667": {"label": "WT 3AT (rep 3)", "bucket": "stress"},
+                # gcn4Δ untreated - shows the deletion effect vs WT
+                "SRR31615672": {"label": "gcn4Δ Untreated (rep 1)", "bucket": "basic_biology"},
+                "SRR31615671": {"label": "gcn4Δ Untreated (rep 2)", "bucket": "basic_biology"},
+                "SRR31615670": {"label": "gcn4Δ Untreated (rep 3)", "bucket": "basic_biology"},
+                # gcn4Δ + 10 mM H2O2 (rep 3 SRR31615659 dropped: 61.7% alignment, mammalian rRNA contamination)
+                "SRR31615661": {"label": "gcn4Δ H2O2 (rep 1)", "bucket": "stress"},
+                "SRR31615660": {"label": "gcn4Δ H2O2 (rep 2)", "bucket": "stress"},
+                # gcn4Δ + 5 mM 3AT
+                "SRR31615666": {"label": "gcn4Δ 3AT (rep 1)", "bucket": "stress"},
+                "SRR31615665": {"label": "gcn4Δ 3AT (rep 2)", "bucket": "stress"},
+                "SRR31615664": {"label": "gcn4Δ 3AT (rep 3)", "bucket": "stress"},
+            },
+        },
     },
     "C_dubliniensis_CD36": {
         "Grumaz_2013": {
@@ -1419,6 +1450,31 @@ LIBRARY_SIZES: Dict[str, Dict[str, Dict[str, float]]] = {
             "SRR15532686": 53.14,
             "SRR15532687": 40.34,
             "SRR15532688": 49.71,
+        },
+        # Rana_2025: effective mRNA library sizes (non-rDNA bigwig signal, millions).
+        # rRNA depletion failed for rep 1/2 libraries (98-99% of signal at the
+        # ChrL/ChrM subtelomeric rDNA arrays) but worked for rep 3s (22-80%), so
+        # raw CPM deflates mRNA signal 30-50x in rep 1/2 samples. Normalizing by
+        # non-rDNA signal puts fold changes on an mRNA-relative scale.
+        # No BAMs staged, so computed from bigwigs (scratchpad/calc_libsizes.py),
+        # not scripts/extract_library_sizes.py.
+        "Rana_2025": {
+            "SRR31615675": 1.432,
+            "SRR31615674": 1.673,
+            "SRR31615673": 145.857,
+            "SRR31615663": 1.251,
+            "SRR31615662": 1.380,
+            "SRR31615669": 4.852,
+            "SRR31615668": 3.633,
+            "SRR31615667": 158.284,
+            "SRR31615672": 1.952,
+            "SRR31615671": 2.138,
+            "SRR31615670": 40.262,
+            "SRR31615661": 2.100,
+            "SRR31615660": 3.594,
+            "SRR31615666": 3.625,
+            "SRR31615665": 3.134,
+            "SRR31615664": 98.015,
         },
     },
     "C_dubliniensis_CD36": {
@@ -3143,11 +3199,16 @@ def get_similar_expression_genes(
     # Get organism_no for downstream analysis (e.g., GO Term Finder)
     organism_no = _get_organism_no_from_key(db, organism_key)
 
-    # Find the query gene feature
+    # Find the query gene feature, scoped to the requested organism —
+    # common gene names (e.g. CTA1) exist in several species, and an
+    # unscoped lookup can resolve to the wrong organism's feature.
+    db_abbrev = DB_ORGANISM_ABBREV.get(organism_key, organism_key)
     query_feature = (
         db.query(Feature)
+        .join(Organism, Feature.organism_no == Organism.organism_no)
         .filter(
-            (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name)
+            (Feature.gene_name == gene_name) | (Feature.feature_name == gene_name),
+            Organism.organism_abbrev == db_abbrev,
         )
         .first()
     )
