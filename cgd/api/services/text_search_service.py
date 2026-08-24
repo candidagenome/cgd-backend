@@ -84,6 +84,9 @@ GENE_FEATURE_TYPES = [
     'ORF', 'blocked_reading_frame', 'pseudogene',
     'transposable_element_gene', 'gene_group', 'ncRNA',
     'rRNA', 'snoRNA', 'snRNA', 'tRNA',
+    # repeat/TE features — keep in sync with es_indexer.GENE_FEATURE_TYPES
+    'long_terminal_repeat', 'retrotransposon', 'repeat_region',
+    'DNA_transposon',
 ]
 
 # Organism display priority (lower index = higher priority)

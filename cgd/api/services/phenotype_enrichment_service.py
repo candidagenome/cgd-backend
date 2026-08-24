@@ -492,7 +492,8 @@ def run_phenotype_enrichment(
         GENE_LEVEL_FEATURE_TYPES = {
             'ORF', 'tRNA', 'snoRNA', 'rRNA', 'snRNA', 'ncRNA',
             'pseudogene', 'blocked_reading_frame',
-            'long_terminal_repeat', 'repeat_region', 'retrotransposon', 'centromere',
+            'long_terminal_repeat', 'repeat_region', 'retrotransposon',
+            'DNA_transposon', 'centromere',
         }
 
         gene_level_features = set(

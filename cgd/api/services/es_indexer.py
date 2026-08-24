@@ -47,6 +47,7 @@ GENE_FEATURE_TYPES = [
     # repeat/TE features (curated + 2026 RepeatModeler loads) — indexed so
     # locus pages like CALB_RPT_0011_A and family aliases (CaRLX1) are findable
     'long_terminal_repeat', 'retrotransposon', 'repeat_region',
+    'DNA_transposon',
 ]
 
 # Sources to exclude from external_ids (they have their own categories)
