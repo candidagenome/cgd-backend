@@ -452,7 +452,7 @@ def format_fasta(header: str, sequence: str, line_length: int = 60) -> str:
 # Feature types to include in "other_features" files
 OTHER_FEATURE_TYPES = {
     "tRNA", "snoRNA", "snRNA", "ncRNA", "rRNA",
-    "long_terminal_repeat", "retrotransposon",
+    "long_terminal_repeat", "retrotransposon", "DNA_transposon",
     "blocked_reading_frame", "pseudogene",
     "repeat_region", "centromere",
 }

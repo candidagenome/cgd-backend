@@ -71,6 +71,7 @@ class GenomeSnapshotResponse(BaseModel):
     snorna_count: int = Field(0, description="snoRNA count")
     repeat_region_count: int = Field(0, description="Repeat region count")
     retrotransposon_count: int = Field(0, description="Retrotransposon count")
+    dna_transposon_count: int = Field(0, description="DNA transposon count")
     centromere_count: int = Field(0, description="Centromere count")
     pseudogene_count: int = Field(0, description="Pseudogene count")
     blocked_reading_frame_count: int = Field(0, description="Blocked reading frame count")

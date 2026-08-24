@@ -840,7 +840,8 @@ def run_go_term_finder(
         GENE_LEVEL_FEATURE_TYPES = {
             'ORF', 'tRNA', 'snoRNA', 'rRNA', 'snRNA', 'ncRNA',
             'pseudogene', 'blocked_reading_frame',
-            'long_terminal_repeat', 'repeat_region', 'retrotransposon', 'centromere',
+            'long_terminal_repeat', 'repeat_region', 'retrotransposon',
+            'DNA_transposon', 'centromere',
         }
 
         # Get all features of gene-level types for this organism
