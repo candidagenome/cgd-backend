@@ -10,6 +10,9 @@ from typing import List
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, distinct
 
+from cgd.api.services.text_search_service import (
+    _get_assembly21_feature_nos_to_exclude,
+)
 from cgd.schemas.literature_topic_schema import (
     LiteratureTopicTerm,
     LiteratureTopicTreeResponse,
@@ -235,6 +238,17 @@ def search_by_topics(
             )
             all_ref_properties.extend(chunk_results)
 
+        # Drop Assembly 21 (orf19.*) features that have Assembly 22 equivalents,
+        # otherwise C. albicans genes appear twice per reference (C1_08450C_A
+        # and orf19.390 are the same gene curated on both assemblies)
+        candidate_feature_nos = {
+            rpf.feature.feature_no
+            for rp in all_ref_properties
+            for rpf in rp.refprop_feat
+            if rpf.feature
+        }
+        excluded_a21 = _get_assembly21_feature_nos_to_exclude(db, candidate_feature_nos)
+
         # Build genes list per reference
         for rp in all_ref_properties:
             ref_no = rp.reference_no
@@ -242,7 +256,11 @@ def search_by_topics(
 
             for rpf in rp.refprop_feat:
                 feat = rpf.feature
-                if feat and feat.feature_no not in seen_gene_nos:
+                if (
+                    feat
+                    and feat.feature_no not in seen_gene_nos
+                    and feat.feature_no not in excluded_a21
+                ):
                     all_genes.add(feat.feature_no)
                     seen_gene_nos.add(feat.feature_no)
 
