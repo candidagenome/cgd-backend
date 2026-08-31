@@ -95,6 +95,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Let cross-origin JS read download filenames (e.g., coordinates.csv)
+        expose_headers=["Content-Disposition"],
     )
 
     # Global exception handler to ensure all errors return proper JSON responses
