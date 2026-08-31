@@ -18,6 +18,12 @@ class DataType(str, Enum):
     ORTHOLOG = "ortholog"
 
 
+class TableFormat(str, Enum):
+    """Output format for tabular data types (coords, phenotype, ortholog)."""
+    TSV = "tsv"
+    CSV = "csv"
+
+
 class ChromosomalRegion(BaseModel):
     """A chromosomal region specification."""
     chromosome: str = Field(..., description="Chromosome name")
@@ -60,6 +66,11 @@ class BatchDownloadRequest(BaseModel):
     use_systematic_names: bool = Field(
         False,
         description="Use systematic names (e.g., orf19.5007) instead of gene names (e.g., ACT1) in FASTA headers"
+    )
+    table_format: TableFormat = Field(
+        TableFormat.TSV,
+        description="Format for tabular data types (coords, phenotype, ortholog): "
+                    "tsv (default) or csv. GO output is always GAF."
     )
 
     class Config:

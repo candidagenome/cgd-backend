@@ -3,6 +3,7 @@ Batch Download Service - handles bulk data download requests.
 """
 from __future__ import annotations
 
+import csv
 import gzip
 import io
 import re
@@ -21,6 +22,7 @@ from cgd.schemas.batch_download_schema import (
     BatchDownloadRequest,
     ResolvedFeature,
     FeatureNotFound,
+    TableFormat,
 )
 from cgd.api.services.sequence_service import (
     get_sequence_by_feature,
@@ -567,6 +569,21 @@ def generate_ortholog_tsv(
     return "\n".join(lines)
 
 
+def tsv_to_csv(content: str) -> str:
+    """
+    Convert tab-delimited content to CSV with proper quoting.
+
+    Safe because TSV fields never contain tabs or newlines; the csv module
+    handles quoting of fields containing commas or double quotes (e.g.,
+    descriptions like "Actin, structural protein...").
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    for line in content.split("\n"):
+        writer.writerow(line.split("\t"))
+    return buf.getvalue()
+
+
 def compress_content(content: str) -> bytes:
     """Gzip compress content."""
     buf = io.BytesIO()
@@ -694,12 +711,16 @@ def process_batch_download(
             filename_base = "orthologs"
 
         if content:
-            # Determine extension
+            # Determine extension; tabular types honor the requested format
+            # (GO is always GAF, a fixed tab-delimited spec)
             if data_type in (DataType.GENOMIC, DataType.GENOMIC_FLANKING,
                              DataType.CODING, DataType.PROTEIN):
                 ext = ".fasta"
             elif data_type == DataType.GO:
                 ext = ".gaf"
+            elif request.table_format == TableFormat.CSV:
+                content = tsv_to_csv(content)
+                ext = ".csv"
             else:
                 ext = ".tsv"
 

@@ -27,13 +27,33 @@ from cgd.api.services.batch_download_service import (
     generate_ortholog_tsv,
     compress_content,
     process_batch_download,
+    tsv_to_csv,
     GO_ASPECT_MAP,
 )
 from cgd.schemas.batch_download_schema import (
     DataType,
     BatchDownloadRequest,
     ResolvedFeature,
+    TableFormat,
 )
+
+
+class TestTsvToCsv:
+    """Tests for tsv_to_csv."""
+
+    def test_plain_fields(self):
+        """Simple fields convert to comma-separated."""
+        assert tsv_to_csv("a\tb\nc\td") == "a,b\r\nc,d\r\n"
+
+    def test_quotes_fields_with_commas(self):
+        """Fields containing commas get quoted."""
+        result = tsv_to_csv("name\tdesc\nACT1\tActin, cytoskeleton component")
+        assert '"Actin, cytoskeleton component"' in result
+
+    def test_escapes_double_quotes(self):
+        """Fields containing double quotes get escaped per CSV rules."""
+        result = tsv_to_csv('gene\tputative "adhesin" protein')
+        assert '"putative ""adhesin"" protein"' in result
 
 
 class MockOrganism:
@@ -494,6 +514,49 @@ class TestProcessBatchDownload:
 
         filename, _ = results[DataType.COORDS]
         assert filename.endswith(".tsv")
+
+    @patch('cgd.api.services.batch_download_service.resolve_features')
+    @patch('cgd.api.services.batch_download_service.generate_coords_tsv')
+    def test_csv_format_converts_and_renames(self, mock_coords, mock_resolve, mock_db, sample_resolved_feature):
+        """Should convert tabular content to CSV and use .csv extension when requested."""
+        mock_resolve.return_value = ([sample_resolved_feature], [])
+        mock_coords.return_value = "name\tdescription\nACT1\tActin, structural protein"
+
+        request = BatchDownloadRequest(
+            genes=["ACT1"],
+            data_types=[DataType.COORDS],
+            compress=False,
+            table_format=TableFormat.CSV,
+        )
+
+        results, _, _ = process_batch_download(mock_db, request)
+
+        filename, content = results[DataType.COORDS]
+        assert filename.endswith(".csv")
+        text = content.decode("utf-8")
+        assert "name,description" in text
+        # Field containing a comma must be quoted
+        assert '"Actin, structural protein"' in text
+
+    @patch('cgd.api.services.batch_download_service.resolve_features')
+    @patch('cgd.api.services.batch_download_service.generate_go_gaf')
+    def test_csv_format_does_not_affect_gaf(self, mock_gaf, mock_resolve, mock_db, sample_resolved_feature):
+        """GO output must stay GAF even when csv is requested."""
+        mock_resolve.return_value = ([sample_resolved_feature], [])
+        mock_gaf.return_value = "!gaf-version: 2.2\nCGD\tCAL0001"
+
+        request = BatchDownloadRequest(
+            genes=["ACT1"],
+            data_types=[DataType.GO],
+            compress=False,
+            table_format=TableFormat.CSV,
+        )
+
+        results, _, _ = process_batch_download(mock_db, request)
+
+        filename, content = results[DataType.GO]
+        assert filename.endswith(".gaf")
+        assert b"\t" in content
 
     @patch('cgd.api.services.batch_download_service.resolve_features')
     @patch('cgd.api.services.batch_download_service.generate_coords_tsv')

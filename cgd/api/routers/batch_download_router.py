@@ -17,6 +17,7 @@ from cgd.schemas.batch_download_schema import (
     BatchDownloadRequest,
     BatchDownloadResponse,
     DownloadFile,
+    TableFormat,
 )
 from cgd.api.services.batch_download_service import (
     process_batch_download,
@@ -89,6 +90,8 @@ def batch_download(
             if data_type in (DataType.GENOMIC, DataType.GENOMIC_FLANKING,
                              DataType.CODING, DataType.PROTEIN):
                 media_type = "text/plain"
+            elif filename.endswith(".csv"):
+                media_type = "text/csv"
             else:
                 media_type = "text/tab-separated-values"
 
@@ -138,6 +141,11 @@ def batch_download_get(
     flank_left: int = Query(0, alias="flankl", ge=0, le=100000),
     flank_right: int = Query(0, alias="flankr", ge=0, le=100000),
     compress: bool = Query(True, description="Gzip compress output"),
+    table_format: TableFormat = Query(
+        TableFormat.TSV,
+        alias="format",
+        description="Format for tabular data types (coords, phenotype, ortholog): tsv or csv"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -145,6 +153,7 @@ def batch_download_get(
 
     Example:
     - /api/batch-download?genes=ACT1,TUB1&types=genomic,protein
+    - /api/batch-download?genes=ACT1,TUB1&types=coords&format=csv
     """
     gene_list = _parse_gene_list(genes)
     if not gene_list:
@@ -169,6 +178,7 @@ def batch_download_get(
         flank_left=flank_left,
         flank_right=flank_right,
         compress=compress,
+        table_format=table_format,
     )
 
     return batch_download(request, db)
@@ -185,6 +195,7 @@ async def batch_download_upload(
     flank_left: int = Query(0, alias="flankl", ge=0, le=100000),
     flank_right: int = Query(0, alias="flankr", ge=0, le=100000),
     compress: bool = Query(True),
+    table_format: TableFormat = Query(TableFormat.TSV, alias="format"),
     db: Session = Depends(get_db),
 ):
     """
@@ -220,6 +231,7 @@ async def batch_download_upload(
         flank_left=flank_left,
         flank_right=flank_right,
         compress=compress,
+        table_format=table_format,
     )
 
     return batch_download(request, db)
