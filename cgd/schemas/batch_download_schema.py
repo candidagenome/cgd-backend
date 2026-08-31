@@ -118,3 +118,4 @@ class ResolvedFeature(BaseModel):
     start: Optional[int] = None
     end: Optional[int] = None
     strand: Optional[str] = None
+    orf19_id: Optional[str] = None  # Assembly 19/21 identifier (e.g., orf19.5007)

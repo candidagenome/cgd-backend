@@ -13,7 +13,7 @@ from sqlalchemy import func, or_
 
 from cgd.models.models import (
     Feature, Seq, FeatLocation, GoAnnotation,
-    PhenoAnnotation, FeatHomology,
+    PhenoAnnotation, FeatHomology, FeatRelationship,
     DbxrefFeat, Dbxref, Organism,
 )
 from cgd.schemas.batch_download_schema import (
@@ -175,6 +175,26 @@ def resolve_features(
                 if seq.feature:
                     chromosome_by_seq[seq.seq_no] = seq.feature.feature_name
 
+    # Batch query Assembly 19/21 identifiers (e.g., orf19.5007).
+    # For C. albicans, the Assembly 21 record is a separate feature linked to
+    # the Assembly 22 feature via an 'Assembly 21 Primary Allele' relationship
+    # (child = Assembly 21 feature, parent = Assembly 22 feature).
+    orf19_by_feature: Dict[int, str] = {}
+    if feature_nos:
+        for chunk in _chunk_list(feature_nos):
+            chunk_rels = (
+                db.query(FeatRelationship.parent_feature_no, Feature.feature_name)
+                .join(Feature, Feature.feature_no == FeatRelationship.child_feature_no)
+                .filter(
+                    FeatRelationship.parent_feature_no.in_(chunk),
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+                .all()
+            )
+            for parent_no, a21_name in chunk_rels:
+                orf19_by_feature[parent_no] = a21_name
+
     # Build results
     found: List[ResolvedFeature] = []
     not_found: List[FeatureNotFound] = []
@@ -198,6 +218,11 @@ def resolve_features(
 
         organism_name = feature.organism.organism_name if feature.organism else None
 
+        orf19_id = orf19_by_feature.get(feature.feature_no)
+        if not orf19_id and feature.feature_name.startswith("orf19."):
+            # The resolved feature is itself an Assembly 21 record
+            orf19_id = feature.feature_name
+
         found.append(ResolvedFeature(
             feature_no=feature.feature_no,
             feature_name=feature.feature_name,
@@ -210,6 +235,7 @@ def resolve_features(
             start=start,
             end=end,
             strand=strand,
+            orf19_id=orf19_id,
         ))
 
         # Mark queries as found
@@ -305,10 +331,11 @@ def generate_coords_tsv(
     """
     Generate tab-delimited coordinate information.
 
-    Columns: feature_name, gene_name, dbxref_id, chromosome, start, end, strand, feature_type, description
+    Columns: feature_name, gene_name, orf19_id, dbxref_id, chromosome, start, end,
+    strand, feature_type, description
     """
     lines = [
-        "feature_name\tgene_name\tdbxref_id\tchromosome\tstart\tend\tstrand\tfeature_type\tdescription"
+        "feature_name\tgene_name\torf19_id\tdbxref_id\tchromosome\tstart\tend\tstrand\tfeature_type\tdescription"
     ]
 
     for feat in features:
@@ -316,6 +343,7 @@ def generate_coords_tsv(
         lines.append(
             f"{feat.feature_name}\t"
             f"{feat.gene_name or ''}\t"
+            f"{feat.orf19_id or ''}\t"
             f"{feat.dbxref_id}\t"
             f"{feat.chromosome or ''}\t"
             f"{feat.start or ''}\t"

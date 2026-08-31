@@ -213,6 +213,7 @@ def sample_resolved_feature():
         start=1000,
         end=2000,
         strand="W",
+        orf19_id="orf19.5741",
     )
 
 
@@ -249,6 +250,7 @@ class TestResolveFeatures:
         mock_db.query.side_effect = [
             MockQuery([sample_feature]),  # Feature lookup
             MockQuery([]),  # Location lookup
+            MockQuery([]),  # Assembly 21 (orf19) lookup
         ]
 
         found, not_found = resolve_features(mock_db, ["ALS1"])
@@ -256,6 +258,31 @@ class TestResolveFeatures:
         assert len(found) == 1
         assert found[0].gene_name == "ALS1"
         assert len(not_found) == 0
+
+    def test_includes_orf19_id_from_relationship(self, mock_db, sample_feature):
+        """Should include Assembly 19/21 identifier from feat_relationship."""
+        mock_db.query.side_effect = [
+            MockQuery([sample_feature]),  # Feature lookup
+            MockQuery([]),  # Location lookup
+            MockQuery([(1, "orf19.5007")]),  # Assembly 21 (orf19) lookup
+        ]
+
+        found, _ = resolve_features(mock_db, ["ALS1"])
+
+        assert found[0].orf19_id == "orf19.5007"
+
+    def test_orf19_feature_is_its_own_orf19_id(self, mock_db):
+        """An Assembly 21 feature should report its own name as orf19_id."""
+        a21_feature = MockFeature(5, "orf19.1234", dbxref_id="CGD:CAL0005")
+        mock_db.query.side_effect = [
+            MockQuery([a21_feature]),  # Feature lookup
+            MockQuery([]),  # Location lookup
+            MockQuery([]),  # Assembly 21 (orf19) lookup
+        ]
+
+        found, _ = resolve_features(mock_db, ["orf19.1234"])
+
+        assert found[0].orf19_id == "orf19.1234"
 
     def test_marks_not_found(self, mock_db):
         """Should mark queries as not found."""
@@ -277,6 +304,7 @@ class TestResolveFeatures:
             MockQuery([sample_feature]),  # Feature lookup
             MockQuery([location]),  # Location lookup
             MockQuery([root_seq]),  # Root seq lookup
+            MockQuery([]),  # Assembly 21 (orf19) lookup
         ]
 
         found, _ = resolve_features(mock_db, ["ALS1"])
@@ -302,6 +330,7 @@ class TestGenerateCoordsTsv:
         lines = result.split("\n")
         assert "feature_name" in lines[0]
         assert "chromosome" in lines[0]
+        assert "orf19_id" in lines[0]
 
     def test_generates_data_row(self, mock_db, sample_resolved_feature):
         """Should generate data rows."""
@@ -309,6 +338,19 @@ class TestGenerateCoordsTsv:
         assert "CAL0001" in result
         assert "ALS1" in result
         assert "Chr1" in result
+        assert "orf19.5741" in result
+
+    def test_blank_orf19_id_for_non_albicans(self, mock_db):
+        """Features without an Assembly 21 record should get a blank orf19 column."""
+        feat = ResolvedFeature(
+            feature_no=3,
+            feature_name="CTRG_00001",
+            dbxref_id="CGD:CAL0003",
+            feature_type="ORF",
+        )
+        result = generate_coords_tsv(mock_db, [feat])
+        data_line = result.split("\n")[1]
+        assert data_line.split("\t")[2] == ""
 
     def test_converts_strand(self, mock_db, sample_resolved_feature):
         """Should convert strand W to + and C to -."""
