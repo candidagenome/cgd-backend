@@ -18,6 +18,7 @@ from cgd.models.models import (
     Abstract,
     Cv,
     CvTerm,
+    FeatRelationship,
     Feature,
     Note,
     NoteLink,
@@ -153,6 +154,36 @@ class LitGuideCurationService:
             .first()
         )
 
+    def get_assembly21_twins(self, feature_nos: list[int]) -> dict[int, int]:
+        """Map Assembly 21 feature_no -> its Assembly 22 feature_no.
+
+        Pre-Assembly-22 papers carry litguide links on BOTH the orf19.* and
+        the A22 feature of the same gene, which shows as duplicated features
+        in curation views. The pairing comes from feat_relationship
+        ('Assembly 21 Primary Allele', rank 3: parent=A22, child=A21), same
+        as the public-search exclusion helper.
+        """
+        twins: dict[int, int] = {}
+        if not feature_nos:
+            return twins
+        for i in range(0, len(feature_nos), 999):
+            chunk = feature_nos[i:i + 999]
+            rows = (
+                self.db.query(
+                    FeatRelationship.child_feature_no,
+                    FeatRelationship.parent_feature_no,
+                )
+                .filter(
+                    FeatRelationship.child_feature_no.in_(chunk),
+                    FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                    FeatRelationship.rank == 3,
+                )
+                .all()
+            )
+            for child_no, parent_no in rows:
+                twins[child_no] = parent_no
+        return twins
+
     def get_feature_literature(self, feature_no: int) -> dict:
         """
         Get all literature for a feature.
@@ -216,8 +247,11 @@ class LitGuideCurationService:
             )
             curated_refs_with_urls = {r.reference_no: r for r in refs_with_urls}
 
-        # Group by reference
+        # Group by reference; collapse duplicate topic rows (the same
+        # ref_property linked on both the A21 and A22 feature of this gene)
+        # into one entry carrying all refprop_feat_nos so removal hits both.
         curated_refs = {}
+        topic_by_prop: dict[tuple[int, int], dict] = {}
         for row in curated_results:
             ref_no = row.reference_no
             if ref_no not in curated_refs:
@@ -241,11 +275,19 @@ class LitGuideCurationService:
                     "urls": urls,
                     "topics": [],
                 }
-            curated_refs[ref_no]["topics"].append({
-                "topic": row.topic,
-                "ref_property_no": row.ref_property_no,
-                "refprop_feat_no": row.refprop_feat_no,
-            })
+            prop_key = (ref_no, row.ref_property_no)
+            existing = topic_by_prop.get(prop_key)
+            if existing:
+                existing["refprop_feat_nos"].append(row.refprop_feat_no)
+            else:
+                entry = {
+                    "topic": row.topic,
+                    "ref_property_no": row.ref_property_no,
+                    "refprop_feat_no": row.refprop_feat_no,
+                    "refprop_feat_nos": [row.refprop_feat_no],
+                }
+                topic_by_prop[prop_key] = entry
+                curated_refs[ref_no]["topics"].append(entry)
 
         # Get uncurated literature (references linked via RefLink but no topics)
         # RefLink connects references to features directly
@@ -741,6 +783,34 @@ class LitGuideCurationService:
                     "topics": [],  # No topics assigned yet - needs curation
                 }
 
+        # Collapse Assembly 21 twins into their Assembly 22 feature so the
+        # same gene doesn't show twice ("RFG1 RFG1") on pre-A22 papers.
+        # Topics merge per ref_property; each topic keeps refprop_feat_nos
+        # (both assemblies' rows) so removals delete both. The twin is
+        # reported in merged_assembly21 for display as a badge.
+        for feat in features_dict.values():
+            for t in feat["topics"]:
+                t["refprop_feat_nos"] = [t["refprop_feat_no"]]
+        twins = self.get_assembly21_twins(list(features_dict.keys()))
+        for child_no, parent_no in twins.items():
+            child = features_dict.get(child_no)
+            parent = features_dict.get(parent_no)
+            if not child or not parent:
+                continue  # twin not linked to this reference; nothing to merge
+            topics_by_prop = {t["ref_property_no"]: t for t in parent["topics"]}
+            for t in child["topics"]:
+                merged = topics_by_prop.get(t["ref_property_no"])
+                if merged:
+                    merged["refprop_feat_nos"].append(t["refprop_feat_no"])
+                else:
+                    parent["topics"].append(t)
+                    topics_by_prop[t["ref_property_no"]] = t
+            parent.setdefault("merged_assembly21", []).append({
+                "feature_no": child["feature_no"],
+                "feature_name": child["feature_name"],
+            })
+            del features_dict[child_no]
+
         all_features = list(features_dict.values())
 
         # Get unlinked features for this reference (via ref_unlink table)
@@ -954,6 +1024,28 @@ class LitGuideCurationService:
         if not reference:
             raise LitGuideCurationError(f"Reference {reference_no} not found")
 
+        # Unlink the feature AND its assembly twin (A21<->A22), otherwise the
+        # links on the other assembly's feature row survive and the gene
+        # reappears (pre-A22 papers are linked on both feature rows).
+        twin_feature_nos = {feature.feature_no}
+        twin_rows = (
+            self.db.query(
+                FeatRelationship.child_feature_no,
+                FeatRelationship.parent_feature_no,
+            )
+            .filter(
+                FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                FeatRelationship.rank == 3,
+                or_(
+                    FeatRelationship.child_feature_no == feature.feature_no,
+                    FeatRelationship.parent_feature_no == feature.feature_no,
+                ),
+            )
+            .all()
+        )
+        for child_no, parent_no in twin_rows:
+            twin_feature_nos.update((child_no, parent_no))
+
         # Remove any topic associations for this feature-reference pair
         # Find all ref_property entries for this reference (both literature_topic and curation_status)
         topic_props = (
@@ -972,26 +1064,27 @@ class LitGuideCurationService:
                 self.db.query(RefpropFeat)
                 .filter(
                     RefpropFeat.ref_property_no == prop.ref_property_no,
-                    RefpropFeat.feature_no == feature.feature_no,
+                    RefpropFeat.feature_no.in_(twin_feature_nos),
                 )
-                .delete()
+                .delete(synchronize_session=False)
             )
             removed_topics += deleted
 
-        # Also check for and delete any RefLink entry (if exists)
-        ref_link = (
+        # Also check for and delete any RefLink entries (if exist)
+        ref_links = (
             self.db.query(RefLink)
             .filter(
                 RefLink.reference_no == reference_no,
                 RefLink.tab_name == "FEATURE",
                 RefLink.col_name == "FEATURE_NO",
-                RefLink.primary_key == feature.feature_no,
+                RefLink.primary_key.in_(twin_feature_nos),
             )
-            .first()
+            .all()
         )
 
-        if ref_link:
-            self.db.delete(ref_link)
+        ref_link = ref_links[0] if ref_links else None
+        for rl in ref_links:
+            self.db.delete(rl)
 
         # If no topics were removed and no RefLink existed, the feature wasn't linked
         if removed_topics == 0 and not ref_link:
