@@ -30,6 +30,7 @@ from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
+    antifungal_evidence_weight,
     EVIDENCE_WEIGHTS,
     get_confidence_tier,
     extract_evidence_types,
@@ -1324,8 +1325,9 @@ def _calculate_confidence_score_es(
             score += EVIDENCE_WEIGHTS["virulence_model"]
         elif "phenotype:" in reason_lower:
             if "antifungal resistance" in reason_lower:
-                # Drug-resistance phenotype with a named antifungal
-                score += EVIDENCE_WEIGHTS["antifungal_phenotype"]
+                # Drug-resistance phenotype with named antifungals; weight
+                # scales with the number of distinct drugs
+                score += antifungal_evidence_weight(reason)
             elif evidence_tier == 1:
                 score += EVIDENCE_WEIGHTS["tier1_phenotype"]
             elif evidence_tier == 2:
@@ -1335,6 +1337,10 @@ def _calculate_confidence_score_es(
             # Check for virulence-related GO terms
             if any(t in reason_lower for t in ["pathogenesis", "host", "virulence"]):
                 score += EVIDENCE_WEIGHTS["virulence_go"]
+            else:
+                # Other matched GO terms still carry some signal (parity
+                # with the Oracle-path scorer, which gives +1 for IEA)
+                score += 1
         elif "literature topic: disease" in reason_lower:
             score += EVIDENCE_WEIGHTS["disease_literature"]
         elif "gene pattern:" in reason_lower:

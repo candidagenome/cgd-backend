@@ -22,6 +22,7 @@ from cgd.schemas.virulence_schema import (
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
     ANTIFUNGAL_CHEMICAL_PATTERNS,
+    antifungal_evidence_weight,
     EVIDENCE_WEIGHTS,
     EVIDENCE_TYPES,
     get_confidence_tier,
@@ -392,10 +393,11 @@ def _calculate_confidence_score(
             if "virulence" in reason_lower:
                 score += EVIDENCE_WEIGHTS["virulence_model"]
             elif "antifungal resistance" in reason_lower:
-                # Drug-resistance phenotype with a named antifungal — direct
+                # Drug-resistance phenotype with named antifungals — direct
                 # evidence for the Drug Resistance category despite the
-                # tier-4 "resistance to chemicals" observable
-                score += EVIDENCE_WEIGHTS["antifungal_phenotype"]
+                # tier-4 "resistance to chemicals" observable; weight scales
+                # with the number of distinct drugs
+                score += antifungal_evidence_weight(reason)
             elif evidence_tier == 1:
                 score += EVIDENCE_WEIGHTS["tier1_phenotype"]
             elif evidence_tier == 2:

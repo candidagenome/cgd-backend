@@ -190,6 +190,22 @@ CONFIDENCE_TIERS = {
 }
 
 
+def antifungal_evidence_weight(reason: str) -> int:
+    """
+    Weight for a "phenotype: antifungal resistance (drug1, drug2, ...)" match
+    reason. Base weight plus +1 per additional named antifungal (capped at
+    +3): resistance demonstrated across several distinct drugs is stronger
+    evidence than a single-drug result. The reason string lists at most four
+    drugs before an ellipsis, so ", ..." counts as a fifth.
+    """
+    base = EVIDENCE_WEIGHTS["antifungal_phenotype"]
+    start, end = reason.rfind("("), reason.rfind(")")
+    if start < 0 or end <= start:
+        return base
+    n_drugs = len([d for d in reason[start + 1:end].split(",") if d.strip()])
+    return base + min(max(n_drugs - 1, 0), 3)
+
+
 def get_confidence_tier(score: int) -> str:
     """Map a 0-20 confidence score to High/Medium/Low tier."""
     if score >= 10:
