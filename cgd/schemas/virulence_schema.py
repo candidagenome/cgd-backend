@@ -54,6 +54,19 @@ PHENOTYPE_EVIDENCE_TIERS = {
     },
 }
 
+# Antifungal drug name patterns (substring match, lowercase). Used to detect
+# drug-resistance phenotype evidence: CGD records the drug on the experiment
+# (EXPT_PROPERTY chebi_ontology / Chemical_pending), not in the observable, so
+# "resistance to chemicals" + fluconazole would otherwise score as tier-4
+# "Indirect" and contribute nothing (e.g. CDR1 rated Low in Drug Resistance).
+ANTIFUNGAL_CHEMICAL_PATTERNS = [
+    "azole",          # fluconazole, itraconazole, voriconazole, ketoconazole...
+    "echinocandin", "fungin",   # caspofungin, micafungin, anidulafungin
+    "amphotericin", "nystatin", "polyene",
+    "terbinafine", "allylamine",
+    "flucytosine", "fluorocytosine",
+]
+
 # =============================================================================
 # HOUSEKEEPING GENE GO TERMS
 # =============================================================================
@@ -1273,6 +1286,7 @@ EVIDENCE_WEIGHTS = {
     "virulence_model": 5,       # Tested in mouse/Galleria
     "tier1_phenotype": 4,       # Direct virulence phenotype
     "tier2_phenotype": 3,       # Host interaction phenotype
+    "antifungal_phenotype": 3,  # Resistance phenotype with a named antifungal
     "virulence_go": 3,          # Host interaction GO terms (symbiont-host)
     "disease_literature": 2,    # Disease literature topic
     "gene_pattern": 1,          # Gene name pattern match

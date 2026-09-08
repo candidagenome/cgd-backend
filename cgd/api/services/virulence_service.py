@@ -21,6 +21,7 @@ from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
+    ANTIFUNGAL_CHEMICAL_PATTERNS,
     EVIDENCE_WEIGHTS,
     EVIDENCE_TYPES,
     get_confidence_tier,
@@ -105,9 +106,11 @@ def _is_housekeeping_gene(db: Session, feature: Feature) -> tuple[bool, Optional
     """
     Detect if gene is likely housekeeping/essential.
 
-    Methods:
-    1. GO annotation to housekeeping terms (translation, DNA replication, etc.)
-    2. Conserved across all 5 Candida species (ortholog groups)
+    Method: GO annotation to housekeeping terms (translation, DNA
+    replication, etc.). Ortholog conservation across Candida species is
+    deliberately NOT used — core virulence and drug-resistance genes (CDR1,
+    ERG11, HSP90) are conserved across the pathogenic species, and the old
+    conservation test penalized them into the Low confidence tier.
 
     Args:
         db: Database session
@@ -116,7 +119,6 @@ def _is_housekeeping_gene(db: Session, feature: Feature) -> tuple[bool, Optional
     Returns:
         Tuple of (is_housekeeping, reason_string)
     """
-    # Method 1: Check GO annotations for housekeeping terms
     housekeeping_goids = [_convert_goid_to_int(g) for g in HOUSEKEEPING_GO_TERMS]
     housekeeping_goids = [g for g in housekeeping_goids if g is not None]
 
@@ -131,11 +133,6 @@ def _is_housekeeping_gene(db: Session, feature: Feature) -> tuple[bool, Optional
 
         if go_match:
             return True, f"GO: {go_match[0]}"
-
-    # Method 2: Check ortholog conservation across Candida species
-    ortholog_count = _get_ortholog_count(db, feature)
-    if ortholog_count >= 5:
-        return True, f"Conserved in {ortholog_count} Candida species"
 
     return False, None
 
@@ -315,6 +312,54 @@ def _get_uniprot_and_alphafold(
     return None, None
 
 
+def get_antifungal_chemicals(db: Session, feature_nos: list[int]) -> dict[int, list[str]]:
+    """
+    Find features whose phenotype experiments name a known antifungal drug.
+
+    CGD stores the drug on the experiment (EXPT_PROPERTY, property_type
+    chebi_ontology or Chemical_pending), not in the phenotype observable, so
+    drug-resistance evidence is invisible to observable-based tier patterns.
+    Returns a map of feature_no -> sorted list of matched antifungal names.
+    Shared by the Oracle search path and the ES indexer.
+    """
+    result: dict[int, set] = {}
+    if not feature_nos:
+        return {}
+    chem_filter = or_(*[
+        func.lower(ExptProperty.property_value).like(f"%{pat}%")
+        for pat in ANTIFUNGAL_CHEMICAL_PATTERNS
+    ])
+    for i in range(0, len(feature_nos), 1000):
+        chunk = feature_nos[i:i + 1000]
+        rows = (
+            db.query(PhenoAnnotation.feature_no, ExptProperty.property_value)
+            .join(Phenotype, PhenoAnnotation.phenotype_no == Phenotype.phenotype_no)
+            .join(ExptExptprop, PhenoAnnotation.experiment_no == ExptExptprop.experiment_no)
+            .join(ExptProperty, ExptExptprop.expt_property_no == ExptProperty.expt_property_no)
+            .filter(PhenoAnnotation.feature_no.in_(chunk))
+            .filter(ExptProperty.property_type.in_(['chebi_ontology', 'Chemical_pending']))
+            .filter(chem_filter)
+            # "Normal" qualifier means no phenotypic effect
+            .filter(
+                or_(
+                    Phenotype.qualifier.is_(None),
+                    func.upper(Phenotype.qualifier) != 'NORMAL'
+                )
+            )
+            .distinct()
+            .all()
+        )
+        for fno, chem in rows:
+            result.setdefault(fno, set()).add(chem.lower())
+    return {fno: sorted(chems) for fno, chems in result.items()}
+
+
+def antifungal_match_reason(chemicals: list[str]) -> str:
+    """Build the match reason string for antifungal resistance evidence."""
+    shown = ", ".join(chemicals[:4]) + (", ..." if len(chemicals) > 4 else "")
+    return f"phenotype: antifungal resistance ({shown})"
+
+
 def _calculate_confidence_score(
     match_reasons: list[str],
     evidence_tier: int,
@@ -346,6 +391,11 @@ def _calculate_confidence_score(
             # Check if it's a virulence phenotype (tier 1)
             if "virulence" in reason_lower:
                 score += EVIDENCE_WEIGHTS["virulence_model"]
+            elif "antifungal resistance" in reason_lower:
+                # Drug-resistance phenotype with a named antifungal — direct
+                # evidence for the Drug Resistance category despite the
+                # tier-4 "resistance to chemicals" observable
+                score += EVIDENCE_WEIGHTS["antifungal_phenotype"]
             elif evidence_tier == 1:
                 score += EVIDENCE_WEIGHTS["tier1_phenotype"]
             elif evidence_tier == 2:
@@ -867,6 +917,12 @@ def get_virulence_factors(
             ):
                 filtered_data[feature_no] = data
         gene_data = filtered_data
+
+    # Add antifungal drug-resistance evidence (the drug name lives on the
+    # experiment, not in the observable, so the category queries miss it)
+    antifungal_by_feature = get_antifungal_chemicals(db, list(gene_data.keys()))
+    for feature_no, chemicals in antifungal_by_feature.items():
+        gene_data[feature_no]["match_reasons"].add(antifungal_match_reason(chemicals))
 
     # Compute evidence quality fields for each gene
     for feature_no, data in gene_data.items():
