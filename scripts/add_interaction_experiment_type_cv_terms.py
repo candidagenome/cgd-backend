@@ -40,6 +40,11 @@ TERMS = [
     "Co-fractionation",               # physical
     "Proximity Label-MS",             # physical
     "Dosage Lethality",               # genetic
+    # Added 2026-09 (BioGRID physical systems missing from the CV):
+    "Cross-Linking-MS",               # physical
+    "Protein-RNA",                    # physical
+    "Surface Display",                # physical
+    "Thermal Shift Assay",            # physical
 ]
 
 
