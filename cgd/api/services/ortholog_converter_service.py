@@ -17,6 +17,7 @@ from cgd.models.models import (
     DbxrefFeat,
     Dbxref,
 )
+from cgd.api.services.es_search_service import ORGANISM_PRIORITY
 from cgd.schemas.ortholog_converter_schema import (
     TargetOrganism,
     SourceOrganism,
@@ -203,13 +204,20 @@ def _find_feature_with_homology(db: Session, gene_id: str) -> Optional[Feature]:
         # If all filtered out, fall back to original list
         valid_features = features
 
-    # Prefer feature with homology data (has feat_homology entries)
-    for feat in valid_features:
-        if feat.feat_homology and len(feat.feat_homology) > 0:
-            return feat
+    # A gene name can exist in several species (e.g. CDR1 is a standard name
+    # in five). Resolve ambiguity by the site-wide organism priority so the
+    # converter picks the same gene the rest of the site would (C. albicans
+    # first), then prefer a feature that has homology data.
+    def sort_key(feat: Feature) -> tuple[int, int]:
+        org = _get_organism_name(feat) or ''
+        try:
+            priority = ORGANISM_PRIORITY.index(org)
+        except ValueError:
+            priority = len(ORGANISM_PRIORITY)
+        has_homology = bool(feat.feat_homology)
+        return (priority, 0 if has_homology else 1)
 
-    # Fall back to first valid feature
-    return valid_features[0] if valid_features else None
+    return min(valid_features, key=sort_key)
 
 
 def _get_ortholog_groups_for_feature(feature: Feature) -> list[HomologyGroup]:
@@ -342,6 +350,34 @@ def _get_sgd_gene_info_from_feature(
         # - We don't have the SGD gene's functional description in our DB
         return result.description, None
     return None, None
+
+
+def _get_sgd_links_from_feature(
+    db: Session,
+    feature_no: int,
+) -> list[tuple[str, Optional[str]]]:
+    """
+    All curated SGD ortholog links on a CGD feature via DbxrefFeat
+    (source='SGD', dbxref_type='Gene ID'): list of (SGDID, gene_name).
+
+    This is the same data the SGD -> CGD direction and the locus Homologs tab
+    use. CGOB clusters (DBXREF_HOMOLOGY) carry S. cerevisiae members for only
+    a subset of genes, so the CGD -> S. cerevisiae direction needs this as a
+    fallback or the converter is asymmetric (PDR5 -> CDR1 worked, CDR1 ->
+    PDR5 returned nothing).
+    """
+    rows = (
+        db.query(Dbxref.dbxref_id, Dbxref.description)
+        .join(DbxrefFeat, Dbxref.dbxref_no == DbxrefFeat.dbxref_no)
+        .filter(
+            DbxrefFeat.feature_no == feature_no,
+            func.upper(Dbxref.source) == 'SGD',
+            Dbxref.dbxref_type == 'Gene ID',
+        )
+        .distinct()
+        .all()
+    )
+    return [(sgdid, gene_name) for sgdid, gene_name in rows]
 
 
 def _count_source_genes_in_cluster(
@@ -704,7 +740,13 @@ def convert_orthologs(
         # Get ortholog groups
         homology_groups = _get_ortholog_groups_for_feature(feature)
 
-        if not homology_groups:
+        # Curated per-gene SGD ortholog links — fallback for SGD targets when
+        # no homology group carries an S. cerevisiae member
+        sgd_links = []
+        if is_external and external_source == 'SGD':
+            sgd_links = _get_sgd_links_from_feature(db, feature.feature_no)
+
+        if not homology_groups and not sgd_links:
             results.append(OrthologResult(
                 input_id=gene_id,
                 input_gene_name=feature.gene_name,
@@ -765,6 +807,20 @@ def convert_orthologs(
             # Use the first cluster that has orthologs
             if all_orthologs:
                 break
+
+        # Fallback for SGD targets: the curated per-gene ortholog assignment
+        # (DbxrefFeat), the same data the reverse direction resolves against
+        if not all_orthologs and sgd_links:
+            for sgdid, sgd_link_name in sgd_links:
+                all_orthologs.append({
+                    'id': sgdid,
+                    'gene_name': sgd_link_name,
+                    'feature_name': sgdid,
+                    'description': sgd_description,
+                    'organism': target_display_name,
+                    'url': f"https://www.yeastgenome.org/locus/{sgdid}",
+                    'cluster_id': None,
+                })
 
         if not all_orthologs:
             results.append(OrthologResult(
