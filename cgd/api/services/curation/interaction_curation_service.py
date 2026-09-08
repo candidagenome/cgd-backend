@@ -58,12 +58,16 @@ PHYSICAL_TYPES = [
     "Co-fractionation",
     "Co-localization",
     "Co-purification",
+    "Cross-Linking-MS",
     "Far Western",
     "FRET",
     "PCA",
     "Protein-peptide",
+    "Protein-RNA",
     "Proximity Label-MS",
     "Reconstituted Complex",
+    "Surface Display",
+    "Thermal Shift Assay",
     "Two-hybrid",
 ]
 
