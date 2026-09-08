@@ -39,8 +39,8 @@ from cgd.schemas.patmatch_schema import (
     DatasetInfo,
     PatmatchConfigResponse,
 )
-from cgd.models.locus_model import Feature, FeatAlias
-from cgd.models.models import Alias
+from cgd.models.locus_model import Feature
+from cgd.models.models import FeatRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -100,32 +100,45 @@ def _lookup_feature_details(
             for feature_no, feature_name, gene_name in features:
                 details[feature_name.upper()] = {
                     "gene_name": gene_name or "",
-                    "orf19_id": "",  # Will be filled in below
+                    # A21 features are their own Assembly 19/21 identifier
+                    "orf19_id": feature_name if feature_name.lower().startswith("orf19.") else "",
                 }
                 feature_no_to_name[feature_no] = feature_name.upper()
 
-        # Now look up orf19 aliases for all features found
+        # Look up Assembly 19/21 identifiers via the 'Assembly 21 Primary
+        # Allele' relationship (child = A21 feature, parent = A22 feature) --
+        # the same source the batch download uses. orf19.* aliases are NOT
+        # reliable here: most A22 features also carry an allele-specific
+        # orf19.9xxx alias, so "first alias found" often disagrees with the
+        # primary identifier.
         if feature_no_to_name:
             feature_nos = list(feature_no_to_name.keys())
             for i in range(0, len(feature_nos), batch_size):
                 batch = feature_nos[i:i + batch_size]
-                # Query aliases that start with "orf19."
-                aliases = (
-                    db.query(FeatAlias.feature_no, Alias.alias_name)
-                    .join(Alias, FeatAlias.alias_no == Alias.alias_no)
+                rels = (
+                    db.query(
+                        FeatRelationship.parent_feature_no,
+                        FeatRelationship.child_feature_no,
+                    )
                     .filter(
-                        FeatAlias.feature_no.in_(batch),
-                        func.lower(Alias.alias_name).like('orf19.%')
+                        FeatRelationship.parent_feature_no.in_(batch),
+                        FeatRelationship.relationship_type == 'Assembly 21 Primary Allele',
+                        FeatRelationship.rank == 3,
                     )
                     .all()
                 )
-
-                for feature_no, alias_name in aliases:
-                    fname = feature_no_to_name.get(feature_no)
-                    if fname and fname in details:
-                        # Keep the first orf19 alias found (there should only be one)
-                        if not details[fname]["orf19_id"]:
-                            details[fname]["orf19_id"] = alias_name
+                child_to_parent = {child: parent for parent, child in rels}
+                if not child_to_parent:
+                    continue
+                a21_features = (
+                    db.query(Feature.feature_no, Feature.feature_name)
+                    .filter(Feature.feature_no.in_(list(child_to_parent.keys())))
+                    .all()
+                )
+                for child_no, a21_name in a21_features:
+                    fname = feature_no_to_name.get(child_to_parent[child_no])
+                    if fname and fname in details and not details[fname]["orf19_id"]:
+                        details[fname]["orf19_id"] = a21_name
 
     except Exception as e:
         logger.warning(f"Failed to look up feature details: {e}")
