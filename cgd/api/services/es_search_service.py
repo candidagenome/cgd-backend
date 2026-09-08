@@ -1311,9 +1311,18 @@ def search_category(
     if category in ("genes", "descriptions"):
         results = _deduplicate_assembly_results(results)
 
-    # Sort genes, descriptions, and orthologs by organism priority
+    # Sort genes, descriptions, and orthologs by organism priority. Within an
+    # organism, a gene whose standard name IS the query outranks alias-only
+    # matches — otherwise the alphabetical tie-break can bury the exact match
+    # (e.g. searching CDR2 listed CDR11, whose alias list contains CDR2,
+    # above the gene actually named CDR2, since "CDR11" < "CDR2").
     if category in ("genes", "descriptions", "orthologs"):
-        results.sort(key=lambda r: (_get_organism_priority(r.organism), r.name or ''))
+        query_upper = query.strip().upper()
+        results.sort(key=lambda r: (
+            _get_organism_priority(r.organism),
+            0 if (r.name or '').upper() == query_upper else 1,
+            r.name or '',
+        ))
 
     # Get organism counts from aggregations
     organism_counts: Optional[dict[str, int]] = None
