@@ -145,5 +145,39 @@ done
 echo "  $LOG_DIR/load/loadRefTemp.log"
 echo "  $LOG_DIR/load/NCBIfulltextURL.log"
 echo ""
+
+# ── Health check ─────────────────────────────────────────────────────────
+# A normal week always loads new papers (C. albicans alone gets dozens), so
+# zero refs across all species means the load is broken, not quiet. The known
+# failure mode is DBID_SEQ drift: a manual CAL-allocating data load leaves the
+# sequence behind MAX(CAL), the REFERENCE trigger's CGDID minting collides
+# (ORA-00001 DBXREF_UK), and every insert fails while the job still "succeeds"
+# (papers stopped silently 2026-08-12 and again 2026-09-08). Exit nonzero and
+# skip the success marker so slack-cron reports Failed instead of Success.
+dbxref_uk_logs=()
+for log in "${LOG_FILES[@]}"; do
+    err_log="${log/_PubMed_/_PubMed_error_}"
+    if [ -f "$err_log" ] && grep -q "DBXREF_UK" "$err_log" 2>/dev/null; then
+        dbxref_uk_logs+=("$err_log")
+    fi
+done
+
+if [ "$total_refs" -eq 0 ] || [ ${#dbxref_uk_logs[@]} -gt 0 ]; then
+    echo "========================================"
+    echo "ALERT: PubMed reference load appears BROKEN"
+    if [ "$total_refs" -eq 0 ]; then
+        echo "  - 0 references loaded across all species (a normal week is never zero)"
+    fi
+    for err_log in "${dbxref_uk_logs[@]}"; do
+        echo "  - DBXREF_UK constraint violations in: $err_log"
+    done
+    echo "  Likely cause: DBID_SEQ behind MAX(CAL) after a manual data load."
+    echo "  Fix: advance DBID_SEQ past the max CAL dbxref_id (PL/SQL NEXTVAL"
+    echo "  loop), then rerun this script to recover the missed papers."
+    echo "========================================"
+    echo "ABORTED with alert at $(date)"
+    exit 1
+fi
+
 echo "========================================"
 echo "Finished PubMed reference loading at $(date)"
