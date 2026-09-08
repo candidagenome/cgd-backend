@@ -30,6 +30,20 @@ audit     DB-wide consistency sweep, independent of any manifest: ortholog
           duplicated standard names within a species (allele twins and
           Assembly 21 twins excluded).
 
+          --allowlist FILE suppresses conflicts curators have reviewed and
+          accepted (e.g. an established Candida name that diverges from the
+          S. cerevisiae standard name, like VID21 vs EAF1). Each line lists
+          one accepted conflict as its full set of names — copy the
+          conflict_key column of the audit output verbatim ("EAF1;VID21");
+          commas/whitespace also work as separators, '#' starts a comment,
+          matching is case-insensitive and order-insensitive. A finding is
+          only suppressed on an exact name-set match, so if a new name
+          joins an accepted conflict it resurfaces. For
+          DUPLICATE_NAME_IN_SPECIES findings, a line with the single
+          duplicated name suppresses it. The allowlist affects audit output
+          ONLY — transfers involving conflicted names stay blocked, because
+          an accepted divergence still violates guideline (2).
+
 FAIL codes (violate the guidelines; block the transfer):
   TARGET_ALREADY_NAMED      target has a standard name (rule 1)
   NAME_CONFLICT             orthologs carry more than one distinct name
@@ -57,11 +71,12 @@ Usage:
     python scripts/reports/qc_ortholog_name_transfers.py check \
         --manifest transfers.tsv [--out qc_report.tsv]
     python scripts/reports/qc_ortholog_name_transfers.py audit \
-        [--out audit.tsv]
+        [--out audit.tsv] [--allowlist accepted_conflicts.txt]
 """
 
 import argparse
 import csv
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -380,10 +395,26 @@ def cmd_check(snap, manifest_path, out):
                        f" of {len(rows)} manifest rows")
 
 
-def cmd_audit(snap, out):
+def load_allowlist(path):
+    """Read accepted-conflict name sets: one conflict per line, names
+    separated by semicolons/commas/whitespace (the audit conflict_key column
+    can be pasted verbatim); '#' starts a comment; case-insensitive."""
+    allow = set()
+    with open(path) as fh:
+        for line in fh:
+            line = line.split("#", 1)[0].strip()
+            names = frozenset(
+                norm(tok) for tok in re.split(r"[;,\s]+", line) if tok)
+            if names:
+                allow.add(names)
+    return allow
+
+
+def cmd_audit(snap, out, allowlist=frozenset()):
     writer = csv.writer(out, delimiter="\t", lineterminator="\n")
-    writer.writerow(["check", "organism", "detail"])
+    writer.writerow(["check", "organism", "conflict_key", "detail"])
     n = 0
+    suppressed = 0
 
     seen = set()
     for fno in snap.neighbors:
@@ -399,6 +430,9 @@ def cmd_audit(snap, out):
             if key in seen:
                 continue
             seen.add(key)
+            if frozenset(all_names) in allowlist:
+                suppressed += 1
+                continue
             members = sorted(
                 f"{snap.org_name[snap.features[m]['organism_no']]}:"
                 f"{snap.features[m]['feature_name']}="
@@ -410,6 +444,7 @@ def cmd_audit(snap, out):
                 for sgdid, _ in hits)
             writer.writerow(["ORTHOLOG_NAME_CONFLICT",
                              snap.org_name[feat["organism_no"]],
+                             ";".join(sorted(all_names)),
                              ";".join(members)])
             n += 1
 
@@ -417,13 +452,18 @@ def cmd_audit(snap, out):
                                           key=lambda kv: (kv[0][0], kv[0][1])):
         canon = {snap.canonical(h) for h in holders} - snap.a21_twins
         if len(canon) > 1:
+            if frozenset({name}) in allowlist:
+                suppressed += 1
+                continue
             writer.writerow([
-                "DUPLICATE_NAME_IN_SPECIES", snap.org_name[org_no],
+                "DUPLICATE_NAME_IN_SPECIES", snap.org_name[org_no], name,
                 name + ": " + ";".join(sorted(
                     snap.features[h]["feature_name"] for h in canon)),
             ])
             n += 1
-    print(f"audit: {n} findings", file=sys.stderr)
+    print(f"audit: {n} findings"
+          + (f" ({suppressed} suppressed by allowlist)" if suppressed else ""),
+          file=sys.stderr)
 
 
 def summarize(results, headline):
@@ -445,6 +485,9 @@ def main():
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
     p = sub.add_parser("audit")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
+    p.add_argument("--allowlist",
+                   help="file of accepted conflicts (one name set per line,"
+                        " e.g. 'EAF1;VID21'); suppressed from the report")
     args = parser.parse_args()
 
     with SessionLocal() as db:
@@ -454,7 +497,8 @@ def main():
     elif args.mode == "check":
         cmd_check(snap, args.manifest, args.out)
     else:
-        cmd_audit(snap, args.out)
+        allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
+        cmd_audit(snap, args.out, allow)
 
 
 if __name__ == "__main__":
