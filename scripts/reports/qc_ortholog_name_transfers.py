@@ -537,64 +537,163 @@ def cmd_audit(snap, out, allowlist=frozenset()):
           file=sys.stderr)
 
 
-def cmd_worklist(snap, out):
-    """
-    Combined curator worklist: one row per conflicted transitive component,
-    merging the co-ortholog census with the name-transfer QC so one curation
-    round settles both. Rows are ranked by named-gene count (the reviewer's
-    "key genes" first). DECISION/NOTES columns are left empty for curators.
-    """
-    writer = csv.writer(out, delimiter="\t", lineterminator="\n")
-    writer.writerow([
-        "rank", "gene_names", "n_named", "n_genes", "duplicated_species",
-        "scer_names", "blocked_transfers", "blocked_targets",
-        "members", "homology_groups", "methods", "DECISION", "NOTES",
-    ])
-    rows = []
-    for members in snap.components():
-        dup = snap.duplicated_species(members)
-        names = sorted({
-            norm(snap.features[m]["gene_name"]) for m in members
-            if snap.features[m]["gene_name"]
-        })
-        # Blocked transfers: unnamed ORF members whose transfer the QC blocks
-        # because this component's names conflict
-        blocked = []
-        for fno in members:
-            feat = snap.features[fno]
-            if feat["gene_name"] or feat["feature_type"] != "ORF":
-                continue
-            if feat["feature_name"].endswith("_B") or fno in snap.a21_twins:
-                continue
-            res = snap.assess(fno)
-            if "NAME_CONFLICT" in res["fails"]:
-                blocked.append(feat["feature_name"])
-        if not dup and not blocked:
+def _name_stem(name):
+    """Gene-family stem: strip trailing digits (SAP1 -> SAP, TLO16 -> TLO)."""
+    return name.rstrip("0123456789")
+
+
+def _component_data(snap, members):
+    """Everything the worklist views need for one transitive component."""
+    dup = snap.duplicated_species(members)
+    names = sorted({
+        norm(snap.features[m]["gene_name"]) for m in members
+        if snap.features[m]["gene_name"]
+    })
+    blocked = []
+    for fno in members:
+        feat = snap.features[fno]
+        if feat["gene_name"] or feat["feature_type"] != "ORF":
             continue
-        scer = sorted({name for m in members
-                       for _, name in snap.sgd_names.get(m, ())})
-        groups = sorted({g for m in members for g in snap.groups_of[m]})
-        methods = sorted({m for f in members for m in snap.methods[f]})
-        detail = "; ".join(
-            f"{snap.org_name[snap.features[m]['organism_no']].replace('Candida ', 'C. ')}:"
-            f"{snap.features[m]['feature_name']}"
-            + (f"={snap.features[m]['gene_name']}"
-               if snap.features[m]["gene_name"] else "")
-            for m in members)
-        rows.append((
-            ",".join(names) or "-", len(names), len(members),
-            "; ".join(sorted(snap.org_name[sp] for sp in dup)),
-            ",".join(scer), len(blocked), ",".join(sorted(blocked)),
-            detail, ",".join(str(g) for g in groups), ",".join(methods),
+        if feat["feature_name"].endswith("_B") or fno in snap.a21_twins:
+            continue
+        res = snap.assess(fno)
+        if "NAME_CONFLICT" in res["fails"]:
+            blocked.append(feat["feature_name"])
+    scer = sorted({name for m in members
+                   for _, name in snap.sgd_names.get(m, ())})
+    detail = "; ".join(
+        f"{snap.org_name[snap.features[m]['organism_no']].replace('Candida ', 'C. ')}:"
+        f"{snap.features[m]['feature_name']}"
+        + (f"={snap.features[m]['gene_name']}"
+           if snap.features[m]["gene_name"] else "")
+        for m in members)
+    groups = sorted({g for m in members for g in snap.groups_of[m]})
+    methods = sorted({m for f in members for m in snap.methods[f]})
+    return {
+        "members": members, "dup": dup, "names": names, "scer": scer,
+        "blocked": sorted(blocked), "detail": detail,
+        "groups": groups, "methods": methods,
+    }
+
+
+def cmd_worklist(snap, out, view="families"):
+    """
+    Curator worklists derived from the conflicted transitive components.
+
+    view=families  Co-ortholog families only: a species duplicated AND >=2
+                   named CGD genes (the reviewer-visible intransitivity).
+                   likely_family=YES marks rows where every name shares one
+                   family stem (SAP1/SAP2/SAP8...) — bulk-acceptable as
+                   FAMILY. same_stem_genes_not_in_component lists named genes
+                   that look like family members but are absent (they carry
+                   no ortholog-group membership), addressing "members seem
+                   to be missing".
+    view=transfers Name-conflict rows that actually gate transfers under the
+                   guidelines: >=1 named CGD gene AND >=2 named entities
+                   among the 7 species (S. cerevisiae counts once), so a
+                   naming decision could genuinely unblock the transfer.
+                   Components with zero named Candida genes are excluded —
+                   they can never reach the two-identical-names bar
+                   regardless of conflicts (their "conflicts" are between
+                   S. cerevisiae paralog links only).
+    view=all       The original full census (every conflicted component).
+    """
+    # Named genes elsewhere in the DB, for the missing-members column
+    named_by_stem = defaultdict(list)
+    for feat in snap.features.values():
+        if feat["gene_name"] and feat["feature_no"] not in snap.a21_twins \
+                and not feat["feature_name"].endswith("_B"):
+            named_by_stem[_name_stem(norm(feat["gene_name"]))].append(feat)
+
+    comps = [_component_data(snap, members) for members in snap.components()]
+    comps = [c for c in comps if c["dup"] or c["blocked"]]
+
+    writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+
+    if view == "families":
+        rows = [c for c in comps if c["dup"] and len(c["names"]) >= 2]
+        writer.writerow([
+            "rank", "gene_names", "likely_family", "n_named", "n_genes",
+            "duplicated_species", "scer_names",
+            "same_stem_genes_not_in_component", "members",
+            "homology_groups", "methods", "DECISION", "NOTES",
+        ])
+        rows.sort(key=lambda c: (
+            len({_name_stem(n) for n in c["names"]}) == 1,  # unclear first
+            -len(c["names"]), -len(c["members"]),
         ))
-    rows.sort(key=lambda r: (-r[1], -r[5], -r[2]))
-    for rank, row in enumerate(rows, 1):
-        writer.writerow([rank] + list(row) + ["", ""])
-    named = sum(1 for r in rows if r[1] >= 2)
-    blocked_total = sum(r[5] for r in rows)
-    print(f"worklist: {len(rows)} conflicted components "
-          f"({named} with >=2 named genes; {blocked_total} name transfers "
-          f"blocked by them)", file=sys.stderr)
+        for rank, c in enumerate(rows, 1):
+            stems = {_name_stem(n) for n in c["names"]}
+            likely = "YES" if len(stems) == 1 else ""
+            in_comp = set(c["members"])
+            missing = sorted({
+                f"{feat['gene_name']}/{feat['feature_name']}"
+                f" ({snap.org_name[feat['organism_no']].replace('Candida ', 'C. ')})"
+                for stem in stems
+                for feat in named_by_stem.get(stem, ())
+                if feat["feature_no"] not in in_comp
+            })
+            writer.writerow([
+                rank, ",".join(c["names"]), likely, len(c["names"]),
+                len(c["members"]),
+                "; ".join(sorted(snap.org_name[sp] for sp in c["dup"])),
+                ",".join(c["scer"]), "; ".join(missing), c["detail"],
+                ",".join(str(g) for g in c["groups"]),
+                ",".join(c["methods"]), "", "",
+            ])
+        bulk = sum(1 for c in rows if len({_name_stem(n) for n in c["names"]}) == 1)
+        print(f"worklist(families): {len(rows)} rows "
+              f"({bulk} likely_family=YES, bulk-acceptable)", file=sys.stderr)
+
+    elif view == "transfers":
+        rows = [
+            c for c in comps
+            if c["blocked"] and c["names"]
+            and len(c["names"]) + (1 if c["scer"] else 0) >= 2
+        ]
+        writer.writerow([
+            "rank", "cgd_names", "scer_names", "conflict_type",
+            "blocked_transfers", "blocked_targets", "members",
+            "DECISION", "NOTES",
+        ])
+
+        def conflict_type(c):
+            if len(c["names"]) >= 2:
+                return "CGD_vs_CGD" if not c["scer"] else "MIXED"
+            return "CGD_vs_SCER"
+
+        rows.sort(key=lambda c: (-len(c["blocked"]), len(c["names"])))
+        for rank, c in enumerate(rows, 1):
+            writer.writerow([
+                rank, ",".join(c["names"]), ",".join(c["scer"]),
+                conflict_type(c), len(c["blocked"]),
+                ",".join(c["blocked"]), c["detail"], "", "",
+            ])
+        print(f"worklist(transfers): {len(rows)} rows gating "
+              f"{sum(len(c['blocked']) for c in rows)} transfers "
+              f"(components with no named Candida gene excluded)",
+              file=sys.stderr)
+
+    else:  # all — the original census
+        writer.writerow([
+            "rank", "gene_names", "n_named", "n_genes", "duplicated_species",
+            "scer_names", "blocked_transfers", "blocked_targets",
+            "members", "homology_groups", "methods", "DECISION", "NOTES",
+        ])
+        comps.sort(key=lambda c: (-len(c["names"]), -len(c["blocked"]),
+                                  -len(c["members"])))
+        for rank, c in enumerate(comps, 1):
+            writer.writerow([
+                rank, ",".join(c["names"]) or "-", len(c["names"]),
+                len(c["members"]),
+                "; ".join(sorted(snap.org_name[sp] for sp in c["dup"])),
+                ",".join(c["scer"]), len(c["blocked"]),
+                ",".join(c["blocked"]), c["detail"],
+                ",".join(str(g) for g in c["groups"]),
+                ",".join(c["methods"]), "", "",
+            ])
+        print(f"worklist(all): {len(comps)} conflicted components",
+              file=sys.stderr)
 
 
 def summarize(results, headline):
@@ -621,6 +720,11 @@ def main():
                         " e.g. 'EAF1;VID21'); suppressed from the report")
     p = sub.add_parser("worklist")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
+    p.add_argument("--view", choices=["families", "transfers", "all"],
+                   default="families",
+                   help="families: co-ortholog families needing FAMILY/SPLIT"
+                        " calls; transfers: name conflicts that actually gate"
+                        " transfers; all: full census")
     args = parser.parse_args()
 
     with SessionLocal() as db:
@@ -630,7 +734,7 @@ def main():
     elif args.mode == "check":
         cmd_check(snap, args.manifest, args.out)
     elif args.mode == "worklist":
-        cmd_worklist(snap, args.out)
+        cmd_worklist(snap, args.out, args.view)
     else:
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
         cmd_audit(snap, args.out, allow)
