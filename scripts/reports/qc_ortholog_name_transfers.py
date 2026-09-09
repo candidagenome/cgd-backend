@@ -26,9 +26,19 @@ check     QC a transfer manifest (TSV with feature_name and gene_name
           proposed list before loading, and again after loading (it also
           reports whether the name is applied in the DB).
 audit     DB-wide consistency sweep, independent of any manifest: ortholog
-          neighborhoods whose members carry different standard names, and
+          neighborhoods whose members carry different standard names,
           duplicated standard names within a species (allele twins and
-          Assembly 21 twins excluded).
+          Assembly 21 twins excluded), and CO_ORTHOLOG_COMPONENT findings —
+          transitive ortholog components that contain two or more genes from
+          one species (expanded families like CDR/PDH, SAP, TLO, where 1:1
+          orthology does not exist and pairwise groups disagree).
+worklist  The combined curator worklist: one row per conflicted transitive
+          component, merging the co-ortholog census with the name-transfer
+          QC — each row lists the family members, every standard name in
+          play, the S. cerevisiae evidence, and which blocked name transfers
+          curating the component would unblock, plus empty DECISION/NOTES
+          columns. See docs in the emitted header and the accompanying
+          curator instructions file.
 
           --allowlist FILE suppresses conflicts curators have reviewed and
           accepted (e.g. an established Candida name that diverges from the
@@ -72,6 +82,8 @@ Usage:
         --manifest transfers.tsv [--out qc_report.tsv]
     python scripts/reports/qc_ortholog_name_transfers.py audit \
         [--out audit.tsv] [--allowlist accepted_conflicts.txt]
+    python scripts/reports/qc_ortholog_name_transfers.py worklist \
+        [--out ortholog_conflict_worklist.tsv]
 """
 
 import argparse
@@ -177,6 +189,41 @@ class Snapshot:
                 " JOIN alias a ON a.alias_no = fa.alias_no"
                 " JOIN feature f ON f.feature_no = fa.feature_no")):
             self.aliases_in_org[(org_no, norm(alias))].add(fno)
+
+    def components(self):
+        """
+        Transitive components of the ortholog graph (union-find over group
+        co-membership, allele-canonicalized). Returns a list of components,
+        each a sorted list of feature_nos. If orthology were transitive and
+        1:1, no component would hold two genes of one species; components
+        that do are co-ortholog families where the pairwise groups disagree
+        (e.g. CGOB picks CgPDH1 for CaCDR1's glabrata slot while BLAST RBH
+        links CgCDR1 via tropicalis).
+        """
+        parent = {}
+
+        def find(x):
+            while parent.setdefault(x, x) != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for fno, group_nos in self.groups_of.items():
+            for other in self.neighbors.get(fno, ()):
+                ra, rb = find(fno), find(other)
+                if ra != rb:
+                    parent[ra] = rb
+        comps = defaultdict(list)
+        for fno in self.groups_of:
+            comps[find(fno)].append(fno)
+        return [sorted(members) for members in comps.values()]
+
+    def duplicated_species(self, members):
+        """Species (organism_no) appearing more than once in a member list."""
+        per_sp = defaultdict(list)
+        for fno in members:
+            per_sp[self.features[fno]["organism_no"]].append(fno)
+        return {sp: feats for sp, feats in per_sp.items() if len(feats) > 1}
 
     def canonical(self, fno):
         """Map a C. albicans _B allele to its _A twin (one locus, one vote)."""
@@ -461,9 +508,93 @@ def cmd_audit(snap, out, allowlist=frozenset()):
                     snap.features[h]["feature_name"] for h in canon)),
             ])
             n += 1
+    # Co-ortholog components: a species duplicated within one transitive
+    # component means the family expanded and 1:1 orthology does not exist
+    for members in snap.components():
+        dup = snap.duplicated_species(members)
+        if not dup:
+            continue
+        names = sorted({
+            norm(snap.features[m]["gene_name"]) for m in members
+            if snap.features[m]["gene_name"]
+        })
+        if names and frozenset(names) in allowlist:
+            suppressed += 1
+            continue
+        dup_orgs = "; ".join(sorted(snap.org_name[sp] for sp in dup))
+        detail = "; ".join(
+            f"{snap.org_name[snap.features[m]['organism_no']]}:"
+            f"{snap.features[m]['feature_name']}"
+            + (f"={snap.features[m]['gene_name']}"
+               if snap.features[m]["gene_name"] else "")
+            for m in members)
+        writer.writerow(["CO_ORTHOLOG_COMPONENT", dup_orgs,
+                         ";".join(names) or "-", detail])
+        n += 1
+
     print(f"audit: {n} findings"
           + (f" ({suppressed} suppressed by allowlist)" if suppressed else ""),
           file=sys.stderr)
+
+
+def cmd_worklist(snap, out):
+    """
+    Combined curator worklist: one row per conflicted transitive component,
+    merging the co-ortholog census with the name-transfer QC so one curation
+    round settles both. Rows are ranked by named-gene count (the reviewer's
+    "key genes" first). DECISION/NOTES columns are left empty for curators.
+    """
+    writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+    writer.writerow([
+        "rank", "gene_names", "n_named", "n_genes", "duplicated_species",
+        "scer_names", "blocked_transfers", "blocked_targets",
+        "members", "homology_groups", "methods", "DECISION", "NOTES",
+    ])
+    rows = []
+    for members in snap.components():
+        dup = snap.duplicated_species(members)
+        names = sorted({
+            norm(snap.features[m]["gene_name"]) for m in members
+            if snap.features[m]["gene_name"]
+        })
+        # Blocked transfers: unnamed ORF members whose transfer the QC blocks
+        # because this component's names conflict
+        blocked = []
+        for fno in members:
+            feat = snap.features[fno]
+            if feat["gene_name"] or feat["feature_type"] != "ORF":
+                continue
+            if feat["feature_name"].endswith("_B") or fno in snap.a21_twins:
+                continue
+            res = snap.assess(fno)
+            if "NAME_CONFLICT" in res["fails"]:
+                blocked.append(feat["feature_name"])
+        if not dup and not blocked:
+            continue
+        scer = sorted({name for m in members
+                       for _, name in snap.sgd_names.get(m, ())})
+        groups = sorted({g for m in members for g in snap.groups_of[m]})
+        methods = sorted({m for f in members for m in snap.methods[f]})
+        detail = "; ".join(
+            f"{snap.org_name[snap.features[m]['organism_no']].replace('Candida ', 'C. ')}:"
+            f"{snap.features[m]['feature_name']}"
+            + (f"={snap.features[m]['gene_name']}"
+               if snap.features[m]["gene_name"] else "")
+            for m in members)
+        rows.append((
+            ",".join(names) or "-", len(names), len(members),
+            "; ".join(sorted(snap.org_name[sp] for sp in dup)),
+            ",".join(scer), len(blocked), ",".join(sorted(blocked)),
+            detail, ",".join(str(g) for g in groups), ",".join(methods),
+        ))
+    rows.sort(key=lambda r: (-r[1], -r[5], -r[2]))
+    for rank, row in enumerate(rows, 1):
+        writer.writerow([rank] + list(row) + ["", ""])
+    named = sum(1 for r in rows if r[1] >= 2)
+    blocked_total = sum(r[5] for r in rows)
+    print(f"worklist: {len(rows)} conflicted components "
+          f"({named} with >=2 named genes; {blocked_total} name transfers "
+          f"blocked by them)", file=sys.stderr)
 
 
 def summarize(results, headline):
@@ -488,6 +619,8 @@ def main():
     p.add_argument("--allowlist",
                    help="file of accepted conflicts (one name set per line,"
                         " e.g. 'EAF1;VID21'); suppressed from the report")
+    p = sub.add_parser("worklist")
+    p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
     args = parser.parse_args()
 
     with SessionLocal() as db:
@@ -496,6 +629,8 @@ def main():
         cmd_propose(snap, args.out)
     elif args.mode == "check":
         cmd_check(snap, args.manifest, args.out)
+    elif args.mode == "worklist":
+        cmd_worklist(snap, args.out)
     else:
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
         cmd_audit(snap, args.out, allow)
