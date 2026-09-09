@@ -54,6 +54,19 @@ PHENOTYPE_EVIDENCE_TIERS = {
     },
 }
 
+# Antifungal drug name patterns (substring match, lowercase). Used to detect
+# drug-resistance phenotype evidence: CGD records the drug on the experiment
+# (EXPT_PROPERTY chebi_ontology / Chemical_pending), not in the observable, so
+# "resistance to chemicals" + fluconazole would otherwise score as tier-4
+# "Indirect" and contribute nothing (e.g. CDR1 rated Low in Drug Resistance).
+ANTIFUNGAL_CHEMICAL_PATTERNS = [
+    "azole",          # fluconazole, itraconazole, voriconazole, ketoconazole...
+    "echinocandin", "fungin",   # caspofungin, micafungin, anidulafungin
+    "amphotericin", "nystatin", "polyene",
+    "terbinafine", "allylamine",
+    "flucytosine", "fluorocytosine",
+]
+
 # =============================================================================
 # HOUSEKEEPING GENE GO TERMS
 # =============================================================================
@@ -175,6 +188,22 @@ CONFIDENCE_TIERS = {
     "Medium": {"min_score": 5, "description": "Moderate evidence with host interaction"},
     "Low": {"min_score": 0, "description": "Indirect or weak evidence"},
 }
+
+
+def antifungal_evidence_weight(reason: str) -> int:
+    """
+    Weight for a "phenotype: antifungal resistance (drug1, drug2, ...)" match
+    reason. Base weight plus +1 per additional named antifungal (capped at
+    +3): resistance demonstrated across several distinct drugs is stronger
+    evidence than a single-drug result. The reason string lists at most four
+    drugs before an ellipsis, so ", ..." counts as a fifth.
+    """
+    base = EVIDENCE_WEIGHTS["antifungal_phenotype"]
+    start, end = reason.rfind("("), reason.rfind(")")
+    if start < 0 or end <= start:
+        return base
+    n_drugs = len([d for d in reason[start + 1:end].split(",") if d.strip()])
+    return base + min(max(n_drugs - 1, 0), 3)
 
 
 def get_confidence_tier(score: int) -> str:
@@ -1273,6 +1302,7 @@ EVIDENCE_WEIGHTS = {
     "virulence_model": 5,       # Tested in mouse/Galleria
     "tier1_phenotype": 4,       # Direct virulence phenotype
     "tier2_phenotype": 3,       # Host interaction phenotype
+    "antifungal_phenotype": 3,  # Resistance phenotype with a named antifungal
     "virulence_go": 3,          # Host interaction GO terms (symbiont-host)
     "disease_literature": 2,    # Disease literature topic
     "gene_pattern": 1,          # Gene name pattern match

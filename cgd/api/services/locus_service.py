@@ -845,7 +845,8 @@ DEFAULT_SEQ_SOURCES = {
 def _filter_features_by_preference(
     db: Session,
     features: list,
-    prefer_seq_source: Optional[str] = None
+    prefer_seq_source: Optional[str] = None,
+    match_rank: Optional[dict] = None,
 ) -> list:
     """
     Filter multiple features to return one per organism, similar to Perl
@@ -857,13 +858,18 @@ def _filter_features_by_preference(
        a. Check for primary allele relationships - prefer parent over secondary
        b. Check for Assembly 22 relationships - prefer Assembly 22 version
        c. Prefer features from the default sequence source
-       d. If still multiple, prefer feature_name starting with 'orf'
+       d. Prefer better match_rank (direct name match over alias match)
+       e. If still multiple, prefer feature_name starting with 'orf'
     3. Return one feature per organism
 
     Args:
         db: Database session
         features: List of Feature objects
         prefer_seq_source: Optional sequence source to prefer
+        match_rank: Optional map of feature_no to match quality (lower is
+            better, e.g. 0 = matched by standard/systematic name or CGDID,
+            1 = matched only via an alias). Applied after the deleted-feature
+            step so a retired direct match cannot shadow a live alias match.
 
     Returns:
         Filtered list of Feature objects (one per organism)
@@ -967,6 +973,22 @@ def _filter_features_by_preference(
             result.append(org_features[0])
             continue
 
+        # Step 3.5: Prefer the best match_rank — a gene whose standard name
+        # (or feature name / CGDID) IS the query beats a gene that merely
+        # lists the query among its aliases. E.g. searching CDR2 must resolve
+        # to C3_04890W_A (gene_name CDR2), not C3_04070C_A (CDR11, alias
+        # CDR2), which the alphabetical tie-break below would otherwise pick.
+        if match_rank:
+            best = min(match_rank.get(f.feature_no, 0) for f in org_features)
+            org_features = [
+                f for f in org_features
+                if match_rank.get(f.feature_no, 0) == best
+            ]
+
+        if len(org_features) == 1:
+            result.append(org_features[0])
+            continue
+
         # Step 4: Prefer feature_name starting with 'orf' (common convention)
         orf_features = [
             f for f in org_features
@@ -1032,12 +1054,16 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         .all()
     )
 
-    # Combine results, avoiding duplicates
+    # Combine results, avoiding duplicates. Track how each feature matched
+    # (0 = direct gene/feature/CGDID match, 1 = alias-only match) so the
+    # per-organism preference filter can rank standard names above aliases.
+    match_rank = {f.feature_no: 0 for f in direct_features}
     features = list(direct_features)
     for feat in alias_features:
         if feat.feature_no not in found_feature_nos:
             features.append(feat)
             found_feature_nos.add(feat.feature_no)
+            match_rank[feat.feature_no] = 1
 
     # Merged-feature fallback: if every direct match is a soft-retired feature
     # (no current location — e.g. its ORF was merged into another gene), also
@@ -1086,7 +1112,7 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
         query_organism, _ = _get_organism_info(direct_features[0])
 
     # Filter to one feature per organism (like Perl check_multi_feature_list)
-    features = _filter_features_by_preference(db, features)
+    features = _filter_features_by_preference(db, features, match_rank=match_rank)
 
     out: dict[str, FeatureOut] = {}
 

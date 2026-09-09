@@ -22,10 +22,15 @@ from cgd.models.models import (
     PhenoAnnotation, GoAnnotation, RefpropFeat, ExptProperty, ExptExptprop,
     RefLink, RefUrl, Url,
 )
+from cgd.api.services.virulence_service import (
+    get_antifungal_chemicals,
+    antifungal_match_reason,
+)
 from cgd.schemas.virulence_schema import (
     VIRULENCE_CATEGORIES,
     PHENOTYPE_EVIDENCE_TIERS,
     HOUSEKEEPING_GO_TERMS,
+    antifungal_evidence_weight,
     EVIDENCE_WEIGHTS,
     get_confidence_tier,
     extract_evidence_types,
@@ -1086,9 +1091,10 @@ def _is_housekeeping_gene_es(db: Session, feature: Feature) -> tuple[bool, Optio
     """
     Detect if gene is likely housekeeping/essential.
 
-    Methods:
-    1. GO annotation to housekeeping terms (translation, DNA replication, etc.)
-    2. Conserved across all 5 Candida species (ortholog groups)
+    Method: GO annotation to housekeeping terms (translation, DNA
+    replication, etc.). Ortholog conservation is deliberately NOT used —
+    conserved virulence/resistance genes (CDR1, ERG11) were being penalized
+    into the Low tier by the old conservation test.
 
     Args:
         db: Database session
@@ -1097,9 +1103,7 @@ def _is_housekeeping_gene_es(db: Session, feature: Feature) -> tuple[bool, Optio
     Returns:
         Tuple of (is_housekeeping, reason_string)
     """
-    from sqlalchemy import func, distinct
-
-    # Method 1: Check GO annotations for housekeeping terms
+    # Check GO annotations for housekeeping terms
     housekeeping_goids = [_convert_goid_to_int(g) for g in HOUSEKEEPING_GO_TERMS]
     housekeeping_goids = [g for g in housekeeping_goids if g is not None]
 
@@ -1114,11 +1118,6 @@ def _is_housekeeping_gene_es(db: Session, feature: Feature) -> tuple[bool, Optio
 
         if go_match:
             return True, f"GO: {go_match[0]}"
-
-    # Method 2: Check ortholog conservation across Candida species
-    ortholog_count = _get_ortholog_count_es(db, feature)
-    if ortholog_count >= 5:
-        return True, f"Conserved in {ortholog_count} Candida species"
 
     return False, None
 
@@ -1325,15 +1324,23 @@ def _calculate_confidence_score_es(
         if "virulence model:" in reason_lower:
             score += EVIDENCE_WEIGHTS["virulence_model"]
         elif "phenotype:" in reason_lower:
-            if evidence_tier == 1:
+            if "antifungal resistance" in reason_lower:
+                # Drug-resistance phenotype with named antifungals; weight
+                # scales with the number of distinct drugs
+                score += antifungal_evidence_weight(reason)
+            elif evidence_tier == 1:
                 score += EVIDENCE_WEIGHTS["tier1_phenotype"]
             elif evidence_tier == 2:
                 score += EVIDENCE_WEIGHTS["tier2_phenotype"]
-            # Tier 3 and 4 phenotypes don't add points
+            # Other tier 3 and 4 phenotypes don't add points
         elif "go:" in reason_lower:
             # Check for virulence-related GO terms
             if any(t in reason_lower for t in ["pathogenesis", "host", "virulence"]):
                 score += EVIDENCE_WEIGHTS["virulence_go"]
+            else:
+                # Other matched GO terms still carry some signal (parity
+                # with the Oracle-path scorer, which gives +1 for IEA)
+                score += 1
         elif "literature topic: disease" in reason_lower:
             score += EVIDENCE_WEIGHTS["disease_literature"]
         elif "gene pattern:" in reason_lower:
@@ -1383,6 +1390,14 @@ def _generate_virulence_docs(db: Session) -> Generator[dict, None, None]:
         all_reasons = []
         for reasons in category_matches.values():
             all_reasons.extend(reasons)
+
+        # Add antifungal drug-resistance evidence (the drug name lives on the
+        # experiment, not in the observable, so the category rules miss it)
+        antifungal = get_antifungal_chemicals(db, [feat.feature_no]).get(feat.feature_no)
+        if antifungal:
+            reason = antifungal_match_reason(antifungal)
+            if reason not in all_reasons:
+                all_reasons.append(reason)
 
         # Determine match types for filtering
         match_types = set()
