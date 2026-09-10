@@ -56,7 +56,12 @@ worklist  The combined curator worklist: one row per conflicted transitive
 
 FAIL codes (violate the guidelines; block the transfer):
   TARGET_ALREADY_NAMED      target has a standard name (rule 1)
-  NAME_CONFLICT             orthologs carry more than one distinct name
+  NAME_CONFLICT             orthologs carry more than one distinct BLOCKING
+                            name: CGD standard names plus the target's OWN
+                            S. cerevisiae link. Per curator-approved policy
+                            (2026-09-10), a divergent S. cerevisiae name that
+                            arrives only via a neighbor gene's SGD link does
+                            NOT block (see SCER_NEIGHBOR_NAME_DIFFERS)
   INSUFFICIENT_SUPPORT      fewer than two orthologs carry the name
   SCER_ONLY_SUPPORT         the only support is the S. cerevisiae ortholog
   NAME_IN_USE_IN_SPECIES    name already on a different gene of the species
@@ -71,6 +76,9 @@ WARN codes (transfer allowed; curator attention suggested):
   SCER_VIA_NEIGHBOR_ONLY      S. cerevisiae evidence comes from an ortholog's
                               SGD link, not the target's own
   SGD_MULTIPLE_NAMES          neighborhood maps to >1 S. cerevisiae name
+  SCER_NEIGHBOR_NAME_DIFFERS  a neighbor gene's S. cerevisiae link carries a
+                              different name (orthology-chain artifact; does
+                              not block per the 2026-09-10 policy)
   ALIAS_COLLISION             name is an alias of another gene in the species
   RESERVED_NAME_ELSEWHERE     name is reserved by another gene in the species
   B_ALLELE_TARGET             target is a C. albicans _B allele
@@ -272,9 +280,23 @@ class Snapshot:
         cgd_named, scer_named, all_names = self.evidence(fno)
         fails, warns = [], []
 
+        # Curator-approved policy (2026-09-10): a divergent S. cerevisiae name
+        # BLOCKS a transfer only when it comes from the target gene's own SGD
+        # link. A differing name that arrives solely via a neighbor gene's SGD
+        # link is an orthology-chain artifact (a stray S. cerevisiae paralog
+        # pulled into the merged component) and is a warning, not a block.
+        # Matching neighbor links still count as transfer support.
+        scer_direct = {n for n, hits in scer_named.items()
+                       if any(direct for _, direct in hits)}
+        scer_neighbor_only = set(scer_named) - scer_direct
+        blocking_names = set(cgd_named) | scer_direct
+
         name = norm(proposed) if proposed else None
-        if name is None and len(all_names) == 1:
-            name = next(iter(all_names))
+        if name is None:
+            if len(blocking_names) == 1:
+                name = next(iter(blocking_names))
+            elif not blocking_names and len(scer_neighbor_only) == 1:
+                name = next(iter(scer_neighbor_only))
 
         if feat["feature_type"] != "ORF":
             fails.append("NON_ORF_TARGET")
@@ -285,8 +307,10 @@ class Snapshot:
         if current and current != name:
             fails.append("TARGET_ALREADY_NAMED")
 
-        if len(all_names) > 1:
+        if len(blocking_names | ({name} if name else set())) > 1:
             fails.append("NAME_CONFLICT")
+        if name and (scer_neighbor_only - {name}):
+            warns.append("SCER_NEIGHBOR_NAME_DIFFERS")
         if name and name not in all_names:
             fails.append("NO_ORTHOLOG_EVIDENCE")
 
@@ -344,7 +368,11 @@ class Snapshot:
             "warns": sorted(set(warns)),
             "support_count": len(support_orgs),
             "support_detail": ";".join(sorted(support_detail)),
-            "conflict_names": ";".join(sorted(all_names - ({name} if name else set()))),
+            "conflict_names": ";".join(
+                sorted(blocking_names - ({name} if name else set()))
+                + sorted(f"{n}(via neighbor)"
+                         for n in scer_neighbor_only
+                         if not name or n != name)),
             "groups": ";".join(str(g) for g in sorted(self.groups_of.get(fno, ()))),
         }
 
@@ -398,7 +426,7 @@ def cmd_propose(snap, out):
     writer.writerow(COLUMNS)
     n_ok = 0
     for res in results:
-        status = "TRANSFER" if not res["fails"] else "BLOCKED"
+        status = "TRANSFER" if not res["fails"] and res["name"] else "BLOCKED"
         n_ok += status == "TRANSFER"
         writer.writerow(result_row(snap, res, status))
     summarize(results, f"propose: {n_ok} TRANSFER / "
