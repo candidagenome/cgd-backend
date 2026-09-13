@@ -84,16 +84,6 @@ def get_mito_orfs_without_qualifier(session) -> list:
     return [(row[0], row[1], row[2]) for row in result]
 
 
-def get_max_feat_property_no(session) -> int:
-    """Get the maximum feat_property_no currently in use."""
-    query = text(f"""
-        SELECT MAX(feat_property_no)
-        FROM {DB_SCHEMA}.feat_property
-    """)
-    result = session.execute(query).scalar()
-    return result or 0
-
-
 def add_uncharacterized_qualifiers(session, dry_run: bool = False):
     """Add 'Uncharacterized' qualifier to C. auris mito ORFs."""
     # Get ORFs that need qualifiers
@@ -113,30 +103,25 @@ def add_uncharacterized_qualifiers(session, dry_run: bool = False):
         logger.info(f"[DRY RUN] Would add 'Uncharacterized' qualifier to {len(orfs)} ORFs")
         return
 
-    # Get starting feat_property_no
-    max_prop_no = get_max_feat_property_no(session)
-    next_prop_no = max_prop_no + 1
-    logger.info(f"Starting feat_property_no: {next_prop_no}")
-
-    # Insert qualifiers
+    # Insert qualifiers; feat_property_no is omitted so the BEFORE INSERT
+    # trigger assigns it from FEAT_PROPERTY_SEQ (never MAX+1, which leaves
+    # the sequence behind and causes later ORA-00001 collisions)
     insert_query = text(f"""
         INSERT INTO {DB_SCHEMA}.feat_property (
-            feat_property_no, feature_no, source, property_type,
+            feature_no, source, property_type,
             property_value, date_created, created_by
         ) VALUES (
-            :feat_property_no, :feature_no, 'CGD', 'feature_qualifier',
+            :feature_no, 'CGD', 'feature_qualifier',
             'Uncharacterized', SYSDATE, :created_by
         )
     """)
 
     for feature_no, feature_name, gene_name in orfs:
         session.execute(insert_query, {
-            "feat_property_no": next_prop_no,
             "feature_no": feature_no,
             "created_by": ADMIN_USER,
         })
-        logger.info(f"Added qualifier to {feature_name} (feat_property_no={next_prop_no})")
-        next_prop_no += 1
+        logger.info(f"Added qualifier to {feature_name}")
 
     session.commit()
     logger.info(f"Successfully added 'Uncharacterized' qualifier to {len(orfs)} ORFs")

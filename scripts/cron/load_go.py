@@ -590,10 +590,10 @@ class GOLoader:
             return None
 
         try:
-            # Get next go_no
-            get_max = text(f"SELECT MAX(go_no) FROM {DB_SCHEMA}.go")
-            result = self.session.execute(get_max).scalar()
-            new_go_no = (result or 0) + 1
+            # Get next go_no from GO_SEQ (never MAX+1: that leaves the
+            # sequence behind and later trigger-assigned inserts collide)
+            get_next = text(f"SELECT {DB_SCHEMA}.go_seq.NEXTVAL FROM DUAL")
+            new_go_no = self.session.execute(get_next).scalar()
 
             insert_go = text(f"""
                 INSERT INTO {DB_SCHEMA}.go
@@ -731,9 +731,10 @@ class GOLoader:
         if not synonym_no:
             # Insert new synonym
             try:
-                get_max = text(f"SELECT MAX(go_synonym_no) FROM {DB_SCHEMA}.go_synonym")
-                result = self.session.execute(get_max).scalar()
-                synonym_no = (result or 0) + 1
+                # From GO_SYNONYM_SEQ (never MAX+1)
+                get_next = text(
+                    f"SELECT {DB_SCHEMA}.go_synonym_seq.NEXTVAL FROM DUAL")
+                synonym_no = self.session.execute(get_next).scalar()
 
                 insert_syn = text(f"""
                     INSERT INTO {DB_SCHEMA}.go_synonym

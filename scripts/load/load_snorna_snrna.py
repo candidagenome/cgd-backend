@@ -65,6 +65,16 @@ def get_max_cal_id(session):
     return max(m("feature"), m("dbxref"))
 
 
+def make_dbid(session):
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
+
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
+    """
+    return session.execute(text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
 def get_contig_map(session, organism_no):
     rows = session.execute(text(f"""
         SELECT f.feature_name, s.seq_no, s.residues FROM {DB_SCHEMA}.feature f
@@ -80,7 +90,9 @@ class Inserter:
         self.contigs, self.next_cal, self.dry = contigs, next_cal, dry
 
     def _cal(self):
-        x = f"CAL{self.next_cal[0]:010d}"; self.next_cal[0] += 1; return x
+        if self.dry:  # preview numbering only; a real run allocates via MAKEDBID
+            x = f"CAL{self.next_cal[0]:010d}"; self.next_cal[0] += 1; return x
+        return make_dbid(self.s)
 
     def _fno(self, name):
         r = self.s.execute(text(f"SELECT feature_no FROM {DB_SCHEMA}.feature WHERE feature_name=:n"), {"n": name}).first()
@@ -164,8 +176,9 @@ def main():
         org = get_scalar(s, f"SELECT organism_no FROM {DB_SCHEMA}.organism WHERE organism_name=:n", n=organism_name)
         gv = get_scalar(s, f"SELECT genome_version_no FROM {DB_SCHEMA}.genome_version WHERE organism_no=:o AND is_ver_current='Y'", o=org)
         contigs = get_contig_map(s, org)
-        next_cal = [get_max_cal_id(s) + 1]
-        logger.info("organism_no=%d gv=%d contigs=%d next CAL=CAL%010d", org, gv, len(contigs), next_cal[0])
+        next_cal = [get_max_cal_id(s) + 1]  # dry-run preview base only
+        logger.info("organism_no=%d gv=%d contigs=%d next CAL (dry-run preview)=CAL%010d",
+                    org, gv, len(contigs), next_cal[0])
         ins = Inserter(s, org, gv, seq_source, contigs, next_cal, args.dry_run)
         inserted = skipped = 0
         for spec in plan:

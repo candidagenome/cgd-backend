@@ -78,6 +78,17 @@ def get_max_cal_id(session) -> int:
     return result or 0
 
 
+def make_dbid(session) -> str:
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
+
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
+    """
+    return session.execute(
+        text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
 def get_ctrop_features(session) -> list:
     """Get all C. tropicalis features with CTROP: prefix."""
     query = text(f"""
@@ -124,21 +135,26 @@ def update_cgdids(session, dry_run: bool = False):
             return
 
     try:
-        # Update each feature
+        # Update each feature; dry runs preview from MAX+1, real runs
+        # allocate through MAKEDBID so DBID_SEQ advances
         next_cal = max_cal + 1
         updated = 0
+        first_new_id = last_new_id = None
 
         for feature_no, feature_name, old_dbxref_id in features:
-            new_dbxref_id = f"CAL{next_cal:010d}"
-
             if dry_run:
+                new_dbxref_id = f"CAL{next_cal:010d}"
+                next_cal += 1
                 if updated < 10:  # Only show first 10 in dry run
                     logger.info(f"[DRY RUN] {feature_name}: {old_dbxref_id} -> {new_dbxref_id}")
             else:
+                new_dbxref_id = make_dbid(session)
                 update_dbxref_id(session, feature_no, new_dbxref_id)
                 updated += 1
 
-            next_cal += 1
+            if first_new_id is None:
+                first_new_id = new_dbxref_id
+            last_new_id = new_dbxref_id
 
             if updated % 500 == 0 and updated > 0:
                 logger.info(f"Updated {updated} features...")
@@ -150,7 +166,7 @@ def update_cgdids(session, dry_run: bool = False):
 
         logger.info("=" * 60)
         logger.info(f"Features processed: {len(features)}")
-        logger.info(f"New CAL ID range: CAL{max_cal + 1:010d} to CAL{next_cal - 1:010d}")
+        logger.info(f"New CAL ID range: {first_new_id} to {last_new_id}")
         if dry_run:
             logger.info("[DRY RUN] No changes made")
         else:

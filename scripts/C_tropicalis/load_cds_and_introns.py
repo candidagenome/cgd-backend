@@ -211,39 +211,22 @@ def feature_exists(session, feature_name: str) -> bool:
     return result is not None
 
 
-def get_max_cal_id(session) -> int:
-    """Get the maximum CAL ID number currently in use."""
-    # Check feature table
-    query1 = text(f"""
-        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
-        FROM {DB_SCHEMA}.feature
-        WHERE dbxref_id LIKE 'CAL%'
-        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
-    """)
-    max_feature = session.execute(query1).scalar() or 0
+def make_dbid(session) -> str:
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
 
-    # Check dbxref table
-    query2 = text(f"""
-        SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id, 4)))
-        FROM {DB_SCHEMA}.dbxref
-        WHERE dbxref_id LIKE 'CAL%'
-        AND REGEXP_LIKE(SUBSTR(dbxref_id, 4), '^[0-9]+$')
-    """)
-    max_dbxref = session.execute(query2).scalar() or 0
-
-    return max(max_feature, max_dbxref)
-
-
-def create_feature(session, organism_no: int, feature_name: str, feature_type: str,
-                   next_cal_id: list) -> Optional[int]:
-    """Create a CDS or intron feature.
-
-    Args:
-        next_cal_id: A list with one int element, used as a mutable counter
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
     """
-    # Generate dbxref_id to avoid trigger conflicts
-    dbxref_id = f"CAL{next_cal_id[0]:010d}"
-    next_cal_id[0] += 1
+    return session.execute(
+        text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
+def create_feature(session, organism_no: int, feature_name: str,
+                   feature_type: str) -> Optional[int]:
+    """Create a CDS or intron feature."""
+    # Allocate the CGD ID from the DB sequence (never MAX+1)
+    dbxref_id = make_dbid(session)
 
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.feature (
@@ -338,11 +321,6 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
     organism_no = get_organism_no(session)
     logger.info(f"Loading CDS and introns for organism_no={organism_no}")
 
-    # Get next available CAL ID
-    max_cal_id = get_max_cal_id(session)
-    next_cal_id = [max_cal_id + 1]  # Use list for mutable counter
-    logger.info(f"Starting CAL ID: CAL{next_cal_id[0]:010d}")
-
     # Parse GFF
     logger.info(f"Parsing GFF: {gff_file}")
     gene_info, gene_to_cds, gene_to_protein = parse_gff_for_cds(gff_file)
@@ -386,7 +364,7 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
                 cds_created += 1
                 continue
 
-            cds_feature_no = create_feature(session, organism_no, cds_name, "CDS", next_cal_id)
+            cds_feature_no = create_feature(session, organism_no, cds_name, "CDS")
             if cds_feature_no:
                 create_feat_relationship(session, parent_feature_no, cds_feature_no)
                 create_feat_location(
@@ -407,7 +385,7 @@ def load_cds_and_introns(session, gff_file: Path, dry_run: bool = False):
                 introns_created += 1
                 continue
 
-            intron_feature_no = create_feature(session, organism_no, intron_name, "intron", next_cal_id)
+            intron_feature_no = create_feature(session, organism_no, intron_name, "intron")
             if intron_feature_no:
                 create_feat_relationship(session, parent_feature_no, intron_feature_no)
                 create_feat_location(

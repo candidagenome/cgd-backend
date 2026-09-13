@@ -64,12 +64,9 @@ def main():
         existing = {row[0] for row in result}
         print(f"Existing experiment_type terms: {len(existing)}")
 
-        # Get max cv_term_no
-        result = db.execute(text('SELECT MAX(cv_term_no) FROM MULTI.cv_term'))
-        max_no = result.scalar() or 0
-        print(f"Current max cv_term_no: {max_no}")
-
-        # Add missing terms
+        # Add missing terms; cv_term_no comes from CV_TERM_SEQ (never MAX+1,
+        # which leaves the sequence behind and causes later ORA-00001
+        # collisions on trigger-assigned inserts)
         added = 0
         skipped = 0
         for term in BIOGRID_EXPERIMENT_TYPES:
@@ -77,20 +74,21 @@ def main():
                 print(f"  [SKIP] {term} (already exists)")
                 skipped += 1
             else:
-                max_no += 1
                 if args.dry_run:
-                    print(f"  [DRY-RUN] Would add: {term} (cv_term_no={max_no})")
+                    print(f"  [DRY-RUN] Would add: {term}")
                 else:
+                    cv_term_no = db.execute(
+                        text('SELECT MULTI.cv_term_seq.NEXTVAL FROM DUAL')).scalar()
                     db.execute(text('''
                         INSERT INTO MULTI.cv_term (cv_term_no, cv_no, term_name, date_created, created_by)
                         VALUES (:cv_term_no, :cv_no, :term_name, SYSDATE, :created_by)
                     '''), {
-                        'cv_term_no': max_no,
+                        'cv_term_no': cv_term_no,
                         'cv_no': CV_NO_EXPERIMENT_TYPE,
                         'term_name': term,
                         'created_by': CREATED_BY
                     })
-                    print(f"  [ADDED] {term} (cv_term_no={max_no})")
+                    print(f"  [ADDED] {term} (cv_term_no={cv_term_no})")
                 added += 1
 
         if not args.dry_run and added > 0:

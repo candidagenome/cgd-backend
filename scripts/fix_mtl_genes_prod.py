@@ -22,13 +22,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cgd.db.engine import SessionLocal
 from cgd.models.models import Feature, FeatAlias, Alias
-from sqlalchemy import func
+from sqlalchemy import text
 
 
 def get_next_id(db, model, id_column):
-    """Get the next available ID for a table."""
-    max_id = db.query(func.max(getattr(model, id_column))).scalar()
-    return (max_id or 0) + 1
+    """Get the next ID from the column's Oracle sequence.
+
+    Never MAX+1: that leaves the sequence behind and the next
+    trigger-assigned insert collides with ORA-00001. The model arg is
+    kept for call-site compatibility.
+    """
+    sequences = {
+        'alias_no': 'alias_seq',
+        'feat_alias_no': 'feat_alias_seq',
+        'feature_no': 'feature_seq',
+        'feat_location_no': 'feat_location_seq',
+    }
+    return db.execute(
+        text(f"SELECT MULTI.{sequences[id_column]}.NEXTVAL FROM DUAL")).scalar()
 
 
 def show_current_state(db):

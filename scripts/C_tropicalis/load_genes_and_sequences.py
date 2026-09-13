@@ -54,6 +54,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def make_dbid(session) -> str:
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
+
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
+    """
+    return session.execute(
+        text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
 def get_max_cal_id(session) -> int:
     """Get the maximum CAL ID number currently in use.
 
@@ -389,10 +400,10 @@ def load_genes_and_proteins(
 
     logger.info(f"Loading genes for organism_no={organism_no}, genome_version_no={genome_version_no}")
 
-    # Get current max CAL ID for generating new CGD IDs
+    # Dry-run preview base only; real runs allocate via MAKEDBID
     max_cal_id = get_max_cal_id(session)
     next_cal_id = max_cal_id + 1
-    logger.info(f"Starting CAL ID: CAL{next_cal_id:010d}")
+    logger.info(f"Starting CAL ID (dry-run preview): CAL{next_cal_id:010d}")
 
     # Parse input files
     logger.info(f"Parsing GFF file: {gff_file}")
@@ -418,9 +429,12 @@ def load_genes_and_proteins(
         # This is consistent with other CGD organisms and matches external databases
         feature_name = gene_id
 
-        # Generate CAL-format CGD ID
-        dbxref_id = f"CAL{next_cal_id:010d}"
-        next_cal_id += 1
+        # Generate CAL-format CGD ID (real runs allocate via MAKEDBID)
+        if dry_run:
+            dbxref_id = f"CAL{next_cal_id:010d}"
+            next_cal_id += 1
+        else:
+            dbxref_id = make_dbid(session)
 
         feature_no = create_feature(
             session,

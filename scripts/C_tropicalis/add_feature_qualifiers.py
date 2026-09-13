@@ -94,16 +94,6 @@ def get_current_orfs_without_qualifier(session, organism_no: int) -> list:
     return [row[0] for row in result]
 
 
-def get_max_feat_property_no(session) -> int:
-    """Get the maximum feat_property_no currently in use."""
-    query = text(f"""
-        SELECT MAX(feat_property_no)
-        FROM {DB_SCHEMA}.feat_property
-    """)
-    result = session.execute(query).scalar()
-    return result or 0
-
-
 def add_uncharacterized_qualifiers(session, dry_run: bool = False):
     """Add 'Uncharacterized' qualifier to all C. tropicalis ORFs without one."""
     organism_no = get_organism_no(session)
@@ -121,21 +111,18 @@ def add_uncharacterized_qualifiers(session, dry_run: bool = False):
         logger.info(f"[DRY RUN] Would add 'Uncharacterized' qualifier to {len(feature_nos)} ORFs")
         return
 
-    # Get starting feat_property_no
-    max_prop_no = get_max_feat_property_no(session)
-    next_prop_no = max_prop_no + 1
-    logger.info(f"Starting feat_property_no: {next_prop_no}")
-
-    # Insert qualifiers in batches
+    # Insert qualifiers in batches; feat_property_no is omitted so the
+    # BEFORE INSERT trigger assigns it from FEAT_PROPERTY_SEQ (never MAX+1,
+    # which leaves the sequence behind and causes later ORA-00001 collisions)
     batch_size = 500
     total_inserted = 0
 
     insert_query = text(f"""
         INSERT INTO {DB_SCHEMA}.feat_property (
-            feat_property_no, feature_no, source, property_type,
+            feature_no, source, property_type,
             property_value, date_created, created_by
         ) VALUES (
-            :feat_property_no, :feature_no, 'CGD', 'feature_qualifier',
+            :feature_no, 'CGD', 'feature_qualifier',
             'Uncharacterized', SYSDATE, :created_by
         )
     """)
@@ -145,11 +132,9 @@ def add_uncharacterized_qualifiers(session, dry_run: bool = False):
 
         for feature_no in batch:
             session.execute(insert_query, {
-                "feat_property_no": next_prop_no,
                 "feature_no": feature_no,
                 "created_by": ADMIN_USER,
             })
-            next_prop_no += 1
             total_inserted += 1
 
         session.commit()
