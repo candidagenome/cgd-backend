@@ -19,6 +19,7 @@ Environment Variables:
     LOG_DIR: Log directory
     ADMIN_USER: Admin username
 """
+from __future__ import annotations
 
 import argparse
 import logging

@@ -13,6 +13,7 @@ Input file format (tab-delimited):
 Original Perl: checkAndLoadExtraAliases.pl
 Converted to Python: 2024
 """
+from __future__ import annotations
 
 import argparse
 import logging

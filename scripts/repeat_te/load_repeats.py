@@ -59,19 +59,11 @@ seq_src = C.get("seq_src") or q(f"""SELECT s.source FROM {S}.seq s JOIN {S}.feat
             o=C["org"])[0][0]
 
 
-def maxcal():
-    m = lambda t: q(f"SELECT MAX(TO_NUMBER(SUBSTR(dbxref_id,4))) FROM {S}.{t} "
-                    f"WHERE dbxref_id LIKE 'CAL%' AND REGEXP_LIKE(SUBSTR(dbxref_id,4),'^[0-9]+$')")[0][0] or 0
-    return max(m("feature"), m("dbxref"))
-
-
-cal = [maxcal() + 1]
-
-
 def newcal():
-    x = f"CAL{cal[0]:010d}"
-    cal[0] += 1
-    return x
+    # Allocate via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL) — never
+    # MAX+1, which leaves DBID_SEQ behind and makes the next trigger-assigned
+    # insert (e.g. the weekly PubMed load) collide with ORA-00001.
+    return q(f"SELECT {S}.MAKEDBID FROM DUAL")[0][0]
 
 
 roots = {}

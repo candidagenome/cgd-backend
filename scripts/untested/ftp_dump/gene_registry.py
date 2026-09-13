@@ -22,6 +22,7 @@ Output Files:
     registry.genenames.tab - Tab-delimited file
     registry.genenames.txt - Human-readable text file
 """
+from __future__ import annotations
 
 import argparse
 import logging

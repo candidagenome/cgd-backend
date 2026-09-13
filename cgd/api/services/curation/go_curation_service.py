@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -85,6 +85,19 @@ class GoCurationService:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def _next_seq_value(self, sequence_name: str) -> int:
+        """Next primary key from an Oracle sequence.
+
+        Never allocate PKs as MAX+1: that leaves the sequence behind, and the
+        next trigger-assigned insert collides with ORA-00001 (this is how the
+        weekly PubMed load has silently failed in the past). If a sequence is
+        ever behind its table, resync it with scripts/resync_all_sequences.py
+        instead of working around it here.
+        """
+        return self.db.execute(
+            text(f"SELECT MULTI.{sequence_name}.NEXTVAL FROM DUAL")
+        ).scalar()
 
     def get_feature_by_name(
         self, name: str, organism_abbrev: Optional[str] = None
@@ -468,10 +481,7 @@ class GoCurationService:
 
         # Create new annotation
         try:
-            # Get next annotation_no manually (workaround for sequence sync issues)
-            from sqlalchemy import func, text
-            max_no = self.db.query(func.max(GoAnnotation.go_annotation_no)).scalar() or 0
-            next_no = max_no + 1
+            next_no = self._next_seq_value("go_annotation_seq")
 
             annotation = GoAnnotation(
                 go_annotation_no=next_no,
@@ -564,9 +574,7 @@ class GoCurationService:
             has_qualifier = "Y" if qualifiers else "N"
             has_supporting_evidence = "Y" if (with_db and with_id) else "N"
 
-            # Get next go_ref_no manually (workaround for sequence sync issues)
-            max_ref_no = self.db.query(func.max(GoRef.go_ref_no)).scalar() or 0
-            next_ref_no = max_ref_no + 1
+            next_ref_no = self._next_seq_value("go_ref_seq")
 
             go_ref = GoRef(
                 go_ref_no=next_ref_no,
@@ -652,9 +660,8 @@ class GoCurationService:
 
             if not dbxref:
                 # Create new dbxref entry
-                max_dbxref_no = self.db.query(func.max(Dbxref.dbxref_no)).scalar() or 0
                 dbxref = Dbxref(
-                    dbxref_no=max_dbxref_no + 1,
+                    dbxref_no=self._next_seq_value("dbxref_seq"),
                     source=with_db,
                     dbxref_type=dbxref_type,
                     dbxref_id=db_id,
@@ -665,11 +672,8 @@ class GoCurationService:
                 logger.info(f"Created new dbxref entry: {with_db}:{db_id}")
 
             # Create goref_dbxref link with support_type="With"
-            max_goref_dbxref_no = (
-                self.db.query(func.max(GorefDbxref.goref_dbxref_no)).scalar() or 0
-            )
             goref_dbxref = GorefDbxref(
-                goref_dbxref_no=max_goref_dbxref_no + 1,
+                goref_dbxref_no=self._next_seq_value("goref_dbxref_seq"),
                 go_ref_no=go_ref_no,
                 dbxref_no=dbxref.dbxref_no,
                 support_type="With",

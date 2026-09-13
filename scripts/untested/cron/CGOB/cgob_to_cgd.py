@@ -18,6 +18,7 @@ Environment Variables:
     DATA_DIR: Directory for data files
     LOG_DIR: Directory for log files
 """
+from __future__ import annotations
 
 import argparse
 import logging

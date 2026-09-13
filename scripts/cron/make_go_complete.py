@@ -179,17 +179,19 @@ def get_root_go_no(session, go_term: str, go_aspect: str) -> int | None:
 
 
 def get_next_go_annotation_no(session) -> int:
-    """Get next go_annotation_no."""
-    query = text(f"SELECT MAX(go_annotation_no) FROM {DB_SCHEMA}.go_annotation")
-    result = session.execute(query).scalar()
-    return (result or 0) + 1
+    """Get next go_annotation_no from GO_ANNOTATION_SEQ.
+
+    Never MAX+1: that leaves the sequence behind and the next
+    trigger-assigned insert collides with ORA-00001.
+    """
+    query = text(f"SELECT {DB_SCHEMA}.go_annotation_seq.NEXTVAL FROM DUAL")
+    return session.execute(query).scalar()
 
 
 def get_next_go_ref_no(session) -> int:
-    """Get next go_ref_no."""
-    query = text(f"SELECT MAX(go_ref_no) FROM {DB_SCHEMA}.go_ref")
-    result = session.execute(query).scalar()
-    return (result or 0) + 1
+    """Get next go_ref_no from GO_REF_SEQ (never MAX+1)."""
+    query = text(f"SELECT {DB_SCHEMA}.go_ref_seq.NEXTVAL FROM DUAL")
+    return session.execute(query).scalar()
 
 
 def check_existing_annotation(session, feature_no: int, go_no: int) -> int | None:

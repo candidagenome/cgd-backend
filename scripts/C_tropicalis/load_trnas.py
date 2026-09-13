@@ -207,6 +207,17 @@ def get_max_cal_id(session) -> int:
     return max(m("feature"), m("dbxref"))
 
 
+def make_dbid(session) -> str:
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
+
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
+    """
+    return session.execute(
+        text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
 def get_contig_map(session, organism_no: int) -> Tuple[Dict[str, Dict], Dict[int, str]]:
     """name -> {seq_no, residues}; and root_seq_no -> contig name."""
     rows = session.execute(text(f"""
@@ -254,9 +265,11 @@ class Enricher:
         self.dry = dry
 
     def _cal(self) -> str:
-        x = f"CAL{self.next_cal[0]:010d}"
-        self.next_cal[0] += 1
-        return x
+        if self.dry:  # preview numbering only; a real run allocates via MAKEDBID
+            x = f"CAL{self.next_cal[0]:010d}"
+            self.next_cal[0] += 1
+            return x
+        return make_dbid(self.s)
 
     def reclassify(self, feature_no: int, gene_name: str, headline: str) -> None:
         if self.dry:
@@ -430,7 +443,7 @@ def main() -> None:
                              f"{p['codon']} anticodon"
                              + ("; possible pseudogene" if p["is_pseudo"] else ""))
 
-        next_cal = [get_max_cal_id(session) + 1]
+        next_cal = [get_max_cal_id(session) + 1]  # dry-run preview base only
         enr = Enricher(session, organism_no, genome_version_no,
                        contigs_by_name, next_cal, args.dry_run)
 

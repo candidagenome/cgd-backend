@@ -100,6 +100,17 @@ def get_max_cal_id(session) -> int:
     return max(m("feature"), m("dbxref"))
 
 
+def make_dbid(session) -> str:
+    """Allocate a new CAL id via the DB's MAKEDBID function (DBID_SEQ.NEXTVAL).
+
+    Never hand-compute CAL ids as MAX+1: that leaves DBID_SEQ behind, and the
+    next trigger-assigned insert (e.g. the weekly PubMed load) collides with
+    ORA-00001. MAKEDBID advances the sequence atomically.
+    """
+    return session.execute(
+        text(f"SELECT {DB_SCHEMA}.MAKEDBID FROM DUAL")).scalar()
+
+
 def get_contig_map(session, organism_no: int) -> Dict[str, Dict]:
     rows = session.execute(text(f"""
         SELECT f.feature_name, s.seq_no, s.residues
@@ -126,9 +137,11 @@ class Inserter:
         self.dry = dry
 
     def _cal(self) -> str:
-        x = f"CAL{self.next_cal[0]:010d}"
-        self.next_cal[0] += 1
-        return x
+        if self.dry:  # preview numbering only; a real run allocates via MAKEDBID
+            x = f"CAL{self.next_cal[0]:010d}"
+            self.next_cal[0] += 1
+            return x
+        return make_dbid(self.s)
 
     def _feature_no(self, name: str) -> Optional[int]:
         row = self.s.execute(text(
@@ -255,7 +268,7 @@ def main() -> None:
         logger.info("organism_no=%d genome_version_no=%d contigs=%d",
                     organism_no, genome_version_no, len(contigs))
 
-        next_cal = [get_max_cal_id(session) + 1]
+        next_cal = [get_max_cal_id(session) + 1]  # dry-run preview base only
         ins = Inserter(session, organism_no, genome_version_no, seq_source,
                        contigs, next_cal, args.dry_run)
 

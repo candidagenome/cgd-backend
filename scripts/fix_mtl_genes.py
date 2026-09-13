@@ -28,13 +28,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cgd.db.engine import SessionLocal
 from cgd.models.models import Feature, FeatAlias, Alias, FeatLocation
-from sqlalchemy import func
+from sqlalchemy import text
 
 
 def get_next_id(db, model, id_column):
-    """Get the next available ID for a table."""
-    max_id = db.query(func.max(getattr(model, id_column))).scalar()
-    return (max_id or 0) + 1
+    """Get the next ID from the column's Oracle sequence.
+
+    Never MAX+1: that leaves the sequence behind and the next
+    trigger-assigned insert collides with ORA-00001. The model arg is
+    kept for call-site compatibility.
+    """
+    sequences = {
+        'alias_no': 'alias_seq',
+        'feat_alias_no': 'feat_alias_seq',
+        'feature_no': 'feature_seq',
+        'feat_location_no': 'feat_location_seq',
+    }
+    return db.execute(
+        text(f"SELECT MULTI.{sequences[id_column]}.NEXTVAL FROM DUAL")).scalar()
 
 
 def show_current_state(db):
@@ -190,16 +201,10 @@ def execute_changes(db):
     else:
         next_feature_no = get_next_id(db, Feature, 'feature_no')
 
-        # Generate a new dbxref_id
-        # Format: CAL followed by 10 digits
-        max_dbxref = db.query(func.max(Feature.dbxref_id)).filter(
-            Feature.dbxref_id.like('CAL%')
-        ).scalar()
-        if max_dbxref:
-            next_dbxref_num = int(max_dbxref[3:]) + 1
-            new_dbxref_id = f'CAL{next_dbxref_num:010d}'
-        else:
-            new_dbxref_id = 'CAL0000999999'  # Fallback
+        # Allocate the CGD ID via the DB's MAKEDBID function (DBID_SEQ) —
+        # never MAX+1, which leaves the sequence behind
+        new_dbxref_id = db.execute(
+            text("SELECT MULTI.MAKEDBID FROM DUAL")).scalar()
 
         feat_a = Feature(
             feature_no=next_feature_no,

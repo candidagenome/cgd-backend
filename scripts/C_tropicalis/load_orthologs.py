@@ -181,26 +181,26 @@ def create_homology_group(
     if dry_run:
         return None
 
+    # Allocate the PK from the sequence up front (race-free, keeps the
+    # sequence in step) instead of SELECT MAX after a trigger-assigned insert
+    homology_group_no = session.execute(text(
+        f"SELECT {DB_SCHEMA}.homology_group_seq.NEXTVAL FROM DUAL")).scalar()
+
     insert = text(f"""
         INSERT INTO {DB_SCHEMA}.homology_group (
-            homology_group_type, method, created_by
+            homology_group_no, homology_group_type, method, created_by
         ) VALUES (
-            :homology_type, :method, :created_by
+            :homology_group_no, :homology_type, :method, :created_by
         )
     """)
     session.execute(insert, {
+        "homology_group_no": homology_group_no,
         "homology_type": homology_type,
         "method": method,
         "created_by": ADMIN_USER,
     })
 
-    # Get the last inserted homology_group_no
-    query = text(f"""
-        SELECT MAX(homology_group_no)
-        FROM {DB_SCHEMA}.homology_group
-    """)
-    result = session.execute(query).first()
-    return result[0] if result else None
+    return homology_group_no
 
 
 def add_feature_to_homology_group(

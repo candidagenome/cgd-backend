@@ -21,6 +21,7 @@ Environment Variables:
     LOG_DIR: Directory for log files
     DATA_DIR: Directory for data files
 """
+from __future__ import annotations
 
 import argparse
 import gzip
