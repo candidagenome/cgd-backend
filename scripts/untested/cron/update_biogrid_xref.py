@@ -16,6 +16,7 @@ Environment Variables:
     BIOGRID_API_KEY: BioGRID API access key
     BIOGRID_API_URL: BioGRID web service URL
 """
+from __future__ import annotations
 
 import argparse
 import logging

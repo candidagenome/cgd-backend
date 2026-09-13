@@ -15,6 +15,7 @@ Environment Variables:
     HTML_ROOT_DIR: Root directory for HTML/download files
     LOG_DIR: Directory for log files
 """
+from __future__ import annotations
 
 import argparse
 import logging

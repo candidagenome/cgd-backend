@@ -26,6 +26,7 @@ Environment Variables:
     DATA_DIR: Directory for data files
     FTP_DIR: FTP directory for output files
 """
+from __future__ import annotations
 
 import argparse
 import gzip

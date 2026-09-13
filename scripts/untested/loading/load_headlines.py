@@ -8,6 +8,7 @@ and creates ref_link entries for associated references.
 Original Perl: loadHeadlines.pl
 Converted to Python: 2024
 """
+from __future__ import annotations
 
 import argparse
 import logging

@@ -16,6 +16,7 @@ Environment Variables:
     DB_SCHEMA: Database schema name
     PROJECT_ACRONYM: Project acronym (e.g., CGD)
 """
+from __future__ import annotations
 
 import argparse
 import gzip

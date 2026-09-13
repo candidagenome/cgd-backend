@@ -11,6 +11,7 @@ Environment Variables:
     HTML_DIR: Directory to write output HTML file
     PROJECT_ACRONYM: Project acronym (e.g., CGD)
 """
+from __future__ import annotations
 
 import logging
 import os
