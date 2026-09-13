@@ -1,47 +1,48 @@
-# CGD CRON JOBS (UTC times - PST +8 hours, PDT +7 hours)
-#
-# Prerequisites:
-#   - samtools (for faidx indexing)
-#   - htslib (for bgzip and tabix)
-#   - Python 3 with venv at /opt/cgd_api/venv
-#   - Playwright with Chromium (for smoke tests)
+# CGD Backend Cron Jobs
+# Sends output to Slack #cgd-cron-jobs channel
 
-# MONITORING (runs as root via /etc/cron.d/cgd-api-monitor)
-# */10 * * * * root /opt/cgd_api/scripts/cron/cgd_monitor_memory.sh             # Auto-restart if memory > 80% or worker > 4GB
+# TWICE DAILY (7 AM and 7 PM UTC): Curl-based smoke tests
+0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://www.candidagenome.org/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50
 
-# TWICE DAILY (7 AM and 7 PM UTC)
-0 7,19 * * * cd /opt/cgd_api && set -a && source .env && set +a && CGD_API_URL=https://www.candidagenome.org/api ENV_STATE=prod scripts/cron/cgd_smoke_tests.sh --api-only 2>&1 | head -50  # Curl-based API checks
-
-# EVERY 6 HOURS
-0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50  # Playwright JS rendering checks
+# EVERY 6 HOURS: Playwright smoke tests
+0 */6 * * * cd /opt/cgd_api && set -a && source .env && set +a && source .venv/bin/activate && CGD_WEB_URL=https://www.candidagenome.org ENV_STATE=prod python scripts/cron/cgd_playwright_tests.py 2>&1 | head -50
 
 # DAILY
-0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh                                   # Run test suite and send Slack report
-0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_orf_classifications.sh  # Update Verified/Uncharacterized based on GO evidence
-0 3 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh                  # Check data integrity rules, email violations to curators
-0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_annotation.sh             # Dump GO annotations to GAF 2.0 format
-0 5 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_go_slim_annotation.sh     # Dump GO Slim annotations
-0 6 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_go_complete.sh            # Assign root GO terms to unannotated features
+0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh
+0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_reindex_elasticsearch.sh
+0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
 
 # TUESDAY (Wednesday 00:00 UTC)
-0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh                        # Send meeting agenda reminder to Slack
+0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh
 
-# SATURDAY/SUNDAY
-0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh            # Generate weekly curator progress reports
-0 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh        # Validate ORF sequences (start/stop codons)
-30 22 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_resync_sequences.sh          # Resync Oracle sequences (guard ahead of the PubMed load; alerts if any were behind)
-0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh                 # Load new PubMed references
-0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh                    # Generate GPI files for GO Consortium
-0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh                    # Dump GFF3 format annotations
-0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh                    # Dump GTF format annotations
-0 5 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh   # Dump chromosomal feature tables
-0 7 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh         # Dump phenotype data
-0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh              # Update JBrowse2 (sort/bgzip/tabix GFF, faidx FASTA)
+# SATURDAY - Reports and publications
+0 20 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_curator_reports.sh
+30 20 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_resync_sequences.sh
+0 21 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_pub_update.sh
+0 23 * * 6 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_load_go.sh
 
-# MONTHLY (1st-4th of each month)
-0 20 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh             # Dump FASTA sequences (genomic, CDS, protein)
-0 21 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh             # Update JBrowse2 with new FASTA files
-0 20 2 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh            # Generate EMBL format files
-0 20 3 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh    # Update PatMatch and BLAST databases
-0 20 4 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh  # Generate ORF coordinates for web-primer
-0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh   # Regenerate External_id_mappings (gp2protein, CGDID_2_GeneID/RefSeqID)
+# SUNDAY - Data dumps and updates (ordered by dependency)
+# Phase 1: Generate source files (GFF, sequences, etc.)
+0 1 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gff.sh
+0 2 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_gtf.sh
+0 3 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_sequences.sh
+0 4 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_chromosomal_features.sh
+
+# Phase 2: Process generated files (depends on Phase 1)
+0 6 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_seq_search_files.sh
+0 8 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_update_jbrowse.sh
+0 9 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_orf_coordinates_webprimer.sh
+0 10 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_embl_files.sh
+
+# Phase 3: Other weekly tasks
+0 11 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_dump_phenotype_data.sh
+0 12 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_gpi.sh
+0 13 * * 0 cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_orf_sequences.sh
+
+
+
+# MONTHLY (1st): regenerate External_id_mappings download files (gp2protein, CGDID_2_GeneID/RefSeqID)
+0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
+
+# QUARTERLY (1st of Jan/Apr/Jul/Oct at 05:00 UTC): transfer manual GO annotations to CGD orthologs as IEA
+0 5 1 1,4,7,10 * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh /opt/cgd_api/.venv/bin/python /opt/cgd_api/scripts/cron/transfer_go_from_orthologs.py
