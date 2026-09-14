@@ -679,10 +679,14 @@ def convert_orthologs(
     gene_ids: list[str],
     target_organism: TargetOrganism,
     source_organism: SourceOrganism = SourceOrganism.CGD,
+    feature_cache: Optional[dict] = None,
 ) -> OrthologConvertResponse:
     """
     Convert a list of gene IDs to orthologs in the target organism.
     Supports both CGD → target and S. cerevisiae → CGD conversions.
+
+    feature_cache (gene_id -> Feature | None) lets multi-target requests
+    resolve each input gene once instead of once per target.
     """
     # Dispatch to reverse lookup if source is S. cerevisiae
     if source_organism == SourceOrganism.S_CEREVISIAE:
@@ -703,13 +707,19 @@ def convert_orthologs(
             continue
 
         # Find the input feature with homology data
-        feature = _find_feature_with_homology(db, gene_id)
+        if feature_cache is not None and gene_id in feature_cache:
+            feature = feature_cache[gene_id]
+        else:
+            feature = _find_feature_with_homology(db, gene_id)
+            if feature_cache is not None:
+                feature_cache[gene_id] = feature
 
         if not feature:
             # Gene not found in CGD
             results.append(OrthologResult(
                 input_id=gene_id,
                 found=False,
+                target_organism=target_display_name,
                 relationship="not_found",
                 notes="Gene not found in CGD",
             ))
@@ -753,6 +763,7 @@ def convert_orthologs(
                 input_feature_name=feature.feature_name,
                 input_organism=source_organism_name,
                 found=True,
+                target_organism=target_display_name,
                 relationship="no_ortholog",
                 notes="No ortholog cluster found for this gene",
             ))
@@ -830,6 +841,7 @@ def convert_orthologs(
                 input_organism=source_organism_name,
                 found=True,
                 cluster_id=cluster_id or (homology_groups[0].homology_group_id if homology_groups else None),
+                target_organism=target_display_name,
                 relationship="no_ortholog",
                 notes=f"No ortholog found in {target_display_name}",
             ))
@@ -877,6 +889,64 @@ def convert_orthologs(
         found_count=found_count,
         converted_count=converted_count,
         results=results,
+    )
+
+
+def convert_orthologs_multi(
+    db: Session,
+    gene_ids: list[str],
+    target_organisms: list[TargetOrganism],
+    source_organism: SourceOrganism = SourceOrganism.CGD,
+) -> OrthologConvertResponse:
+    """
+    Convert a gene list to orthologs in one or several target organisms.
+
+    Single target behaves exactly like convert_orthologs. With several
+    targets, each input gene is resolved once (shared feature cache) and
+    converted against every target; results are merged gene-major (all
+    targets for gene 1, then gene 2, ...) with 'no_ortholog' /
+    'same_organism' rows where appropriate, so every (gene, target) pair is
+    accounted for.
+    """
+    targets = list(dict.fromkeys(target_organisms))
+    if len(targets) == 1:
+        response = convert_orthologs(db, gene_ids, targets[0], source_organism)
+        response.target_organisms = [response.target_organism]
+        return response
+
+    feature_cache: Optional[dict] = (
+        {} if source_organism == SourceOrganism.CGD else None
+    )
+    per_target = [
+        convert_orthologs(db, gene_ids, target, source_organism,
+                          feature_cache=feature_cache)
+        for target in targets
+    ]
+
+    # Gene-major interleave: every response emits exactly one row per
+    # non-empty input, in input order. Fall back to target-major
+    # concatenation if that invariant ever fails (defensive).
+    lengths = {len(r.results) for r in per_target}
+    merged = []
+    if len(lengths) == 1:
+        for i in range(lengths.pop()):
+            for response in per_target:
+                merged.append(response.results[i])
+    else:
+        for response in per_target:
+            merged.extend(response.results)
+
+    display_names = [
+        TARGET_ORGANISM_DISPLAY_NAMES.get(t, str(t)) for t in targets
+    ]
+    return OrthologConvertResponse(
+        source_organism=per_target[0].source_organism,
+        target_organism="; ".join(display_names),
+        target_organisms=display_names,
+        total_input=per_target[0].total_input,
+        found_count=per_target[0].found_count,
+        converted_count=sum(r.converted_count for r in per_target),
+        results=merged,
     )
 
 
