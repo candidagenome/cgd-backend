@@ -14,6 +14,13 @@ single group is not the full ortholog set). S. cerevisiae orthologs are not
 FEATURE rows; they come from DBXREF (source='SGD', dbxref_type='Gene ID'),
 whose description holds the S. cerevisiae standard name.
 
+Curated family clusters (homology_group_type 'curated family', loaded from
+the 2026-09 intransitive-component curation) are treated as resolved curator
+territory throughout: family members are not transfer targets
+(CURATED_FAMILY_MEMBER), their names are invisible as candidates/blockers/
+conflict evidence outside the family, and audit/worklist family detection
+runs on the non-curated remainder of each component.
+
 Modes
 -----
 propose   Derive the guideline-compliant candidate transfer list from the DB.
@@ -50,9 +57,10 @@ worklist  The combined curator worklist: one row per conflicted transitive
           only suppressed on an exact name-set match, so if a new name
           joins an accepted conflict it resurfaces. For
           DUPLICATE_NAME_IN_SPECIES findings, a line with the single
-          duplicated name suppresses it. The allowlist affects audit output
-          ONLY — transfers involving conflicted names stay blocked, because
-          an accepted divergence still violates guideline (2).
+          duplicated name suppresses it. The allowlist affects audit and
+          worklist output ONLY — transfers involving conflicted names stay
+          blocked, because an accepted divergence still violates
+          guideline (2).
 
 FAIL codes (violate the guidelines; block the transfer):
   TARGET_ALREADY_NAMED      target has a standard name (rule 1)
@@ -130,6 +138,7 @@ class Snapshot:
         self.names_in_org = defaultdict(set)     # (org_no, NAME) -> {feature_no}
         self.aliases_in_org = defaultdict(set)   # (org_no, NAME) -> {feature_no}
         self.a21_twins = set()                   # albicans Assembly 21 feature_nos
+        self.curated_of = defaultdict(set)       # feature_no -> {curated group_no}
         self._load(db)
 
     def _load(self, db):
@@ -185,6 +194,18 @@ class Snapshot:
                 " WHERE d.source = 'SGD' AND d.dbxref_type = 'Gene ID'")):
             if desc:
                 self.sgd_names[self.canonical(fno)].add((sgdid, norm(desc)))
+
+        # Curator-approved family clusters (type 'curated family'): naming
+        # inside these is settled curator territory. Members are excluded
+        # from transfer targeting, and their names are neither candidates,
+        # blockers, nor conflict evidence for genes outside the family.
+        for gno, fno in db.execute(text(
+                "SELECT fh.homology_group_no, fh.feature_no"
+                " FROM feat_homology fh"
+                " JOIN homology_group hg"
+                "   ON hg.homology_group_no = fh.homology_group_no"
+                " WHERE hg.homology_group_type = 'curated family'")):
+            self.curated_of[self.canonical(fno)].add(gno)
 
         for (fno,) in db.execute(text(
                 "SELECT feature_no FROM gene_reservation"
@@ -242,6 +263,18 @@ class Snapshot:
                 return a_twin
         return fno
 
+    def neighbor_visible(self, fno, nb):
+        """Whether nb's naming evidence applies to fno.
+
+        A neighbor inside a curated family that fno does not belong to is
+        family-internal: its name describes the family, not a 1:1 ortholog
+        of fno, so it is invisible as candidate/blocker/conflict evidence.
+        """
+        nb_clusters = self.curated_of.get(nb)
+        if not nb_clusters:
+            return True
+        return bool(nb_clusters & self.curated_of.get(fno, set()))
+
     def evidence(self, fno):
         """Collect naming evidence across the ortholog neighborhood of fno.
 
@@ -252,7 +285,9 @@ class Snapshot:
         """
         cgd_named = defaultdict(list)
         scer_named = defaultdict(list)
-        for nb in self.neighbors.get(fno, ()):
+        visible = [nb for nb in self.neighbors.get(fno, ())
+                   if self.neighbor_visible(fno, nb)]
+        for nb in visible:
             feat = self.features[nb]
             name = norm(feat["gene_name"])
             if name:
@@ -262,7 +297,7 @@ class Snapshot:
                 ))
         for sgdid, name in self.sgd_names.get(fno, ()):
             scer_named[name].append((sgdid, True))
-        for nb in self.neighbors.get(fno, ()):
+        for nb in visible:
             for sgdid, name in self.sgd_names.get(nb, ()):
                 if not any(s == sgdid for s, _ in scer_named.get(name, ())):
                     scer_named[name].append((sgdid, False))
@@ -302,6 +337,9 @@ class Snapshot:
             fails.append("NON_ORF_TARGET")
         if feat["feature_name"].endswith("_B"):
             warns.append("B_ALLELE_TARGET")
+        if self.curated_of.get(self.canonical(fno)):
+            # Naming within a curator-approved family is manual per-gene work
+            fails.append("CURATED_FAMILY_MEMBER")
 
         current = norm(feat["gene_name"])
         if current and current != name:
@@ -410,16 +448,23 @@ def flag_duplicate_targets(snap, results):
 
 def cmd_propose(snap, out):
     results = []
+    n_family = 0
     for fno in sorted(snap.neighbors):
         feat = snap.features[fno]
         if feat["gene_name"] or feat["feature_type"] != "ORF":
             continue
         if feat["feature_name"].endswith("_B") or fno in snap.a21_twins:
             continue
+        if snap.curated_of.get(snap.canonical(fno)):
+            n_family += 1                 # curated-family naming is manual
+            continue
         res = snap.assess(fno)
         if res["name"] is None and not res["conflict_names"]:
             continue                      # no named orthologs at all
         results.append(res)
+    if n_family:
+        print(f"propose: {n_family} unnamed curated-family members excluded"
+              " (family naming is manual curation)", file=sys.stderr)
     flag_duplicate_targets(snap, results)
 
     writer = csv.writer(out, delimiter="\t", lineterminator="\n")
@@ -496,6 +541,9 @@ def cmd_audit(snap, out, allowlist=frozenset()):
         feat = snap.features[fno]
         if not feat["gene_name"]:
             continue
+        if snap.curated_of.get(fno):
+            # Name diversity inside a curated family is curator-approved
+            continue
         _, scer_named, all_names = snap.evidence(fno)
         all_names.add(norm(feat["gene_name"]))
         if len(all_names) > 1:
@@ -537,10 +585,17 @@ def cmd_audit(snap, out, allowlist=frozenset()):
             ])
             n += 1
     # Co-ortholog components: a species duplicated within one transitive
-    # component means the family expanded and 1:1 orthology does not exist
+    # component means the family expanded and 1:1 orthology does not exist.
+    # Members of curated family clusters are curator-resolved — the test
+    # runs on the unresolved remainder of each component.
+    curated_resolved = 0
     for members in snap.components():
-        dup = snap.duplicated_species(members)
+        unresolved = [m for m in members if not snap.curated_of.get(m)]
+        dup = snap.duplicated_species(unresolved)
         if not dup:
+            if len(unresolved) < len(members) \
+                    and snap.duplicated_species(members):
+                curated_resolved += 1
             continue
         names = sorted({
             norm(snap.features[m]["gene_name"]) for m in members
@@ -561,7 +616,9 @@ def cmd_audit(snap, out, allowlist=frozenset()):
         n += 1
 
     print(f"audit: {n} findings"
-          + (f" ({suppressed} suppressed by allowlist)" if suppressed else ""),
+          + (f" ({suppressed} suppressed by allowlist)" if suppressed else "")
+          + (f" ({curated_resolved} components resolved by curated"
+             " family clusters)" if curated_resolved else ""),
           file=sys.stderr)
 
 
@@ -571,14 +628,20 @@ def _name_stem(name):
 
 
 def _component_data(snap, members):
-    """Everything the worklist views need for one transitive component."""
-    dup = snap.duplicated_species(members)
+    """Everything the worklist views need for one transitive component.
+
+    Curated-family members are curator-resolved: the duplicated-species
+    test and the name census run on the unresolved remainder, so components
+    fully covered by curated clusters drop out of the worklists.
+    """
+    unresolved = [m for m in members if not snap.curated_of.get(m)]
+    dup = snap.duplicated_species(unresolved)
     names = sorted({
-        norm(snap.features[m]["gene_name"]) for m in members
+        norm(snap.features[m]["gene_name"]) for m in unresolved
         if snap.features[m]["gene_name"]
     })
     blocked = []
-    for fno in members:
+    for fno in unresolved:
         feat = snap.features[fno]
         if feat["gene_name"] or feat["feature_type"] != "ORF":
             continue
@@ -604,7 +667,7 @@ def _component_data(snap, members):
     }
 
 
-def cmd_worklist(snap, out, view="families"):
+def cmd_worklist(snap, out, view="families", allowlist=frozenset()):
     """
     Curator worklists derived from the conflicted transitive components.
 
@@ -635,6 +698,12 @@ def cmd_worklist(snap, out, view="families"):
 
     comps = [_component_data(snap, members) for members in snap.components()]
     comps = [c for c in comps if c["dup"] or c["blocked"]]
+    if allowlist:
+        n_before = len(comps)
+        comps = [c for c in comps if frozenset(c["names"]) not in allowlist]
+        if n_before != len(comps):
+            print(f"worklist: {n_before - len(comps)} component(s) suppressed"
+                  " by allowlist", file=sys.stderr)
 
     writer = csv.writer(out, delimiter="\t", lineterminator="\n")
 
@@ -753,6 +822,9 @@ def main():
                    help="families: co-ortholog families needing FAMILY/SPLIT"
                         " calls; transfers: name conflicts that actually gate"
                         " transfers; all: full census")
+    p.add_argument("--allowlist",
+                   help="file of accepted conflicts (same format as audit);"
+                        " matching components are suppressed from the views")
     args = parser.parse_args()
 
     with SessionLocal() as db:
@@ -762,7 +834,8 @@ def main():
     elif args.mode == "check":
         cmd_check(snap, args.manifest, args.out)
     elif args.mode == "worklist":
-        cmd_worklist(snap, args.out, args.view)
+        allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
+        cmd_worklist(snap, args.out, args.view, allow)
     else:
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
         cmd_audit(snap, args.out, allow)

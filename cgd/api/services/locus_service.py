@@ -1523,30 +1523,91 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
                     ))
             return found_features
 
-        # First pass: get direct orthologs from query gene's clusters
-        direct_ortholog_features = []
-        for fh in f.feat_homology:
-            hg = fh.homology_group
-            if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
-                found = add_orthologs_from_cluster(hg.homology_group_no, f.feature_no)
-                direct_ortholog_features.extend(found)
-
-        # Second pass: transitive lookup - check if direct orthologs have additional clusters
-        # This handles C. auris -> C. tropicalis (BLAST RBH) -> other species (CGOB)
-        for feat_no in direct_ortholog_features:
-            # Get all ortholog clusters for this feature
-            additional_clusters = (
-                db.query(HomologyGroup)
-                .join(FeatHomology, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+        # Curated family clusters take precedence over the chained
+        # CGOB/BLAST-RBH lookup: where curators reviewed an intransitive
+        # component and recorded the family explicitly (type 'curated
+        # family'), that membership IS the ortholog set — the chained lookup
+        # would just re-derive the intransitive chain the curation resolved.
+        # All family members are shown, including same-species paralogs.
+        curated_family = None
+        curated_family_note = None
+        curated_groups = (
+            db.query(HomologyGroup)
+            .join(FeatHomology, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+            .filter(
+                FeatHomology.feature_no == f.feature_no,
+                HomologyGroup.homology_group_type == 'curated family',
+            )
+            .all()
+        )
+        if curated_groups:
+            curated_family = "; ".join(
+                hg.homology_group_id for hg in curated_groups
+                if hg.homology_group_id
+            ) or None
+            note_row = (
+                db.query(Note.note)
+                .join(NoteLink, NoteLink.note_no == Note.note_no)
                 .filter(
-                    FeatHomology.feature_no == feat_no,
-                    HomologyGroup.homology_group_type == 'ortholog',
-                    HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
+                    NoteLink.tab_name == 'HOMOLOGY_GROUP',
+                    NoteLink.primary_key.in_(
+                        [hg.homology_group_no for hg in curated_groups]),
+                )
+                .first()
+            )
+            if note_row:
+                curated_family_note = note_row[0]
+            members = (
+                db.query(Feature)
+                .options(joinedload(Feature.organism))
+                .join(FeatHomology, FeatHomology.feature_no == Feature.feature_no)
+                .filter(
+                    FeatHomology.homology_group_no.in_(
+                        [hg.homology_group_no for hg in curated_groups]),
+                    Feature.feature_no != f.feature_no,
                 )
                 .all()
             )
-            for add_hg in additional_clusters:
-                add_orthologs_from_cluster(add_hg.homology_group_no, f.feature_no)
+            for other_feat in sorted(
+                    members,
+                    key=lambda m: (_get_organism_info(m)[0],
+                                   m.gene_name or m.feature_name)):
+                if other_feat.feature_no in seen_orthologs:
+                    continue
+                seen_orthologs.add(other_feat.feature_no)
+                other_org_name, _ = _get_organism_info(other_feat)
+                candida_orthologs.append(CandidaOrthologOut(
+                    feature_name=other_feat.feature_name,
+                    gene_name=other_feat.gene_name,
+                    organism_name=other_org_name,
+                    dbxref_id=other_feat.dbxref_id,
+                ))
+
+        if not curated_groups:
+            # First pass: get direct orthologs from query gene's clusters
+            direct_ortholog_features = []
+            for fh in f.feat_homology:
+                hg = fh.homology_group
+                if hg and hg.homology_group_type == 'ortholog' and hg.method in ('CGOB', 'BLAST RBH'):
+                    found = add_orthologs_from_cluster(hg.homology_group_no, f.feature_no)
+                    direct_ortholog_features.extend(found)
+
+            # Second pass: transitive lookup - check if direct orthologs have additional clusters
+            # This handles C. auris -> C. tropicalis (BLAST RBH) -> other species (CGOB)
+            for feat_no in direct_ortholog_features:
+                # Get all ortholog clusters for this feature
+                additional_clusters = (
+                    db.query(HomologyGroup)
+                    .join(FeatHomology, FeatHomology.homology_group_no == HomologyGroup.homology_group_no)
+                    .filter(
+                        FeatHomology.feature_no == feat_no,
+                        HomologyGroup.homology_group_type == 'ortholog',
+                        HomologyGroup.method.in_(['CGOB', 'BLAST RBH']),
+                    )
+                    .all()
+                )
+                for add_hg in additional_clusters:
+                    add_orthologs_from_cluster(add_hg.homology_group_no, f.feature_no)
 
         # Get external orthologs (non-CGD species)
         external_orthologs = []
@@ -1686,6 +1747,8 @@ def get_locus_by_organism(db: Session, name: str) -> LocusByOrganismResponse:
             other_strain_names=other_strain_names,
             candida_orthologs=candida_orthologs,
             external_orthologs=external_orthologs,
+            curated_family=curated_family,
+            curated_family_note=curated_family_note,
             ortholog_cluster_url=ortholog_cluster_url,
             cug_codons=cug_codons,
             allelic_variation=allelic_variation,
