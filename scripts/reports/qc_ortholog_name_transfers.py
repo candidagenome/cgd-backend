@@ -139,6 +139,8 @@ class Snapshot:
         self.aliases_in_org = defaultdict(set)   # (org_no, NAME) -> {feature_no}
         self.a21_twins = set()                   # albicans Assembly 21 feature_nos
         self.curated_of = defaultdict(set)       # feature_no -> {curated group_no}
+        self.sgd_name_sets = {}    # sgdid -> {NAMES} (standard+aliases), optional
+        self.approved = {}         # FEATURE_NAME -> {NAMES} curator-approved, optional
         self._load(db)
 
     def _load(self, db):
@@ -301,6 +303,23 @@ class Snapshot:
             for sgdid, name in self.sgd_names.get(nb, ()):
                 if not any(s == sgdid for s, _ in scer_named.get(name, ())):
                     scer_named[name].append((sgdid, False))
+        # SGD alias equivalence (when the alias map is loaded): an Sc link
+        # whose gene carries a CGD ortholog name among its standard name and
+        # aliases AGREES with that name (e.g. Sc SIS2 whose alias is HAL3
+        # supports Candida HAL3) — fold it into the matching name instead of
+        # letting the stale/synonymous description read as a conflict.
+        if self.sgd_name_sets:
+            for x in list(scer_named):
+                if x in cgd_named:
+                    continue
+                x_sgdids = {s for s, _ in scer_named[x]}
+                equiv = next(
+                    (c for c in cgd_named
+                     if any(c in self.sgd_name_sets.get(s, ())
+                            for s in x_sgdids)),
+                    None)
+                if equiv:
+                    scer_named[equiv].extend(scer_named.pop(x))
         all_names = set(cgd_named) | set(scer_named)
         return cgd_named, scer_named, all_names
 
@@ -326,12 +345,27 @@ class Snapshot:
         scer_neighbor_only = set(scer_named) - scer_direct
         blocking_names = set(cgd_named) | scer_direct
 
+        approved = self.approved.get(feat["feature_name"].upper(), set())
+
         name = norm(proposed) if proposed else None
         if name is None:
             if len(blocking_names) == 1:
                 name = next(iter(blocking_names))
             elif not blocking_names and len(scer_neighbor_only) == 1:
                 name = next(iter(scer_neighbor_only))
+            elif approved and len(approved & set(cgd_named)) == 1:
+                # curator-approved transfer despite a divergent own-SGD name
+                name = next(iter(approved & set(cgd_named)))
+
+        # Curator-approved divergence (2026-09-14 FIX_LINK decisions): the
+        # target's own SGD link keeps a name with no CGD-name counterpart
+        # (Candida-literature naming); the curator approved the transfer.
+        if name and name in approved:
+            divergent = {x for x in scer_direct if x != name}
+            if divergent:
+                scer_direct -= divergent
+                blocking_names = set(cgd_named) | scer_direct
+                warns.append("CURATOR_APPROVED_SCER_DIVERGENCE")
 
         if feat["feature_type"] != "ORF":
             fails.append("NON_ORF_TARGET")
@@ -515,6 +549,52 @@ def cmd_check(snap, manifest_path, out):
                        f" of {len(rows)} manifest rows")
 
 
+def load_sgd_name_sets(path):
+    """SGD_features.tab -> sgdid -> {standard name, systematic name, aliases}
+    (multiword and over-long aliases skipped; CDS/intron sub-rows skipped)."""
+    name_sets = defaultdict(set)
+    with open(path) as fh:
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 6 or not f[0].startswith("S000"):
+                continue
+            if f[1] in ("CDS", "intron", "ARS", "telomere",
+                        "long_terminal_repeat"):
+                continue
+            for cand in [f[4], f[3]] + f[5].split("|"):
+                cand = cand.strip()
+                if cand and " " not in cand and len(cand) <= 12:
+                    name_sets[f[0]].add(cand.upper())
+    return dict(name_sets)
+
+
+def load_approved(path):
+    """Curator-approved (feature_name, gene_name) transfer pairs, TSV with
+    feature_name + gene_name/proposed_name columns."""
+    approved = defaultdict(set)
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        cols = {c.lower(): c for c in reader.fieldnames or ()}
+        fcol = cols.get("feature_name")
+        ncol = cols.get("gene_name") or cols.get("proposed_name") \
+            or cols.get("consensus_name")
+        for row in reader:
+            if row.get(fcol, "").strip() and row.get(ncol, "").strip():
+                approved[row[fcol].strip().upper()].add(norm(row[ncol]))
+    return dict(approved)
+
+
+def load_decisions(path):
+    """Decided transfers-worklist rows: (cgd_names, scer_names) keys."""
+    decided = set()
+    with open(path, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            if (row.get("DECISION") or "").strip():
+                decided.add((row.get("cgd_names", "").strip(),
+                             row.get("scer_names", "").strip()))
+    return decided
+
+
 def load_allowlist(path):
     """Read accepted-conflict name sets: one conflict per line, names
     separated by semicolons/commas/whitespace (the audit conflict_key column
@@ -667,7 +747,8 @@ def _component_data(snap, members):
     }
 
 
-def cmd_worklist(snap, out, view="families", allowlist=frozenset()):
+def cmd_worklist(snap, out, view="families", allowlist=frozenset(),
+                 decided=frozenset()):
     """
     Curator worklists derived from the conflicted transitive components.
 
@@ -704,6 +785,13 @@ def cmd_worklist(snap, out, view="families", allowlist=frozenset()):
         if n_before != len(comps):
             print(f"worklist: {n_before - len(comps)} component(s) suppressed"
                   " by allowlist", file=sys.stderr)
+    if decided:
+        n_before = len(comps)
+        comps = [c for c in comps
+                 if (",".join(c["names"]), ",".join(c["scer"])) not in decided]
+        if n_before != len(comps):
+            print(f"worklist: {n_before - len(comps)} component(s) already"
+                  " decided by curators (decisions file)", file=sys.stderr)
 
     writer = csv.writer(out, delimiter="\t", lineterminator="\n")
 
@@ -807,16 +895,26 @@ def main():
     sub = parser.add_subparsers(dest="mode", required=True)
     p = sub.add_parser("propose")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
+    p.add_argument("--sgd-features", help="SGD_features.tab for alias-aware"
+                   " S. cerevisiae name comparison")
+    p.add_argument("--approved", help="curator-approved (feature, name)"
+                   " transfer pairs TSV")
     p = sub.add_parser("check")
     p.add_argument("--manifest", required=True)
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
+    p.add_argument("--sgd-features", help="see propose")
+    p.add_argument("--approved", help="see propose")
     p = sub.add_parser("audit")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
     p.add_argument("--allowlist",
                    help="file of accepted conflicts (one name set per line,"
                         " e.g. 'EAF1;VID21'); suppressed from the report")
+    p.add_argument("--sgd-features", help="see propose")
     p = sub.add_parser("worklist")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
+    p.add_argument("--sgd-features", help="see propose")
+    p.add_argument("--decisions", help="decided worklist rows TSV (cgd_names,"
+                   " scer_names, DECISION) — decided components are dropped")
     p.add_argument("--view", choices=["families", "transfers", "all"],
                    default="families",
                    help="families: co-ortholog families needing FAMILY/SPLIT"
@@ -829,13 +927,18 @@ def main():
 
     with SessionLocal() as db:
         snap = Snapshot(db)
+    if getattr(args, "sgd_features", None):
+        snap.sgd_name_sets = load_sgd_name_sets(args.sgd_features)
+    if getattr(args, "approved", None):
+        snap.approved = load_approved(args.approved)
     if args.mode == "propose":
         cmd_propose(snap, args.out)
     elif args.mode == "check":
         cmd_check(snap, args.manifest, args.out)
     elif args.mode == "worklist":
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
-        cmd_worklist(snap, args.out, args.view, allow)
+        decided = load_decisions(args.decisions) if args.decisions else frozenset()
+        cmd_worklist(snap, args.out, args.view, allow, decided)
     else:
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
         cmd_audit(snap, args.out, allow)
