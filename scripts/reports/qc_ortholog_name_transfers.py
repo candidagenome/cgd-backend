@@ -585,14 +585,22 @@ def load_approved(path):
 
 
 def load_decisions(path):
-    """Decided transfers-worklist rows: (cgd_names, scer_names) keys."""
-    decided = set()
+    """Decided transfers-worklist rows.
+
+    Returns (exact_keys, name_keys): exact (cgd_names, scer_names) pairs plus
+    the cgd_names alone. Link repoints change a component's S. cerevisiae
+    fingerprint (stale descriptions get corrected), so an exact-key match
+    would let already-decided components resurface — the cgd_names fallback
+    keeps them suppressed.
+    """
+    exact, names = set(), set()
     with open(path, newline="") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             if (row.get("DECISION") or "").strip():
-                decided.add((row.get("cgd_names", "").strip(),
-                             row.get("scer_names", "").strip()))
-    return decided
+                cgd = row.get("cgd_names", "").strip()
+                exact.add((cgd, row.get("scer_names", "").strip()))
+                names.add(cgd)
+    return exact, names
 
 
 def load_allowlist(path):
@@ -748,7 +756,7 @@ def _component_data(snap, members):
 
 
 def cmd_worklist(snap, out, view="families", allowlist=frozenset(),
-                 decided=frozenset()):
+                 decided=(frozenset(), frozenset())):
     """
     Curator worklists derived from the conflicted transitive components.
 
@@ -785,10 +793,12 @@ def cmd_worklist(snap, out, view="families", allowlist=frozenset(),
         if n_before != len(comps):
             print(f"worklist: {n_before - len(comps)} component(s) suppressed"
                   " by allowlist", file=sys.stderr)
-    if decided:
+    if any(decided):
+        exact, names = decided
         n_before = len(comps)
         comps = [c for c in comps
-                 if (",".join(c["names"]), ",".join(c["scer"])) not in decided]
+                 if (",".join(c["names"]), ",".join(c["scer"])) not in exact
+                 and ",".join(c["names"]) not in names]
         if n_before != len(comps):
             print(f"worklist: {n_before - len(comps)} component(s) already"
                   " decided by curators (decisions file)", file=sys.stderr)
@@ -913,6 +923,7 @@ def main():
     p = sub.add_parser("worklist")
     p.add_argument("--out", type=argparse.FileType("w"), default=sys.stdout)
     p.add_argument("--sgd-features", help="see propose")
+    p.add_argument("--approved", help="see propose")
     p.add_argument("--decisions", help="decided worklist rows TSV (cgd_names,"
                    " scer_names, DECISION) — decided components are dropped")
     p.add_argument("--view", choices=["families", "transfers", "all"],
@@ -937,7 +948,8 @@ def main():
         cmd_check(snap, args.manifest, args.out)
     elif args.mode == "worklist":
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
-        decided = load_decisions(args.decisions) if args.decisions else frozenset()
+        decided = (load_decisions(args.decisions) if args.decisions
+                   else (frozenset(), frozenset()))
         cmd_worklist(snap, args.out, args.view, allow, decided)
     else:
         allow = load_allowlist(args.allowlist) if args.allowlist else frozenset()
