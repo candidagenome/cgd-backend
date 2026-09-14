@@ -131,6 +131,8 @@ class FeatureOut(ORMSchema):
     ortholog_cluster_url: t.Optional[str] = None  # URL to CGOB ortholog cluster viewer
     candida_orthologs: list[CandidaOrthologOut] = []
     external_orthologs: list[ExternalOrthologOut] = []
+    curated_family: t.Optional[str] = None  # curated gene-family cluster label
+    curated_family_note: t.Optional[str] = None  # curator note on the family
     cug_codons: t.Optional[int] = None  # Number of CUG codons
     allelic_variation: t.Optional[str] = None  # Allelic variation info
 
