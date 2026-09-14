@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from cgd.db.deps import get_db
 from cgd.api.services import ortholog_converter_service
 from cgd.schemas.ortholog_converter_schema import (
-    TargetOrganism,
     OrthologConvertRequest,
     OrthologConvertResponse,
     AvailableTargetsResponse,
@@ -62,11 +61,11 @@ def convert_orthologs(
     request: OrthologConvertRequest,
     db: Session = Depends(get_db),
 ) -> OrthologConvertResponse:
-    """Convert a list of gene IDs to orthologs in the target organism."""
-    return ortholog_converter_service.convert_orthologs(
+    """Convert a list of gene IDs to orthologs in the target organism(s)."""
+    return ortholog_converter_service.convert_orthologs_multi(
         db=db,
         gene_ids=request.gene_ids,
-        target_organism=request.target_organism,
+        target_organisms=request.targets,
         source_organism=request.source_organism,
     )
 
@@ -91,10 +90,10 @@ def download_ortholog_conversion(
     format: Annotated[str, Query(description="Output format: csv or tsv")] = "csv",
 ) -> StreamingResponse:
     """Download ortholog conversion results as CSV or TSV."""
-    result = ortholog_converter_service.convert_orthologs(
+    result = ortholog_converter_service.convert_orthologs_multi(
         db=db,
         gene_ids=request.gene_ids,
-        target_organism=request.target_organism,
+        target_organisms=request.targets,
         source_organism=request.source_organism,
     )
 
@@ -143,7 +142,9 @@ def download_ortholog_conversion(
     # Set filename
     media_type = 'text/tab-separated-values' if format == 'tsv' else 'text/csv'
     extension = 'tsv' if format == 'tsv' else 'csv'
-    filename = f"ortholog_conversion_{request.target_organism.value}.{extension}"
+    targets = request.targets
+    target_tag = targets[0].value if len(targets) == 1 else f"{len(targets)}_species"
+    filename = f"ortholog_conversion_{target_tag}.{extension}"
 
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -174,10 +175,10 @@ def get_ortholog_ids_only(
     ] = False,
 ) -> StreamingResponse:
     """Get just the ortholog IDs as a plain text list."""
-    result = ortholog_converter_service.convert_orthologs(
+    result = ortholog_converter_service.convert_orthologs_multi(
         db=db,
         gene_ids=request.gene_ids,
-        target_organism=request.target_organism,
+        target_organisms=request.targets,
         source_organism=request.source_organism,
     )
 
@@ -194,6 +195,8 @@ def get_ortholog_ids_only(
         iter([output]),
         media_type="text/plain",
         headers={
-            "Content-Disposition": f"attachment; filename=ortholog_ids_{request.target_organism.value}.txt",
+            "Content-Disposition": "attachment; filename=ortholog_ids_"
+            + (request.targets[0].value if len(request.targets) == 1
+               else f"{len(request.targets)}_species") + ".txt",
         },
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TargetOrganism(str, Enum):
@@ -50,21 +50,46 @@ EXTERNAL_ORGANISM_SOURCES = {
 
 
 class OrthologConvertRequest(BaseModel):
-    """Request body for ortholog conversion."""
+    """Request body for ortholog conversion.
+
+    Provide either a single target_organism (legacy) or target_organisms
+    (one to all species) — exactly one of the two. With multiple targets the
+    response holds one result row per input gene per target, gene-major, with
+    relationship 'no_ortholog' (or 'same_organism') where appropriate.
+    """
     gene_ids: list[str] = Field(
         ...,
         description="List of gene identifiers to convert",
         min_length=1,
         max_length=5000,
     )
-    target_organism: TargetOrganism = Field(
-        ...,
-        description="Target organism to convert orthologs to",
+    target_organism: Optional[TargetOrganism] = Field(
+        None,
+        description="Single target organism to convert orthologs to",
+    )
+    target_organisms: Optional[list[TargetOrganism]] = Field(
+        None,
+        description="Multiple target organisms (use instead of target_organism)",
+        min_length=1,
     )
     source_organism: Optional[SourceOrganism] = Field(
         default=SourceOrganism.CGD,
         description="Source organism of input genes (default: CGD species)",
     )
+
+    @model_validator(mode="after")
+    def _exactly_one_target_form(self):
+        if (self.target_organism is None) == (self.target_organisms is None):
+            raise ValueError(
+                "provide exactly one of target_organism or target_organisms")
+        return self
+
+    @property
+    def targets(self) -> list[TargetOrganism]:
+        """Requested targets as a de-duplicated, order-preserving list."""
+        if self.target_organisms:
+            return list(dict.fromkeys(self.target_organisms))
+        return [self.target_organism]
 
 
 class OrthologResult(BaseModel):
@@ -92,10 +117,15 @@ class OrthologResult(BaseModel):
 class OrthologConvertResponse(BaseModel):
     """Response for ortholog conversion."""
     source_organism: Optional[str] = Field(None, description="Source organism display name")
-    target_organism: str = Field(..., description="Target organism display name")
+    target_organism: str = Field(..., description="Target organism display name(s)")
+    target_organisms: list[str] = Field(
+        default_factory=list,
+        description="All target organism display names (multi-target requests)",
+    )
     total_input: int = Field(..., description="Total number of input genes")
     found_count: int = Field(..., description="Number of input genes found")
-    converted_count: int = Field(..., description="Number of genes with orthologs in target")
+    converted_count: int = Field(
+        ..., description="Number of (gene, target) pairs with an ortholog")
     results: list[OrthologResult] = Field(..., description="Conversion results")
 
 
