@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from cgd.models.models import Feature, Seq, FeatLocation, Organism, FeatRelationship
 from cgd.schemas.sequence_schema import (
@@ -19,6 +19,28 @@ from cgd.schemas.sequence_schema import (
 
 # Complement mapping for reverse complement
 COMPLEMENT_MAP = str.maketrans("ACGTacgt", "TGCAtgca")
+
+
+def _fetch_residue_window(db: Session, seq_no: int, start: int, stop: int) -> Optional[str]:
+    """Residues[start..stop] (1-based, inclusive) of a SEQ row via SQL SUBSTR.
+
+    Never load a chromosome's full residues CLOB to slice it in Python: each
+    load ships megabases and takes seconds, and under crawler load the
+    accumulated holds exhausted the DB pool (prod incident 2026-09-15).
+    SUBSTR on the CLOB ships only the requested window.
+    """
+    if stop < start:
+        return None
+    start = max(1, start)
+    row = db.execute(
+        text("SELECT SUBSTR(residues, :s, :l) FROM seq"
+             " WHERE seq_no = :n AND is_seq_current = 'Y'"),
+        {"s": start, "l": stop - start + 1, "n": seq_no},
+    ).first()
+    if not row or row[0] is None:
+        return None
+    val = row[0]
+    return val.read() if hasattr(val, "read") else str(val)
 
 
 def _reverse_complement(seq: str) -> str:
@@ -90,23 +112,10 @@ def _get_genomic_utr_sequence(
     feat_start = min(all_coords)
     feat_stop = max(all_coords)
 
-    # Get the chromosome/root sequence
-    root_seq = (
-        db.query(Seq)
-        .filter(
-            Seq.seq_no == location.root_seq_no,
-            Seq.is_seq_current == "Y"
-        )
-        .first()
-    )
-
-    if not root_seq or not root_seq.residues:
+    # Fetch only the spanned window of the chromosome (never the full CLOB)
+    sequence = _fetch_residue_window(db, location.root_seq_no, feat_start, feat_stop)
+    if not sequence:
         return None
-
-    chr_seq = root_seq.residues
-
-    # Extract the sequence (convert to 0-based indexing)
-    sequence = chr_seq[feat_start - 1:feat_stop]
 
     # Reverse complement if on Crick strand
     if location.strand == "C":
@@ -131,20 +140,6 @@ def _get_coding_utr_sequence(
     if not subfeatures:
         return None
 
-    # Get the chromosome/root sequence
-    root_seq = (
-        db.query(Seq)
-        .filter(
-            Seq.seq_no == location.root_seq_no,
-            Seq.is_seq_current == "Y"
-        )
-        .first()
-    )
-
-    if not root_seq or not root_seq.residues:
-        return None
-
-    chr_seq = root_seq.residues
     strand = location.strand
 
     # Filter to only CDS, UTR, and Noncoding_exon subfeatures (not introns)
@@ -166,6 +161,14 @@ def _get_coding_utr_sequence(
     if not exon_subfeatures:
         return None
 
+    # Fetch one bounding window covering all exon subfeatures (never the
+    # full chromosome CLOB) and slice segments relative to it
+    window_lo = min(min(s, e) for _, s, e in exon_subfeatures)
+    window_hi = max(max(s, e) for _, s, e in exon_subfeatures)
+    window = _fetch_residue_window(db, location.root_seq_no, window_lo, window_hi)
+    if not window:
+        return None
+
     # Extract each exon segment and concatenate
     segments = []
     for feat_type, start, stop in exon_subfeatures:
@@ -173,8 +176,8 @@ def _get_coding_utr_sequence(
         if start > stop:
             start, stop = stop, start
 
-        # Extract segment (convert to 0-based indexing)
-        segment = chr_seq[start - 1:stop]
+        # Extract segment (window is 1-based from window_lo)
+        segment = window[start - window_lo:stop - window_lo + 1]
 
         # If Crick strand, reverse complement each segment
         if strand == "C":
@@ -324,15 +327,16 @@ def get_sequence_by_feature(
     strand = None
 
     if location:
-        # Get chromosome name from root sequence
-        root_seq = (
-            db.query(Seq)
-            .join(Feature, Seq.feature_no == Feature.feature_no)
+        # Get chromosome name from root sequence (name column only — loading
+        # the Seq entity would drag the whole chromosome residues CLOB)
+        root_name = (
+            db.query(Feature.feature_name)
+            .join(Seq, Seq.feature_no == Feature.feature_no)
             .filter(Seq.seq_no == location.root_seq_no)
             .first()
         )
-        if root_seq and root_seq.feature:
-            chromosome = root_seq.feature.feature_name
+        if root_name:
+            chromosome = root_name[0]
 
         start_coord = location.start_coord
         end_coord = location.stop_coord
@@ -474,20 +478,6 @@ def _add_flanking_regions(
     if not location:
         return sequence
 
-    # Get the chromosome/root sequence
-    root_seq = (
-        db.query(Seq)
-        .filter(
-            Seq.seq_no == location.root_seq_no,
-            Seq.is_seq_current == "Y"
-        )
-        .first()
-    )
-
-    if not root_seq or not root_seq.residues:
-        return sequence
-
-    chr_seq = root_seq.residues
     strand = location.strand
 
     # Genomic low/high boundary of the stored genomic sequence. start_coord and
@@ -495,19 +485,24 @@ def _add_flanking_regions(
     feat_start = min(location.start_coord, location.stop_coord)
     feat_stop = max(location.start_coord, location.stop_coord)
 
-    # Extract flanking regions from chromosome
+    # Fetch only the flank windows (never the full chromosome CLOB); SUBSTR
+    # clamps at the chromosome end, _fetch_residue_window clamps at 1.
+    def upstream(n):
+        return (_fetch_residue_window(
+            db, location.root_seq_no, feat_start - n, feat_start - 1) or "") if n > 0 else ""
+
+    def downstream(n):
+        return (_fetch_residue_window(
+            db, location.root_seq_no, feat_stop + 1, feat_stop + n) or "") if n > 0 else ""
+
     if strand == "W":
         # Watson strand: left flank is upstream, right flank is downstream
-        left_start = max(0, feat_start - 1 - flank_left)
-        left_flank = chr_seq[left_start:feat_start - 1] if flank_left > 0 else ""
-        right_flank = chr_seq[feat_stop:feat_stop + flank_right] if flank_right > 0 else ""
-        return left_flank + sequence + right_flank
+        return upstream(flank_left) + sequence + downstream(flank_right)
     else:
         # Crick strand: need to reverse complement flanking regions
         # For Crick strand genes, "left" flank (5') is downstream on chromosome
-        right_start = max(0, feat_start - 1 - flank_right)
-        right_flank = chr_seq[right_start:feat_start - 1] if flank_right > 0 else ""
-        left_flank = chr_seq[feat_stop:feat_stop + flank_left] if flank_left > 0 else ""
+        right_flank = upstream(flank_right)
+        left_flank = downstream(flank_left)
         # Reverse complement the flanks
         left_flank = _reverse_complement(left_flank) if left_flank else ""
         right_flank = _reverse_complement(right_flank) if right_flank else ""
@@ -539,9 +534,9 @@ def get_sequence_by_coordinates(
     # Normalize chromosome name
     chr_upper = chromosome.strip().upper()
 
-    # Find chromosome sequence
-    chr_seq = (
-        db.query(Seq)
+    # Find the chromosome (columns only — never load the residues CLOB)
+    chr_row = (
+        db.query(Seq.seq_no, Seq.seq_length, Feature.feature_name)
         .join(Feature, Seq.feature_no == Feature.feature_no)
         .filter(
             Seq.seq_type == "genomic",
@@ -551,10 +546,10 @@ def get_sequence_by_coordinates(
         .first()
     )
 
-    if not chr_seq:
+    if not chr_row:
         # Try without prefix
-        chr_seq = (
-            db.query(Seq)
+        chr_row = (
+            db.query(Seq.seq_no, Seq.seq_length, Feature.feature_name)
             .join(Feature, Seq.feature_no == Feature.feature_no)
             .filter(
                 Seq.seq_type == "genomic",
@@ -565,15 +560,14 @@ def get_sequence_by_coordinates(
             .first()
         )
 
-    if not chr_seq:
+    if not chr_row:
         return None
 
-    # Extract sequence (convert to 0-based indexing)
-    full_sequence = chr_seq.residues
-    seq_start = max(0, start - 1)
-    seq_end = min(len(full_sequence), end)
+    seq_no, seq_length, chr_feature_name = chr_row
 
-    sequence = full_sequence[seq_start:seq_end]
+    # Fetch only the requested window
+    seq_end = min(seq_length, end) if seq_length else end
+    sequence = _fetch_residue_window(db, seq_no, start, seq_end) or ""
 
     # Handle strand
     if strand == "C" or reverse_complement:
@@ -582,7 +576,7 @@ def get_sequence_by_coordinates(
     # Convert to uppercase for display
     sequence = sequence.upper()
 
-    chr_name = chr_seq.feature.feature_name if chr_seq.feature else chromosome
+    chr_name = chr_feature_name or chromosome
 
     fasta_header = f">{chr_name}:{start}-{end}({'+' if strand == 'W' else '-'})"
 

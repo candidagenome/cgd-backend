@@ -369,6 +369,22 @@ class TestGetSequenceByFeature:
 class TestGetSequenceByCoordinates:
     """Tests for getting sequence by coordinates."""
 
+    @staticmethod
+    def _wire(mock_db, residues, chr_name="Chr1"):
+        """New contract: chromosome resolution returns (seq_no, seq_length,
+        feature_name) columns, and the residue window is fetched via
+        db.execute(SUBSTR...) — never the full CLOB."""
+        mock_db.query.return_value = MockQuery([(1, len(residues), chr_name)])
+
+        def execute(_stmt, params):
+            start, length = params["s"], params["l"]
+            window = residues[start - 1:start - 1 + length]
+            result = MagicMock()
+            result.first.return_value = (window,) if window else (None,)
+            return result
+
+        mock_db.execute.side_effect = execute
+
     def test_returns_none_for_unknown_chromosome(self, mock_db):
         """Should return None for unknown chromosome."""
         mock_db.query.side_effect = [
@@ -382,10 +398,7 @@ class TestGetSequenceByCoordinates:
 
     def test_extracts_sequence_region(self, mock_db):
         """Should extract correct sequence region."""
-        chr_feature = MockFeature(1, "Chr1", feature_type="chromosome")
-        chr_seq = MockSeq(1, 1, "AAAAATGCATGCTTTT", "genomic", feature=chr_feature)
-
-        mock_db.query.return_value = MockQuery([chr_seq])
+        self._wire(mock_db, "AAAAATGCATGCTTTT")
 
         result = get_sequence_by_coordinates(mock_db, "Chr1", 6, 13)
 
@@ -393,10 +406,7 @@ class TestGetSequenceByCoordinates:
 
     def test_returns_uppercase(self, mock_db):
         """Should return uppercase sequence."""
-        chr_feature = MockFeature(1, "Chr1", feature_type="chromosome")
-        chr_seq = MockSeq(1, 1, "aaaaatgcatgctttt", "genomic", feature=chr_feature)
-
-        mock_db.query.return_value = MockQuery([chr_seq])
+        self._wire(mock_db, "aaaaatgcatgctttt")
 
         result = get_sequence_by_coordinates(mock_db, "Chr1", 1, 10)
 
@@ -404,10 +414,7 @@ class TestGetSequenceByCoordinates:
 
     def test_crick_strand_reverse_complements(self, mock_db):
         """Should reverse complement for Crick strand."""
-        chr_feature = MockFeature(1, "Chr1", feature_type="chromosome")
-        chr_seq = MockSeq(1, 1, "ATGC", "genomic", feature=chr_feature)
-
-        mock_db.query.return_value = MockQuery([chr_seq])
+        self._wire(mock_db, "ATGC")
 
         result = get_sequence_by_coordinates(mock_db, "Chr1", 1, 4, strand="C")
 
@@ -415,10 +422,7 @@ class TestGetSequenceByCoordinates:
 
     def test_includes_fasta_header(self, mock_db):
         """Should include FASTA header with coordinates."""
-        chr_feature = MockFeature(1, "Chr1", feature_type="chromosome")
-        chr_seq = MockSeq(1, 1, "ATGCATGC", "genomic", feature=chr_feature)
-
-        mock_db.query.return_value = MockQuery([chr_seq])
+        self._wire(mock_db, "ATGCATGC")
 
         result = get_sequence_by_coordinates(mock_db, "Chr1", 1, 8)
 
@@ -426,10 +430,7 @@ class TestGetSequenceByCoordinates:
 
     def test_handles_out_of_bounds(self, mock_db):
         """Should handle coordinates beyond sequence length."""
-        chr_feature = MockFeature(1, "Chr1", feature_type="chromosome")
-        chr_seq = MockSeq(1, 1, "ATGC", "genomic", feature=chr_feature)
-
-        mock_db.query.return_value = MockQuery([chr_seq])
+        self._wire(mock_db, "ATGC")
 
         result = get_sequence_by_coordinates(mock_db, "Chr1", 1, 100)
 
