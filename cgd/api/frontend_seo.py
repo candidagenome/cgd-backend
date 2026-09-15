@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -174,13 +175,86 @@ def read_frontend_index() -> str:
     return index_path.read_text(encoding="utf-8")
 
 
-def render_locus_html(db: Session, name: str) -> str:
-    html = read_frontend_index()
+# Display order for multi-organism names (albicans first), mirroring
+# es_search_service.ORGANISM_PRIORITY without importing the service stack.
+_ORGANISM_PRIORITY = [
+    "Candida albicans SC5314",
+    "Candida glabrata CBS138",
+    "Candida auris B8441",
+    "Candida dubliniensis CD36",
+    "Candida parapsilosis CDC317",
+    "Candida tropicalis MYA-3404",
+]
+
+# The SEO tags need seven scalar fields, so the render must NOT call the
+# full locus assembly: /locus/:name is fetched by every crawler for every
+# gene, and a distributed crawl of the ~42k sitemap URLs through the heavy
+# path exhausts the DB pool (prod incident 2026-09-15). One indexed query
+# plus a TTL cache keeps the route effectively free.
+_SEO_QUERY = text("""
+    SELECT f.gene_name, f.feature_name, o.organism_name, f.feature_type,
+           f.headline, f.name_description,
+           (SELECT MAX(fp.property_value) FROM feat_property fp
+             WHERE fp.feature_no = f.feature_no
+               AND fp.property_type = 'feature_qualifier'
+               AND fp.property_value NOT LIKE 'Deleted%') AS qualifier
+      FROM feature f
+      JOIN organism o ON o.organism_no = f.organism_no
+     WHERE UPPER(f.feature_name) = :name OR UPPER(f.gene_name) = :name
+""")
+
+_seo_cache: dict[str, tuple[float, LocusSeo | None]] = {}
+_SEO_CACHE_TTL = 6 * 3600
+_SEO_CACHE_MAX = 60000
+
+
+def _fetch_locus_seo(db: Session, name: str) -> LocusSeo | None:
+    rows = db.execute(_SEO_QUERY, {"name": name.upper()}).fetchall()
+    if not rows:
+        return None
+
+    def rank(row):
+        org = row.organism_name
+        priority = (_ORGANISM_PRIORITY.index(org)
+                    if org in _ORGANISM_PRIORITY else 999)
+        return (priority, row.feature_name.endswith("_B"),
+                row.headline is None)
+
+    row = min(rows, key=rank)
+    feature = {
+        "gene_name": row.gene_name,
+        "feature_name": row.feature_name,
+        "feature_type": row.feature_type,
+        "feature_qualifier": row.qualifier,
+        "headline": row.headline,
+        "name_description": row.name_description,
+    }
+    return build_locus_seo(
+        name,
+        {"results": {row.organism_name: feature},
+         "query_organism": row.organism_name},
+    )
+
+
+def get_locus_seo(db: Session, name: str) -> LocusSeo | None:
+    """TTL-cached lightweight SEO metadata lookup for /locus/:name."""
+    key = name.strip().upper()
+    now = time.monotonic()
+    hit = _seo_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
     try:
-        locus_service = importlib.import_module("cgd.api.services.locus_service")
-        seo = build_locus_seo(name, locus_service.get_locus_by_organism(db, name))
+        seo = _fetch_locus_seo(db, name)
     except Exception:
         logger.exception("Unable to build locus SEO metadata for %s", name)
-        seo = None
+        return None
+    if len(_seo_cache) >= _SEO_CACHE_MAX:
+        _seo_cache.clear()
+    _seo_cache[key] = (now + _SEO_CACHE_TTL, seo)
+    return seo
 
+
+def render_locus_html(db: Session, name: str) -> str:
+    html = read_frontend_index()
+    seo = get_locus_seo(db, name)
     return inject_locus_seo(html, seo) if seo else html

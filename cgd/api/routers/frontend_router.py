@@ -25,9 +25,11 @@ def locus_page(name: str, db: Session = Depends(get_db)):
     backend HTML rewrite for /locus/:name while React still handles the UI.
     """
     try:
+        # Cacheable: the SEO metadata is TTL-cached server-side anyway, and
+        # letting clients/proxies reuse the page sheds crawler load.
         return HTMLResponse(
             content=frontend_seo.render_locus_html(db, name),
-            headers={"Cache-Control": "no-cache"},
+            headers={"Cache-Control": "public, max-age=3600"},
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail="Frontend index.html not found") from exc
