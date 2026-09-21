@@ -34,7 +34,11 @@ cd "$PROJECT_ROOT"
 
 # Arrays to track results
 declare -a SPECIES_LIST=("C_albicans" "C_dubliniensis" "C_glabrata" "C_parapsilosis" "C_auris" "C_tropicalis")
-declare -a SPECIES_QUERIES=("Candida AND albicans" "Candida AND dubliniensis" "Candida AND glabrata" "Candida AND parapsilosis" "Candida AND auris" "Candida AND tropicalis")
+# Genus renames: C. glabrata -> Nakaseomyces glabratus (2023), C. auris ->
+# Candidozyma auris (2024). Papers increasingly use only the new genus name,
+# and the per-gene reference search requires the species words to appear in
+# the text (PMID 41033005 class of miss) — accept either genus.
+declare -a SPECIES_QUERIES=("Candida AND albicans" "Candida AND dubliniensis" "(Candida OR Nakaseomyces) AND (glabrata OR glabratus)" "Candida AND parapsilosis" "(Candida OR Candidozyma) AND auris" "Candida AND tropicalis")
 declare -a LOG_FILES=()
 declare -a REFS_LOADED=()
 declare -a ERRORS=()
