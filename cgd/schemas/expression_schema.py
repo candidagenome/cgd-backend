@@ -121,6 +121,7 @@ class SimilarGenesResponse(BaseModel):
     # Query gene info
     query_gene: Optional[str] = Field(None, description="Query gene name")
     query_feature_name: Optional[str] = Field(None, description="Query systematic name")
+    query_description: Optional[str] = Field(None, description="Query gene description/headline")
     organism: Optional[str] = Field(None, description="Organism searched")
     organism_no: Optional[int] = Field(None, description="Organism number for downstream analysis")
     metric: Optional[str] = Field(None, description="Similarity metric used")
