@@ -347,3 +347,37 @@ class TestEdgeCases:
 
         content = output_file.read_text()
         assert long_details in content
+
+
+class TestValidateOutputFile:
+    """Validation guard: % change enforced only above the absolute floor."""
+
+    @staticmethod
+    def _file(tmp_path, name, n_records):
+        f = tmp_path / name
+        f.write_text("Feature Name\tFeature Type\n"
+                     + "".join(f"G{i}\tORF\n" for i in range(n_records)))
+        return f
+
+    def test_small_file_curation_burst_passes(self, tmp_path):
+        # the 2026-09-20 C. tropicalis case: 25 -> 80 is a legitimate batch
+        from scripts.cron.dump_phenotype_data import validate_output_file
+        new = self._file(tmp_path, "new.tab", 80)
+        old = self._file(tmp_path, "old.tab", 25)
+        ok, msg = validate_output_file(new, old, "C_tropicalis")
+        assert ok, msg
+
+    def test_large_swing_on_big_file_still_fails(self, tmp_path):
+        from scripts.cron.dump_phenotype_data import validate_output_file
+        new = self._file(tmp_path, "new.tab", 1400)
+        old = self._file(tmp_path, "old.tab", 1000)
+        ok, msg = validate_output_file(new, old, "C_albicans_SC5314")
+        assert not ok
+        assert "changed too much" in msg
+
+    def test_small_absolute_change_on_big_file_passes(self, tmp_path):
+        from scripts.cron.dump_phenotype_data import validate_output_file
+        new = self._file(tmp_path, "new.tab", 1050)
+        old = self._file(tmp_path, "old.tab", 1000)
+        ok, _ = validate_output_file(new, old, "C_albicans_SC5314")
+        assert ok

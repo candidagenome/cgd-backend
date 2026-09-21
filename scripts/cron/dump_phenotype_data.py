@@ -88,6 +88,10 @@ ENV_STATE = os.getenv("ENV_STATE", "dev")
 # Validation thresholds
 MIN_RECORDS = 10  # Minimum records expected (some strains have few phenotypes)
 MAX_RECORD_CHANGE_PERCENT = 20.0  # Maximum allowed change from previous file
+# Absolute floor below which the % guard does not apply: small species files
+# grow in legitimate curation bursts (C. tropicalis 25 -> 80 records from one
+# curation batch tripped the 20% guard, 2026-09-20)
+MIN_CHANGE_TO_ENFORCE = 100
 
 # Configure logging
 logging.basicConfig(
@@ -166,8 +170,9 @@ def validate_output_file(
     if existing_file and existing_file.exists():
         existing_count = count_records_in_file(existing_file)
         if existing_count > 0:
-            change_pct = abs(new_count - existing_count) / existing_count * 100
-            if change_pct > MAX_RECORD_CHANGE_PERCENT:
+            change = abs(new_count - existing_count)
+            change_pct = change / existing_count * 100
+            if change > MIN_CHANGE_TO_ENFORCE and change_pct > MAX_RECORD_CHANGE_PERCENT:
                 return False, (
                     f"Record count changed too much for {strain_abbrev}: "
                     f"{existing_count} -> {new_count} ({change_pct:.1f}% "
