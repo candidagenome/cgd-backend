@@ -339,7 +339,18 @@ class InteractionCurationService:
         if not cand_nos:
             return None
         if bait_no == hit_no:
-            return next(iter(cand_nos))
+            # A self-interaction has no partner FeatInteract row, so only a
+            # candidate with no other participant is a true duplicate.
+            with_partner = (
+                self.db.query(FeatInteract.interaction_no)
+                .filter(
+                    FeatInteract.interaction_no.in_(cand_nos),
+                    FeatInteract.feature_no != bait_no,
+                )
+                .all()
+            )
+            self_only = cand_nos - {w[0] for w in with_partner}
+            return next(iter(self_only)) if self_only else None
         hit_match = (
             self.db.query(FeatInteract.interaction_no)
             .filter(
