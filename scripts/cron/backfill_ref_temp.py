@@ -29,7 +29,7 @@ import argparse
 import logging
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -91,8 +91,21 @@ def fetch_summaries(pmids: list[int]) -> dict[int, dict]:
     return out
 
 
-def search_window(query: str, mindate: str, maxdate: str) -> list[int]:
-    """Paginated esearch over an explicit edat date range."""
+# NCBI ESearch can only page through the first 9,999 hits of a query; a
+# multi-year window on a broad term (bare "Candida") exceeds that, so a
+# too-large slice is bisected by date until every piece fits under the cap.
+ESEARCH_CAP = 9999
+
+
+def _count(query: str, mindate: str, maxdate: str) -> int:
+    handle = Entrez.esearch(db="pubmed", term=query, datetype="edat",
+                            mindate=mindate, maxdate=maxdate, retmax=0)
+    record = Entrez.read(handle)
+    handle.close()
+    return int(record.get("Count", 0))
+
+
+def _paginate(query: str, mindate: str, maxdate: str) -> list[int]:
     pmids: list[int] = []
     retstart = 0
     while True:
@@ -110,6 +123,20 @@ def search_window(query: str, mindate: str, maxdate: str) -> list[int]:
         if retstart >= total or not batch:
             return pmids
         time.sleep(0.4)
+
+
+def search_window(query: str, mindate: str, maxdate: str) -> list[int]:
+    """esearch over an edat range, bisecting the range if it exceeds the cap."""
+    lo = datetime.strptime(mindate, "%Y/%m/%d").date()
+    hi = datetime.strptime(maxdate, "%Y/%m/%d").date()
+    time.sleep(0.34)
+    if _count(query, mindate, maxdate) <= ESEARCH_CAP or lo >= hi:
+        return _paginate(query, mindate, maxdate)
+    mid = lo + (hi - lo) // 2
+    left = search_window(query, mindate, mid.strftime("%Y/%m/%d"))
+    right = search_window(query, (mid + timedelta(days=1)).strftime("%Y/%m/%d"),
+                          maxdate)
+    return list(dict.fromkeys(left + right))
 
 
 def known_pmids(session, pmids: list[int]) -> set[int]:
