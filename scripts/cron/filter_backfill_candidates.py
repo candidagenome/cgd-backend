@@ -14,6 +14,7 @@ Rules (a paper is dropped for the first that fires):
   nano            "nano" appears in the journal name
   food            food-science journal (Foods, food/wine/dairy/nutr titles)
   worthless_gene  the ONLY gene tokens are ITS1/ITS2/THP1/HSF (uninformative)
+  krusei/kudriavzevii  C. krusei / P. kudriavzevii is not a CGD species yet
   no_genus+species  no CGD-lineage genus paired with a CGD target species
                     (the major split: needs BOTH, e.g. "Candida albicans",
                     not bare "Candida" nor a non-CGD species)
@@ -33,7 +34,11 @@ import time
 from Bio import Entrez, Medline
 
 TARGET_SPECIES = ["albicans", "glabrata", "glabratus", "auris", "dubliniensis",
-                  "parapsilosis", "tropicalis", "krusei", "kudriavzevii"]
+                  "parapsilosis", "tropicalis"]
+# C. krusei / Pichia kudriavzevii is not currently a CGD species; per
+# curator (2026-09) these should not sit in the queue ahead of the species
+# being added — drop with a clear reason, not a vague "no genus+species"
+EXCLUDED_SPECIES = ["krusei", "kudriavzevii"]
 GENERA = ["candida", "candidozyma", "nakaseomyces", "torulopsis", "pichia"]
 PREPRINT_JOURNALS = {"biorxiv", "medrxiv", "arxiv", "research square",
                      "preprints", "ssrn", "chemrxiv"}
@@ -47,6 +52,9 @@ NANO_RE = re.compile(r"nano", re.I)
 GENUS_SPECIES_RE = re.compile(
     r"\b(?:candida|candidozyma|nakaseomyces|torulopsis|pichia|[CNTP])\.?\s+"
     r"(?:" + "|".join(TARGET_SPECIES) + r")\b", re.I)
+EXCLUDED_GENUS_SPECIES_RE = re.compile(
+    r"\b(?:candida|pichia|[CP])\.?\s+"
+    r"(?:" + "|".join(EXCLUDED_SPECIES) + r")\b", re.I)
 
 
 def classify(row: dict, rec: dict) -> tuple[str, str]:
@@ -68,6 +76,10 @@ def classify(row: dict, rec: dict) -> tuple[str, str]:
         return "N", "food (journal)"
     if genes and all(g in WORTHLESS_GENES for g in genes):
         return "N", "worthless_gene (ITS/THP1/HSF only)"
+
+    if (EXCLUDED_GENUS_SPECIES_RE.search(text)
+            and not GENUS_SPECIES_RE.search(text)):
+        return "N", "krusei/kudriavzevii (species not in CGD)"
 
     # major split: a CGD-lineage genus (or genus-initial) immediately
     # followed by a CGD target species — bare genus, a non-CGD species, or
