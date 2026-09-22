@@ -80,7 +80,8 @@ echo "Loading ref_temp entries..."
 echo "----------------------------------------"
 
 # Load ref_temp for species and synonyms
-REF_TEMP_QUERIES=("albicans" "glabrata" "dubliniensis" "parapsilosis" "auris" "tropicalis" "Torulopsis" "Candida" "Nakaseomyces AND glabratus" "Nakaseomyces AND glabrata" "Candidozyma AND auris" "Candida AND krusei" "Pichia AND kudriavzevii")
+# C. krusei / Pichia kudriavzevii dropped 2026-09 — not a CGD species yet
+REF_TEMP_QUERIES=("albicans" "glabrata" "dubliniensis" "parapsilosis" "auris" "tropicalis" "Torulopsis" "Candida" "Nakaseomyces AND glabratus" "Nakaseomyces AND glabrata" "Candidozyma AND auris")
 REF_TEMP_SUCCESS=0
 REF_TEMP_TOTAL=${#REF_TEMP_QUERIES[@]}
 
@@ -96,8 +97,6 @@ python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida" --exclude "Folsomia" &&
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabratus" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Nakaseomyces AND glabrata" && ((REF_TEMP_SUCCESS++)) || true
 python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candidozyma AND auris" && ((REF_TEMP_SUCCESS++)) || true
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Candida AND krusei" && ((REF_TEMP_SUCCESS++)) || true
-python3 "$SCRIPT_DIR/load_ref_temp.py" --query "Pichia AND kudriavzevii" && ((REF_TEMP_SUCCESS++)) || true
 
 echo ""
 echo "Updating full text URLs..."
