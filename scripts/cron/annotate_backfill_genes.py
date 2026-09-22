@@ -4,12 +4,13 @@ Annotate a backfill review TSV with the CGD genes each paper mentions.
 
 Companion to backfill_ref_temp.py: given its --review-tsv output, fetch each
 candidate's Medline record and match the title+abstract text against all CGD
-gene names and systematic names (case variants: NAME, Name, and the Namep /
-NAMEp protein forms common in Candida literature). Adds n_genes and
-genes_mentioned columns so curators can separate gene-bearing papers from
-the clinical/epidemiology residue.
+gene names and systematic names — case variants (NAME, Name), the Namep /
+NAMEp protein forms, and the species-prefixed forms common in Candida
+literature (CaCdr1, CgPdr1p; curator-approved recipe: prefixes yes, MeSH
+terms no). Adds n_genes and genes_mentioned columns so curators can separate
+gene-bearing papers from the clinical/epidemiology residue.
 
-2026-09 backfill result for context: only 112 of 5,326 candidates mentioned
+2026-09 backfill result for context: only 115 of 5,326 candidates mentioned
 any CGD gene — expected, because the windowless per-gene reference search
 never had the pdat-window bug, so gene-naming papers were being caught all
 along; the species-sweep backlog is by construction mostly gene-free.
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.\-]{2,}")
 MAX_SHOWN = 25
+# Species-prefixed gene forms used in Candida papers (CaCdr1, CgPdr1p, ...)
+PREFIXES = ["Ca", "Cg", "Cd", "Cp", "Ct"]
 
 
 def build_variant_map(session) -> dict[str, str]:
@@ -54,7 +57,10 @@ def build_variant_map(session) -> dict[str, str]:
         if not name or len(name) < 3:
             return
         cap = name.capitalize()
-        for v in (name, cap, cap + "p", name + "p"):
+        forms = [name, cap, cap + "p", name + "p"]
+        for pre in PREFIXES:
+            forms += [pre + cap, pre + name, pre + cap + "p"]
+        for v in forms:
             variants.setdefault(v, name)
 
     for gene_name, feature_name in rows:
