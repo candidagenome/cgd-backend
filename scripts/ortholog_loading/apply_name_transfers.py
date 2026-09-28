@@ -20,6 +20,13 @@ C. albicans conventions (verified against the DB, 2026-09-14):
     loader propagates the new name to an unnamed A21 primary twin and logs
     it; a differently-named twin is a warning, never overwritten.
 
+Every name the loader sets is backed by a REF_LINK (FEATURE / GENE_NAME) row
+citing the CGD name-transfer methods reference (see
+create_name_transfer_reference.py — run it once per database before applying).
+Already-applied rows get the ref_link too if it is missing, so reruns heal
+older loads. Names the loader did NOT set (a differently-named target or an
+A21 twin that already carried a name) are never linked.
+
 Updates run through the normal FEATURE triggers, so update_log carries the
 full audit trail. Dry-run by default.
 
@@ -44,8 +51,13 @@ load_dotenv(PROJECT_ROOT / ".env")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal  # noqa: E402
+from scripts.ortholog_loading.create_name_transfer_reference import (  # noqa: E402
+    REF_TITLE,
+    ensure_seq_ahead,
+)
 
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
+ADMIN_USER = os.getenv("ADMIN_USER", "cgdadmin").upper()
 BATCH = 500
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -76,10 +88,40 @@ def main() -> None:
     rows = read_manifest(args.manifest)
     logger.info("manifest: %d transfers%s", len(rows), " [DRY-RUN]" if dry else "")
 
-    applied = already = skipped = a21_named = 0
+    applied = already = skipped = a21_named = linked = 0
     with SessionLocal() as session:
         def q(sql, **kw):
             return session.execute(text(sql), kw).fetchall()
+
+        ref_no = session.execute(text(
+            f"SELECT reference_no FROM {DB_SCHEMA}.reference WHERE title = :t"),
+            {"t": REF_TITLE}).scalar()
+        if not ref_no:
+            msg = ("name-transfer reference not found — run "
+                   "create_name_transfer_reference.py --apply first")
+            if dry:
+                logger.warning("%s (dry-run continues without ref_links)", msg)
+            else:
+                sys.exit(msg)
+        if not dry and ref_no:
+            ensure_seq_ahead(session, "REF_LINK_SEQ", "ref_link", "ref_link_no")
+
+        def ensure_ref_link(feature_no: int) -> None:
+            """Cite the name-transfer reference for a name this loader set."""
+            nonlocal linked
+            if dry or not ref_no:
+                return
+            exists = q(f"""SELECT 1 FROM {DB_SCHEMA}.ref_link
+                       WHERE tab_name = 'FEATURE' AND col_name = 'GENE_NAME'
+                         AND primary_key = :f AND reference_no = :r""",
+                       f=feature_no, r=ref_no)
+            if not exists:
+                session.execute(text(
+                    f"""INSERT INTO {DB_SCHEMA}.ref_link
+                        (reference_no, tab_name, primary_key, col_name, created_by)
+                    VALUES (:r, 'FEATURE', :f, 'GENE_NAME', :u)"""),
+                    {"r": ref_no, "f": feature_no, "u": ADMIN_USER})
+                linked += 1
 
         for i, (fname, name) in enumerate(rows, 1):
             feats = q(f"SELECT feature_no, gene_name, feature_type, organism_no"
@@ -91,6 +133,7 @@ def main() -> None:
             fno, current, ftype, org_no = feats[0]
             if current:
                 if current.upper() == name.upper():
+                    ensure_ref_link(fno)
                     already += 1
                 else:
                     logger.warning("SKIP %s: already named %s (manifest says %s)",
@@ -106,6 +149,7 @@ def main() -> None:
                 session.execute(text(
                     f"UPDATE {DB_SCHEMA}.feature SET gene_name=:g"
                     f" WHERE feature_no=:f"), {"g": name, "f": fno})
+                ensure_ref_link(fno)
             applied += 1
 
             # Propagate to an unnamed Assembly 21 primary twin (albicans A22)
@@ -122,6 +166,7 @@ def main() -> None:
                         session.execute(text(
                             f"UPDATE {DB_SCHEMA}.feature SET gene_name=:g"
                             f" WHERE feature_no=:f"), {"g": name, "f": tno})
+                        ensure_ref_link(tno)
                     a21_named += 1
                 elif tgene.upper() != name.upper():
                     logger.warning("A21 twin %s of %s already named %s (not touched)",
@@ -135,8 +180,8 @@ def main() -> None:
             session.commit()
 
     logger.info("done: %d applied, %d A21 twins named, %d already applied, "
-                "%d skipped%s", applied, a21_named, already, skipped,
-                " [DRY-RUN — no changes]" if dry else "")
+                "%d skipped, %d ref_links added%s", applied, a21_named, already,
+                skipped, linked, " [DRY-RUN — no changes]" if dry else "")
     if skipped:
         sys.exit(1)
 
