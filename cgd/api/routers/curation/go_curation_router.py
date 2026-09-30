@@ -33,6 +33,7 @@ class EvidenceSupportOut(BaseModel):
 
     support_type: str  # "With" or "From"
     source: str  # e.g., "SGD", "CGD", "GO Consortium"
+    organism: Optional[str] = None  # Source species for CGD-internal genes, e.g. "C. auris"
     dbxref_type: str  # e.g., "GOID", "ORF"
     dbxref_id: str  # The actual ID
     description: Optional[str] = None  # Gene name for CGD/SGD entries
