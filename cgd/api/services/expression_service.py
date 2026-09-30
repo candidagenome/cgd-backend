@@ -805,6 +805,34 @@ EXPRESSION_STUDIES = {
                 "SRR28791438": {"label": "AR0387 aggregative, in vivo catheter (rep 4)", "bucket": "basic_biology", "group": "In vivo catheter"},
             },
         },
+        "Kovacs_2026": {
+            # Antifungal synergy: caspofungin (1.0 mg/l) and posaconazole
+            # (0.25 mg/l), alone and combined, on NCPF 8971 biofilms vs
+            # untreated control. Single strain -- study-level control.
+            "category": "Antifungal Response",
+            "pmid": "41817193",  # GSE302377 / PRJNA1290291 (Kovacs et al.)
+            "ncbi_id": "PRJNA1290291",
+            "path_style": "direct",
+            "control": "SRR34495245",
+            "conditions": {
+                # Untreated control
+                "SRR34495245": {"label": "Kovacs et al untreated control (Rep 1)", "bucket": "control"},
+                "SRR34495244": {"label": "Kovacs et al untreated control (Rep 2)", "bucket": "control"},
+                "SRR34495243": {"label": "Kovacs et al untreated control (Rep 3)", "bucket": "control"},
+                # Caspofungin alone (1.0 mg/l)
+                "SRR34495242": {"label": "Kovacs et al caspofungin alone (Rep 1)", "bucket": "kill_candida"},
+                "SRR34495241": {"label": "Kovacs et al caspofungin alone (Rep 2)", "bucket": "kill_candida"},
+                "SRR34495240": {"label": "Kovacs et al caspofungin alone (Rep 3)", "bucket": "kill_candida"},
+                # Posaconazole alone (0.25 mg/l)
+                "SRR34495239": {"label": "Kovacs et al posaconazole alone (Rep 1)", "bucket": "kill_candida"},
+                "SRR34495238": {"label": "Kovacs et al posaconazole alone (Rep 2)", "bucket": "kill_candida"},
+                "SRR34495237": {"label": "Kovacs et al posaconazole alone (Rep 3)", "bucket": "kill_candida"},
+                # Caspofungin + posaconazole combination
+                "SRR34495236": {"label": "Kovacs et al caspofungin plus posaconazole (Rep 1)", "bucket": "kill_candida"},
+                "SRR34495235": {"label": "Kovacs et al caspofungin plus posaconazole (Rep 2)", "bucket": "kill_candida"},
+                "SRR34495234": {"label": "Kovacs et al caspofungin plus posaconazole (Rep 3)", "bucket": "kill_candida"},
+            },
+        },
     },
     "C_glabrata_CBS138": {
         "Linde_2015": {
