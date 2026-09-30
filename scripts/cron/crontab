@@ -44,5 +44,9 @@
 # MONTHLY (1st): regenerate External_id_mappings download files (gp2protein, CGDID_2_GeneID/RefSeqID)
 0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
 
+# QUARTERLY (1st of Jan/Apr/Jul/Oct at 03:00 UTC): transfer experimental SGD GO annotations to CGD orthologs as IEA
+# (runs BEFORE transfer_go_from_orthologs so Sc-sourced terms claim the unique key first)
+0 3 1 1,4,7,10 * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh /opt/cgd_api/.venv/bin/python /opt/cgd_api/scripts/cron/transfer_go_from_sgd.py
+
 # QUARTERLY (1st of Jan/Apr/Jul/Oct at 05:00 UTC): transfer manual GO annotations to CGD orthologs as IEA
 0 5 1 1,4,7,10 * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh /opt/cgd_api/.venv/bin/python /opt/cgd_api/scripts/cron/transfer_go_from_orthologs.py
