@@ -16,6 +16,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from cgd.api.services.locus_service import abbreviate_species_name
 from cgd.models.models import (
     Dbxref,
     Feature,
@@ -357,17 +358,26 @@ class GoCurationService:
                     if dbxref:
                         # Get gene name: use description if available, or look up CGD features
                         gene_name = dbxref.description
-                        if not gene_name and dbxref.source == "CGD":
-                            # For CGD entries, look up gene name from Feature table
+                        organism = None
+                        if dbxref.source == "CGD":
+                            # For CGD entries, look up the feature to get the gene
+                            # name and the species the annotation was derived from
+                            # (a CGD "with" gene can belong to any CGD organism)
                             feature = self.db.query(Feature).filter(
                                 Feature.dbxref_id == dbxref.dbxref_id
                             ).first()
                             if feature:
-                                gene_name = feature.gene_name or feature.feature_name
+                                if not gene_name:
+                                    gene_name = feature.gene_name or feature.feature_name
+                                if feature.organism is not None:
+                                    organism = abbreviate_species_name(
+                                        feature.organism.organism_name
+                                    )
 
                         evidence_support.append({
                             "support_type": gd.support_type,  # "With" or "From"
                             "source": dbxref.source,
+                            "organism": organism,  # e.g. "C. auris" for CGD-internal genes
                             "dbxref_type": dbxref.dbxref_type,
                             "dbxref_id": dbxref.dbxref_id,
                             "description": gene_name,  # Gene name from description or Feature lookup

@@ -835,6 +835,17 @@ def _get_organism_info(f) -> tuple[str, int]:
     return organism_name, taxon_id
 
 
+def abbreviate_species_name(organism_name: str) -> str:
+    """Abbreviate a full organism name to genus-initial form.
+
+    "Candida auris B8441" -> "C. auris" (strain suffix dropped).
+    """
+    parts = organism_name.split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {parts[1]}"
+    return organism_name
+
+
 # Default sequence sources per organism (matching Perl config)
 DEFAULT_SEQ_SOURCES = {
     "Candida albicans SC5314": "C. albicans SC5314 Assembly 22",
@@ -1819,12 +1830,13 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
     # Filter to one feature per organism (like Perl check_multi_feature_list)
     features = _filter_features_by_preference(db, features)
 
-    # Source to species mapping for "with" display
+    # Source to species mapping for "with" display. CGD is intentionally
+    # absent: a CGD "with" gene can belong to any CGD organism, so its
+    # species is resolved from the feature's own organism below.
     source_to_species = {
         'SGD': 'S. cerevisiae',
         'POMBASE': 'S. pombe',
         'AspGD': 'A. nidulans',
-        'CGD': 'C. albicans',
         'BROAD_NEUROSPORA': 'N. crassa',
     }
 
@@ -1897,19 +1909,25 @@ def get_locus_go_details(db: Session, name: str) -> GODetailsResponse:
                         if dbx:
                             source = dbx.source
                             display_name = dbx.description or dbx.dbxref_id
+                            species = source_to_species.get(source, source)
 
                             # For CGD internal references, look up the feature to
-                            # get gene_name/feature_name instead of dbxref_id
+                            # get gene_name/feature_name instead of dbxref_id and
+                            # the actual species the annotation came from
                             if source == 'CGD' and dbx.dbxref_id:
                                 feat = (
                                     db.query(Feature)
+                                    .options(joinedload(Feature.organism))
                                     .filter(Feature.dbxref_id == dbx.dbxref_id)
                                     .first()
                                 )
                                 if feat:
                                     display_name = feat.gene_name or feat.feature_name
+                                    if feat.organism is not None:
+                                        species = abbreviate_species_name(
+                                            feat.organism.organism_name
+                                        )
 
-                            species = source_to_species.get(source, source)
                             with_from_parts.append(f"{species}: {display_name}")
 
             # Build with_from string
