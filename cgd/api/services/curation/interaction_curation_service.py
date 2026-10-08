@@ -25,6 +25,7 @@ from cgd.models.models import (
     Feature, Interaction, FeatInteract, RefLink, Reference, RefUrl,
 )
 from cgd.api.services.curation.phenotype_curation_service import (
+    PhenotypeCurationError,
     PhenotypeCurationService,
 )
 
@@ -91,6 +92,13 @@ class InteractionCurationService:
     # ------------------------------------------------------------------
     # Vocabulary
     # ------------------------------------------------------------------
+    def _get_feature(self, name: str, organism_abbrev: Optional[str]):
+        """Resolve a gene name, surfacing ambiguity as a curation (400) error."""
+        try:
+            return self._helper.get_feature_by_name(name, organism_abbrev)
+        except PhenotypeCurationError as e:
+            raise InteractionCurationError(str(e)) from e
+
     def classify(self, experiment_type: Optional[str]) -> str:
         """Return 'genetic' or 'physical' for an experiment type."""
         return "genetic" if (experiment_type or "").lower() in _GENETIC_SET else "physical"
@@ -120,7 +128,7 @@ class InteractionCurationService:
     # ------------------------------------------------------------------
     def get_interactions(self, feature_name: str, organism_abbrev: Optional[str] = None) -> dict:
         """Return a gene's interactions split into physical / genetic lists."""
-        feature = self._helper.get_feature_by_name(feature_name, organism_abbrev)
+        feature = self._get_feature(feature_name, organism_abbrev)
         if not feature:
             raise InteractionCurationError(
                 f"Gene '{feature_name}' not found"
@@ -236,17 +244,21 @@ class InteractionCurationService:
             )
         canonical = cv_map.get(key, canonical)
 
-        bait = self._helper.get_feature_by_name(feature_name, organism_abbrev)
+        bait = self._get_feature(feature_name, organism_abbrev)
         if not bait:
             raise InteractionCurationError(
                 f"Gene '{feature_name}' not found"
                 + (f" in {organism_abbrev}" if organism_abbrev else "")
             )
-        hit = self._helper.get_feature_by_name(partner_name, organism_abbrev)
+        # Cross-species interactions are not curated: resolve the partner in
+        # the bait's organism, so names shared across species (e.g. PGA7 in
+        # albicans, auris, dubliniensis, ...) are not ambiguous.
+        bait_organism = bait.organism.organism_abbrev if bait.organism else organism_abbrev
+        hit = self._get_feature(partner_name, bait_organism)
         if not hit:
             raise InteractionCurationError(
                 f"Interacting gene '{partner_name}' not found"
-                + (f" in {organism_abbrev}" if organism_abbrev else "")
+                + (f" in {bait_organism}" if bait_organism else "")
             )
 
         if pubmed is None:
