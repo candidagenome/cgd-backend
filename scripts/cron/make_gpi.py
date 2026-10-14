@@ -14,8 +14,8 @@ The column conventions mirror SGD's dump_gpi.py so both MODs submit comparable
 files: protein-coding features use the DB_Object_Type PR:000000001, the standard
 gene name is the symbol (systematic name and aliases become synonyms), DB_Xrefs
 carry UniProtKB and RefSeq protein accessions, and Gene_Product_Properties
-records db_subset, go_annotation_complete (latest manual review date), and
-uniprot_proteome. Two columns are intentionally left empty: Encoded_by, and
+records db-subset, go-annotation-complete (latest manual review date), and
+uniprot-proteome. Two columns are intentionally left empty: Encoded_by, and
 Protein_Containing_Complex_Members (CGD does not curate protein complexes).
 
 Output files are gzipped (.gpi.gz), the format GO Central requires for ingest.
@@ -109,14 +109,14 @@ TYPE_TO_OBJECT_TYPE = {
 }
 
 # Feature types that are protein-coding (get UniProt/RefSeq xrefs and the
-# Swiss-Prot db_subset property).
+# Swiss-Prot db-subset property).
 PROTEIN_FEATURE_TYPES = ("ORF", "allele")
 
 # UniProt dbxref selection. CGD stores EBI-loaded accessions under three
 # dbxref_type values: reviewed 'SwissProt', unreviewed 'TrEMBL', and a generic
 # 'UniProtKB'. All three are accepted (matching the accessions the original
 # script emitted); only 'SwissProt' counts as reviewed for the Swiss-Prot
-# db_subset property.
+# db-subset property.
 UNIPROT_SOURCE = "EBI"
 SWISSPROT_TYPE = "SwissProt"
 UNIPROT_TYPES = ("SwissProt", "TrEMBL", "UniProtKB")
@@ -376,7 +376,7 @@ def get_refseq_protein_ids(session, feature_no: int) -> list[str]:
 def get_go_annotation_complete_date(session, feature_no: int) -> str:
     """Return the most recent manual GO annotation review date (YYYYMMDD).
 
-    Mirrors SGD's go_annotation_complete: the date of the latest manually
+    Mirrors SGD's go-annotation-complete: the date of the latest manually
     curated (non-computational) GO annotation for the feature. Returns an empty
     string when the feature has no manual GO annotations.
     """
@@ -536,12 +536,12 @@ def generate_gpi(
                     # col11: Gene_Product_Properties
                     props = []
                     if is_swissprot:
-                        props.append("db_subset=Swiss-Prot")
+                        props.append("db-subset=Swiss-Prot")
                     props.append(
-                        f"go_annotation_complete={get_go_annotation_complete_date(session, feature_no)}"
+                        f"go-annotation-complete={get_go_annotation_complete_date(session, feature_no)}"
                     )
                     if uniprot_acc:
-                        props.append(f"uniprot_proteome=UniProtKB:{uniprot_acc}")
+                        props.append(f"uniprot-proteome=UniProtKB:{uniprot_acc}")
                     property_list = "|".join(props)
 
                     # Write GPI 2.0 line (tab-separated, 11 columns):

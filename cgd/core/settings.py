@@ -50,6 +50,13 @@ class Settings(BaseSettings):
         validation_alias="CGD_DATA_DIR"
     )
 
+    # PathoYeastract regulation JSON for the locus Regulation tab
+    # (defaults to <cgd_data_dir>/regulation/pathoyeastract)
+    regulation_data_dir: str = Field(
+        default="",
+        validation_alias="REGULATION_DATA_DIR"
+    )
+
     # Back-compat toggle for CGI-style dispatch endpoint
     allow_search_dispatch: bool = True
 
