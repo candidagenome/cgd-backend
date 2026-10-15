@@ -9,6 +9,12 @@ aspect and assigns the root term with 'ND' evidence code. This signifies that
 a curator has examined the literature and that as of the date of the annotation,
 there was no information available for that aspect.
 
+RETIRED (2026-10): curators decided to drop ND placeholders altogether -- the
+last run (2026-04-04) only covered C. albicans, C. glabrata and C. parapsilosis,
+and the placeholders went stale as ortholog IEA transfers landed. They were
+removed with remove_superseded_nd_go.py --all, and this script now refuses to
+run without --force so they are not re-created by accident.
+
 Safety checks before modifying database:
 ---------------------------------------------------------------------------
 - Validates that deletion count is within expected range
@@ -20,8 +26,8 @@ Safety checks before modifying database:
 Based on make_GO_complete.pl by Prachi Shah (March 2010)
 
 Usage:
-    python make_go_complete.py C_albicans_SC5314
-    python make_go_complete.py --all
+    python make_go_complete.py --force C_albicans_SC5314
+    python make_go_complete.py --force --all
     python make_go_complete.py --dry-run C_albicans_SC5314
 
 Environment Variables:
@@ -509,8 +515,18 @@ def main() -> int:
         action="store_true",
         help="Don't actually modify database, just show what would be done",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even though ND placeholders are retired (see module docstring)",
+    )
 
     args = parser.parse_args()
+
+    if not args.force and not args.dry_run:
+        print("ND placeholders are retired (2026-10); pass --force to re-create them.",
+              file=sys.stderr)
+        return 1
 
     if args.all:
         strains = STRAIN_ABBREVS

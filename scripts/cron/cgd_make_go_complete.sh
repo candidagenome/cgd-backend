@@ -5,6 +5,9 @@
 # This script finds features that do not have any GO annotations for a particular
 # aspect (P, F, C) and assigns the root term with 'ND' evidence code.
 #
+# RETIRED (2026-10): ND placeholders were dropped by curator decision;
+# make_go_complete.py now exits unless run with --force. Not in the crontab.
+#
 # Usage:
 #   ./slack-cron.sh ./cgd_make_go_complete.sh
 #
