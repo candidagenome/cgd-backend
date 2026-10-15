@@ -18,10 +18,16 @@ go_ref / go_qualifier child rows go with it via ON DELETE CASCADE.
 Both transfer scripts call remove_superseded_nd() in their own transaction
 after inserting; run this script directly for a one-off cleanup.
 
+--all removes every ND placeholder, superseded or not. Curators decided
+(2026-10) to drop the NDs entirely: the 2026-04-04 make_go_complete batch had
+only covered C. albicans, C. glabrata and C. parapsilosis, so the placeholders
+were inconsistent across species.
+
 Usage:
     python remove_superseded_nd_go.py --dry-run
     python remove_superseded_nd_go.py --organisms C_glabrata_CBS138
     python remove_superseded_nd_go.py
+    python remove_superseded_nd_go.py --all --dry-run
 
 Environment Variables:
     DATABASE_URL, DB_SCHEMA
@@ -48,9 +54,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def _superseded_nd_where(organisms: list[str] | None) -> tuple[str, dict]:
-    """FROM/WHERE clause (alias nd, go gn, feature f, organism o) selecting
-    superseded ND annotations, optionally limited to the given organisms."""
+def _nd_where(organisms: list[str] | None, superseded_only: bool = True) -> tuple[str, dict]:
+    """FROM/WHERE clause (alias nd, go gn, feature f, organism o) selecting ND
+    annotations -- only superseded ones unless superseded_only is False --
+    optionally limited to the given organisms."""
     binds: dict = {}
     org_sql = ""
     if organisms:
@@ -61,7 +68,9 @@ def _superseded_nd_where(organisms: list[str] | None) -> tuple[str, dict]:
         JOIN {DB_SCHEMA}.go gn ON gn.go_no = nd.go_no
         JOIN {DB_SCHEMA}.feature f ON f.feature_no = nd.feature_no
         JOIN {DB_SCHEMA}.organism o ON o.organism_no = f.organism_no
-        WHERE nd.go_evidence = 'ND' {org_sql}
+        WHERE nd.go_evidence = 'ND' {org_sql}"""
+    if superseded_only:
+        sql += f"""
           AND EXISTS (
               SELECT 1
               FROM {DB_SCHEMA}.go_annotation ga
@@ -72,17 +81,20 @@ def _superseded_nd_where(organisms: list[str] | None) -> tuple[str, dict]:
     return sql, binds
 
 
-def remove_superseded_nd(session, organisms: list[str] | None = None) -> int:
+def remove_superseded_nd(session, organisms: list[str] | None = None,
+                         superseded_only: bool = True) -> int:
     """Delete ND annotations whose aspect now has a real annotation on the same
-    feature. Does not commit. Returns the number of ND annotations deleted."""
-    where_sql, binds = _superseded_nd_where(organisms)
+    feature (or every ND annotation when superseded_only is False). Does not
+    commit. Returns the number of ND annotations deleted."""
+    where_sql, binds = _nd_where(organisms, superseded_only)
+    label = "superseded ND" if superseded_only else "ND"
     rows = session.execute(text(f"""
         SELECT o.organism_abbrev, gn.go_aspect, COUNT(*) {where_sql}
         GROUP BY o.organism_abbrev, gn.go_aspect
         ORDER BY o.organism_abbrev, gn.go_aspect
     """), binds).fetchall()
     for org, aspect, n in rows:
-        logger.info("  superseded ND: %-24s %s %6d", org, aspect, n)
+        logger.info("  %s: %-24s %s %6d", label, org, aspect, n)
     total = sum(r[2] for r in rows)
     if total:
         session.execute(text(f"""
@@ -96,6 +108,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Remove ND GO placeholders superseded by real annotations")
     parser.add_argument("--dry-run", action="store_true", help="Count only; no DB changes")
+    parser.add_argument("--all", action="store_true",
+                        help="Remove every ND annotation, not just superseded ones")
     parser.add_argument("--organisms",
                         help="Comma-separated organism_abbrev list; default: all species")
     args = parser.parse_args()
@@ -103,13 +117,14 @@ def main() -> int:
 
     try:
         with SessionLocal() as session:
-            n = remove_superseded_nd(session, organisms)
+            n = remove_superseded_nd(session, organisms, superseded_only=not args.all)
+            what = "ND" if args.all else "superseded ND"
             if args.dry_run:
                 session.rollback()
-                logger.info("[DRY RUN] Would delete %d superseded ND annotations", n)
+                logger.info("[DRY RUN] Would delete %d %s annotations", n, what)
             else:
                 session.commit()
-                logger.info("Deleted %d superseded ND annotations", n)
+                logger.info("Deleted %d %s annotations", n, what)
     except Exception as e:  # noqa: BLE001
         logger.exception("Failed: %s", e)
         return 1
