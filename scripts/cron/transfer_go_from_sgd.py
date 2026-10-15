@@ -51,6 +51,8 @@ Redundancy (skip a candidate target term when):
 
 Refresh model:  each run deletes the script-owned SGD transfers (IEAs on
 CAL0121033 whose with/from are all SGD dbxrefs) and recomputes them.
+ND placeholders (make_go_complete.py) in an aspect that now has an
+annotation are removed in the same transaction (remove_superseded_nd_go.py).
 
 Usage:
     python transfer_go_from_sgd.py --dry-run --report /tmp/sgd_transfer.tsv
@@ -80,6 +82,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
+from remove_superseded_nd_go import remove_superseded_nd
 
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 
@@ -677,8 +680,12 @@ def main() -> int:
             else:
                 ins = insert_transfers(session, transfers, transfer_quals, dbxref_map,
                                        ref_no, args.created_by)
+                # The new IEAs supersede any make_go_complete ND placeholder
+                # in the same aspect; drop those in the same transaction.
+                nd = remove_superseded_nd(session, organisms)
                 session.commit()
                 logger.info("Inserted: %s", ins)
+                logger.info("Removed %d superseded ND annotations", nd)
     except Exception as e:  # noqa: BLE001
         logger.exception("Failed: %s", e)
         return 1
