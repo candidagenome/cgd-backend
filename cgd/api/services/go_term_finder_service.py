@@ -136,6 +136,35 @@ def get_go_term_finder_config(db: Session) -> GoTermFinderConfigResponse:
     )
 
 
+def resolve_to_a22_features(
+    db: Session,
+    found_map: dict[str, Feature],
+) -> dict[str, Feature]:
+    """
+    Replace Assembly 21 features (and alleles of them) in found_map with their
+    Assembly 22 equivalents.
+
+    A gene name such as ACT1 matches the Assembly 22 gene, its Assembly 21
+    orf19 feature and allele features; which one wins the name match depends
+    on row order. Resolving all of them to the Assembly 22 gene makes the
+    result deterministic and matches the features the analysis uses.
+    """
+    a21_to_a22 = get_a21_to_a22_map(
+        db, list({f.feature_no for f in found_map.values()}))
+    if not a21_to_a22:
+        return found_map
+
+    a22_features: dict[int, Feature] = {}
+    for chunk in _chunk_list(list(set(a21_to_a22.values()))):
+        for feature in db.query(Feature).filter(Feature.feature_no.in_(chunk)).all():
+            a22_features[feature.feature_no] = feature
+
+    return {
+        name: a22_features.get(a21_to_a22.get(feature.feature_no), feature)
+        for name, feature in found_map.items()
+    }
+
+
 def validate_genes(
     db: Session,
     request: ValidateGenesRequest,
@@ -205,6 +234,8 @@ def validate_genes(
             alias_upper = alias.alias_name.upper() if alias.alias_name else None
             if alias_upper and alias_upper in remaining_genes:
                 found_map[alias_upper] = feature
+
+    found_map = resolve_to_a22_features(db, found_map)
 
     # Get GO annotation status for found features (chunked to avoid Oracle 1000 limit)
     feature_nos = list(set(f.feature_no for f in found_map.values()))
@@ -308,12 +339,12 @@ def _chunk_list(lst: list, chunk_size: int = 900) -> list[list]:
     return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
-def _translate_a21_to_a22_feature_nos(
+def get_a21_to_a22_map(
     db: Session,
     feature_nos: list[int],
-) -> list[int]:
+) -> dict[int, int]:
     """
-    Translate Assembly 21 feature_nos to their Assembly 22 equivalents.
+    Map Assembly 21 feature_nos (and alleles of them) to Assembly 22 feature_nos.
 
     In CGD, Assembly 21 features (orf19.XXXX) have a FeatRelationship with:
     - relationship_type = 'Assembly 21 Primary Allele'
@@ -324,11 +355,10 @@ def _translate_a21_to_a22_feature_nos(
     of orf19.922). These also need to be translated via their parent's A21
     relationship.
 
-    This function returns a list of feature_nos where any Assembly 21 features
-    have been replaced with their Assembly 22 equivalents.
+    Feature_nos with no Assembly 22 equivalent are not in the returned map.
     """
     if not feature_nos:
-        return []
+        return {}
 
     a21_to_a22_map: dict[int, int] = {}
 
@@ -394,6 +424,24 @@ def _translate_a21_to_a22_feature_nos(
         for allele_fno, parent_fno in allele_to_parent.items():
             if parent_fno in parent_to_a22:
                 a21_to_a22_map[allele_fno] = parent_to_a22[parent_fno]
+
+    return a21_to_a22_map
+
+
+def _translate_a21_to_a22_feature_nos(
+    db: Session,
+    feature_nos: list[int],
+) -> list[int]:
+    """
+    Translate Assembly 21 feature_nos to their Assembly 22 equivalents.
+
+    Returns a de-duplicated list of feature_nos where any Assembly 21 features
+    (or alleles of them) have been replaced with their Assembly 22 equivalents.
+    """
+    if not feature_nos:
+        return []
+
+    a21_to_a22_map = get_a21_to_a22_map(db, feature_nos)
 
     # Build result list, translating A21 to A22 where applicable
     seen = set()

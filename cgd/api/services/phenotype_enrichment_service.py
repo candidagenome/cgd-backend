@@ -31,6 +31,7 @@ from cgd.models.models import (
     Phenotype,
     Seq,
 )
+from cgd.api.services.go_term_finder_service import resolve_to_a22_features
 from cgd.schemas.phenotype_enrichment_schema import (
     EnrichedPhenotype,
     GeneHit,
@@ -150,6 +151,8 @@ def validate_genes(
             alias_upper = alias.alias_name.upper() if alias.alias_name else None
             if alias_upper and alias_upper in remaining_genes:
                 found_map[alias_upper] = feature
+
+    found_map = resolve_to_a22_features(db, found_map)
 
     # Get phenotype annotation status for found features (chunked to avoid Oracle 1000 limit)
     feature_nos = list(set(f.feature_no for f in found_map.values()))

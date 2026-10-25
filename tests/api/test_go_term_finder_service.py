@@ -12,6 +12,9 @@ Tests validate:
 Reference: https://github.com/gitpan/GO-TermFinder
 """
 import math
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 from scipy.stats import hypergeom
 
@@ -20,6 +23,7 @@ from cgd.api.services.go_term_finder_service import (
     _apply_multiple_testing_correction,
     _format_goid,
     _chunk_list,
+    resolve_to_a22_features,
 )
 from cgd.schemas.go_term_finder_schema import MultipleCorrectionMethod
 
@@ -679,3 +683,58 @@ class TestStatisticalValidation:
 
         assert abs(p_value - expected) < 1e-6, \
             f"Expected ~{expected}, got {p_value}"
+
+
+class TestResolveToA22Features:
+    """
+    Gene names shared by an Assembly 22 gene, its Assembly 21 orf19 feature
+    and allele features must all resolve to the Assembly 22 gene.
+    """
+
+    A22 = SimpleNamespace(feature_no=136819, feature_name='C1_13700W_A', gene_name='ACT1')
+    A21 = SimpleNamespace(feature_no=1571, feature_name='orf19.5007', gene_name='ACT1')
+    ALLELE = SimpleNamespace(feature_no=64759, feature_name='orf19.12474', gene_name='ACT1')
+    OTHER = SimpleNamespace(feature_no=906, feature_name='CR_07890W_A', gene_name='EFG1')
+
+    @staticmethod
+    def _db_returning(features):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = features
+        return db
+
+    def test_allele_and_a21_matches_resolve_to_a22(self):
+        """Whichever ACT1 feature won the name match, the result is the A22 gene."""
+        found_map = {'ACT1': self.ALLELE, 'ORF19.5007': self.A21, 'C1_13700W_A': self.A22}
+        db = self._db_returning([self.A22])
+        a21_map = {self.A21.feature_no: self.A22.feature_no, self.ALLELE.feature_no: self.A22.feature_no}
+
+        with patch('cgd.api.services.go_term_finder_service.get_a21_to_a22_map', return_value=a21_map):
+            resolved = resolve_to_a22_features(db, found_map)
+
+        assert {name: f.feature_no for name, f in resolved.items()} == {
+            'ACT1': self.A22.feature_no,
+            'ORF19.5007': self.A22.feature_no,
+            'C1_13700W_A': self.A22.feature_no,
+        }
+
+    def test_current_features_unchanged(self):
+        """Features with no Assembly 21 relationship are returned as-is."""
+        found_map = {'EFG1': self.OTHER}
+        db = MagicMock()
+
+        with patch('cgd.api.services.go_term_finder_service.get_a21_to_a22_map', return_value={}):
+            resolved = resolve_to_a22_features(db, found_map)
+
+        assert resolved == found_map
+        db.query.assert_not_called()
+
+    def test_missing_a22_feature_keeps_original(self):
+        """If the mapped A22 feature row is missing, keep the matched feature."""
+        found_map = {'ACT1': self.A21}
+        db = self._db_returning([])
+
+        with patch('cgd.api.services.go_term_finder_service.get_a21_to_a22_map',
+                   return_value={self.A21.feature_no: self.A22.feature_no}):
+            resolved = resolve_to_a22_features(db, found_map)
+
+        assert resolved['ACT1'] is self.A21
