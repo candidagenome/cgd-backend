@@ -657,7 +657,9 @@ def convert_orthologs_from_sgd(
             ortholog_gene_name=first_orth['gene_name'],
             ortholog_feature_name=first_orth['feature_name'],
             ortholog_description=first_orth['description'],
-            target_organism=first_orth['organism'],
+            # Label with the requested target, as no_ortholog rows are; the
+            # matched record's own name can differ (e.g. '... S288C')
+            target_organism=target_display_name,
             relationship=relationship,
             cluster_id=first_orth['cluster_id'],
             ortholog_url=first_orth['url'],
@@ -875,7 +877,9 @@ def convert_orthologs(
             ortholog_gene_name=first_orth['gene_name'],
             ortholog_feature_name=first_orth['feature_name'],
             ortholog_description=first_orth['description'],
-            target_organism=first_orth['organism'],
+            # Label with the requested target, as no_ortholog rows are; the
+            # matched record's own name can differ (e.g. '... S288C')
+            target_organism=target_display_name,
             relationship=relationship,
             cluster_id=first_orth['cluster_id'],
             ortholog_url=first_orth['url'],
