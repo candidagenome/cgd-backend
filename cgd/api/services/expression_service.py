@@ -3515,20 +3515,37 @@ def get_batch_expression_data(
     genes_found = 0
     genes_missing = 0
 
+    # Scope name lookups to the requested organism: ortholog name transfers
+    # put the same standard name (e.g. TPS2) on genes in several species.
+    organism_no = _get_organism_no_from_key(db, hts_key)
+
     # One shared handle pool for the whole request: every gene reads the same
     # set of bigWig files, so opening each once (instead of once per gene) is
     # what keeps a large batch/matrix under the request timeout.
     with _BigWigPool() as pool:
         # Process each gene
         for gene_name in gene_names:
-            # Find the feature
-            feature = (
+            # Find the feature; for C. albicans a name also matches the
+            # Assembly 21 (orf19.*) record and the _B allele, so prefer the
+            # current-assembly ORF the locus page shows.
+            candidates = (
                 db.query(Feature)
                 .filter(
+                    Feature.organism_no == organism_no,
                     (func.upper(Feature.gene_name) == func.upper(gene_name)) |
                     (func.upper(Feature.feature_name) == func.upper(gene_name))
                 )
-                .first()
+                .all()
+            )
+            feature = min(
+                candidates,
+                key=lambda f: (
+                    f.feature_type != "ORF",
+                    f.feature_name.upper().startswith(("ORF19.", "ORF21.")),
+                    f.feature_name.endswith("_B"),
+                    f.feature_no,
+                ),
+                default=None,
             )
 
             if not feature:
