@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from collections import defaultdict
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_, distinct
 
@@ -22,6 +23,8 @@ from cgd.schemas.phenotype_schema import (
     SearchResultDetail,
     ObservableTreeResponse,
     ObservableTerm,
+    ObservableGene,
+    ObservableGenesResponse,
 )
 from cgd.models.models import (
     Feature,
@@ -595,3 +598,93 @@ def get_observable_tree(db: Session) -> ObservableTreeResponse:
         ]
 
         return ObservableTreeResponse(tree=tree)
+
+
+def get_observable_genes(
+    db: Session,
+    term: str,
+    organism_no: int,
+    include_descendants: bool = True,
+    qualifier: Optional[str] = None,
+    include_normal: bool = False,
+) -> ObservableGenesResponse:
+    """
+    Get the distinct genes of one organism annotated to an observable
+    (phenotype ontology) term, and optionally to any of its descendants.
+
+    By default "normal" results (qualifier normal, normal rate, normal
+    duration: the mutant showed no phenotype) are left out; annotations
+    without a qualifier are kept. ``qualifier`` restricts to one qualifier.
+    """
+    # Local import: go_service owns the shared one-record-per-locus mapping
+    from cgd.api.services.go_service import locus_features
+
+    observable_cv = db.query(Cv).filter(func.lower(Cv.cv_name) == "observable").first()
+    focus = None
+    if observable_cv:
+        focus = (
+            db.query(CvTerm)
+            .filter(
+                CvTerm.cv_no == observable_cv.cv_no,
+                func.lower(CvTerm.term_name) == term.strip().lower(),
+            )
+            .first()
+        )
+    if not focus:
+        raise HTTPException(status_code=404, detail=f"Phenotype term not found: {term}")
+
+    term_names = {focus.term_name}
+    if include_descendants:
+        # The observable CV is small (~200 terms) and its CVTERM_PATH closure
+        # is not populated, so walk the 'is a' relationships directly
+        children = defaultdict(list)
+        for parent_no, child_no, child_name in (
+            db.query(
+                CvtermRelationship.parent_cv_term_no,
+                CvtermRelationship.child_cv_term_no,
+                CvTerm.term_name,
+            )
+            .join(CvTerm, CvTerm.cv_term_no == CvtermRelationship.child_cv_term_no)
+            .filter(CvTerm.cv_no == observable_cv.cv_no)
+        ):
+            children[parent_no].append((child_no, child_name))
+        stack, seen = [focus.cv_term_no], {focus.cv_term_no}
+        while stack:
+            for child_no, child_name in children.get(stack.pop(), ()):
+                if child_no not in seen:
+                    seen.add(child_no)
+                    term_names.add(child_name)
+                    stack.append(child_no)
+
+    query = (
+        db.query(PhenoAnnotation.feature_no)
+        .join(Phenotype, Phenotype.phenotype_no == PhenoAnnotation.phenotype_no)
+        .join(Feature, Feature.feature_no == PhenoAnnotation.feature_no)
+        .filter(Phenotype.observable.in_(term_names), Feature.organism_no == organism_no)
+    )
+    if qualifier:
+        query = query.filter(Phenotype.qualifier == qualifier)
+    elif not include_normal:
+        query = query.filter(or_(
+            Phenotype.qualifier.is_(None),
+            ~Phenotype.qualifier.like("normal%"),
+        ))
+    feature_nos = {f for (f,) in query.distinct()}
+
+    return ObservableGenesResponse(
+        term=focus.term_name,
+        apo_id=focus.dbxref_id,
+        organism_no=organism_no,
+        include_descendants=include_descendants,
+        qualifier=qualifier or None,
+        include_normal=include_normal,
+        term_count=len(term_names),
+        genes=[
+            ObservableGene(
+                feature_no=feature.feature_no,
+                feature_name=feature.feature_name,
+                gene_name=feature.gene_name,
+            )
+            for feature in locus_features(db, organism_no, feature_nos)
+        ],
+    )

@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
 from cgd.api.services import phenotype_service
-from cgd.schemas.phenotype_schema import PhenotypeSearchResponse, PhenotypeSearchSummaryResponse, ObservableTreeResponse
+from cgd.schemas.phenotype_schema import (
+    PhenotypeSearchResponse,
+    PhenotypeSearchSummaryResponse,
+    ObservableTreeResponse,
+    ObservableGenesResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +105,35 @@ def search_phenotypes_summary(
         return phenotype_service.search_phenotypes_summary(db=db, query=query)
     except Exception as e:
         logger.error(f"Error in search_phenotypes_summary: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/observables/genes", response_model=ObservableGenesResponse)
+def get_observable_genes(
+    term: str = Query(..., min_length=1, description="Observable (phenotype ontology) term name"),
+    organism_no: int = Query(..., description="Organism to list genes for"),
+    include_descendants: bool = Query(True, description="Include genes annotated to descendant terms"),
+    qualifier: Optional[str] = Query(None, description="Only this qualifier (e.g. decreased)"),
+    include_normal: bool = Query(False, description="Include 'normal' results (no phenotype observed)"),
+    db: Session = Depends(get_db),
+):
+    """
+    List the genes of one organism annotated to a phenotype observable term,
+    optionally including every descendant term, e.g. to build a gene list for
+    the Gene List Workbench.
+    """
+    try:
+        return phenotype_service.get_observable_genes(
+            db, term, organism_no,
+            include_descendants=include_descendants,
+            qualifier=qualifier,
+            include_normal=include_normal,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_observable_genes for {term}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
