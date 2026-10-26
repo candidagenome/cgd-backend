@@ -773,6 +773,46 @@ def get_go_hierarchy(
     )
 
 
+def locus_features(db: Session, organism_no: int, feature_nos: set[int]) -> list[Feature]:
+    """
+    Map annotated feature_nos to one Feature per locus, sorted by display name.
+
+    Assembly 21 records with an Assembly 22 equivalent are dropped, and
+    C. albicans _B alleles (which carry their own annotations) are reported
+    once, as their _A twin, the record the locus page and gene names use.
+    Shared by the GO and phenotype gene-list endpoints.
+    """
+    feature_nos = set(feature_nos) - _get_assembly21_feature_nos_to_exclude(db, feature_nos)
+
+    features = {}
+    feature_nos_list = list(feature_nos)
+    for i in range(0, len(feature_nos_list), 999):
+        chunk = feature_nos_list[i:i + 999]
+        for feature in db.query(Feature).filter(Feature.feature_no.in_(chunk)):
+            features[feature.feature_no] = feature
+
+    b_alleles = [f for f in features.values() if f.feature_name.endswith("_B")]
+    for i in range(0, len(b_alleles), 999):
+        chunk = b_alleles[i:i + 999]
+        twins = {
+            twin.feature_name: twin
+            for twin in db.query(Feature).filter(
+                Feature.organism_no == organism_no,
+                Feature.feature_name.in_([f.feature_name[:-2] + "_A" for f in chunk]),
+            )
+        }
+        for feature in chunk:
+            twin = twins.get(feature.feature_name[:-2] + "_A")
+            if twin:
+                del features[feature.feature_no]
+                features[twin.feature_no] = twin
+
+    return sorted(
+        features.values(),
+        key=lambda f: ((f.gene_name or f.feature_name).upper(), f.feature_name),
+    )
+
+
 def get_go_term_genes(
     db: Session,
     goid_str: str,
@@ -843,42 +883,14 @@ def get_go_term_genes(
                 negated.add(ann_no)
 
     feature_nos = {f for a, f in annotations if a not in negated}
-    feature_nos -= _get_assembly21_feature_nos_to_exclude(db, feature_nos)
-
-    features = {}
-    feature_nos_list = list(feature_nos)
-    for i in range(0, len(feature_nos_list), 999):
-        chunk = feature_nos_list[i:i + 999]
-        for feature in db.query(Feature).filter(Feature.feature_no.in_(chunk)):
-            features[feature.feature_no] = feature
-
-    # C. albicans _B alleles carry their own annotations; report the locus
-    # once, as its _A twin (the record the locus page and gene names use)
-    b_alleles = [f for f in features.values() if f.feature_name.endswith("_B")]
-    for i in range(0, len(b_alleles), 999):
-        chunk = b_alleles[i:i + 999]
-        twins = {
-            twin.feature_name: twin
-            for twin in db.query(Feature).filter(
-                Feature.organism_no == organism_no,
-                Feature.feature_name.in_([f.feature_name[:-2] + "_A" for f in chunk]),
-            )
-        }
-        for feature in chunk:
-            twin = twins.get(feature.feature_name[:-2] + "_A")
-            if twin:
-                del features[feature.feature_no]
-                features[twin.feature_no] = twin
-
     genes = [
         GoTermGene(
             feature_no=feature.feature_no,
             feature_name=feature.feature_name,
             gene_name=feature.gene_name,
         )
-        for feature in features.values()
+        for feature in locus_features(db, organism_no, feature_nos)
     ]
-    genes.sort(key=lambda g: ((g.gene_name or g.feature_name).upper(), g.feature_name))
 
     return GoTermGenesResponse(
         goid=_format_goid(go_term.goid),
