@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from cgd.db.deps import get_db
 from cgd.api.services import go_service
-from cgd.schemas.go_schema import GoTermResponse, GoEvidenceResponse, GoHierarchyResponse
+from cgd.schemas.go_schema import (
+    GoTermResponse, GoEvidenceResponse, GoHierarchyResponse, GoTermGenesResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,33 @@ def get_go_hierarchy(
         raise
     except Exception as e:
         logger.error(f"Error in get_go_hierarchy for {goid}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{goid}/genes", response_model=GoTermGenesResponse)
+def get_go_term_genes(
+    goid: str,
+    organism_no: int = Query(..., description="Organism to list genes for"),
+    include_descendants: bool = Query(True, description="Include genes annotated to descendant terms"),
+    include_computational: bool = Query(True, description="Include computational (IEA) annotations"),
+    db: Session = Depends(get_db),
+):
+    """
+    List the genes of one organism annotated to a GO term, optionally
+    including every descendant term, e.g. to build a gene list for the
+    Gene List Workbench.
+    """
+    try:
+        return go_service.get_go_term_genes(
+            db, goid, organism_no,
+            include_descendants=include_descendants,
+            include_computational=include_computational,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_go_term_genes for {goid}: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

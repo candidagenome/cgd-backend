@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Optional
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, select
 from fastapi import HTTPException
 
 from cgd.schemas.go_schema import (
@@ -24,6 +24,8 @@ from cgd.schemas.go_schema import (
     GoHierarchyNode,
     GoHierarchyEdge,
     GoHierarchyResponse,
+    GoTermGene,
+    GoTermGenesResponse,
 )
 from cgd.models.models import (
     Go,
@@ -768,4 +770,122 @@ def get_go_hierarchy(
         edges=edges,
         can_go_up=can_go_up,
         can_go_down=can_go_down,
+    )
+
+
+def get_go_term_genes(
+    db: Session,
+    goid_str: str,
+    organism_no: int,
+    include_descendants: bool = True,
+    include_computational: bool = True,
+) -> GoTermGenesResponse:
+    """
+    Get the distinct genes of one organism annotated to a GO term, and
+    optionally to any of its descendants (via the GO_PATH closure).
+
+    Annotations whose every reference carries the NOT qualifier are skipped,
+    and C. albicans Assembly 21 records that have an Assembly 22 equivalent
+    are dropped, as on the GO term page.
+    """
+    try:
+        goid_int = _parse_goid(goid_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid GO identifier format: {goid_str}"
+        )
+
+    go_term = db.query(Go).filter(Go.goid == goid_int).first()
+    if not go_term:
+        raise HTTPException(
+            status_code=404,
+            detail=f"GO term not found: {_format_goid(goid_int)}"
+        )
+
+    go_filter = GoAnnotation.go_no == go_term.go_no
+    term_count = 1
+    if include_descendants:
+        descendants = select(GoPath.child_go_no).where(GoPath.ancestor_go_no == go_term.go_no)
+        term_count += db.query(func.count(func.distinct(GoPath.child_go_no))).filter(
+            GoPath.ancestor_go_no == go_term.go_no).scalar()
+        go_filter = go_filter | GoAnnotation.go_no.in_(descendants)
+
+    query = (
+        db.query(GoAnnotation.go_annotation_no, GoAnnotation.feature_no)
+        .join(Feature, Feature.feature_no == GoAnnotation.feature_no)
+        .filter(go_filter, Feature.organism_no == organism_no)
+    )
+    if not include_computational:
+        query = query.filter(GoAnnotation.annotation_type != "computational")
+    annotations = query.all()
+
+    # NOT is per reference; an annotation counts unless all its refs are NOT
+    ann_nos = {a for a, _ in annotations}
+    not_counts = dict(
+        db.query(GoRef.go_annotation_no, func.count(GoRef.go_ref_no))
+        .join(GoQualifier, GoQualifier.go_ref_no == GoRef.go_ref_no)
+        .filter(GoQualifier.qualifier == "NOT")
+        .group_by(GoRef.go_annotation_no)
+        .all()
+    )
+    negated = set()
+    candidates = [a for a in not_counts if a in ann_nos]
+    for i in range(0, len(candidates), 999):
+        chunk = candidates[i:i + 999]
+        for ann_no, n_refs in (
+            db.query(GoRef.go_annotation_no, func.count(GoRef.go_ref_no))
+            .filter(GoRef.go_annotation_no.in_(chunk))
+            .group_by(GoRef.go_annotation_no)
+            .all()
+        ):
+            if n_refs == not_counts[ann_no]:
+                negated.add(ann_no)
+
+    feature_nos = {f for a, f in annotations if a not in negated}
+    feature_nos -= _get_assembly21_feature_nos_to_exclude(db, feature_nos)
+
+    features = {}
+    feature_nos_list = list(feature_nos)
+    for i in range(0, len(feature_nos_list), 999):
+        chunk = feature_nos_list[i:i + 999]
+        for feature in db.query(Feature).filter(Feature.feature_no.in_(chunk)):
+            features[feature.feature_no] = feature
+
+    # C. albicans _B alleles carry their own annotations; report the locus
+    # once, as its _A twin (the record the locus page and gene names use)
+    b_alleles = [f for f in features.values() if f.feature_name.endswith("_B")]
+    for i in range(0, len(b_alleles), 999):
+        chunk = b_alleles[i:i + 999]
+        twins = {
+            twin.feature_name: twin
+            for twin in db.query(Feature).filter(
+                Feature.organism_no == organism_no,
+                Feature.feature_name.in_([f.feature_name[:-2] + "_A" for f in chunk]),
+            )
+        }
+        for feature in chunk:
+            twin = twins.get(feature.feature_name[:-2] + "_A")
+            if twin:
+                del features[feature.feature_no]
+                features[twin.feature_no] = twin
+
+    genes = [
+        GoTermGene(
+            feature_no=feature.feature_no,
+            feature_name=feature.feature_name,
+            gene_name=feature.gene_name,
+        )
+        for feature in features.values()
+    ]
+    genes.sort(key=lambda g: ((g.gene_name or g.feature_name).upper(), g.feature_name))
+
+    return GoTermGenesResponse(
+        goid=_format_goid(go_term.goid),
+        go_term=go_term.go_term,
+        organism_no=organism_no,
+        include_descendants=include_descendants,
+        include_computational=include_computational,
+        term_count=term_count,
+        genes=genes,
     )

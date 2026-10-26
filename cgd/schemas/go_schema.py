@@ -173,3 +173,21 @@ class GoHierarchyResponse(BaseModel):
     edges: list[GoHierarchyEdge]
     can_go_up: bool  # True if focus term has parents (not a root term)
     can_go_down: bool  # True if focus term has children (not a leaf term)
+
+
+class GoTermGene(BaseModel):
+    """A gene annotated to a GO term or one of its descendants"""
+    feature_no: int
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+
+
+class GoTermGenesResponse(BaseModel):
+    """Response for /api/go/{goid}/genes endpoint"""
+    goid: str
+    go_term: str
+    organism_no: int
+    include_descendants: bool
+    include_computational: bool
+    term_count: int  # the term itself plus descendants searched
+    genes: list[GoTermGene]
