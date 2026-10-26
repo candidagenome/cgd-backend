@@ -183,9 +183,10 @@ class BatchExpressionResponse(BaseModel):
 class ExpressionMatrixRequest(BaseModel):
     """Request for expression matrix download."""
     gene_names: List[str] = Field(
-        description="List of gene names to include in matrix",
+        description=("List of gene names to include in matrix (max 10000; "
+                     "200 when the precomputed matrix is unavailable)"),
         min_length=1,
-        max_length=200
+        max_length=10000
     )
     organism: str = Field(
         default="Candida albicans SC5314",

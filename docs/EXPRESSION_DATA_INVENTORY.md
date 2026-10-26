@@ -223,6 +223,24 @@ Based on the curator's suggestion, expression tools could be divided into:
 {Author}{Year}_Hap{A|B}_{condition}_coverage.bigwig
 ```
 
+### Precomputed Expression Matrix (rebuild after adding or reprocessing a study)
+Expression matrix downloads (Gene List Workbench, Similar Genes) are served from
+a per-organism genes x conditions matrix:
+```
+/data/cache/expression/expression_matrix_{HTS key}.npz
+```
+It stores a fingerprint of `EXPRESSION_STUDIES`, `LIBRARY_SIZES` and every
+configured bigWig's size/mtime. When a study is added or reprocessed the
+fingerprint no longer matches and the API falls back to live bigWig reads,
+which are limited to 200 genes per download, until the matrix is rebuilt:
+```
+python scripts/expression/build_expression_matrix_cache.py --status        # which are current
+python scripts/expression/build_expression_matrix_cache.py --organism C_auris_B8441
+python scripts/expression/build_expression_matrix_cache.py                 # all (~16 min on dev)
+```
+The API notices a rebuilt file on its own (no restart). Values are computed by
+the same service code as live reads, so cached and live downloads are identical.
+
 ### NCBI Search Queries for Finding More Data
 ```
 # C. albicans with publications + multi-isolate

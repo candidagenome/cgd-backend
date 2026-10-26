@@ -3,7 +3,7 @@ Expression Data API Router.
 
 Provides endpoints for gene expression analysis from RNA-seq data.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,7 @@ from cgd.api.services.expression_service import (
     get_similar_expression_genes,
     get_batch_expression_data,
     generate_expression_matrix_csv,
+    MatrixTooLargeError,
 )
 from cgd.schemas.expression_schema import (
     GeneExpressionResponse,
@@ -161,7 +162,8 @@ def get_batch_expression(
     - **Values**: Fold change values relative to control
 
     **Request body:**
-    - gene_names: List of gene names to include (max 200)
+    - gene_names: List of gene names to include (max 10000; 200 when the
+      precomputed matrix is unavailable or out of date)
     - organism: Organism display name
     - include_metadata: Include description and correlation columns
     - correlations: Optional dict of gene → correlation value
@@ -172,13 +174,16 @@ def download_expression_matrix(
     db: Session = Depends(get_db)
 ) -> Response:
     """Download expression matrix as TSV file."""
-    content = generate_expression_matrix_csv(
-        db,
-        request.gene_names,
-        request.organism,
-        request.include_metadata,
-        request.correlations
-    )
+    try:
+        content = generate_expression_matrix_csv(
+            db,
+            request.gene_names,
+            request.organism,
+            request.include_metadata,
+            request.correlations
+        )
+    except MatrixTooLargeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Generate filename
     gene_count = len(request.gene_names)

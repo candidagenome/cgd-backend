@@ -3455,6 +3455,48 @@ def get_similar_expression_genes(
 # Batch Expression Data (for multi-gene heatmap)
 # ============================================================================
 
+def _resolve_features_in_organism(
+    db: Session,
+    organism_no: Optional[int],
+    names: List[str],
+) -> Dict[str, Feature]:
+    """
+    Resolve gene/systematic names to features of one organism, in batches.
+
+    Returns {UPPER(name): Feature}. For C. albicans a name also matches the
+    Assembly 21 (orf19.*) record and the _B allele, so the current-assembly
+    ORF the locus page shows is preferred.
+    """
+    if organism_no is None:
+        return {}
+    wanted = sorted({n.upper() for n in names if n})
+    candidates: Dict[str, List[Feature]] = {}
+    for i in range(0, len(wanted), 500):
+        chunk = wanted[i:i + 500]
+        for feature in (
+            db.query(Feature)
+            .filter(
+                Feature.organism_no == organism_no,
+                or_(
+                    func.upper(Feature.gene_name).in_(chunk),
+                    func.upper(Feature.feature_name).in_(chunk),
+                ),
+            )
+        ):
+            for key in {(feature.gene_name or "").upper(), feature.feature_name.upper()}:
+                if key in chunk:
+                    candidates.setdefault(key, []).append(feature)
+    return {
+        key: min(feats, key=lambda f: (
+            f.feature_type != "ORF",
+            f.feature_name.upper().startswith(("ORF19.", "ORF21.")),
+            f.feature_name.endswith("_B"),
+            f.feature_no,
+        ))
+        for key, feats in candidates.items()
+    }
+
+
 def get_batch_expression_data(
     db: Session,
     gene_names: List[str],
@@ -3518,6 +3560,7 @@ def get_batch_expression_data(
     # Scope name lookups to the requested organism: ortholog name transfers
     # put the same standard name (e.g. TPS2) on genes in several species.
     organism_no = _get_organism_no_from_key(db, hts_key)
+    features = _resolve_features_in_organism(db, organism_no, gene_names)
 
     # One shared handle pool for the whole request: every gene reads the same
     # set of bigWig files, so opening each once (instead of once per gene) is
@@ -3525,28 +3568,7 @@ def get_batch_expression_data(
     with _BigWigPool() as pool:
         # Process each gene
         for gene_name in gene_names:
-            # Find the feature; for C. albicans a name also matches the
-            # Assembly 21 (orf19.*) record and the _B allele, so prefer the
-            # current-assembly ORF the locus page shows.
-            candidates = (
-                db.query(Feature)
-                .filter(
-                    Feature.organism_no == organism_no,
-                    (func.upper(Feature.gene_name) == func.upper(gene_name)) |
-                    (func.upper(Feature.feature_name) == func.upper(gene_name))
-                )
-                .all()
-            )
-            feature = min(
-                candidates,
-                key=lambda f: (
-                    f.feature_type != "ORF",
-                    f.feature_name.upper().startswith(("ORF19.", "ORF21.")),
-                    f.feature_name.endswith("_B"),
-                    f.feature_no,
-                ),
-                default=None,
-            )
+            feature = features.get(gene_name.upper())
 
             if not feature:
                 results.append(BatchGeneExpression(
@@ -3586,6 +3608,163 @@ def get_batch_expression_data(
     )
 
 
+# Live matrix downloads read every gene's bigWig signal (~85 ms/gene), so
+# without a current precomputed matrix they stay capped at this many genes.
+LIVE_MATRIX_MAX_GENES = 200
+
+# Precomputed per-organism matrix (scripts/expression/build_expression_matrix_cache.py)
+MATRIX_CACHE_VERSION = 1
+MATRIX_CACHE_RECHECK_SECONDS = 300
+_matrix_cache: Dict[str, dict] = {}
+
+
+class MatrixTooLargeError(ValueError):
+    """A live (uncached) matrix request exceeds LIVE_MATRIX_MAX_GENES."""
+
+
+def matrix_cache_path(hts_key: str) -> Path:
+    return EXPRESSION_CACHE_DIR / f"expression_matrix_{hts_key}.npz"
+
+
+def expression_data_fingerprint(hts_key: str) -> str:
+    """
+    Fingerprint of everything a gene's fold changes depend on: the study
+    configuration, library sizes and every configured bigWig file's size and
+    mtime. A precomputed matrix is only served while this still matches, so
+    adding a study or reprocessing a dataset falls back to live reads until
+    the matrix is rebuilt.
+    """
+    import hashlib
+
+    studies = EXPRESSION_STUDIES.get(hts_key, {})
+    base_path = HTS_BASE_PATHS.get(hts_key)
+    digest = hashlib.sha256(json.dumps(
+        {
+            "version": MATRIX_CACHE_VERSION,
+            "studies": studies,
+            "library_sizes": LIBRARY_SIZES.get(hts_key, {}),
+            "normalize": NORMALIZE_BY_LIBRARY_SIZE,
+        },
+        sort_keys=True, default=str,
+    ).encode())
+    if base_path:
+        for study_id, study_info in sorted(studies.items()):
+            for cond_id in sorted(study_info.get("conditions", {})):
+                path = _get_bigwig_path(base_path, study_id, cond_id, study_info)
+                try:
+                    st = path.stat()
+                    digest.update(f"{path}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+                except OSError:
+                    digest.update(f"{path}|missing\n".encode())
+    return digest.hexdigest()
+
+
+def _get_matrix_cache(hts_key: str) -> Optional[dict]:
+    """
+    The precomputed matrix for an organism, or None when it is missing or
+    stale. Reloaded when the file changes; staleness is rechecked every
+    MATRIX_CACHE_RECHECK_SECONDS.
+    """
+    import time
+
+    if not NUMPY_AVAILABLE:
+        return None
+    path = matrix_cache_path(hts_key)
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+    entry = _matrix_cache.get(hts_key)
+    if entry is None or entry["mtime"] != mtime:
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                meta = json.loads(str(data["meta"]))
+                entry = {
+                    "mtime": mtime,
+                    "checked": 0.0,
+                    "valid": False,
+                    "fingerprint": meta["fingerprint"],
+                    "columns": [tuple(c) for c in meta["columns"]],
+                    "row_of": {int(f): i for i, f in enumerate(data["feature_nos"])},
+                    "fold_changes": data["fold_changes"],
+                }
+        except Exception as e:
+            logger.error(f"Unreadable expression matrix cache {path}: {e}")
+            return None
+        _matrix_cache[hts_key] = entry
+        logger.info(f"Loaded expression matrix cache {path}: "
+                    f"{len(entry['row_of'])} genes x {len(entry['columns'])} conditions")
+
+    now = time.monotonic()
+    if now - entry["checked"] > MATRIX_CACHE_RECHECK_SECONDS:
+        entry["valid"] = entry["fingerprint"] == expression_data_fingerprint(hts_key)
+        entry["checked"] = now
+        if not entry["valid"]:
+            logger.warning(f"Expression matrix cache {path} is stale; using live reads")
+    return entry if entry["valid"] else None
+
+
+def _matrix_entry_from_details(data: ExpressionDetailsForOrganism, request_name: str):
+    """(request name, gene, feature name, description, {col: fc}, {col: meta})"""
+    fold_changes, columns = {}, {}
+    for study in data.studies or []:
+        for condition in study.conditions:
+            key = (study.study_id, condition.condition_id)
+            fold_changes[key] = condition.fold_change
+            columns.setdefault(key, (study.study_id, condition.condition_id,
+                                     condition.label, study.category))
+    return (request_name, data.gene_name or request_name, data.feature_name or "",
+            data.description or "", fold_changes, columns)
+
+
+def _matrix_entries_live(db: Session, gene_names: List[str], organism: str):
+    batch_response = get_batch_expression_data(db, gene_names, organism)
+    if not batch_response.success or not batch_response.results:
+        return None
+    return [
+        _matrix_entry_from_details(r.data, r.gene_name)
+        for r in batch_response.results if r.data
+    ]
+
+
+def _matrix_entries_cached(db: Session, gene_names: List[str], organism: str,
+                           hts_key: str, cache: dict):
+    """Rows from the precomputed matrix; genes it lacks are read live."""
+    organism_no = _get_organism_no_from_key(db, hts_key)
+    features = _resolve_features_in_organism(db, organism_no, gene_names)
+    columns = cache["columns"]
+    fold_changes = cache["fold_changes"]
+
+    entries, misses = [], []
+    for gene_name in gene_names:
+        feature = features.get(gene_name.upper())
+        if not feature:
+            continue
+        row = cache["row_of"].get(feature.feature_no)
+        if row is None:
+            misses.append((len(entries), gene_name, feature))
+            entries.append(None)
+            continue
+        values = fold_changes[row]
+        fcs = {
+            (col[0], col[1]): float(values[j])
+            for j, col in enumerate(columns) if not np.isnan(values[j])
+        }
+        entries.append((
+            gene_name, feature.gene_name or feature.feature_name, feature.feature_name,
+            feature.headline or "", fcs, {(c[0], c[1]): c for c in columns},
+        ))
+
+    if misses:
+        with _BigWigPool() as pool:
+            for index, gene_name, feature in misses:
+                data = _get_expression_for_organism(db, feature, organism, pool=pool)
+                if data:
+                    entries[index] = _matrix_entry_from_details(data, gene_name)
+    return [e for e in entries if e is not None]
+
+
 def generate_expression_matrix_csv(
     db: Session,
     gene_names: List[str],
@@ -3594,12 +3773,17 @@ def generate_expression_matrix_csv(
     correlations: Optional[Dict[str, float]] = None,
 ) -> str:
     """
-    Generate a CSV expression matrix for multiple genes.
+    Generate a TSV expression matrix for multiple genes.
 
     The matrix has:
     - Rows: genes (one per row)
     - Columns: conditions (organized by study)
     - Values: fold change values
+
+    Served from the precomputed per-organism matrix when it is current (any
+    number of genes); otherwise read live from the bigWig files, which is
+    limited to LIVE_MATRIX_MAX_GENES (raises MatrixTooLargeError). Both paths
+    produce identical output.
 
     Args:
         db: Database session
@@ -3609,100 +3793,65 @@ def generate_expression_matrix_csv(
         correlations: Optional dict mapping gene names to correlation values
 
     Returns:
-        CSV string with expression matrix
+        TSV string with expression matrix
     """
     from datetime import datetime
-    import csv
     import io
 
-    # Get batch expression data
-    batch_response = get_batch_expression_data(db, gene_names, organism)
+    hts_key = ORGANISM_TO_HTS_KEY.get(organism)
+    cache = _get_matrix_cache(hts_key) if hts_key else None
+    if cache is not None:
+        entries = _matrix_entries_cached(db, gene_names, organism, hts_key, cache)
+    else:
+        if len(gene_names) > LIVE_MATRIX_MAX_GENES:
+            raise MatrixTooLargeError(
+                f"The precomputed expression matrix for {organism} is not available, "
+                f"so downloads are limited to {LIVE_MATRIX_MAX_GENES} genes for now "
+                f"({len(gene_names)} requested)."
+            )
+        entries = _matrix_entries_live(db, gene_names, organism)
 
-    if not batch_response.success or not batch_response.results:
+    if entries is None:
         return "# Error: No expression data available\n"
 
-    # Build condition list from all genes' data
-    # condition_key = "study_id|condition_id" for uniqueness
-    all_conditions = []  # List of (study_id, condition_id, label, category)
-    condition_set = set()
+    # Columns: every condition with data for at least one requested gene,
+    # sorted by study, then condition id
+    all_columns: Dict[Tuple[str, str], tuple] = {}
+    for entry in entries:
+        for key in entry[4]:
+            all_columns.setdefault(key, entry[5][key])
+    all_conditions = sorted(all_columns.values(), key=lambda x: (x[0], x[1]))
 
-    for gene_result in batch_response.results:
-        if gene_result.data and gene_result.data.studies:
-            for study in gene_result.data.studies:
-                for condition in study.conditions:
-                    key = f"{study.study_id}|{condition.condition_id}"
-                    if key not in condition_set:
-                        condition_set.add(key)
-                        all_conditions.append((
-                            study.study_id,
-                            condition.condition_id,
-                            condition.label,
-                            study.category
-                        ))
-
-    # Sort conditions by study, then by condition id
-    all_conditions.sort(key=lambda x: (x[0], x[1]))
-
-    # Build CSV
     output = io.StringIO()
 
     # Header comments
-    output.write(f"# Expression Matrix\n")
+    output.write("# Expression Matrix\n")
     output.write(f"# Organism: {organism}\n")
     output.write(f"# Genes: {len(gene_names)}\n")
     output.write(f"# Conditions: {len(all_conditions)}\n")
-    output.write(f"# Data type: Fold Change (vs control)\n")
+    output.write("# Data type: Fold Change (vs control)\n")
     output.write(f"# Generated: {datetime.now().isoformat()}\n")
-    output.write(f"#\n")
+    output.write("#\n")
 
-    # Build header row
     header = ["Gene", "Feature Name"]
     if include_metadata:
         header.append("Description")
         if correlations:
             header.append("Correlation")
-
-    # Add condition columns (format: "Study|Condition Label")
     for study_id, cond_id, label, category in all_conditions:
         header.append(f"{study_id}|{label}")
-
     output.write("\t".join(header) + "\n")
 
-    # Build data rows
-    for gene_result in batch_response.results:
-        gene_name = gene_result.gene_name
-        if not gene_result.data:
-            continue
-
-        data = gene_result.data
-        row = [
-            data.gene_name or gene_name,
-            data.feature_name or ""
-        ]
-
+    for request_name, gene_label, feature_name, description, fc_lookup, _ in entries:
+        row = [gene_label, feature_name]
         if include_metadata:
-            row.append(data.description or "")
+            row.append(description)
             if correlations:
-                corr = correlations.get(gene_name, "")
+                corr = correlations.get(request_name, "")
                 row.append(str(corr) if corr != "" else "")
-
-        # Build fold change lookup for this gene
-        fc_lookup = {}  # key = "study_id|condition_id" -> fold_change
-        if data.studies:
-            for study in data.studies:
-                for condition in study.conditions:
-                    key = f"{study.study_id}|{condition.condition_id}"
-                    fc_lookup[key] = condition.fold_change
-
-        # Add fold change values for each condition
         for study_id, cond_id, label, category in all_conditions:
-            key = f"{study_id}|{cond_id}"
-            fc = fc_lookup.get(key)
-            if fc is not None:
-                row.append(f"{fc:.4f}")
-            else:
-                row.append("")  # Missing data
-
+            fc = fc_lookup.get((study_id, cond_id))
+            row.append(f"{fc:.4f}" if fc is not None else "")
         output.write("\t".join(row) + "\n")
 
     return output.getvalue()
