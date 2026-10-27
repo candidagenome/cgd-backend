@@ -738,3 +738,38 @@ class TestResolveToA22Features:
             resolved = resolve_to_a22_features(db, found_map)
 
         assert resolved['ACT1'] is self.A21
+
+
+class TestCorrectionCountsAllTests:
+    """
+    The correction must count every tested term, not only those with raw
+    p <= cutoff; terms are passed in unfiltered and the cutoff applied after.
+    """
+
+    # One nominally significant term among nine clearly non-significant ones
+    RESULTS = [(1, 3, 10, 30, 1000, 0.01)] + [(i, 2, 10, 300, 1000, 0.6) for i in range(2, 11)]
+
+    def test_bh_uses_all_tested_terms(self):
+        # 10 tests: FDR for p=0.01 at rank 1 is 0.01 * 10 / 1 = 0.1 > 0.05
+        corrected = _apply_multiple_testing_correction(
+            self.RESULTS, MultipleCorrectionMethod.BENJAMINI_HOCHBERG, p_value_cutoff=0.05
+        )
+        assert corrected == []
+
+    def test_bh_keeps_term_when_it_survives_all_tests(self):
+        corrected = _apply_multiple_testing_correction(
+            self.RESULTS, MultipleCorrectionMethod.BENJAMINI_HOCHBERG, p_value_cutoff=0.1
+        )
+        assert [(r[0], round(r[6], 6)) for r in corrected] == [(1, 0.1)]
+
+    def test_bonferroni_uses_all_tested_terms(self):
+        corrected = _apply_multiple_testing_correction(
+            self.RESULTS, MultipleCorrectionMethod.BONFERRONI, p_value_cutoff=0.05
+        )
+        assert corrected == []
+
+    def test_no_correction_applies_raw_cutoff(self):
+        corrected = _apply_multiple_testing_correction(
+            self.RESULTS, MultipleCorrectionMethod.NONE, p_value_cutoff=0.05
+        )
+        assert [r[0] for r in corrected] == [1]

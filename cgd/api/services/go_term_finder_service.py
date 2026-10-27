@@ -776,7 +776,10 @@ def _apply_multiple_testing_correction(
     p_value_cutoff: float,
 ) -> list[tuple[int, int, int, int, int, float, Optional[float]]]:
     """
-    Apply multiple testing correction.
+    Apply multiple testing correction and the p-value cutoff.
+
+    `results` must hold every term that was tested (not only nominally
+    significant ones): the number of tests is len(results).
 
     Returns list of (go_no, k, n, K, N, p_value, fdr) tuples.
     """
@@ -784,7 +787,11 @@ def _apply_multiple_testing_correction(
         return []
 
     if method == MultipleCorrectionMethod.NONE:
-        return [(go_no, k, n, K, N, p_val, None) for go_no, k, n, K, N, p_val in results]
+        return [
+            (go_no, k, n, K, N, p_val, None)
+            for go_no, k, n, K, N, p_val in results
+            if p_val <= p_value_cutoff
+        ]
 
     n_tests = len(results)
 
@@ -962,7 +969,9 @@ def run_go_term_finder(
         background_direct_annotations,
         len(query_feature_nos),  # ALL query genes (including those without GO annotations) - matches Perl
         len(background_feature_nos),  # Total background size
-        request.p_value_cutoff,
+        # Keep every tested term: the cutoff is applied after multiple-testing
+        # correction, which must count all tests, not only nominally significant ones
+        1.0,
         request.min_genes_in_term,
     )
     logger.info(f"Step 4 (calculate enrichment): {time.time() - step_start:.2f}s - {len(enrichment_results)} terms")
