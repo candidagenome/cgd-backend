@@ -7,12 +7,19 @@ Tests cover:
 - Change preview (insertion, deletion, substitution)
 - Affected features detection
 - Nearby features search
+- Edit normalization, application and coordinate adjustment (indels)
 """
 import pytest
 from unittest.mock import MagicMock
 
 from cgd.api.services.curation.sequence_curation_service import (
+    SequenceCurationError,
     SequenceCurationService,
+    adjust_coordinate,
+    apply_edits,
+    edit_containing,
+    normalize_changes,
+    overlaps_edit,
 )
 
 
@@ -408,3 +415,161 @@ class TestServiceInitialization:
         """Should store database session."""
         service = SequenceCurationService(mock_db)
         assert service.db is mock_db
+
+
+SEQ = "AAAAACCCCCGGGGGTTTTT"   # 20 bp; positions 1-5 A, 6-10 C, 11-15 G, 16-20 T
+
+
+class TestNormalizeChanges:
+    """Tests for turning curator changes into original-coordinate edits."""
+
+    def test_insertion_is_an_empty_window_after_its_position(self):
+        (edit,) = normalize_changes([{"type": "insertion", "position": 5, "sequence": "tt"}], SEQ)
+        assert (edit.start, edit.end, edit.new, edit.old, edit.delta) == (6, 5, "TT", "", 2)
+
+    def test_deletion_records_the_removed_residues(self):
+        (edit,) = normalize_changes([{"type": "deletion", "start": 6, "end": 8}], SEQ)
+        assert (edit.old, edit.new, edit.delta) == ("CCC", "", -3)
+
+    def test_sorted_by_position_whatever_the_entry_order(self):
+        edits = normalize_changes([
+            {"type": "deletion", "start": 16, "end": 16},
+            {"type": "insertion", "position": 2, "sequence": "G"},
+        ], SEQ)
+        assert [e.type for e in edits] == ["insertion", "deletion"]
+
+    def test_rejects_overlapping_changes(self):
+        with pytest.raises(SequenceCurationError, match="overlap"):
+            normalize_changes([
+                {"type": "deletion", "start": 6, "end": 10},
+                {"type": "substitution", "start": 9, "end": 12, "sequence": "AAAA"},
+            ], SEQ)
+
+    def test_rejects_an_insertion_inside_a_deletion(self):
+        with pytest.raises(SequenceCurationError, match="overlap"):
+            normalize_changes([
+                {"type": "deletion", "start": 6, "end": 10},
+                {"type": "insertion", "position": 7, "sequence": "A"},
+            ], SEQ)
+
+    def test_allows_an_insertion_just_before_a_deletion(self):
+        edits = normalize_changes([
+            {"type": "deletion", "start": 6, "end": 10},
+            {"type": "insertion", "position": 5, "sequence": "A"},
+        ], SEQ)
+        assert len(edits) == 2
+
+    def test_rejects_non_nucleotide_characters(self):
+        with pytest.raises(SequenceCurationError, match="IUPAC"):
+            normalize_changes([{"type": "insertion", "position": 1, "sequence": "AXZ"}], SEQ)
+
+    def test_rejects_coordinates_outside_the_sequence(self):
+        with pytest.raises(SequenceCurationError, match="outside"):
+            normalize_changes([{"type": "deletion", "start": 18, "end": 25}], SEQ)
+
+    def test_rejects_a_stale_preview(self):
+        with pytest.raises(SequenceCurationError, match="re-run the preview"):
+            normalize_changes(
+                [{"type": "deletion", "start": 6, "end": 8, "old_sequence": "GGG"}], SEQ
+            )
+
+
+class TestApplyEditsAndAdjustCoordinates:
+    """Tests for the edited sequence and the coordinate mapping."""
+
+    def test_applies_mixed_edits_in_original_coordinates(self):
+        edits = normalize_changes([
+            {"type": "substitution", "start": 11, "end": 15, "sequence": "AC"},
+            {"type": "insertion", "position": 0, "sequence": "TT"},
+            {"type": "deletion", "start": 6, "end": 10},
+        ], SEQ)
+        assert apply_edits(SEQ, edits) == "TT" + "AAAAA" + "AC" + "TTTTT"
+
+    def test_coordinates_shift_by_edits_ending_before_them(self):
+        edits = normalize_changes([
+            {"type": "insertion", "position": 5, "sequence": "GG"},   # +2 after 5
+            {"type": "deletion", "start": 11, "end": 12},             # -2 after 12
+        ], SEQ)
+        assert adjust_coordinate(5, edits) == 5      # before the insertion
+        assert adjust_coordinate(6, edits) == 8      # after it
+        assert adjust_coordinate(13, edits) == 13    # after both
+        new = apply_edits(SEQ, edits)
+        # residue identity is preserved for every coordinate outside the edits
+        for coord in (1, 5, 6, 10, 13, 20):
+            assert new[adjust_coordinate(coord, edits) - 1] == SEQ[coord - 1]
+
+    def test_boundary_inside_a_length_changing_edit_is_flagged(self):
+        edits = normalize_changes([{"type": "deletion", "start": 6, "end": 10}], SEQ)
+        assert edit_containing(8, edits) is not None
+        assert edit_containing(5, edits) is None
+        assert edit_containing(11, edits) is None
+
+    def test_equal_length_substitution_never_flags_a_boundary(self):
+        edits = normalize_changes(
+            [{"type": "substitution", "start": 6, "end": 10, "sequence": "AAAAA"}], SEQ
+        )
+        assert edit_containing(8, edits) is None
+
+    def test_overlap_counts_a_feature_spanning_an_insertion_point(self):
+        edits = normalize_changes([{"type": "insertion", "position": 10, "sequence": "A"}], SEQ)
+        assert overlaps_edit(5, 15, edits)
+        assert overlaps_edit(15, 5, edits)           # Crick: start > stop
+        assert not overlaps_edit(1, 10, edits)       # ends at the insertion point
+        assert not overlaps_edit(11, 20, edits)      # starts just after it
+
+    def test_frameshift_fix_merges_two_orfs(self):
+        """
+        Mirrors the KAR5 case: an extra base splits one ORF in two, and deleting
+        it joins them into a single reading frame.
+        """
+        orf = "ATG" + "GCT" * 5 + "TAA"
+        broken = "CC" + orf[:9] + "T" + orf[9:] + "CC"
+        edits = normalize_changes([{"type": "deletion", "start": 12, "end": 12}], broken)
+        fixed = apply_edits(broken, edits)
+        start, stop = 3, adjust_coordinate(len(broken) - 2, edits)
+        assert fixed[start - 1:stop] == orf
+
+
+class TestPreviewWithIndels:
+    """Tests for preview coordinates with length-changing edits."""
+
+    def test_overlapping_feature_keeps_start_and_moves_stop(self, mock_db, sample_chromosome):
+        feature, seq = sample_chromosome
+        orf = MockFeature(2, "ORF1", "ORF")
+        downstream = MockFeature(3, "ORF2", "ORF")
+        mock_db.query.side_effect = [
+            MockQuery([(feature, seq)]),
+            MockQuery([
+                (orf, MockFeatLocation(1, 2, 1, 10, 60, "W")),
+                (downstream, MockFeatLocation(2, 3, 1, 90, 70, "C")),
+            ]),
+        ]
+        service = SequenceCurationService(mock_db)
+        result = service.preview_changes("ChrA", [
+            {"type": "deletion", "start": 30, "end": 32},
+            {"type": "insertion", "position": 20, "sequence": "A"},
+        ])
+        assert result["net_change"] == -2
+        first, second = result["affected_features"]
+        assert (first["new_start"], first["new_stop"]) == (10, 58)
+        assert first["is_overlapping"] and not first["boundary_in_edit"]
+        assert (second["new_start"], second["new_stop"]) == (88, 68)
+        assert second["is_downstream"]
+
+    def test_flags_a_feature_end_inside_a_deletion(self, mock_db, sample_chromosome):
+        feature, seq = sample_chromosome
+        orf = MockFeature(2, "ORF1", "ORF")
+        mock_db.query.side_effect = [
+            MockQuery([(feature, seq)]),
+            MockQuery([(orf, MockFeatLocation(1, 2, 1, 10, 31, "W"))]),
+        ]
+        service = SequenceCurationService(mock_db)
+        result = service.preview_changes("ChrA", [{"type": "deletion", "start": 30, "end": 32}])
+        assert result["affected_features"][0]["boundary_in_edit"] is True
+
+    def test_invalid_change_raises(self, mock_db, sample_chromosome):
+        feature, seq = sample_chromosome
+        mock_db.query.side_effect = [MockQuery([(feature, seq)])]
+        service = SequenceCurationService(mock_db)
+        with pytest.raises(SequenceCurationError):
+            service.preview_changes("ChrA", [{"type": "deletion", "start": 50, "end": 40}])

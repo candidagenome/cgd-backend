@@ -88,6 +88,10 @@ class SequenceChange(BaseModel):
     sequence: Optional[str] = Field(
         None, description="Sequence to insert or substitute"
     )
+    old_sequence: Optional[str] = Field(
+        None,
+        description="Residues the preview showed in start..end; the commit refuses if they changed",
+    )
 
 
 class PreviewChangesRequest(BaseModel):
@@ -126,6 +130,7 @@ class AffectedFeature(BaseModel):
     strand: str
     is_overlapping: bool
     is_downstream: bool
+    boundary_in_edit: bool = False
     new_start: int
     new_stop: int
 
@@ -145,7 +150,7 @@ class PreviewChangesResponse(BaseModel):
 
 
 class ApplyChangesRequest(BaseModel):
-    """Request to commit sequence changes (v1: equal-length substitutions)."""
+    """Request to commit sequence changes (insertions, deletions, substitutions)."""
 
     feature_name: str
     changes: list[SequenceChange]
@@ -168,6 +173,7 @@ class RegeneratedFeature(BaseModel):
     genomic_length: int
     new_protein_seq_no: Optional[int] = None
     protein_length: Optional[int] = None
+    internal_stops: Optional[int] = None
 
 
 class ApplyChangesResponse(BaseModel):
@@ -177,9 +183,12 @@ class ApplyChangesResponse(BaseModel):
     feature_no: int
     old_root_seq_no: int
     new_root_seq_no: int
+    old_length: int
     seq_length: int
-    substitutions: list[dict]
+    net_change: int
+    changes: list[dict]
     feat_locations_repointed: int
+    feat_locations_moved: int
     features_regenerated: list[RegeneratedFeature]
     note_no: int
     reference_nos: list[int]
@@ -209,6 +218,33 @@ class NearbyFeaturesResponse(BaseModel):
 # ---------------------------
 # Endpoints
 # ---------------------------
+
+
+def _validate_changes(changes: list[SequenceChange]) -> None:
+    """Reject malformed changes with a clear 400 before touching the database."""
+    for change in changes:
+        if change.type not in ["insertion", "deletion", "substitution"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid change type: {change.type}",
+            )
+        if change.type == "insertion":
+            if change.position is None or not change.sequence:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Insertion requires position and sequence",
+                )
+        elif change.type == "deletion":
+            if change.start is None or change.end is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Deletion requires start and end coordinates",
+                )
+        elif change.start is None or change.end is None or not change.sequence:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Substitution requires start, end, and sequence",
+            )
 
 
 @router.get("/root-sequences", response_model=RootSequencesResponse)
@@ -267,35 +303,14 @@ def preview_changes(
     Shows the effect of insertions, deletions, and substitutions on the
     sequence and lists affected features that would need coordinate updates.
     """
-    # Validate changes
-    for change in request.changes:
-        if change.type not in ["insertion", "deletion", "substitution"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid change type: {change.type}",
-            )
-        if change.type == "insertion":
-            if change.position is None or not change.sequence:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Insertion requires position and sequence",
-                )
-        elif change.type == "deletion":
-            if change.start is None or change.end is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Deletion requires start and end coordinates",
-                )
-        elif change.type == "substitution":
-            if change.start is None or change.end is None or not change.sequence:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Substitution requires start, end, and sequence",
-                )
+    _validate_changes(request.changes)
 
     service = SequenceCurationService(db)
     changes_dicts = [c.model_dump() for c in request.changes]
-    result = service.preview_changes(request.feature_name, changes_dicts)
+    try:
+        result = service.preview_changes(request.feature_name, changes_dicts)
+    except SequenceCurationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     if "error" in result:
         raise HTTPException(
@@ -315,30 +330,18 @@ def apply_changes(
     """
     Commit sequence changes to a root (chromosome/contig) sequence.
 
-    v1 supports equal-length **substitutions** only. This inserts a new current
-    SEQ version with the corrected residues, deprecates the old one, re-points
-    every current feat_location to the new root sequence, records
+    Supports insertions, deletions and substitutions of any length. This
+    inserts a new current SEQ version with the edited residues, deprecates the
+    old one, gives every feature whose coordinates move a new current
+    feat_location (re-pointing the rest to the new root sequence), records
     seq_change_archive rows plus a note (and any referenced publications), and
     regenerates genomic/protein sequences for features whose residues changed.
+    A feature with an end inside a length-changing edit is refused.
 
     Requires curator authentication. Use `dry_run=true` to validate against the
     live database and roll back without persisting.
     """
-    # Enforce v1 scope (substitution-only) at the edge for a clear error.
-    for change in request.changes:
-        if change.type != "substitution":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "This tool currently supports substitution changes only. "
-                    "Insertions/deletions are not yet enabled."
-                ),
-            )
-        if change.start is None or change.end is None or not change.sequence:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Substitution requires start, end, and sequence",
-            )
+    _validate_changes(request.changes)
 
     service = SequenceCurationService(db)
     changes_dicts = [c.model_dump() for c in request.changes]
