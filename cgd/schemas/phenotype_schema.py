@@ -150,3 +150,22 @@ class ObservableTreeResponse(BaseModel):
 
 # Forward reference resolution for recursive model
 ObservableTerm.model_rebuild()
+
+
+class ObservableGene(BaseModel):
+    """A gene annotated to an observable term or one of its descendants"""
+    feature_no: int
+    feature_name: str
+    gene_name: typing.Optional[str] = None
+
+
+class ObservableGenesResponse(BaseModel):
+    """Response for /api/phenotype/observables/genes endpoint"""
+    term: str
+    apo_id: typing.Optional[str] = None
+    organism_no: int
+    include_descendants: bool
+    qualifier: typing.Optional[str] = None  # None = any qualifier
+    include_normal: bool
+    term_count: int  # the term itself plus descendants searched
+    genes: list[ObservableGene]

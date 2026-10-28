@@ -6,10 +6,11 @@ insert, delete, or substitute nucleotides in root sequences.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime
 
-from sqlalchemy import func, text, and_, or_
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
@@ -105,6 +106,171 @@ def translate_dna(dna_seq: str, codon_table: dict) -> str:
 
 class SequenceCurationError(Exception):
     """Raised when a sequence-curation apply operation is invalid or fails."""
+
+
+# IUPAC nucleotide codes accepted in inserted/substituted fragments (as in the
+# legacy RootSequence.pm _check_sequence_fragment).
+SEQ_FRAGMENT_CHARS = set("ACGTRYKMSWBDHVN")
+
+ARCHIVE_CHANGE_TYPES = {
+    "insertion": "Insertion",
+    "deletion": "Deletion",
+    "substitution": "Substitution",
+}
+
+
+@dataclass
+class SequenceEdit:
+    """
+    One curator edit, expressed (as in the legacy RootSequence.pm) as the
+    replacement of the original window [start, end] by ``new``. All
+    coordinates are 1-based on the sequence as it was before any edit, so
+    edits never depend on the order they were entered in. An insertion after
+    position p is the empty window [p + 1, p].
+    """
+
+    type: str
+    start: int
+    end: int
+    new: str
+    old: str
+    position: Optional[int] = None    # insertions only: "insert after"
+
+    @property
+    def delta(self) -> int:
+        return len(self.new) - (self.end - self.start + 1)
+
+
+def normalize_changes(changes: list[dict], residues: Optional[str] = None) -> list[SequenceEdit]:
+    """
+    Validate curator changes and return them as SequenceEdits sorted by
+    position. With ``residues`` the coordinates are range-checked, the old
+    fragments are filled in, and any ``old_sequence`` the caller sends (what
+    its preview showed) must still match the current residues.
+    """
+    seq_len = len(residues) if residues is not None else None
+    edits = []
+    for c in changes:
+        change_type = c.get("type")
+        frag = (c.get("sequence") or "").upper()
+        if change_type == "insertion":
+            if c.get("position") is None or not frag:
+                raise SequenceCurationError("An insertion needs a position and a sequence.")
+            position = int(c["position"])
+            if position < 0 or (seq_len is not None and position > seq_len):
+                raise SequenceCurationError(
+                    f"Insertion position {position} is outside the sequence (0-{seq_len})."
+                )
+            edit = SequenceEdit("insertion", position + 1, position, frag, "", position)
+        elif change_type in ("deletion", "substitution"):
+            if c.get("start") is None or c.get("end") is None:
+                raise SequenceCurationError(f"A {change_type} needs start and end coordinates.")
+            start, end = int(c["start"]), int(c["end"])
+            if change_type == "deletion":
+                frag = ""
+            elif not frag:
+                raise SequenceCurationError("A substitution needs a replacement sequence.")
+            if end < start:
+                raise SequenceCurationError(
+                    f"{change_type.capitalize()} end ({end}) is before start ({start})."
+                )
+            if start < 1 or (seq_len is not None and end > seq_len):
+                raise SequenceCurationError(
+                    f"{change_type.capitalize()} {start}-{end} is outside the sequence (1-{seq_len})."
+                )
+            edit = SequenceEdit(change_type, start, end, frag, "")
+        else:
+            raise SequenceCurationError(f"Invalid change type: {change_type}")
+        bad = set(frag) - SEQ_FRAGMENT_CHARS
+        if bad:
+            raise SequenceCurationError(
+                f"Sequence fragments may only contain IUPAC nucleotide codes; found {''.join(sorted(bad))}."
+            )
+        if residues is not None:
+            edit.old = residues[edit.start - 1:edit.end].upper()
+            expected = (c.get("old_sequence") or "").upper()
+            if expected and expected != edit.old:
+                raise SequenceCurationError(
+                    f"Current residues at {edit.start}-{edit.end} are '{edit.old}', but the "
+                    f"preview expected '{expected}'. The sequence may have changed; re-run the preview."
+                )
+        edits.append(edit)
+
+    edits.sort(key=lambda e: (e.start, e.end))
+    for prev, cur in zip(edits, edits[1:]):
+        if cur.start <= prev.end or (
+                cur.type == prev.type == "insertion" and cur.position == prev.position):
+            raise SequenceCurationError(
+                f"Changes at {prev.start}-{prev.end} and {cur.start}-{cur.end} overlap; "
+                "combine them into one change."
+            )
+    return edits
+
+
+def apply_edits(residues: str, edits: list[SequenceEdit]) -> str:
+    """Apply sorted, non-overlapping edits (original coordinates) to residues."""
+    pieces = []
+    cursor = 0
+    for e in edits:
+        pieces.append(residues[cursor:e.start - 1])
+        pieces.append(e.new)
+        cursor = e.end
+    pieces.append(residues[cursor:])
+    return "".join(pieces)
+
+
+def adjust_coordinate(coord: int, edits: list[SequenceEdit]) -> int:
+    """
+    Map an original coordinate onto the edited sequence: it moves by the
+    length change of every edit that ends before it (legacy _adjust_coordinate).
+    """
+    return coord + sum(e.delta for e in edits if e.end < coord)
+
+
+def edit_containing(coord: int, edits: list[SequenceEdit]) -> Optional[SequenceEdit]:
+    """
+    The length-changing edit whose window contains ``coord``, if any. A
+    feature boundary there has no well-defined new position.
+    """
+    for e in edits:
+        if e.delta != 0 and e.start <= coord <= e.end:
+            return e
+    return None
+
+
+def overlaps_edit(start: int, stop: int, edits: list[SequenceEdit]) -> bool:
+    """Whether a feature spanning start..stop contains or touches an edit."""
+    lo, hi = min(start, stop), max(start, stop)
+    return any(lo <= e.end and hi >= e.start for e in edits)
+
+
+def resolve_reference_nos(db: Session, values: list[int]) -> tuple[list[int], list[int]]:
+    """
+    Map curator-entered reference identifiers to CGD reference_nos.
+
+    Each value is taken as a reference_no if one exists, otherwise as the PMID
+    of a reference already in CGD. Returns (reference_nos, unknown_values).
+    """
+    values = list(dict.fromkeys(values))
+    if not values:
+        return [], []
+    by_ref_no = {
+        r for (r,) in db.query(Reference.reference_no).filter(Reference.reference_no.in_(values)).all()
+    }
+    by_pubmed = dict(
+        db.query(Reference.pubmed, Reference.reference_no)
+        .filter(Reference.pubmed.in_([v for v in values if v not in by_ref_no]))
+        .all()
+    ) if len(by_ref_no) < len(values) else {}
+    resolved, unknown = [], []
+    for v in values:
+        if v in by_ref_no:
+            resolved.append(v)
+        elif v in by_pubmed:
+            resolved.append(by_pubmed[v])
+        else:
+            unknown.append(v)
+    return list(dict.fromkeys(resolved)), unknown
 
 
 class SequenceCurationService:
@@ -255,100 +421,34 @@ class SequenceCurationService:
 
         feature, seq = result
 
-        # Process changes to compute new sequence
-        new_sequence = seq.residues
-        net_change = 0  # Track cumulative position shift
-
-        sorted_changes = sorted(changes, key=lambda c: c.get("position", 0))
+        # Every edit is in original coordinates, so the outcome does not depend
+        # on the order the changes were entered in.
+        old_sequence = seq.residues
+        edits = normalize_changes(changes, old_sequence)
+        new_sequence = apply_edits(old_sequence, edits)
+        net_change = len(new_sequence) - len(old_sequence)
 
         change_details = []
+        for e in edits:
+            # 0-based offsets of the window in the old and the new sequence
+            old_at = e.start - 1
+            new_at = adjust_coordinate(e.start, edits) - 1
+            detail = {
+                "type": e.type,
+                "old_context": self._get_context(old_sequence, old_at, 20 + len(e.old)),
+                "new_context": self._get_context(new_sequence, new_at, 20 + len(e.new)),
+            }
+            if e.type == "insertion":
+                detail.update(position=e.position, sequence=e.new, length=len(e.new))
+            elif e.type == "deletion":
+                detail.update(start=e.start, end=e.end, deleted_sequence=e.old, length=len(e.old))
+            else:
+                detail.update(start=e.start, end=e.end, old_sequence=e.old,
+                              new_sequence=e.new, length_change=e.delta)
+            change_details.append(detail)
 
-        for change in sorted_changes:
-            change_type = change.get("type")
-            position = change.get("position", 0)
-
-            if change_type == "insertion":
-                # Insert after the given position
-                insert_seq = change.get("sequence", "").upper()
-                adjusted_pos = position + net_change
-
-                old_context = self._get_context(new_sequence, adjusted_pos, 20)
-                new_sequence = (
-                    new_sequence[:adjusted_pos] +
-                    insert_seq +
-                    new_sequence[adjusted_pos:]
-                )
-                new_context = self._get_context(new_sequence, adjusted_pos, 20 + len(insert_seq))
-
-                net_change += len(insert_seq)
-                change_details.append({
-                    "type": "insertion",
-                    "position": position,
-                    "sequence": insert_seq,
-                    "length": len(insert_seq),
-                    "old_context": old_context,
-                    "new_context": new_context,
-                })
-
-            elif change_type == "deletion":
-                # Delete from start to end (1-based, inclusive)
-                start = change.get("start", 0)
-                end = change.get("end", start)
-                adjusted_start = start + net_change - 1  # Convert to 0-based
-                adjusted_end = end + net_change
-
-                deleted_seq = new_sequence[adjusted_start:adjusted_end]
-                old_context = self._get_context(new_sequence, adjusted_start, 20 + len(deleted_seq))
-
-                new_sequence = new_sequence[:adjusted_start] + new_sequence[adjusted_end:]
-                new_context = self._get_context(new_sequence, adjusted_start, 20)
-
-                deletion_length = end - start + 1
-                net_change -= deletion_length
-                change_details.append({
-                    "type": "deletion",
-                    "start": start,
-                    "end": end,
-                    "deleted_sequence": deleted_seq,
-                    "length": deletion_length,
-                    "old_context": old_context,
-                    "new_context": new_context,
-                })
-
-            elif change_type == "substitution":
-                # Replace from start to end with new sequence
-                start = change.get("start", 0)
-                end = change.get("end", start)
-                new_seq = change.get("sequence", "").upper()
-                adjusted_start = start + net_change - 1  # Convert to 0-based
-                adjusted_end = end + net_change
-
-                old_seq = new_sequence[adjusted_start:adjusted_end]
-                old_context = self._get_context(new_sequence, adjusted_start, 20 + len(old_seq))
-
-                new_sequence = (
-                    new_sequence[:adjusted_start] +
-                    new_seq +
-                    new_sequence[adjusted_end:]
-                )
-                new_context = self._get_context(new_sequence, adjusted_start, 20 + len(new_seq))
-
-                length_diff = len(new_seq) - (end - start + 1)
-                net_change += length_diff
-                change_details.append({
-                    "type": "substitution",
-                    "start": start,
-                    "end": end,
-                    "old_sequence": old_seq,
-                    "new_sequence": new_seq,
-                    "length_change": length_diff,
-                    "old_context": old_context,
-                    "new_context": new_context,
-                })
-
-        # Get affected features
         affected_features = self._get_affected_features(
-            seq.seq_no, changes, net_change
+            seq.seq_no, changes, net_change, edits=edits
         )
 
         return {
@@ -373,53 +473,45 @@ class SequenceCurationService:
         root_seq_no: int,
         changes: list[dict],
         net_change: int,
+        edits: Optional[list[SequenceEdit]] = None,
     ) -> list[dict]:
         """
-        Get features that would be affected by the sequence changes.
-
-        A feature is affected if its coordinates overlap with any change position.
+        Get features that would be affected by the sequence changes: those
+        overlapping an edit (their sequence changes) and the first of those
+        downstream (their coordinates shift). ``boundary_in_edit`` marks a
+        feature with an end inside a length-changing edit, which the commit
+        refuses.
         """
-        # Get min and max positions of all changes
-        positions = []
-        for change in changes:
-            if change.get("type") == "insertion":
-                positions.append(change.get("position", 0))
-            else:
-                positions.append(change.get("start", 0))
-                positions.append(change.get("end", 0))
-
-        if not positions:
+        if edits is None:
+            if not changes:
+                return []
+            edits = normalize_changes(changes)
+        if not edits:
             return []
 
-        min_pos = min(positions)
-        max_pos = max(positions)
+        min_pos = min(e.start for e in edits) - 1   # an insertion's window is empty
+        max_pos = max(e.end for e in edits)
+        lo = func.least(FeatLocation.start_coord, FeatLocation.stop_coord)
+        hi = func.greatest(FeatLocation.start_coord, FeatLocation.stop_coord)
 
-        # Find features that overlap with the change region
         results = (
             self.db.query(Feature, FeatLocation)
             .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .filter(
                 FeatLocation.root_seq_no == root_seq_no,
                 FeatLocation.is_loc_current == "Y",
-                or_(
-                    # Feature overlaps the change region
-                    and_(
-                        FeatLocation.start_coord <= max_pos,
-                        FeatLocation.stop_coord >= min_pos,
-                    ),
-                    # Feature is downstream (will have coordinates shifted)
-                    FeatLocation.start_coord > max_pos,
-                ),
+                Feature.feature_type.notin_(["chromosome", "contig", "plasmid"]),
+                # overlapping the edited span, or downstream of it
+                hi >= min_pos,
             )
-            .order_by(FeatLocation.start_coord)
+            .order_by(lo)
             .limit(100)
             .all()
         )
 
         affected = []
         for feature, loc in results:
-            is_overlapping = (loc.start_coord <= max_pos and loc.stop_coord >= min_pos)
-
+            is_overlapping = overlaps_edit(loc.start_coord, loc.stop_coord, edits)
             affected.append({
                 "feature_no": feature.feature_no,
                 "feature_name": feature.feature_name,
@@ -429,9 +521,13 @@ class SequenceCurationService:
                 "stop_coord": loc.stop_coord,
                 "strand": loc.strand,
                 "is_overlapping": is_overlapping,
-                "is_downstream": loc.start_coord > max_pos,
-                "new_start": loc.start_coord if is_overlapping else loc.start_coord + net_change,
-                "new_stop": loc.stop_coord if is_overlapping else loc.stop_coord + net_change,
+                "is_downstream": min(loc.start_coord, loc.stop_coord) > max_pos,
+                "boundary_in_edit": bool(
+                    edit_containing(loc.start_coord, edits)
+                    or edit_containing(loc.stop_coord, edits)
+                ),
+                "new_start": adjust_coordinate(loc.start_coord, edits),
+                "new_stop": adjust_coordinate(loc.stop_coord, edits),
             })
 
         return affected
@@ -503,11 +599,13 @@ class SequenceCurationService:
     # ------------------------------------------------------------------
     # Commit path (ported from legacy UpdateRootSequence.pm / RootSequence.pm)
     #
-    # v1 scope: equal-length SUBSTITUTIONS only. Because no base is added or
-    # removed, every feature keeps its coordinates and only needs its
-    # feat_location re-pointed to the new root-sequence version; the coordinate
-    # propagation machinery of the legacy tool (for insertions/deletions) is
-    # intentionally not reproduced here.
+    # Insertions, deletions and substitutions of any length. As in the legacy
+    # tool, every edit is the replacement of an original window, and a
+    # coordinate moves by the length change of every edit ending before it.
+    # A feature whose coordinates move gets a new current feat_location
+    # (coord_version = the edit time) and its old one is kept as history; a
+    # feature whose coordinates do not move is re-pointed to the new root
+    # sequence in place.
     # ------------------------------------------------------------------
     def apply_changes(
         self,
@@ -519,17 +617,20 @@ class SequenceCurationService:
         dry_run: bool = True,
     ) -> dict:
         """
-        Apply equal-length substitution edits to a root (chromosome/contig)
-        sequence, following the legacy UpdateRootSequence semantics.
+        Apply insertion/deletion/substitution edits to a root (chromosome/
+        contig) sequence, following the legacy UpdateRootSequence semantics.
 
         Steps (single transaction):
-          1. Validate every change is an equal-length substitution.
-          2. Verify the current residues at each window match what the caller
-             believes is there (guards against a stale preview).
-          3. Insert a new current SEQ version with corrected residues and
+          1. Validate the edits (coordinates, IUPAC fragments, no overlaps) and
+             verify the current residues at each window match what the caller's
+             preview showed (guards against a stale preview).
+          2. Refuse if any feature has an end inside a length-changing edit:
+             its new boundary is ambiguous and needs manual curation.
+          3. Insert a new current SEQ version with the edited residues and
              deprecate the old one.
-          4. Re-point every current feat_location on the old root_seq to the
-             new SEQ (and the root feature's own seq_no).
+          4. Give every feature whose coordinates move a new current
+             feat_location; re-point the rest (and the root feature's own
+             seq_no) to the new SEQ.
           5. Regenerate genomic (and protein, for coding features) sequences
              for any feature whose residues actually changed.
           6. Record seq_change_archive rows + a note (+ optional references).
@@ -539,33 +640,16 @@ class SequenceCurationService:
         reference_nos = reference_nos or []
         creator = (curator_userid or "")[:12]
 
-        # --- 1. validate scope ---
         if not changes:
             raise SequenceCurationError("No changes supplied.")
-        subs = []
-        for c in changes:
-            if c.get("type") != "substitution":
-                raise SequenceCurationError(
-                    "This tool currently supports substitution changes only "
-                    "(equal length). Insertions/deletions are not yet enabled."
-                )
-            start = int(c["start"])
-            end = int(c["end"])
-            new_frag = (c.get("sequence") or "").upper()
-            if end < start:
-                raise SequenceCurationError(
-                    f"Substitution end ({end}) is before start ({start})."
-                )
-            if len(new_frag) != (end - start + 1):
-                raise SequenceCurationError(
-                    f"Substitution at {start}-{end} changes length "
-                    f"({end - start + 1} -> {len(new_frag)}); only equal-length "
-                    "substitutions are supported."
-                )
-            subs.append({"start": start, "end": end, "new": new_frag,
-                         "expected_old": (c.get("old_sequence") or "").upper() or None})
         if not note_text or not note_text.strip():
             raise SequenceCurationError("A note describing the change is required.")
+        reference_nos, unknown_refs = resolve_reference_nos(self.db, reference_nos)
+        if unknown_refs:
+            raise SequenceCurationError(
+                "Reference(s) not found in CGD: " + ", ".join(map(str, unknown_refs))
+                + ". Enter a CGD reference_no, or the PMID of a paper already in CGD."
+            )
 
         # --- 2. load current root sequence ---
         row = (
@@ -585,7 +669,7 @@ class SequenceCurationService:
         chr_feature, old_seq = row
         old_root_seq_no = old_seq.seq_no
         old_residues = old_seq.residues
-        seq_len = len(old_residues)
+        old_len = len(old_residues)
 
         # organism -> translation table selection for protein regeneration
         organism = (
@@ -595,43 +679,47 @@ class SequenceCurationService:
         )
         use_table_12 = bool(organism and organism.organism_name in TRANSLATION_TABLE_12_ORGANISMS)
 
-        # --- verify + compute new residues ---
-        new_residues = old_residues
-        archive_specs = []
-        for s in subs:
-            cur_old = old_residues[s["start"] - 1:s["end"]].upper()
-            if s["expected_old"] and s["expected_old"] != cur_old:
-                raise SequenceCurationError(
-                    f"Current residues at {s['start']}-{s['end']} are '{cur_old}', "
-                    f"but the preview expected '{s['expected_old']}'. The reference "
-                    "may have changed; re-run the preview."
-                )
-            new_residues = new_residues[:s["start"] - 1] + s["new"] + new_residues[s["end"]:]
-            archive_specs.append({"start": s["start"], "end": s["end"],
-                                  "old": cur_old, "new": s["new"]})
-        if len(new_residues) != seq_len:
-            raise SequenceCurationError(
-                "Internal error: corrected sequence length changed; aborting."
-            )
+        # --- 1. validate + compute new residues ---
+        edits = normalize_changes(changes, old_residues)
+        new_residues = apply_edits(old_residues, edits)
         if new_residues == old_residues:
             raise SequenceCurationError("The edits produce no change to the sequence.")
+        new_len = len(new_residues)
 
-        min_pos = min(s["start"] for s in subs)
-        max_pos = max(s["end"] for s in subs)
-
-        # --- features overlapping the edited window (residues may change) ---
-        overlap_rows = (
+        # --- 2. plan every current feature location on this root ---
+        loc_rows = (
             self.db.query(Feature, FeatLocation)
             .join(FeatLocation, Feature.feature_no == FeatLocation.feature_no)
             .filter(
                 FeatLocation.root_seq_no == old_root_seq_no,
                 FeatLocation.is_loc_current == "Y",
-                func.least(FeatLocation.start_coord, FeatLocation.stop_coord) <= max_pos,
-                func.greatest(FeatLocation.start_coord, FeatLocation.stop_coord) >= min_pos,
                 Feature.feature_no != chr_feature.feature_no,
             )
             .all()
         )
+        moved = []         # (feature, old loc, new start, new stop)
+        overlapping = []   # (feature, new start, new stop, strand): residues may change
+        conflicts = []
+        for feature, loc in loc_rows:
+            if edit_containing(loc.start_coord, edits) or edit_containing(loc.stop_coord, edits):
+                conflicts.append(
+                    f"{feature.feature_name} ({feature.feature_type}, {loc.start_coord}-{loc.stop_coord})"
+                )
+                continue
+            new_start = adjust_coordinate(loc.start_coord, edits)
+            new_stop = adjust_coordinate(loc.stop_coord, edits)
+            if (new_start, new_stop) != (loc.start_coord, loc.stop_coord):
+                moved.append((feature, loc, new_start, new_stop))
+            if overlaps_edit(loc.start_coord, loc.stop_coord, edits):
+                overlapping.append((feature, new_start, new_stop, loc.strand))
+        if conflicts:
+            shown = "; ".join(conflicts[:10])
+            more = f" and {len(conflicts) - 10} more" if len(conflicts) > 10 else ""
+            raise SequenceCurationError(
+                "These features have an end inside an edit that changes the sequence length, so "
+                f"their new boundaries are ambiguous: {shown}{more}. Adjust the edit so it does not "
+                "cross a feature boundary, or curate those features first."
+            )
 
         # ================= writes =================
         now = datetime.now()
@@ -643,7 +731,7 @@ class SequenceCurationService:
             seq_type="genomic",
             genome_version_no=old_seq.genome_version_no,
             is_seq_current="Y",
-            seq_length=seq_len,
+            seq_length=new_len,
             residues=new_residues,
             source=old_seq.source,
             created_by=creator,
@@ -654,7 +742,52 @@ class SequenceCurationService:
 
         old_seq.is_seq_current = "N"
 
-        # 4. re-point all current feat_locations on this root to the new SEQ
+        # 4a. moved features: archive the current location, insert the new one
+        for feature, loc, new_start, new_stop in moved:
+            loc.is_loc_current = "N"
+            self.db.add(FeatLocation(
+                feature_no=feature.feature_no,
+                seq_no=loc.seq_no,
+                root_seq_no=new_root_seq_no,
+                coord_version=now,
+                start_coord=new_start,
+                stop_coord=new_stop,
+                strand=loc.strand,
+                is_loc_current="Y",
+                created_by=creator,
+            ))
+        self.db.flush()
+
+        # 4b. the root feature's own location spans the whole sequence
+        root_locs = (
+            self.db.query(FeatLocation)
+            .filter(
+                FeatLocation.feature_no == chr_feature.feature_no,
+                FeatLocation.is_loc_current == "Y",
+            )
+            .all()
+        )
+        for loc in root_locs:
+            if new_len != old_len and max(loc.start_coord, loc.stop_coord) == old_len:
+                loc.is_loc_current = "N"
+                grow = new_len - old_len
+                self.db.add(FeatLocation(
+                    feature_no=chr_feature.feature_no,
+                    seq_no=new_root_seq_no,
+                    root_seq_no=(new_root_seq_no if loc.root_seq_no == old_root_seq_no
+                                 else loc.root_seq_no),
+                    coord_version=now,
+                    start_coord=loc.start_coord + (grow if loc.start_coord > loc.stop_coord else 0),
+                    stop_coord=loc.stop_coord + (grow if loc.stop_coord >= loc.start_coord else 0),
+                    strand=loc.strand,
+                    is_loc_current="Y",
+                    created_by=creator,
+                ))
+            else:
+                loc.seq_no = new_root_seq_no
+        self.db.flush()
+
+        # 4c. everything else keeps its coordinates: re-point in place
         repointed = (
             self.db.query(FeatLocation)
             .filter(
@@ -664,15 +797,10 @@ class SequenceCurationService:
             .update({FeatLocation.root_seq_no: new_root_seq_no},
                     synchronize_session=False)
         )
-        # the root feature's own feat_location.seq_no also points at the root SEQ
-        self.db.query(FeatLocation).filter(
-            FeatLocation.feature_no == chr_feature.feature_no,
-            FeatLocation.is_loc_current == "Y",
-        ).update({FeatLocation.seq_no: new_root_seq_no}, synchronize_session=False)
 
         # 5. regenerate genomic/protein for features whose residues changed
         regenerated = self._regenerate_feature_sequences(
-            overlap_rows, old_residues, new_residues, now, creator, use_table_12
+            overlapping, new_residues, now, creator, use_table_12
         )
 
         # 6. seq_change_archive + note (+ references)
@@ -689,14 +817,20 @@ class SequenceCurationService:
             note = Note(note=note_text_clean, note_type=NOTE_TYPE, created_by=creator)
             self.db.add(note)
             self.db.flush()
-        for spec in archive_specs:
+        archive_specs = []
+        for e in edits:
+            # legacy archive convention: an insertion is recorded at its
+            # "insert after" position, with no old sequence
+            start, end = (e.position, e.position) if e.type == "insertion" else (e.start, e.end)
+            archive_specs.append({"type": e.type, "start": start, "end": end,
+                                  "old": e.old, "new": e.new, "length_change": e.delta})
             arch = SeqChangeArchive(
                 seq_no=old_root_seq_no,
-                seq_change_type="Substitution",
-                change_start_coord=spec["start"],
-                change_stop_coord=spec["end"],
-                old_seq=spec["old"],
-                new_seq=spec["new"],
+                seq_change_type=ARCHIVE_CHANGE_TYPES[e.type],
+                change_start_coord=start,
+                change_stop_coord=end,
+                old_seq=e.old or None,
+                new_seq=e.new or None,
                 created_by=creator,
             )
             self.db.add(arch)
@@ -735,9 +869,12 @@ class SequenceCurationService:
             "feature_no": chr_feature.feature_no,
             "old_root_seq_no": old_root_seq_no,
             "new_root_seq_no": new_root_seq_no,
-            "seq_length": seq_len,
-            "substitutions": archive_specs,
+            "old_length": old_len,
+            "seq_length": new_len,
+            "net_change": new_len - old_len,
+            "changes": archive_specs,
             "feat_locations_repointed": repointed,
+            "feat_locations_moved": len(moved),
             "features_regenerated": regenerated,
             "note_no": note.note_no,
             "reference_nos": reference_nos,
@@ -750,20 +887,24 @@ class SequenceCurationService:
         else:
             self.db.commit()
             logger.info(
-                "apply_changes committed for %s: new_root_seq_no=%s, %d feat_locations re-pointed, %d features regenerated",
-                feature_name, new_root_seq_no, repointed, len(regenerated),
+                "apply_changes committed for %s: new_root_seq_no=%s, net change %+d, "
+                "%d feat_locations moved, %d re-pointed, %d features regenerated",
+                feature_name, new_root_seq_no, new_len - old_len, len(moved), repointed,
+                len(regenerated),
             )
         return plan
 
     def _regenerate_feature_sequences(
-        self, overlap_rows, old_residues, new_residues, now, creator, use_table_12,
+        self, overlapping, new_residues, now, creator, use_table_12,
     ) -> list[dict]:
-        """Regenerate genomic (+protein) SEQ for features whose residues changed."""
+        """
+        Regenerate genomic (+protein) SEQ for features whose residues changed.
+        ``overlapping`` holds (feature, start, stop, strand) with the feature's
+        coordinates on the edited sequence.
+        """
         regenerated = []
-        for feature, loc in overlap_rows:
-            new_genomic = extract_subsequence(
-                new_residues, loc.start_coord, loc.stop_coord, loc.strand
-            )
+        for feature, start, stop, strand in overlapping:
+            new_genomic = extract_subsequence(new_residues, start, stop, strand)
             cur_genomic_seq = (
                 self.db.query(Seq)
                 .filter(
@@ -808,22 +949,26 @@ class SequenceCurationService:
                 "genomic_length": len(new_genomic),
             }
 
-            # protein for coding features
-            if feature.feature_type in CODING_FEATURE_TYPES:
+            # Protein for coding features, and for any feature that already has
+            # one: C. albicans _B alleles are feature_type 'allele' but carry a
+            # protein (as the merge tool also assumes).
+            cur_prot = (
+                self.db.query(Seq)
+                .filter(
+                    Seq.feature_no == feature.feature_no,
+                    func.upper(Seq.seq_type) == "PROTEIN",
+                    Seq.is_seq_current == "Y",
+                )
+                .first()
+            )
+            if feature.feature_type in CODING_FEATURE_TYPES or cur_prot is not None:
                 protein = translate_dna(
                     new_genomic, codon_table=(CODON_TABLE_12 if use_table_12 else CODON_TABLE)
                 )
                 if protein.endswith("*"):
                     protein = protein[:-1]
-                cur_prot = (
-                    self.db.query(Seq)
-                    .filter(
-                        Seq.feature_no == feature.feature_no,
-                        func.upper(Seq.seq_type) == "PROTEIN",
-                        Seq.is_seq_current == "Y",
-                    )
-                    .first()
-                )
+                # a curator fixing a frameshift wants to see whether it worked
+                entry["internal_stops"] = protein.count("*")
                 if cur_prot:
                     cur_prot.is_seq_current = "N"
                 new_pseq = Seq(

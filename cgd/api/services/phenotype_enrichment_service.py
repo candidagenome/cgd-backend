@@ -31,6 +31,7 @@ from cgd.models.models import (
     Phenotype,
     Seq,
 )
+from cgd.api.services.go_term_finder_service import resolve_to_a22_features
 from cgd.schemas.phenotype_enrichment_schema import (
     EnrichedPhenotype,
     GeneHit,
@@ -150,6 +151,8 @@ def validate_genes(
             alias_upper = alias.alias_name.upper() if alias.alias_name else None
             if alias_upper and alias_upper in remaining_genes:
                 found_map[alias_upper] = feature
+
+    found_map = resolve_to_a22_features(db, found_map)
 
     # Get phenotype annotation status for found features (chunked to avoid Oracle 1000 limit)
     feature_nos = list(set(f.feature_no for f in found_map.values()))
@@ -298,15 +301,40 @@ def _get_valid_background_feature_nos(
     return valid_features
 
 
+def _get_merged_phenotype_map(db: Session) -> dict[int, int]:
+    """
+    Map each phenotype_no to one representative phenotype_no per
+    (observable, mutant type, qualifier).
+
+    A PHENOTYPE row is also keyed by source and experiment type, so the same
+    phenotype recorded by e.g. classical genetics and a large-scale survey is
+    stored as separate rows. Enrichment treats those as one phenotype; the
+    lowest phenotype_no in each group represents it.
+    """
+    representative: dict[tuple, int] = {}
+    merged: dict[int, int] = {}
+    rows = db.query(
+        Phenotype.phenotype_no, Phenotype.observable, Phenotype.mutant_type, Phenotype.qualifier
+    ).order_by(Phenotype.phenotype_no).all()
+    for phenotype_no, observable, mutant_type, qualifier in rows:
+        key = (observable, mutant_type, qualifier)
+        merged[phenotype_no] = representative.setdefault(key, phenotype_no)
+    return merged
+
+
 def _get_phenotype_annotations(
     db: Session,
     feature_nos: list[int],
+    merged_phenotypes: Optional[dict[int, int]] = None,
 ) -> dict[int, set[int]]:
     """
     Get phenotype annotations for features.
 
-    Returns dict mapping feature_no -> set of phenotype_no values.
+    Returns dict mapping feature_no -> set of phenotype_no values. With
+    merged_phenotypes (see _get_merged_phenotype_map), each phenotype_no is
+    replaced by its representative.
     """
+    merged_phenotypes = merged_phenotypes or {}
     if not feature_nos:
         return {}
 
@@ -318,7 +346,7 @@ def _get_phenotype_annotations(
             .filter(PhenoAnnotation.feature_no.in_(chunk))
         )
         for feature_no, phenotype_no in query.all():
-            annotations[feature_no].add(phenotype_no)
+            annotations[feature_no].add(merged_phenotypes.get(phenotype_no, phenotype_no))
 
     return dict(annotations)
 
@@ -389,7 +417,10 @@ def _apply_multiple_testing_correction(
     p_value_cutoff: float,
 ) -> list[tuple[int, int, int, int, int, float, Optional[float]]]:
     """
-    Apply multiple testing correction.
+    Apply multiple testing correction and the p-value cutoff.
+
+    `results` must hold every phenotype that was tested (not only nominally
+    significant ones): the number of tests is len(results).
 
     Returns list of (phenotype_no, k, n, K, N, p_value, fdr) tuples.
     """
@@ -397,7 +428,11 @@ def _apply_multiple_testing_correction(
         return []
 
     if method == MultipleCorrectionMethod.NONE:
-        return [(pheno_no, k, n, K, N, p_val, None) for pheno_no, k, n, K, N, p_val in results]
+        return [
+            (pheno_no, k, n, K, N, p_val, None)
+            for pheno_no, k, n, K, N, p_val in results
+            if p_val <= p_value_cutoff
+        ]
 
     n_tests = len(results)
 
@@ -526,11 +561,12 @@ def run_phenotype_enrichment(
 
     # Step 3: Get phenotype annotations
     step_start = time.time()
-    query_annotations = _get_phenotype_annotations(db, query_feature_nos)
+    merged_phenotypes = _get_merged_phenotype_map(db)
+    query_annotations = _get_phenotype_annotations(db, query_feature_nos, merged_phenotypes)
     logger.info(f"Step 3a (query phenotype annotations): {time.time() - step_start:.2f}s")
 
     step_start = time.time()
-    background_annotations = _get_phenotype_annotations(db, background_feature_nos)
+    background_annotations = _get_phenotype_annotations(db, background_feature_nos, merged_phenotypes)
     logger.info(f"Step 3b (background phenotype annotations): {time.time() - step_start:.2f}s")
 
     # Filter to genes with phenotype annotations
@@ -550,7 +586,9 @@ def run_phenotype_enrichment(
         background_annotations,
         len(query_feature_nos),
         len(background_feature_nos),
-        request.p_value_cutoff,
+        # Keep every tested term: the cutoff is applied after multiple-testing
+        # correction, which must count all tests, not only nominally significant ones
+        1.0,
         request.min_genes_in_term,
     )
     logger.info(f"Step 4 (calculate enrichment): {time.time() - step_start:.2f}s - {len(enrichment_results)} terms")

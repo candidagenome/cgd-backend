@@ -59,6 +59,7 @@ from cgd.api.services.curation.sequence_curation_service import (
     CODON_TABLE,
     CODON_TABLE_12,
     TRANSLATION_TABLE_12_ORGANISMS,
+    resolve_reference_nos,
 )
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,12 @@ class FeatureMergeService:
         # A note is required to commit, but a dry-run preview may omit it.
         if not dry_run and not note_text_clean:
             raise FeatureMergeError("A note describing the merge is required.")
+        reference_nos, unknown_refs = resolve_reference_nos(self.db, reference_nos)
+        if unknown_refs:
+            raise FeatureMergeError(
+                "Reference(s) not found in CGD: " + ", ".join(map(str, unknown_refs))
+                + ". Enter a CGD reference_no, or the PMID of a paper already in CGD."
+            )
 
         survivor = self._load_feature(survivor_name)
         retire = self._load_feature(retire_name)
