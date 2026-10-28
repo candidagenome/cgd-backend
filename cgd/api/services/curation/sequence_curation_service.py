@@ -914,8 +914,19 @@ class SequenceCurationService:
                 "genomic_length": len(new_genomic),
             }
 
-            # protein for coding features
-            if feature.feature_type in CODING_FEATURE_TYPES:
+            # Protein for coding features, and for any feature that already has
+            # one: C. albicans _B alleles are feature_type 'allele' but carry a
+            # protein (as the merge tool also assumes).
+            cur_prot = (
+                self.db.query(Seq)
+                .filter(
+                    Seq.feature_no == feature.feature_no,
+                    func.upper(Seq.seq_type) == "PROTEIN",
+                    Seq.is_seq_current == "Y",
+                )
+                .first()
+            )
+            if feature.feature_type in CODING_FEATURE_TYPES or cur_prot is not None:
                 protein = translate_dna(
                     new_genomic, codon_table=(CODON_TABLE_12 if use_table_12 else CODON_TABLE)
                 )
@@ -923,15 +934,6 @@ class SequenceCurationService:
                     protein = protein[:-1]
                 # a curator fixing a frameshift wants to see whether it worked
                 entry["internal_stops"] = protein.count("*")
-                cur_prot = (
-                    self.db.query(Seq)
-                    .filter(
-                        Seq.feature_no == feature.feature_no,
-                        func.upper(Seq.seq_type) == "PROTEIN",
-                        Seq.is_seq_current == "Y",
-                    )
-                    .first()
-                )
                 if cur_prot:
                     cur_prot.is_seq_current = "N"
                 new_pseq = Seq(
