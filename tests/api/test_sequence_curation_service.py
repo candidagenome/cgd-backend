@@ -8,6 +8,7 @@ Tests cover:
 - Affected features detection
 - Nearby features search
 - Edit normalization, application and coordinate adjustment (indels)
+- Reference identifier resolution (reference_no or PMID)
 """
 import pytest
 from unittest.mock import MagicMock
@@ -20,6 +21,7 @@ from cgd.api.services.curation.sequence_curation_service import (
     edit_containing,
     normalize_changes,
     overlaps_edit,
+    resolve_reference_nos,
 )
 
 
@@ -573,3 +575,36 @@ class TestPreviewWithIndels:
         service = SequenceCurationService(mock_db)
         with pytest.raises(SequenceCurationError):
             service.preview_changes("ChrA", [{"type": "deletion", "start": 50, "end": 40}])
+
+
+class TestResolveReferenceNos:
+    """Curator-entered references may be CGD reference_nos or PMIDs."""
+
+    def test_empty(self, mock_db):
+        assert resolve_reference_nos(mock_db, []) == ([], [])
+        mock_db.query.assert_not_called()
+
+    def test_reference_no_pmid_and_unknown(self, mock_db):
+        mock_db.query.side_effect = [
+            MockQuery([(68332,)]),                # reference_no lookup
+            MockQuery([(37561787, 68332), (111, 5)]),  # PMID lookup
+        ]
+        resolved, unknown = resolve_reference_nos(mock_db, [68332, 37561787, 111, 38362496])
+        # the PMID of an already-listed reference collapses onto it
+        assert resolved == [68332, 5]
+        assert unknown == [38362496]
+
+    def test_all_reference_nos_skips_pmid_lookup(self, mock_db):
+        mock_db.query.side_effect = [MockQuery([(7,), (9,)])]
+        assert resolve_reference_nos(mock_db, [7, 9, 7]) == ([7, 9], [])
+        assert mock_db.query.call_count == 1
+
+    def test_apply_changes_rejects_unknown_reference_before_writing(self, mock_db):
+        mock_db.query.side_effect = [MockQuery([]), MockQuery([])]
+        service = SequenceCurationService(mock_db)
+        with pytest.raises(SequenceCurationError, match="38362496"):
+            service.apply_changes(
+                "ChrA", [{"type": "deletion", "start": 5, "end": 5}], "note", "CUR",
+                reference_nos=[38362496], dry_run=False,
+            )
+        mock_db.add.assert_not_called()

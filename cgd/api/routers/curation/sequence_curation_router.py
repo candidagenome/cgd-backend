@@ -156,7 +156,8 @@ class ApplyChangesRequest(BaseModel):
     changes: list[SequenceChange]
     note: str = Field(..., description="Required note describing the change")
     reference_nos: list[int] = Field(
-        default_factory=list, description="Optional CGD reference_no(s) to link to the note"
+        default_factory=list,
+        description="Optional CGD reference_no(s), or PMID(s) of references in CGD, to link to the note",
     )
     dry_run: bool = Field(
         False, description="If true, perform all writes then roll back (validation only)"

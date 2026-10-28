@@ -244,6 +244,35 @@ def overlaps_edit(start: int, stop: int, edits: list[SequenceEdit]) -> bool:
     return any(lo <= e.end and hi >= e.start for e in edits)
 
 
+def resolve_reference_nos(db: Session, values: list[int]) -> tuple[list[int], list[int]]:
+    """
+    Map curator-entered reference identifiers to CGD reference_nos.
+
+    Each value is taken as a reference_no if one exists, otherwise as the PMID
+    of a reference already in CGD. Returns (reference_nos, unknown_values).
+    """
+    values = list(dict.fromkeys(values))
+    if not values:
+        return [], []
+    by_ref_no = {
+        r for (r,) in db.query(Reference.reference_no).filter(Reference.reference_no.in_(values)).all()
+    }
+    by_pubmed = dict(
+        db.query(Reference.pubmed, Reference.reference_no)
+        .filter(Reference.pubmed.in_([v for v in values if v not in by_ref_no]))
+        .all()
+    ) if len(by_ref_no) < len(values) else {}
+    resolved, unknown = [], []
+    for v in values:
+        if v in by_ref_no:
+            resolved.append(v)
+        elif v in by_pubmed:
+            resolved.append(by_pubmed[v])
+        else:
+            unknown.append(v)
+    return list(dict.fromkeys(resolved)), unknown
+
+
 class SequenceCurationService:
     """Service for chromosome/contig sequence curation."""
 
@@ -615,6 +644,12 @@ class SequenceCurationService:
             raise SequenceCurationError("No changes supplied.")
         if not note_text or not note_text.strip():
             raise SequenceCurationError("A note describing the change is required.")
+        reference_nos, unknown_refs = resolve_reference_nos(self.db, reference_nos)
+        if unknown_refs:
+            raise SequenceCurationError(
+                "Reference(s) not found in CGD: " + ", ".join(map(str, unknown_refs))
+                + ". Enter a CGD reference_no, or the PMID of a paper already in CGD."
+            )
 
         # --- 2. load current root sequence ---
         row = (
