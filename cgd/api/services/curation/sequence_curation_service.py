@@ -286,7 +286,10 @@ class SequenceCurationService:
         Returns:
             List of root sequences with assembly grouping
         """
-        # Get root features (chromosomes, contigs, etc.) with their sequences
+        # Get root features (chromosomes, contigs, etc.) with their sequences.
+        # seq_type is compared as stored ('genomic') so Oracle can use the
+        # SEQ_TYPE_CURRENT_I index; upper() forced a full scan of SEQ, which
+        # took minutes on a cold cache.
         results = (
             self.db.query(
                 Feature.feature_no,
@@ -299,7 +302,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 Feature.feature_type.in_(["chromosome", "contig", "plasmid"]),
-                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .order_by(Seq.source, Feature.feature_name)
@@ -348,7 +351,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -410,7 +413,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -555,7 +558,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -657,7 +660,7 @@ class SequenceCurationService:
             .join(Seq, Feature.feature_no == Seq.feature_no)
             .filter(
                 func.upper(Feature.feature_name) == feature_name.upper(),
-                func.upper(Seq.seq_type) == "GENOMIC",
+                Seq.seq_type == "genomic",
                 Seq.is_seq_current == "Y",
             )
             .first()
@@ -909,7 +912,7 @@ class SequenceCurationService:
                 self.db.query(Seq)
                 .filter(
                     Seq.feature_no == feature.feature_no,
-                    func.upper(Seq.seq_type) == "GENOMIC",
+                    Seq.seq_type == "genomic",
                     Seq.is_seq_current == "Y",
                 )
                 .first()
