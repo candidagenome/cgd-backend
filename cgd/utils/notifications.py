@@ -8,8 +8,10 @@ and error alerts.
 import logging
 import os
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,7 @@ def send_email(
     smtp_host: Optional[str] = None,
     smtp_port: Optional[int] = None,
     html: bool = False,
+    attachments: Optional[list[str | Path]] = None,
 ) -> bool:
     """
     Send an email notification.
@@ -40,6 +43,7 @@ def send_email(
         smtp_host: SMTP server hostname
         smtp_port: SMTP server port
         html: Whether body is HTML format
+        attachments: Paths of files to attach
 
     Returns:
         True if sent successfully, False otherwise
@@ -68,7 +72,7 @@ def send_email(
 
     try:
         # Create message
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed" if attachments else "alternative")
         msg["Subject"] = subject
         msg["From"] = from_email
         msg["To"] = ", ".join(recipients)
@@ -76,6 +80,12 @@ def send_email(
         # Attach body
         content_type = "html" if html else "plain"
         msg.attach(MIMEText(body, content_type))
+
+        for path in attachments or ():
+            path = Path(path)
+            part = MIMEApplication(path.read_bytes(), Name=path.name)
+            part["Content-Disposition"] = f'attachment; filename="{path.name}"'
+            msg.attach(part)
 
         # Send
         with smtplib.SMTP(smtp_host, smtp_port) as smtp:

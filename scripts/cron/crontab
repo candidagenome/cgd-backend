@@ -44,6 +44,10 @@
 # MONTHLY (1st): regenerate External_id_mappings download files (gp2protein, CGDID_2_GeneID/RefSeqID)
 0 22 1 * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_make_external_id_mappings.sh
 
+# MONTHLY (1st/2nd at 14:00 UTC): ortholog name-transfer candidates emailed to curators for review (read-only)
+0 14 1 * * cd /opt/cgd_api/scripts/cron && NAME_TRANSFER_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_propose_name_transfers.sh
+0 14 2 * * cd /opt/cgd_api/scripts/cron && NAME_TRANSFER_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_mutual_best_hit_names.sh
+
 # QUARTERLY (1st of Jan/Apr/Jul/Oct at 03:00 UTC): transfer experimental SGD GO annotations to CGD orthologs as IEA
 # (runs BEFORE transfer_go_from_orthologs so Sc-sourced terms claim the unique key first)
 0 3 1 1,4,7,10 * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh /opt/cgd_api/.venv/bin/python /opt/cgd_api/scripts/cron/transfer_go_from_sgd.py
