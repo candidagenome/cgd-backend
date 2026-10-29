@@ -237,6 +237,27 @@ for strain in "${!SPECIES_CONFIG[@]}"; do
     fi
 done
 
+# Re-index the protein FASTAs behind the JBrowse protein-domain viewer.
+# protein_data/<strain>_proteins.fasta symlinks to the PatMatch/BLAST protein
+# file that update_seq_search_files.py rewrites each week; its .fai must be
+# rebuilt with it or JBrowse reads proteins at stale byte offsets.
+# protein_data/<strain>_proteins.fasta.fai should symlink to the .fai made here.
+FASTA_DIR="${FASTA_DIR:-/data/fasta_files}"
+for fasta in "$FASTA_DIR"/*/orf_trans_all_*.fasta; do
+    [ -f "$fasta" ] || continue
+    if is_source_newer "$fasta" "${fasta}.fai"; then
+        echo ""
+        echo "Indexing protein FASTA: $fasta"
+        # duplicate IDs (e.g. shared alleles) keep their first record
+        if samtools faidx "$fasta" 2>/dev/null; then
+            ((updated++)) || true
+        else
+            echo "  ERROR: samtools faidx failed for $fasta"
+            errors=$((errors + 1))
+        fi
+    fi
+done
+
 echo ""
 echo "========================================"
 echo "Summary: $updated files updated, $errors errors"
