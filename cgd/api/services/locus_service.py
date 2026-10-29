@@ -5906,6 +5906,8 @@ def get_locus_protein_properties(db: Session, name: str) -> ProteinPropertiesRes
     features = get_features_for_locus_name(db, name)
     if not features:
         return ProteinPropertiesResponse(results={})
+    # One feature per organism, preferring Assembly 22 over its orf19 twin
+    features = _filter_features_by_preference(db, features)
 
     # Eager load protein_info and protein_detail
     feature_nos = [f.feature_no for f in features]
@@ -6163,6 +6165,8 @@ def get_locus_domain_details(db: Session, name: str) -> ProteinDomainResponse:
     features = get_features_for_locus_name(db, name)
     if not features:
         return ProteinDomainResponse(results={})
+    # One feature per organism, preferring Assembly 22 over its orf19 twin
+    features = _filter_features_by_preference(db, features)
 
     feature_nos = [f.feature_no for f in features]
 
