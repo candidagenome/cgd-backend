@@ -816,13 +816,17 @@ def process_gene(
 
     stats.nd_ancestors_found += len(ga_nos_to_delete)
 
-    # Collect the terms of remaining GO annotations and their ancestors; an IEA
-    # to any of them is redundant (GO_PATH holds no self rows, so add the term)
+    # Collect ancestors of remaining GO annotations, plus the terms of curated
+    # (non-IEA) ones; a domain IEA to any of them is redundant. A term already
+    # held by another IEA is not skipped: the InterPro reference is added to
+    # that annotation, so it does not depend on the other pipeline's next load.
+    # (GO_PATH holds no self rows.)
     curr_ancestors: dict[int, set[int]] = {}  # goid -> set of ga_no
     for ga_no, goid in goid_for_ga.items():
         if ga_no in ga_nos_to_delete:
             continue
-        for anc_goid in get_go_ancestors(session, goid) | {goid}:
+        own_term = {goid} if ev_for_ga.get(ga_no) != "IEA" else set()
+        for anc_goid in get_go_ancestors(session, goid) | own_term:
             if anc_goid not in curr_ancestors:
                 curr_ancestors[anc_goid] = set()
             curr_ancestors[anc_goid].add(ga_no)
