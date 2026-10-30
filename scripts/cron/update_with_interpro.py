@@ -6,10 +6,17 @@ This script reads InterProScan results and updates GO annotations for features
 based on domain predictions. It handles GO term obsolescence, replacement,
 taxonomy constraints, and removes redundant annotations.
 
+Alleles of one gene (C. albicans <locus>_A / <locus>_B) are annotated as a
+unit: both alleles get the union of their InterPro hits, the redundancy check
+runs against the existing annotations of both alleles, and the identical set
+of IEA annotations is written to each allele. Genes whose alleles have
+different InterPro hits (or only one allele scanned) are listed in
+<strain>_ipro2go_allele_differences.txt for curator review.
+
 Based on updateWithIpro.pl by CGD team.
 
 Usage:
-    python update_with_interpro.py --strain C_albicans_SC5314
+    python update_with_interpro.py --strain C_albicans_SC5314             # dry run
     python update_with_interpro.py --strain C_albicans_SC5314 --download --update
 
 Environment Variables:
@@ -20,13 +27,14 @@ Environment Variables:
     LOG_DIR: Directory for log files
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os
 import re
 import sys
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -36,7 +44,7 @@ from sqlalchemy import text
 # Add parent directory to path to import cgd modules
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from cgd.db.engine import SessionLocal
+from cgd.db.engine import SessionLocal  # noqa: E402
 
 # Load environment variables
 load_dotenv()
@@ -55,10 +63,16 @@ INTERPRO2GO_URL = "https://ftp.ebi.ac.uk/pub/databases/interpro/current_release/
 EVAL_CUTOFF = 1.0
 
 # Citation pattern for InterPro-based GO annotations
-IPR_CITATION_PATTERN = "%Prediction of Gene Ontology (GO) annotations based on protein characteristics (e.g., domains and motifs)%"
+IPR_CITATION_PATTERN = (
+    "%Prediction of Gene Ontology (GO) annotations based on protein characteristics"
+    " (e.g., domains and motifs)%"
+)
 
-# Commit interval
-COMMIT_LIMIT = 1000
+# Progress log interval (genes)
+PROGRESS_INTERVAL = 1000
+
+# Allele suffixes of diploid assemblies (C. albicans Assembly 22)
+ALLELE_SUFFIXES = ("_A", "_B")
 
 # GO IDs that have been replaced with newer terms
 GOID_REPLACED = {
@@ -212,8 +226,8 @@ def read_iprscan_results(
             # interpro_desc = parts[12]
             go_desc = parts[13] if len(parts) > 13 else ""
 
-            # Skip entries without InterPro ID
-            if interpro_id == "NULL":
+            # Skip entries without InterPro ID (InterProScan 5 writes "-")
+            if interpro_id in ("NULL", "-", ""):
                 continue
 
             # Skip entries without e-value
@@ -363,8 +377,14 @@ def get_feature_go_annotations(
     return annotations
 
 
+_ancestor_cache: dict[int, set[int]] = {}
+_descendant_cache: dict[int, set[int]] = {}
+
+
 def get_go_ancestors(session, goid: int) -> set[int]:
     """Get all ancestor GO IDs for a GO term."""
+    if goid in _ancestor_cache:
+        return _ancestor_cache[goid]
     query = text(f"""
         SELECT DISTINCT g1.goid
         FROM {DB_SCHEMA}.go_path gp
@@ -376,11 +396,14 @@ def get_go_ancestors(session, goid: int) -> set[int]:
     for row in session.execute(query, {"goid": goid}).fetchall():
         ancestors.add(row[0])
 
+    _ancestor_cache[goid] = ancestors
     return ancestors
 
 
 def get_go_descendants(session, goid: int) -> set[int]:
     """Get all descendant GO IDs for a GO term."""
+    if goid in _descendant_cache:
+        return _descendant_cache[goid]
     query = text(f"""
         SELECT DISTINCT g1.goid
         FROM {DB_SCHEMA}.go_path gp
@@ -392,6 +415,7 @@ def get_go_descendants(session, goid: int) -> set[int]:
     for row in session.execute(query, {"goid": goid}).fetchall():
         descendants.add(row[0])
 
+    _descendant_cache[goid] = descendants
     return descendants
 
 
@@ -428,14 +452,24 @@ def delete_current_ipro_annotations(
         delete_ga_query, {"strain": strain_abbrev, "ref_no": reference_no}
     )
 
-    # Delete remaining GO refs with this reference
+    # Delete this strain's remaining GO refs with this reference (annotations
+    # that also cite another reference keep it); other strains are untouched
     delete_gr_query = text(f"""
         DELETE FROM {DB_SCHEMA}.go_ref
         WHERE reference_no = :ref_no
+        AND go_annotation_no IN (
+            SELECT ga.go_annotation_no
+            FROM {DB_SCHEMA}.go_annotation ga
+            JOIN {DB_SCHEMA}.feature f ON ga.feature_no = f.feature_no
+            JOIN {DB_SCHEMA}.organism o ON (
+                f.organism_no = o.organism_no
+                AND o.organism_abbrev = :strain
+            )
+        )
     """)
-    session.execute(delete_gr_query, {"ref_no": reference_no})
+    session.execute(delete_gr_query, {"strain": strain_abbrev, "ref_no": reference_no})
 
-    session.commit()
+    # Committed with the new annotations, so a failed run rolls both back
     logger.info("Deleted existing annotations")
 
 
@@ -662,9 +696,37 @@ def insert_full_go_annotation(
         stats.goref_dbxrefs_inserted += 1
 
 
-def process_feature(
+def allele_gene_name(feature_name: str) -> str:
+    """Gene a feature belongs to: '<locus>' for '<locus>_A'/'<locus>_B', else itself."""
+    if feature_name.endswith(ALLELE_SUFFIXES):
+        return feature_name[:-2]
+    return feature_name
+
+
+def group_by_gene(
+    ipr_ids_for_feature: dict[str, set[str]],
+) -> dict[str, dict[str, set[str]]]:
+    """Group scanned features by gene: gene name -> {feature_name: InterPro IDs}."""
+    genes: dict[str, dict[str, set[str]]] = {}
+    for feature_name, ipr_ids in ipr_ids_for_feature.items():
+        genes.setdefault(allele_gene_name(feature_name), {})[feature_name] = ipr_ids
+    return genes
+
+
+def gene_members(gene_name: str, scanned: dict[str, set[str]]) -> list[str]:
+    """
+    Feature names to annotate for a gene: both alleles of an allele pair, even
+    when only one of them was scanned, otherwise the scanned feature itself.
+    """
+    if any(name != gene_name for name in scanned):
+        return [gene_name + suffix for suffix in ALLELE_SUFFIXES]
+    return list(scanned)
+
+
+def process_gene(
     session,
-    feature_name: str,
+    gene_name: str,
+    member_names: list[str],
     ipr_ids: set[str],
     goids_for_ipr_id: dict[str, set[int]],
     reference_no: int,
@@ -673,23 +735,35 @@ def process_feature(
     stats: ProcessingStats,
     summary_lines: list[str],
 ) -> None:
-    """Process GO annotations for a single feature."""
-    # Get feature info
-    feature_no, feature_type = get_feature_info(session, feature_name)
+    """
+    Process GO annotations for one gene. All of its alleles (member_names) are
+    treated as a unit: the redundancy check uses their combined existing
+    annotations, and each allele receives the same IEA annotations.
+    """
+    members: list[tuple[str, int]] = []
+    for feature_name in member_names:
+        feature_no, feature_type = get_feature_info(session, feature_name)
+        if not feature_no:
+            logger.debug(f"Skipping {feature_name}: not found in database")
+            continue
+        if feature_type and "pseudogene" in feature_type.lower():
+            logger.debug(f"Skipping {gene_name}: {feature_name} is a pseudogene")
+            return
+        members.append((feature_name, feature_no))
 
-    if not feature_no:
-        logger.debug(f"Skipping {feature_name}: not found in database")
+    if not members:
         return
 
-    if feature_type and "pseudogene" in feature_type.lower():
-        logger.debug(f"Skipping {feature_name}: pseudogene")
-        return
+    stats.features_processed += len(members)
+    label = ",".join(name for name, _ in members)
+    logger.debug(f"Processing {label}")
 
-    stats.features_processed += 1
-    logger.debug(f"Processing {feature_name}")
-
-    # Get existing GO annotations for this feature
-    existing_annotations = get_feature_go_annotations(session, feature_no, reference_no)
+    # Get existing GO annotations for every allele of this gene
+    existing_annotations = [
+        annot
+        for _, feature_no in members
+        for annot in get_feature_go_annotations(session, feature_no, reference_no)
+    ]
     goid_for_ga: dict[int, int] = {}
     ev_for_ga: dict[int, str] = {}
     for annot in existing_annotations:
@@ -742,12 +816,13 @@ def process_feature(
 
     stats.nd_ancestors_found += len(ga_nos_to_delete)
 
-    # Collect ancestors of remaining GO annotations
+    # Collect the terms of remaining GO annotations and their ancestors; an IEA
+    # to any of them is redundant (GO_PATH holds no self rows, so add the term)
     curr_ancestors: dict[int, set[int]] = {}  # goid -> set of ga_no
     for ga_no, goid in goid_for_ga.items():
         if ga_no in ga_nos_to_delete:
             continue
-        for anc_goid in get_go_ancestors(session, goid):
+        for anc_goid in get_go_ancestors(session, goid) | {goid}:
             if anc_goid not in curr_ancestors:
                 curr_ancestors[anc_goid] = set()
             curr_ancestors[anc_goid].add(ga_no)
@@ -757,7 +832,7 @@ def process_feature(
 
     for ipr_id in ipr_ids:
         if ipr_id not in goids_for_ipr_id:
-            summary_lines.append(f"{feature_name}\t{ipr_id}\tNA\t0\tNo GOIDs")
+            summary_lines.append(f"{label}\t{ipr_id}\tNA\t0\tNo GOIDs")
             continue
 
         domain_goids = goids_for_ipr_id[ipr_id]
@@ -827,7 +902,7 @@ def process_feature(
                 if note_for_goid[goid]:
                     note_for_goid[goid] += "; "
                 note_for_goid[goid] += (
-                    "GOID is ancestor of existing annotations: "
+                    "GOID already annotated or ancestor of existing annotations: "
                     + " ".join(str(ga) for ga in curr_ancestors[use_goid])
                 )
 
@@ -850,13 +925,14 @@ def process_feature(
                 stats.unique_feature_go_ipro += 1
 
                 if do_update and go_no:
-                    insert_full_go_annotation(
-                        session, go_no, ipr_id, feature_no, reference_no, stats
-                    )
+                    for _, feature_no in members:
+                        insert_full_go_annotation(
+                            session, go_no, ipr_id, feature_no, reference_no, stats
+                        )
 
             # Write summary line
             summary_lines.append(
-                f"{feature_name}\t{ipr_id}\t{goid}\t{1 if insert_goid[goid] else 0}\t{note_for_goid[goid]}"
+                f"{label}\t{ipr_id}\t{goid}\t{1 if insert_goid[goid] else 0}\t{note_for_goid[goid]}"
             )
 
     stats.unique_feature_go += len(goids_added)
@@ -892,8 +968,8 @@ def main() -> int:
     go_obo_file = DATA_DIR / "GO" / "gene_ontology.obo"
     interpro2go_file = domain_dir / "interpro2go.txt"
 
-    log_file = LOG_DIR / f"{strain_abbrev}_domain_GO_tx.log"
     summary_file = domain_dir / strain_abbrev / f"{strain_abbrev}_ipro2go_summary.txt"
+    allele_diff_file = domain_dir / strain_abbrev / f"{strain_abbrev}_ipro2go_allele_differences.txt"
 
     # Validate required files
     if not iprscan_file.exists():
@@ -937,18 +1013,32 @@ def main() -> int:
             if args.update:
                 delete_current_ipro_annotations(session, strain_abbrev, reference_no)
 
-            # Process each feature
+            # Process each gene; alleles of one gene are annotated together
             stats = ProcessingStats()
             summary_lines: list[str] = []
-            summary_lines.append("Feature\tInterPro ID\tGO ID\tAdded\tNote")
+            summary_lines.append("Feature(s)\tInterPro ID\tGO ID\tAdded\tNote")
+            allele_diff_lines = ["Gene\tAlleles scanned\tInterPro IDs only on A\tInterPro IDs only on B"]
 
-            transaction_count = 0
+            genes = group_by_gene(ipr_ids_for_feature)
+            for count, (gene_name, scanned) in enumerate(sorted(genes.items()), 1):
+                members = gene_members(gene_name, scanned)
+                ipr_ids = set().union(*scanned.values())
+                if len(members) > 1:
+                    on_a = scanned.get(gene_name + "_A")
+                    on_b = scanned.get(gene_name + "_B")
+                    if on_a is None or on_b is None or on_a != on_b:
+                        allele_diff_lines.append("\t".join([
+                            gene_name,
+                            ",".join(sorted(scanned)),
+                            ",".join(sorted((on_a or set()) - (on_b or set()))),
+                            ",".join(sorted((on_b or set()) - (on_a or set()))),
+                        ]))
 
-            for feature_name in ipr_ids_for_feature:
-                process_feature(
+                process_gene(
                     session,
-                    feature_name,
-                    ipr_ids_for_feature[feature_name],
+                    gene_name,
+                    members,
+                    ipr_ids,
                     goids_for_ipr_id,
                     reference_no,
                     obsolete_goids,
@@ -956,13 +1046,10 @@ def main() -> int:
                     stats,
                     summary_lines,
                 )
+                if count % PROGRESS_INTERVAL == 0:
+                    logger.info(f"Processed {count} of {len(genes)} genes")
 
-                transaction_count += 1
-                if args.update and transaction_count >= COMMIT_LIMIT:
-                    session.commit()
-                    transaction_count = 0
-
-            # Final commit
+            # One transaction: a failure part-way leaves the old annotations
             if args.update:
                 session.commit()
 
@@ -971,11 +1058,16 @@ def main() -> int:
         with open(summary_file, "w") as f:
             f.write("\n".join(summary_lines) + "\n")
         logger.info(f"Summary written to {summary_file}")
+        if len(allele_diff_lines) > 1:
+            with open(allele_diff_file, "w") as f:
+                f.write("\n".join(allele_diff_lines) + "\n")
+            logger.info(f"{len(allele_diff_lines) - 1} genes whose alleles differ in InterPro hits"
+                        f" written to {allele_diff_file}")
 
         # Print statistics
-        logger.info(f"Processed {stats.features_processed} features")
-        logger.info(f"Unique feature::GO associations: {stats.unique_feature_go}")
-        logger.info(f"Unique feature::GO::InterPro associations: {stats.unique_feature_go_ipro}")
+        logger.info(f"Processed {len(genes)} genes ({stats.features_processed} features)")
+        logger.info(f"Unique gene::GO associations: {stats.unique_feature_go}")
+        logger.info(f"Unique gene::GO::InterPro associations: {stats.unique_feature_go_ipro}")
         logger.info(f"ND ancestors identified: {stats.nd_ancestors_found}")
 
         if args.update:
