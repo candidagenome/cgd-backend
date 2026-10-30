@@ -642,15 +642,6 @@ def dump_sequences(
     # Build chromosome sequence cache
     chr_seqs = {c["name"]: c["sequence"] for c in chromosomes}
 
-    # Batch fetch CDS subfeatures for all ORFs
-    logger.info("Fetching CDS subfeatures...")
-    cds_cache = {}
-    for feat in features:
-        if is_orf(feat["feature_type"]):
-            cds_cache[feat["feature_no"]] = get_cds_subfeatures(
-                session, feat["feature_no"], seq_source
-            )
-
     # Get parent types for alleles (to include alleles of other_features)
     logger.info("Fetching allele parent types...")
     allele_parent_types = get_allele_parent_types(session, organism_no, seq_source)
@@ -676,6 +667,14 @@ def dump_sequences(
             # Direct other feature
             other_features.append(f)
     logger.info(f"ORFs: {len(orfs)}, Other features: {len(other_features)}")
+
+    # Batch fetch CDS subfeatures for all ORFs, including alleles of ORFs
+    # (C. albicans _B alleles); without them introns are translated
+    logger.info("Fetching CDS subfeatures...")
+    cds_cache = {
+        feat["feature_no"]: get_cds_subfeatures(session, feat["feature_no"], seq_source)
+        for feat in orfs
+    }
 
     # Build features by chromosome for intergenic calculation
     features_by_chr = defaultdict(list)
