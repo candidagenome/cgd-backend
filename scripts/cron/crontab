@@ -48,6 +48,10 @@
 0 14 1 * * cd /opt/cgd_api/scripts/cron && NAME_TRANSFER_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_propose_name_transfers.sh
 0 14 2 * * cd /opt/cgd_api/scripts/cron && NAME_TRANSFER_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_mutual_best_hit_names.sh
 
+# MONTHLY (3rd at 14:00 UTC): refresh PathoYeastract regulation data for the locus Regulation tab;
+# emails curators any CGD-curated associations the new release now also covers
+0 14 3 * * cd /opt/cgd_api/scripts/cron && REGULATION_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_pathoyeastract_regulation.sh
+
 # QUARTERLY (1st of Jan/Apr/Jul/Oct at 03:00 UTC): transfer experimental SGD GO annotations to CGD orthologs as IEA
 # (runs BEFORE transfer_go_from_orthologs so Sc-sourced terms claim the unique key first)
 0 3 1 1,4,7,10 * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh /opt/cgd_api/.venv/bin/python /opt/cgd_api/scripts/cron/transfer_go_from_sgd.py
