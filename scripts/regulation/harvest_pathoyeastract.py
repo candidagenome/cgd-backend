@@ -3,17 +3,18 @@
 
 PathoYeastract (https://yeastract-plus.org/pathoyeastract/) curates
 TF -> target-gene regulatory associations for C. albicans, C. glabrata,
-C. parapsilosis, C. tropicalis and C. auris (not C. dubliniensis). Its flat
-file downloads and web services are discontinued, so this script reads the
-public HTML query pages and writes one JSON file per gene, which the locus
-page Regulation tab (cgd/api/services/regulation_service.py) serves.
+C. parapsilosis, C. tropicalis and C. auris (not C. dubliniensis). This
+script reads the public HTML query pages and writes one JSON file per gene,
+which the locus page Regulation tab (cgd/api/services/regulation_service.py)
+serves.
 
-This is the stop-gap for the Regulation-tab mock-up: it is polite (one
-request per --delay seconds, raw HTML cached under <out>/_cache so re-runs
-never re-fetch) but it is not meant to mirror the whole database. A
-full-genome load should come from a bulk export requested from the
-PathoYeastract team; the per-gene JSON written here is the contract that
-such an export would be converted to.
+Documented associations for every gene are loaded from PathoYeastract's
+regulation flat files by load_pathoyeastract_flatfiles.py, which writes the
+same per-gene JSON. The flat files have no predicted (consensus) regulators,
+binding sites or promoter sequences; this script harvests those for selected
+genes, and the flat-file loader carries them over. It is polite (one request
+per --delay seconds, raw HTML cached under <out>/_cache so re-runs never
+re-fetch) but it is not meant to mirror the whole database.
 
 For every gene (target-centric, "who regulates this gene?"):
   * documented regulators, each with its evidence rows (PubMed ID, direct

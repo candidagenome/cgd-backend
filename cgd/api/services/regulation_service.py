@@ -1,12 +1,18 @@
 """
 Regulation Service.
 
-Serves transcriptional regulatory associations from PathoYeastract for the
-locus page Regulation tab. The data are per-gene JSON files written by
-scripts/regulation/harvest_pathoyeastract.py under
-<regulation data dir>/<organism_abbrev>/<ORF>.json; this service joins them
-to CGD: TF and target names are resolved to CGD features (so they link to
-locus pages) and PubMed IDs to CGD references.
+Serves transcriptional regulatory associations for the locus page Regulation
+tab from two sources:
+
+  * PathoYeastract: per-gene JSON files written by
+    scripts/regulation/load_pathoyeastract_flatfiles.py (documented
+    associations) and harvest_pathoyeastract.py (predicted sites) under
+    <regulation data dir>/<organism_abbrev>/<ORF>.json;
+  * CGD curation: MULTI.REGULATION rows entered with the Curate Regulation
+    tool, merged in as evidence rows with source "CGD".
+
+TF and target names are resolved to CGD features (so they link to locus
+pages) and PubMed IDs to CGD references.
 """
 from __future__ import annotations
 
@@ -22,9 +28,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from cgd.api.services.locus_service import _filter_features_by_preference
 from cgd.core.settings import settings
-from cgd.models.models import Feature, Organism, Reference
+from cgd.models.models import Feature, Organism, Reference, Regulation
 from cgd.schemas.regulation_schema import (
     BindingSite,
+    MatchedConsensus,
     Promoter,
     RegulationDetailsResponse,
     RegulationEvidence,
@@ -135,6 +142,30 @@ def _references_by_pubmed(db: Session, pmids: Iterable[int]) -> dict[int, Refere
     return out
 
 
+def _site_summary(sites: list[BindingSite], positions: dict) -> tuple[int, int, list[MatchedConsensus]]:
+    """Distinct site locations, those on both strands, and per-motif hit counts.
+
+    PathoYeastract lists a site once per strand, so a palindromic match (e.g.
+    CANNTG) appears on both; count locations instead. Its per-motif positions
+    give a + strand match by its start and a - strand match by its end + 1;
+    a hit inside a merged block of overlapping matches has no site of its own
+    and counts as its own location.
+    """
+    strands_at: dict[tuple[int, int], set] = {}
+    for site in sites:
+        strands_at.setdefault((site.start, site.end), set()).add(site.strand)
+    by_start = {start: (start, end) for (start, end), st in strands_at.items() if "+" in st}
+    by_end = {end + 1: (start, end) for (start, end), st in strands_at.items() if "-" in st}
+    matched = []
+    for motif, hits in (positions or {}).items():
+        locations = ({by_start.get(p, ("+", p)) for p in hits.get("+") or []}
+                     | {by_end.get(p, ("-", p)) for p in hits.get("-") or []})
+        if locations:
+            matched.append(MatchedConsensus(motif=motif, sites=len(locations)))
+    matched.sort(key=lambda m: (-m.sites, m.motif))
+    return len(strands_at), sum(len(st) > 1 for st in strands_at.values()), matched
+
+
 def _build_regulators(entries: list[dict], orf: str, slug: str, index: dict,
                       refs: dict[int, Reference]) -> list[Regulator]:
     regulators = []
@@ -157,11 +188,15 @@ def _build_regulators(entries: list[dict], orf: str, slug: str, index: dict,
                 environmental_group=row.get("environmental_group"),
                 environmental_condition=row.get("environmental_condition"),
                 log2fc=row.get("log2fc"),
+                source=row.get("source") or "PathoYeastract",
+                curation_note=row.get("curation_note"),
             ))
         sites = []
         for strand, key in (("+", "plus"), ("-", "minus")):
             for start, end in (entry.get("sites") or {}).get(key) or []:
                 sites.append(BindingSite(strand=strand, start=start, end=end))
+        site_count, both_strand_count, matched = _site_summary(
+            sites, (entry.get("sites") or {}).get("consensus_positions"))
         protein = entry["tf_protein"]
         codes = {e.evidence_code for e in evidence}
         signs = {e.association_type for e in evidence}
@@ -177,10 +212,13 @@ def _build_regulators(entries: list[dict], orf: str, slug: str, index: dict,
             potential=entry.get("potential_status") == "found",
             consensus=entry.get("consensus") or [],
             sites=sorted(sites, key=lambda s: s.start),
+            site_count=site_count,
+            both_strand_count=both_strand_count,
+            matched_consensus=matched,
             pathoyeastract_url=(
                 f"{PATHOYEASTRACT_URL}/{slug}/view.php?"
                 + urlencode({"existing": "regulation", "proteinname": protein, "orfname": orf})
-                if evidence else None
+                if slug and any(e.source == "PathoYeastract" for e in evidence) else None
             ),
         ))
     # Best-supported first: binding evidence, then both documented and predicted,
@@ -199,7 +237,8 @@ def _build_tf_targets(tf: dict, index: dict) -> TfTargets:
         if target is None:
             target = merged[key] = RegulationTarget(gene=gene)
         # A and B haplotype rows collapse onto one CGD locus
-        for flag in ("documented", "binding", "expression", "activated", "repressed", "potential"):
+        for flag in ("documented", "binding", "expression", "activated", "repressed", "potential",
+                     "cgd_curated"):
             if row.get(flag):
                 setattr(target, flag, True)
     targets = sorted(merged.values(), key=lambda t: (not t.binding, not t.documented,
@@ -217,6 +256,104 @@ def _build_tf_targets(tf: dict, index: dict) -> TfTargets:
                      counts=counts, targets=targets)
 
 
+def _curated_evidence(row: Regulation) -> dict:
+    """A CGD-curated REGULATION row in the per-gene JSON evidence format."""
+    ref = row.reference
+    return {
+        "pubmed": ref.pubmed if ref else None,
+        "citation": ref.citation if ref else None,
+        "evidence_code": row.evidence_code,
+        "experiment": row.experiment,
+        "association_type": row.association_type,
+        "strain": row.strain_background,
+        "environmental_group": row.condition_group,
+        "environmental_condition": row.environmental_condition,
+        "log2fc": row.log2fc,
+        "source": "CGD",
+        "curation_note": row.regulation_note,
+    }
+
+
+def _covered_by_pathoyeastract(entry: dict, row: Regulation) -> bool:
+    """Whether PathoYeastract's entry for this TF already cites the row's paper.
+
+    The gene page then shows only PathoYeastract's copy; the CGD row stays in
+    the database and is flagged on the curation page for review.
+    """
+    pubmed = row.reference.pubmed if row.reference else None
+    return bool(pubmed) and any(
+        e.get("pubmed") == pubmed and (e.get("source") or "PathoYeastract") == "PathoYeastract"
+        for e in entry.get("evidence") or []
+    )
+
+
+def _merge_curated(db: Session, feature: Feature, data: dict) -> int:
+    """Add CGD-curated associations of this gene to its PathoYeastract data.
+
+    Rows where the gene is the target join its regulators (appended to the
+    same TF's PathoYeastract evidence when there is any); rows where it is the
+    TF join its target list. Rows whose TF, target and paper PathoYeastract
+    already has are left out. Returns the number of curated rows shown.
+    """
+    as_target = (
+        db.query(Regulation)
+        .options(joinedload(Regulation.tf_feature), joinedload(Regulation.reference))
+        .filter(Regulation.target_feature_no == feature.feature_no)
+        .all()
+    )
+    as_tf = (
+        db.query(Regulation)
+        .options(joinedload(Regulation.target_feature), joinedload(Regulation.reference))
+        .filter(Regulation.tf_feature_no == feature.feature_no)
+        .all()
+    )
+    shown = 0
+    if as_target:
+        entries = data.setdefault("regulators", [])
+        by_tf = {e.get("tf_orf"): e for e in entries if e.get("tf_orf")}
+        for row in as_target:
+            tf = row.tf_feature
+            entry = by_tf.get(tf.feature_name)
+            if entry and _covered_by_pathoyeastract(entry, row):
+                continue
+            if entry is None:
+                entry = by_tf[tf.feature_name] = {
+                    "tf_protein": tf.gene_name or tf.feature_name,
+                    "tf_orf": tf.feature_name,
+                    "evidence": [],
+                    "potential_status": "not_scanned",
+                    "consensus": None,
+                    "sites": None,
+                }
+                entries.append(entry)
+            entry["evidence"] = list(entry.get("evidence") or []) + [_curated_evidence(row)]
+            shown += 1
+    if as_tf:
+        tf = data.get("tf") or {"protein": feature.gene_name or feature.feature_name,
+                                "consensus": None, "targets": []}
+        targets = list(tf.get("targets") or [])
+        abbrev = feature.organism.organism_abbrev if feature.organism else None
+        for row in as_tf:
+            target_data = _load_gene_file(abbrev, row.target_feature.feature_name) or {}
+            entry = next((e for e in target_data.get("regulators") or []
+                          if e.get("tf_orf") == feature.feature_name), None)
+            if entry and _covered_by_pathoyeastract(entry, row):
+                continue
+            shown += 1
+            targets.append({
+                "orf": row.target_feature.feature_name,
+                "documented": True,
+                "binding": row.evidence_code == "Direct",
+                "expression": row.evidence_code == "Indirect",
+                "activated": row.association_type == "Positive",
+                "repressed": row.association_type == "Negative",
+                "potential": False,
+                "cgd_curated": True,
+            })
+        data["tf"] = {**tf, "targets": targets}
+    return shown
+
+
 def _regulation_for_feature(db: Session, feature: Feature) -> RegulationForOrganism:
     organism = feature.organism
     abbrev = organism.organism_abbrev if organism else None
@@ -227,15 +364,15 @@ def _regulation_for_feature(db: Session, feature: Feature) -> RegulationForOrgan
         gene_name=feature.gene_name,
         covered=slug is not None,
     )
-    if slug is None:
-        return out
-    out.source = RegulationSource(
-        url=f"{PATHOYEASTRACT_URL}/{slug}/",
-        gene_url=f"{PATHOYEASTRACT_URL}/{slug}/view.php?"
-                 + urlencode({"existing": "locus", "orfname": feature.feature_name}),
-    )
-    data = _load_gene_file(abbrev, feature.feature_name)
-    if not data:
+    if slug is not None:
+        out.source = RegulationSource(
+            url=f"{PATHOYEASTRACT_URL}/{slug}/",
+            gene_url=f"{PATHOYEASTRACT_URL}/{slug}/view.php?"
+                     + urlencode({"existing": "locus", "orfname": feature.feature_name}),
+        )
+    data = (_load_gene_file(abbrev, feature.feature_name) if slug else None) or {}
+    out.cgd_curated_count = _merge_curated(db, feature, data)
+    if not data.get("regulators") and not data.get("tf"):
         return out
 
     index = _name_index(db, feature.organism_no)
@@ -244,8 +381,9 @@ def _regulation_for_feature(db: Session, feature: Feature) -> RegulationForOrgan
     source = data.get("source") or {}
 
     out.has_data = True
-    out.source.citation_doi = source.get("citation_doi")
-    out.source.retrieved = source.get("retrieved")
+    if out.source:
+        out.source.citation_doi = source.get("citation_doi")
+        out.source.retrieved = source.get("retrieved")
     out.regulators = _build_regulators(data.get("regulators") or [], feature.feature_name, slug, index, refs)
     if data.get("promoter"):
         out.promoter = Promoter(**data["promoter"])
