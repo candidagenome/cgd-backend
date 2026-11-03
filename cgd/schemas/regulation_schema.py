@@ -30,6 +30,8 @@ class RegulationEvidence(BaseModel):
     environmental_group: Optional[str] = None
     environmental_condition: Optional[str] = None
     log2fc: Optional[float] = None
+    source: str = Field("PathoYeastract", description="PathoYeastract, or CGD for curator-entered rows")
+    curation_note: Optional[str] = Field(None, description="CGD curator note")
 
 
 class BindingSite(BaseModel):
@@ -37,6 +39,12 @@ class BindingSite(BaseModel):
     strand: str = Field(description="'+' or '-'")
     start: int
     end: int
+
+
+class MatchedConsensus(BaseModel):
+    """A consensus motif of the TF that occurs in the promoter."""
+    motif: str
+    sites: int = Field(description="Distinct promoter locations it matches")
 
 
 class Regulator(BaseModel):
@@ -51,6 +59,10 @@ class Regulator(BaseModel):
     potential: bool = Field(False, description="TF consensus found in the target's promoter")
     consensus: List[str] = Field(default_factory=list)
     sites: List[BindingSite] = Field(default_factory=list)
+    site_count: int = Field(0, description="Distinct predicted site locations (a site on both strands counts once)")
+    both_strand_count: int = Field(0, description="Locations matched on both strands (e.g. palindromic motifs)")
+    matched_consensus: List[MatchedConsensus] = Field(
+        default_factory=list, description="Motifs that occur in the promoter, with their site counts")
     pathoyeastract_url: Optional[str] = Field(None, description="PathoYeastract evidence page for this association")
 
 
@@ -68,6 +80,7 @@ class RegulationTarget(BaseModel):
     activated: bool = False
     repressed: bool = False
     potential: bool = False
+    cgd_curated: bool = Field(False, description="At least one CGD-curated evidence row")
 
 
 class TargetCounts(BaseModel):
@@ -102,6 +115,7 @@ class RegulationForOrganism(BaseModel):
     gene_name: Optional[str] = None
     covered: bool = Field(description="Whether PathoYeastract covers this organism at all")
     has_data: bool = Field(False, description="Whether regulation data is loaded for this gene")
+    cgd_curated_count: int = Field(0, description="CGD-curated evidence rows shown for this gene")
     source: Optional[RegulationSource] = None
     regulators: List[Regulator] = Field(default_factory=list)
     promoter: Optional[Promoter] = None

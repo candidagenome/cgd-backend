@@ -2366,3 +2366,45 @@ class EiTu(Base):
 
     external_id: Mapped['ExternalId'] = relationship('ExternalId', back_populates='ei_tu')
     template_url: Mapped['TemplateUrl'] = relationship('TemplateUrl', back_populates='ei_tu')
+
+
+class Regulation(Base):
+    """Curator-entered TF -> target regulatory association (one evidence row).
+
+    Created by scripts/regulation/create_regulation_table.py; shown on the
+    locus Regulation tab alongside PathoYeastract's associations.
+    """
+    __tablename__ = 'regulation'
+    __table_args__ = (
+        ForeignKeyConstraint(['tf_feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='regulation_tf_fk'),
+        ForeignKeyConstraint(['target_feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='regulation_target_fk'),
+        ForeignKeyConstraint(['reference_no'], ['MULTI.reference.reference_no'], ondelete='CASCADE', name='regulation_ref_fk'),
+        CheckConstraint("evidence_code IN ('Direct', 'Indirect')", name='regulation_evidence_ck'),
+        CheckConstraint("association_type IN ('Positive', 'Negative', 'N/A')", name='regulation_assoc_ck'),
+        PrimaryKeyConstraint('regulation_no', name='regulation_pk'),
+        Index('regulation_uk', 'tf_feature_no', 'target_feature_no', 'reference_no', 'experiment',
+              'strain_background', 'environmental_condition', unique=True),
+        Index('regulation_target_i', 'target_feature_no'),
+        Index('regulation_ref_i', 'reference_no'),
+        {'comment': 'Curator-entered transcriptional regulatory associations (transcription factor -> '
+                    'target gene), one row per evidence observation.', 'schema': 'MULTI'}
+    )
+
+    regulation_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='Assigned unique identifier. Oracle generated sequence number.')
+    tf_feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Feature of the transcription factor.')
+    target_feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Feature of the regulated (target) gene.')
+    reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Reference reporting the association.')
+    evidence_code: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, comment='Direct (DNA binding) or Indirect (expression).')
+    experiment: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='Experiment, e.g. ChIP-seq.')
+    association_type: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'N/A' "), comment='Positive (activation), Negative (repression) or N/A.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
+    strain_background: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    condition_group: Mapped[Optional[str]] = mapped_column(VARCHAR(100), comment='Environmental condition group (PathoYeastract vocabulary).')
+    environmental_condition: Mapped[Optional[str]] = mapped_column(VARCHAR(1000))
+    log2fc: Mapped[Optional[float]] = mapped_column(NUMBER(asdecimal=False), comment='Log2 fold change of the target, when reported.')
+    regulation_note: Mapped[Optional[str]] = mapped_column(VARCHAR(1000))
+
+    tf_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[tf_feature_no])
+    target_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[target_feature_no])
+    reference: Mapped['Reference'] = relationship('Reference')

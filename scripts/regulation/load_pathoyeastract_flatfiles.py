@@ -30,7 +30,9 @@ logged.
 
 The new tree is built next to the output directory and swapped in at the end,
 so the API never reads a half-written set; the previous tree is kept as
-<out>.prev.
+<out>.prev. Finally, CGD-curated rows (MULTI.REGULATION) that the new release
+also has are listed in <out>/_cgd_overlap.tsv, and emailed with --email when
+there are new ones, so curators can retire them.
 
 Usage
 -----
@@ -367,6 +369,86 @@ def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citatio
     return counts
 
 
+OVERLAP_FILE = "_cgd_overlap.tsv"
+OVERLAP_COLUMNS = ["new_this_release", "regulation_no", "organism", "tf", "tf_feature", "target",
+                   "target_feature", "pubmed", "experiment", "curated_by", "date_curated"]
+
+
+def cgd_overlap_report(out: Path, previous: Path, recipients: list[str]) -> None:
+    """List CGD-curated rows that the new release now also has (same TF, target, paper).
+
+    The gene page shows only PathoYeastract's copy of these; curators review
+    the list and retire the CGD rows. Written to <out>/_cgd_overlap.tsv and,
+    when there are new overlaps, emailed to `recipients`.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from cgd.db.engine import SessionLocal
+        from cgd.models.models import Regulation
+        from sqlalchemy.orm import joinedload
+    except Exception as exc:  # no database configured
+        logger.warning("CGD overlap report skipped: %s", exc)
+        return
+    rows = []
+    with SessionLocal() as db:
+        curated = (
+            db.query(Regulation)
+            .options(joinedload(Regulation.tf_feature), joinedload(Regulation.target_feature),
+                     joinedload(Regulation.reference))
+            .all()
+        )
+        for r in curated:
+            organism = r.tf_feature.organism.organism_abbrev if r.tf_feature.organism else None
+            pubmed = r.reference.pubmed if r.reference else None
+            data = load_old(out / str(organism) / f"{r.target_feature.feature_name}.json")
+            hit = any(
+                e.get("tf_orf") == r.tf_feature.feature_name
+                and any(ev.get("pubmed") == pubmed for ev in e.get("evidence") or [])
+                for e in data.get("regulators") or []
+            )
+            if pubmed and hit:
+                rows.append({
+                    "regulation_no": r.regulation_no, "organism": organism,
+                    "tf": r.tf_feature.gene_name or r.tf_feature.feature_name, "tf_feature": r.tf_feature.feature_name,
+                    "target": r.target_feature.gene_name or r.target_feature.feature_name,
+                    "target_feature": r.target_feature.feature_name, "pubmed": pubmed,
+                    "experiment": r.experiment, "curated_by": r.created_by,
+                    "date_curated": r.date_created.date().isoformat() if r.date_created else "",
+                })
+    seen = set()
+    if (previous / OVERLAP_FILE).exists():
+        with open(previous / OVERLAP_FILE, newline="") as fh:
+            seen = {row["regulation_no"] for row in csv.DictReader(fh, delimiter="\t")}
+    for row in rows:
+        row["new_this_release"] = "" if str(row["regulation_no"]) in seen else "yes"
+    with open(out / OVERLAP_FILE, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=OVERLAP_COLUMNS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    new = [r for r in rows if r["new_this_release"]]
+    logger.info("CGD-curated rows also in PathoYeastract: %d (%d new); see %s",
+                len(rows), len(new), out / OVERLAP_FILE)
+    if new and recipients:
+        from cgd.utils.notifications import send_email
+        lines = [f"  {r['tf']} -> {r['target']} ({r['organism']}), PMID {r['pubmed']}, "
+                 f"regulation {r['regulation_no']}" for r in new]
+        body = "\n".join([
+            f"The new PathoYeastract release now includes {len(new)} association(s) that CGD curators "
+            "entered themselves (same transcription factor, target and paper).",
+            "",
+            "The gene pages already show only PathoYeastract's copy of these. Please review the rows "
+            "in Curate Regulation (load the paper by PubMed ID; they are marked 'also in "
+            "PathoYeastract') and delete the CGD copies you no longer need.",
+            "",
+            *lines,
+            "",
+            f"Full list (attached): {out / OVERLAP_FILE}",
+        ])
+        if not send_email(recipients, f"CGD regulation curation: {len(new)} rows now in PathoYeastract",
+                          body, attachments=[out / OVERLAP_FILE]):
+            logger.error("Overlap report email failed")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True, type=Path, help="Regulation tab data directory "
@@ -380,6 +462,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-numbering-runs", action="store_true",
                         help="keep evidence rows whose PMIDs look like a numbering error")
     parser.add_argument("--dry-run", action="store_true", help="parse and report; write nothing")
+    parser.add_argument("--email", default="",
+                        help="comma-separated recipients for the report of CGD-curated rows the new "
+                             "release also has (only sent when there are new ones)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -434,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         out.rename(prev)
     new.rename(out)
     logger.info("swapped in %s (previous tree kept at %s)", out, prev)
+    cgd_overlap_report(out, prev, [a.strip() for a in args.email.split(",") if a.strip()])
     return 0
 
 
