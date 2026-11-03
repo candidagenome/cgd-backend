@@ -93,7 +93,7 @@ PMID_CORRECTIONS = {
     "cglabrata": [((34900751, 34900754), 34900750)],
 }
 SUSPICIOUS_RUN = 4
-RUN_GAP = 2
+RUN_GAP = 5  # 18627447 sits 3-5 IDs from its run neighbours
 
 FLAGS = ("documented", "binding", "expression", "activated", "repressed", "potential")
 
