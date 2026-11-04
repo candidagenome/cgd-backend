@@ -8,6 +8,8 @@ Tests cover:
 - TF target lists: B-haplotype rows collapse onto the A locus; counts
 - Per-organism coverage (C. dubliniensis is not in PathoYeastract) and
   genes without a data file
+- CGD-curated rows: shown alongside PathoYeastract's, hidden when
+  PathoYeastract already has the same TF, target and paper
 """
 import json
 from types import SimpleNamespace
@@ -135,16 +137,32 @@ class TestRegulationForFeature:
     @staticmethod
     def _feature(abbrev, feature_name="C3_05230W_A", gene_name="SAP3"):
         organism = SimpleNamespace(organism_abbrev=abbrev, organism_name=abbrev)
-        return SimpleNamespace(feature_name=feature_name, gene_name=gene_name, organism=organism,
-                               organism_no=3)
+        return SimpleNamespace(feature_no=30, feature_name=feature_name, gene_name=gene_name,
+                               organism=organism, organism_no=3)
+
+    @staticmethod
+    def _db(as_target=(), as_tf=()):
+        """A session whose REGULATION queries return these rows (gene as target, then as TF)."""
+        db = MagicMock()
+        db.query.return_value.options.return_value.filter.return_value.all.side_effect = [
+            list(as_target), list(as_tf)]
+        return db
+
+    @staticmethod
+    def _curated(tf_name, tf_gene, pubmed, code="Direct", sign="Positive"):
+        return SimpleNamespace(
+            tf_feature=SimpleNamespace(feature_name=tf_name, gene_name=tf_gene),
+            reference=SimpleNamespace(pubmed=pubmed, citation=f"Paper {pubmed}"),
+            evidence_code=code, experiment="EMSA", association_type=sign, strain_background=None,
+            condition_group=None, environmental_condition=None, log2fc=None, regulation_note=None)
 
     def test_dubliniensis_is_not_covered(self, data_dir):
-        out = _regulation_for_feature(MagicMock(), self._feature("C_dubliniensis_CD36", "Cd36_00010", None))
+        out = _regulation_for_feature(self._db(), self._feature("C_dubliniensis_CD36", "Cd36_00010", None))
         assert out.covered is False and out.has_data is False and out.source is None
         assert out.locus_display_name == "Cd36_00010"
 
     def test_covered_gene_without_file(self, data_dir):
-        out = _regulation_for_feature(MagicMock(), self._feature("C_albicans_SC5314"))
+        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
         assert out.covered is True and out.has_data is False and out.regulators == []
         # Still links out so readers can check PathoYeastract directly
         assert out.source.gene_url.endswith("calbicans/view.php?existing=locus&orfname=C3_05230W_A")
@@ -157,7 +175,7 @@ class TestRegulationForFeature:
             "regulators": TestBuildRegulators.ENTRIES,
             "promoter": {"start": -1000, "end": -1, "sequence": "ACGT"},
         }))
-        out = _regulation_for_feature(MagicMock(), self._feature("C_albicans_SC5314"))
+        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
 
         assert out.has_data is True
         assert len(out.regulators) == 3
@@ -165,3 +183,38 @@ class TestRegulationForFeature:
         assert out.tf_targets is None
         assert out.source.retrieved == "2026-10-07"
         assert out.source.gene_url.endswith("calbicans/view.php?existing=locus&orfname=C3_05230W_A")
+
+    def _write_gene_file(self, data_dir):
+        (data_dir / "C_albicans_SC5314").mkdir()
+        (data_dir / "C_albicans_SC5314" / "C3_05230W_A.json").write_text(json.dumps({
+            "orf": "C3_05230W_A",
+            "source": {"url": "https://yeastract-plus.org/pathoyeastract/calbicans/", "retrieved": "2026-10-07"},
+            "regulators": TestBuildRegulators.ENTRIES,
+        }))
+
+    def test_curated_row_shown_for_uncovered_species(self, data_dir):
+        db = self._db(as_target=[self._curated("Cd36_12340", "EFG1", 444)])
+        out = _regulation_for_feature(db, self._feature("C_dubliniensis_CD36", "Cd36_00010", None))
+
+        assert out.covered is False and out.has_data is True and out.cgd_curated_count == 1
+        evidence = out.regulators[0].evidence
+        assert [(e.reference.pubmed, e.source) for e in evidence] == [(444, "CGD")]
+
+    def test_curated_row_joins_pathoyeastract_tf(self, data_dir):
+        self._write_gene_file(data_dir)
+        db = self._db(as_target=[self._curated("CR_07890W_A", "EFG1", 444)])
+        out = _regulation_for_feature(db, self._feature("C_albicans_SC5314"))
+
+        assert out.cgd_curated_count == 1
+        efg1 = next(r for r in out.regulators if r.tf.feature_name == "CR_07890W_A")
+        assert sorted((e.reference.pubmed, e.source) for e in efg1.evidence) == [
+            (222, "PathoYeastract"), (333, "PathoYeastract"), (444, "CGD")]
+
+    def test_curated_row_hidden_when_pathoyeastract_has_paper(self, data_dir):
+        self._write_gene_file(data_dir)
+        db = self._db(as_target=[self._curated("CR_07890W_A", "EFG1", 222)])
+        out = _regulation_for_feature(db, self._feature("C_albicans_SC5314"))
+
+        assert out.cgd_curated_count == 0
+        efg1 = next(r for r in out.regulators if r.tf.feature_name == "CR_07890W_A")
+        assert all(e.source == "PathoYeastract" for e in efg1.evidence)
