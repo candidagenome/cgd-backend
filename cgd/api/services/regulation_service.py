@@ -9,7 +9,9 @@ tab from two sources:
     associations) and harvest_pathoyeastract.py (predicted sites) under
     <regulation data dir>/<organism_abbrev>/<ORF>.json;
   * CGD curation: MULTI.REGULATION rows entered with the Curate Regulation
-    tool, merged in as evidence rows with source "CGD".
+    tool, merged in as evidence rows with source "CGD", and RNA accumulation
+    phenotype annotations of regulators (source "CGD phenotype", see
+    regulation_phenotype.py).
 
 TF and target names are resolved to CGD features (so they link to locus
 pages) and PubMed IDs to CGD references.
@@ -26,6 +28,7 @@ from urllib.parse import urlencode
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from cgd.api.services import regulation_phenotype
 from cgd.api.services.locus_service import _filter_features_by_preference
 from cgd.core.settings import settings
 from cgd.models.models import Feature, Organism, Reference, Regulation
@@ -188,6 +191,7 @@ def _build_regulators(entries: list[dict], orf: str, slug: str, index: dict,
                 environmental_group=row.get("environmental_group"),
                 environmental_condition=row.get("environmental_condition"),
                 log2fc=row.get("log2fc"),
+                mutant_type=row.get("mutant_type"),
                 source=row.get("source") or "PathoYeastract",
                 curation_note=row.get("curation_note"),
             ))
@@ -264,6 +268,7 @@ def _curated_evidence(row: Regulation) -> dict:
         "citation": ref.citation if ref else None,
         "evidence_code": row.evidence_code,
         "experiment": row.experiment,
+        "mutant_type": row.mutant_type,
         "association_type": row.association_type,
         "strain": row.strain_background,
         "environmental_group": row.condition_group,
@@ -274,79 +279,117 @@ def _curated_evidence(row: Regulation) -> dict:
     }
 
 
-def _covered_by_pathoyeastract(entry: dict, row: Regulation) -> bool:
-    """Whether PathoYeastract's entry for this TF already cites the row's paper.
+def _covered_by_pathoyeastract(entry: dict, pubmed: Optional[int]) -> bool:
+    """Whether PathoYeastract's entry for this TF already cites the paper.
 
-    The gene page then shows only PathoYeastract's copy; the CGD row stays in
+    The gene page then shows only PathoYeastract's copy; a CGD row stays in
     the database and is flagged on the curation page for review.
     """
-    pubmed = row.reference.pubmed if row.reference else None
     return bool(pubmed) and any(
         e.get("pubmed") == pubmed and (e.get("source") or "PathoYeastract") == "PathoYeastract"
         for e in entry.get("evidence") or []
     )
 
 
-def _merge_curated(db: Session, feature: Feature, data: dict) -> int:
-    """Add CGD-curated associations of this gene to its PathoYeastract data.
+def _cgd_evidence(db: Session, feature: Feature) -> tuple[list[tuple], list[tuple]]:
+    """CGD evidence for a gene: curated REGULATION rows and RNA accumulation phenotypes.
 
-    Rows where the gene is the target join its regulators (appended to the
-    same TF's PathoYeastract evidence when there is any); rows where it is the
-    TF join its target list. Rows whose TF, target and paper PathoYeastract
-    already has are left out. Returns the number of curated rows shown.
+    Returns (as_target, as_tf): as_target items are ((tf_name, tf_gene), evidence)
+    for regulators of this gene; as_tf items are ((target_name, target_gene),
+    evidence) for genes this one regulates. Phenotype rows count only when the
+    mutated gene is a regulator (regulation_phenotype.regulator_sources).
     """
-    as_target = (
+    as_target, as_tf = [], []
+    for row in (
         db.query(Regulation)
         .options(joinedload(Regulation.tf_feature), joinedload(Regulation.reference))
         .filter(Regulation.target_feature_no == feature.feature_no)
         .all()
-    )
-    as_tf = (
+    ):
+        as_target.append(((row.tf_feature.feature_name, row.tf_feature.gene_name), _curated_evidence(row)))
+    for row in (
         db.query(Regulation)
         .options(joinedload(Regulation.target_feature), joinedload(Regulation.reference))
         .filter(Regulation.tf_feature_no == feature.feature_no)
         .all()
-    )
+    ):
+        as_tf.append(((row.target_feature.feature_name, row.target_feature.gene_name), _curated_evidence(row)))
+
+    organism = feature.organism
+    if organism is None:
+        return as_target, as_tf
+    rows = [row for row in regulation_phenotype.phenotype_rows(db, feature.organism_no)
+            if regulation_phenotype.shown(row)]
+    if not rows:
+        return as_target, as_tf
+    me = regulation_phenotype.locus_name(feature.feature_name)
+    regulators = set().union(*regulation_phenotype.regulator_sources(
+        db, feature.organism_no, organism.organism_abbrev).values())
+    for row in rows:
+        regulator = row["regulator"]
+        if regulator[0] not in regulators:
+            continue
+        if regulator[0] == me:
+            for target in row["targets"]:
+                for ref in row["references"]:
+                    as_tf.append((target, regulation_phenotype.phenotype_evidence(row, ref)))
+        elif any(t[0] == me for t in row["targets"]):
+            for ref in row["references"]:
+                as_target.append((regulator, regulation_phenotype.phenotype_evidence(row, ref)))
+    return as_target, as_tf
+
+
+def _merge_curated(db: Session, feature: Feature, data: dict) -> int:
+    """Add CGD evidence (curated rows, RNA accumulation phenotypes) to a gene's PathoYeastract data.
+
+    Evidence where the gene is the target joins its regulators (appended to
+    the same TF's PathoYeastract evidence when there is any); evidence where
+    it is the regulator joins its target list. Evidence whose TF, target and
+    paper PathoYeastract already has is left out. Returns the number of CGD
+    evidence rows shown.
+    """
+    as_target, as_tf = _cgd_evidence(db, feature)
     shown = 0
     if as_target:
         entries = data.setdefault("regulators", [])
         by_tf = {e.get("tf_orf"): e for e in entries if e.get("tf_orf")}
-        for row in as_target:
-            tf = row.tf_feature
-            entry = by_tf.get(tf.feature_name)
-            if entry and _covered_by_pathoyeastract(entry, row):
+        for (tf_name, tf_gene), evidence in as_target:
+            entry = by_tf.get(tf_name)
+            if entry and _covered_by_pathoyeastract(entry, evidence["pubmed"]):
                 continue
             if entry is None:
-                entry = by_tf[tf.feature_name] = {
-                    "tf_protein": tf.gene_name or tf.feature_name,
-                    "tf_orf": tf.feature_name,
+                entry = by_tf[tf_name] = {
+                    "tf_protein": tf_gene or tf_name,
+                    "tf_orf": tf_name,
                     "evidence": [],
                     "potential_status": "not_scanned",
                     "consensus": None,
                     "sites": None,
                 }
                 entries.append(entry)
-            entry["evidence"] = list(entry.get("evidence") or []) + [_curated_evidence(row)]
+            entry["evidence"] = list(entry.get("evidence") or []) + [evidence]
             shown += 1
     if as_tf:
         tf = data.get("tf") or {"protein": feature.gene_name or feature.feature_name,
                                 "consensus": None, "targets": []}
         targets = list(tf.get("targets") or [])
         abbrev = feature.organism.organism_abbrev if feature.organism else None
-        for row in as_tf:
-            target_data = _load_gene_file(abbrev, row.target_feature.feature_name) or {}
-            entry = next((e for e in target_data.get("regulators") or []
+        target_files: dict[str, dict] = {}
+        for (target_name, _gene), evidence in as_tf:
+            if target_name not in target_files:
+                target_files[target_name] = _load_gene_file(abbrev, target_name) or {}
+            entry = next((e for e in target_files[target_name].get("regulators") or []
                           if e.get("tf_orf") == feature.feature_name), None)
-            if entry and _covered_by_pathoyeastract(entry, row):
+            if entry and _covered_by_pathoyeastract(entry, evidence["pubmed"]):
                 continue
             shown += 1
             targets.append({
-                "orf": row.target_feature.feature_name,
+                "orf": target_name,
                 "documented": True,
-                "binding": row.evidence_code == "Direct",
-                "expression": row.evidence_code == "Indirect",
-                "activated": row.association_type == "Positive",
-                "repressed": row.association_type == "Negative",
+                "binding": evidence["evidence_code"] == "Direct",
+                "expression": evidence["evidence_code"] == "Indirect",
+                "activated": evidence["association_type"] == "Positive",
+                "repressed": evidence["association_type"] == "Negative",
                 "potential": False,
                 "cgd_curated": True,
             })

@@ -2383,7 +2383,7 @@ class Regulation(Base):
         CheckConstraint("association_type IN ('Positive', 'Negative', 'N/A')", name='regulation_assoc_ck'),
         PrimaryKeyConstraint('regulation_no', name='regulation_pk'),
         Index('regulation_uk', 'tf_feature_no', 'target_feature_no', 'reference_no', 'experiment',
-              'strain_background', 'environmental_condition', unique=True),
+              'mutant_type', 'strain_background', 'environmental_condition', unique=True),
         Index('regulation_target_i', 'target_feature_no'),
         Index('regulation_ref_i', 'reference_no'),
         {'comment': 'Curator-entered transcriptional regulatory associations (transcription factor -> '
@@ -2396,6 +2396,7 @@ class Regulation(Base):
     reference_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), nullable=False, comment='Reference reporting the association.')
     evidence_code: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, comment='Direct (DNA binding) or Indirect (expression).')
     experiment: Mapped[str] = mapped_column(VARCHAR(240), nullable=False, comment='Experiment, e.g. ChIP-seq.')
+    mutant_type: Mapped[Optional[str]] = mapped_column(VARCHAR(40), comment='Expression rows: how the regulator was mutated.')
     association_type: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default=text("'N/A' "), comment='Positive (activation), Negative (repression) or N/A.')
     date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
     created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
@@ -2408,3 +2409,26 @@ class Regulation(Base):
     tf_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[tf_feature_no])
     target_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[target_feature_no])
     reference: Mapped['Reference'] = relationship('Reference')
+
+
+class RegulatorAllow(Base):
+    """A gene curators admit as a regulator on the Regulation tab.
+
+    Regulators are otherwise genes with a DNA-binding transcription factor GO
+    annotation or PathoYeastract regulators. Created by
+    scripts/regulation/create_regulation_table.py.
+    """
+    __tablename__ = 'regulator_allow'
+    __table_args__ = (
+        ForeignKeyConstraint(['feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE',
+                             name='regulator_allow_feat_fk'),
+        PrimaryKeyConstraint('feature_no', name='regulator_allow_pk'),
+        {'comment': 'Genes curators admit as regulators on the Regulation tab.', 'schema': 'MULTI'}
+    )
+
+    feature_no: Mapped[int] = mapped_column(NUMBER(10, 0, False), primary_key=True, comment='The admitted gene.')
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('SYSDATE '), comment='Date the record was entered into the database.')
+    created_by: Mapped[str] = mapped_column(VARCHAR(12), nullable=False, server_default=text('SUBSTR(USER,1,12) '), comment='Person who entered the record into the database.')
+    allow_note: Mapped[Optional[str]] = mapped_column(VARCHAR(1000), comment='Why the gene is admitted.')
+
+    feature: Mapped['Feature'] = relationship('Feature')

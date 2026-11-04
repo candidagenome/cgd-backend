@@ -25,12 +25,16 @@ class RegulationEvidence(BaseModel):
     reference: RegulationReference
     evidence_code: Optional[str] = Field(None, description="Direct (DNA binding) or Indirect (expression)")
     experiment: Optional[str] = None
+    mutant_type: Optional[str] = Field(None, description="Expression rows: how the regulator was mutated")
     association_type: Optional[str] = Field(None, description="Positive (activation), Negative (repression), N/A")
     strain: Optional[str] = None
     environmental_group: Optional[str] = None
     environmental_condition: Optional[str] = None
     log2fc: Optional[float] = None
-    source: str = Field("PathoYeastract", description="PathoYeastract, or CGD for curator-entered rows")
+    source: str = Field(
+        "PathoYeastract",
+        description="PathoYeastract; CGD for curator-entered rows; CGD phenotype for RNA accumulation "
+                    "phenotype annotations")
     curation_note: Optional[str] = Field(None, description="CGD curator note")
 
 

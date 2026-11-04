@@ -17,7 +17,10 @@ harvest_pathoyeastract.py writes), for every gene with data:
   * <ORF>.json "regulators": documented regulators of the gene, each with its
     evidence rows;
   * <ORF>.json "tf" (TF genes only): the TF's documented targets, flagged by
-    evidence type (DNA binding / expression) and direction.
+    evidence type (DNA binding / expression) and direction;
+  * _regulators.json: the species' regulator ORFs, which (with GO
+    DNA-binding transcription factors) decide which genes the tab and the
+    curation tool accept as regulators.
 
 The flat files hold documented associations only. Predicted (consensus)
 regulators, binding sites and promoter sequences come from
@@ -290,6 +293,9 @@ def load_old(path: Path) -> dict:
         return {}
 
 
+REGULATORS_FILE = "_regulators.json"
+
+
 def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citations: dict[int, str],
                   old_dir: Path, new_dir: Path, source: dict) -> dict:
     """Write one species' per-gene JSON files; return counts."""
@@ -366,6 +372,7 @@ def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citatio
 
     if (old_dir / "_tf_orfs.json").exists():
         shutil.copy2(old_dir / "_tf_orfs.json", out_dir / "_tf_orfs.json")
+    (out_dir / REGULATORS_FILE).write_text(json.dumps(sorted({row["tf_orf"] for row in rows}), indent=0))
     return counts
 
 
