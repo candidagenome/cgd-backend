@@ -10,7 +10,7 @@ Tests cover:
   genes without a data file
 - CGD-curated rows: shown alongside PathoYeastract's, hidden when
   PathoYeastract already has the same TF, target and paper
-- RNA accumulation phenotypes: shown for regulators only, with a direction,
+- Rows transferred from RNA accumulation phenotypes: shown as "CGD phenotype",
   and hidden like curated rows when PathoYeastract has the paper
 """
 import json
@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cgd.api.services import regulation_phenotype, regulation_service
+from cgd.api.services import regulation_service
 from cgd.api.services.regulation_service import (
     _build_regulators,
     _build_tf_targets,
@@ -134,11 +134,6 @@ class TestRegulationForFeature:
         monkeypatch.setattr(regulation_service.settings, "regulation_data_dir", str(tmp_path))
         monkeypatch.setattr(regulation_service, "_name_index", lambda db, organism_no: INDEX)
         monkeypatch.setattr(regulation_service, "_references_by_pubmed", lambda db, pmids: {})
-        self.phenotypes = []
-        self.regulators = {"CR_07890W_A"}
-        monkeypatch.setattr(regulation_phenotype, "phenotype_rows", lambda db, organism_no: self.phenotypes)
-        monkeypatch.setattr(regulation_phenotype, "regulator_sources",
-                            lambda db, organism_no, abbrev: {"go": self.regulators})
         return tmp_path
 
     @staticmethod
@@ -156,12 +151,14 @@ class TestRegulationForFeature:
         return db
 
     @staticmethod
-    def _curated(tf_name, tf_gene, pubmed, code="Direct", sign="Positive"):
+    def _curated(tf_name, tf_gene, pubmed, code="Direct", sign="Positive", target=None):
         return SimpleNamespace(
             tf_feature=SimpleNamespace(feature_name=tf_name, gene_name=tf_gene),
+            target_feature=SimpleNamespace(feature_name=target[0], gene_name=target[1]) if target else None,
             reference=SimpleNamespace(pubmed=pubmed, citation=f"Paper {pubmed}"),
             evidence_code=code, experiment="EMSA", mutant_type=None, association_type=sign, strain_background=None,
-            condition_group=None, environmental_condition=None, log2fc=None, regulation_note=None)
+            condition_group=None, environmental_condition=None, log2fc=None, regulation_note=None,
+            pheno_annotation_no=None)
 
     def test_dubliniensis_is_not_covered(self, data_dir):
         out = _regulation_for_feature(self._db(), self._feature("C_dubliniensis_CD36", "Cd36_00010", None))
@@ -226,20 +223,19 @@ class TestRegulationForFeature:
         efg1 = next(r for r in out.regulators if r.tf.feature_name == "CR_07890W_A")
         assert all(e.source == "PathoYeastract" for e in efg1.evidence)
 
-    @staticmethod
-    def _phenotype(regulator, targets, pubmed, qualifier="decreased", change="down", effect="Positive"):
-        return {
-            "pheno_annotation_no": 1, "regulator": regulator, "mutant_type": "null", "qualifier": qualifier,
-            "experiment_type": "classical genetics", "change": change, "association_type": effect,
-            "reporter": "SAP3 mRNA", "targets": targets, "unresolved": [], "strain": "SC5314", "allele": None,
-            "condition": None, "details": None,
-            "references": [{"pubmed": pubmed, "citation": f"Paper {pubmed}", "dbxref_id": None}],
-        }
+    @classmethod
+    def _phenotype(cls, pubmed, sign="Positive", target=None):
+        """A REGULATION row transferred from an RNA accumulation phenotype."""
+        row = cls._curated("CR_07890W_A", "EFG1", pubmed, code="Indirect", sign=sign, target=target)
+        row.experiment = "Phenotype: RNA accumulation decreased"
+        row.mutant_type = "null"
+        row.regulation_note = "Reporter: SAP3 mRNA"
+        row.pheno_annotation_no = 1
+        return row
 
-    def test_phenotype_of_a_regulator_is_shown(self, data_dir):
+    def test_phenotype_row_is_shown_as_cgd_phenotype(self, data_dir):
         self._write_gene_file(data_dir)
-        self.phenotypes = [self._phenotype(("CR_07890W_A", "EFG1"), [("C3_05230W_A", "SAP3")], 555)]
-        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
+        out = _regulation_for_feature(self._db(as_target=[self._phenotype(555)]), self._feature("C_albicans_SC5314"))
 
         assert out.cgd_curated_count == 1
         efg1 = next(r for r in out.regulators if r.tf.feature_name == "CR_07890W_A")
@@ -248,29 +244,14 @@ class TestRegulationForFeature:
         assert phenotype.experiment == "Phenotype: RNA accumulation decreased"
         assert phenotype.association_type == "Positive" and phenotype.evidence_code == "Indirect"
 
-    def test_phenotype_of_a_non_regulator_is_left_out(self, data_dir):
+    def test_phenotype_row_hidden_when_pathoyeastract_has_paper(self, data_dir):
         self._write_gene_file(data_dir)
-        self.phenotypes = [self._phenotype(("C1_00010W_A", "ALG6"), [("C3_05230W_A", "SAP3")], 555)]
-        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
+        out = _regulation_for_feature(self._db(as_target=[self._phenotype(222)]), self._feature("C_albicans_SC5314"))
         assert out.cgd_curated_count == 0
-        assert all(r.tf.feature_name != "C1_00010W_A" for r in out.regulators)
-
-    def test_phenotype_hidden_when_pathoyeastract_has_paper(self, data_dir):
-        self._write_gene_file(data_dir)
-        self.phenotypes = [self._phenotype(("CR_07890W_A", "EFG1"), [("C3_05230W_A", "SAP3")], 222)]
-        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
-        assert out.cgd_curated_count == 0
-
-    def test_phenotype_without_direction_is_left_out(self, data_dir):
-        self.phenotypes = [self._phenotype(("CR_07890W_A", "EFG1"), [("C3_05230W_A", "SAP3")], 555,
-                                           qualifier="normal", change=None, effect="N/A")]
-        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314"))
-        assert out.has_data is False
 
     def test_regulator_lists_phenotype_targets(self, data_dir):
-        self.phenotypes = [self._phenotype(("CR_07890W_A", "EFG1"), [("C3_05230W_A", "SAP3")], 555,
-                                           qualifier="increased", change="up", effect="Negative")]
-        out = _regulation_for_feature(self._db(), self._feature("C_albicans_SC5314", "CR_07890W_A", "EFG1"))
+        db = self._db(as_tf=[self._phenotype(555, sign="Negative", target=("C3_05230W_A", "SAP3"))])
+        out = _regulation_for_feature(db, self._feature("C_albicans_SC5314", "CR_07890W_A", "EFG1"))
 
         assert out.cgd_curated_count == 1
         [target] = out.tf_targets.targets

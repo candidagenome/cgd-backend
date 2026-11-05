@@ -7,8 +7,15 @@ Tests cover:
 - Target lines: effects, directions of change and log2FC
 - Batch validation: binding vs single-gene-mutant expression experiments
 - Peak files (BED, narrowPeak summits, chrom:start-end) and chromosome names
+- Phenotype transfer into REGULATION: which rows a phenotype calls for, adding
+  new ones, removing stale ones, the removal guard; derived rows can't be deleted
 """
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
+
+from cgd.api.services import regulation_phenotype
 
 from cgd.api.services.curation.regulation_curation_service import (
     RegulationCurationError,
@@ -169,3 +176,98 @@ class TestPeaks:
         assert keys("Ca22chr1A_C_albicans_SC5314", "C_albicans_SC5314") == [
             "ca22chr1a_c_albicans_sc5314", "ca22chr1a", "chr1a"]
         assert keys("ChrA_C_glabrata_CBS138", "C_glabrata_CBS138") == ["chra_c_glabrata_cbs138", "chra"]
+
+
+class TestPhenotypeTransfer:
+    FEATURES = {"CR_07890W_A": 10, "C3_05230W_A": 30, "C1_00010W_A": 40, "C2_00020W_A": 50}
+
+    @pytest.fixture(autouse=True)
+    def stubs(self, monkeypatch):
+        self.phenotypes = []
+        monkeypatch.setattr(regulation_phenotype, "_build_phenotype_rows", lambda db, organism_no: self.phenotypes)
+        monkeypatch.setattr(regulation_phenotype, "regulator_sources",
+                            lambda db, organism_no, abbrev: {"go": {"CR_07890W_A"}, "admitted": set()})
+        monkeypatch.setattr(regulation_phenotype, "_feature_nos",
+                            lambda db, organism_no, names: {n: self.FEATURES[n] for n in names})
+        monkeypatch.setattr(regulation_phenotype, "_valid_users", lambda db, userids: {"CURATOR1"})
+
+    @staticmethod
+    def _phenotype(no, regulator, targets, pubmeds=(555,), qualifier="decreased", change="down",
+                   effect="Positive", created_by="CURATOR1"):
+        return {
+            "pheno_annotation_no": no, "created_by": created_by, "regulator": regulator, "mutant_type": "null",
+            "qualifier": qualifier, "experiment_type": "classical genetics", "change": change,
+            "association_type": effect, "reporter": "SAP3 mRNA", "targets": targets, "unresolved": [],
+            "strain": "SC5314", "allele": None, "condition": None, "details": None,
+            "references": [{"reference_no": p + 1000, "pubmed": p, "citation": f"Paper {p}", "dbxref_id": None}
+                           for p in pubmeds],
+        }
+
+    def test_rows_a_phenotype_calls_for(self):
+        efg1, sap3 = ("CR_07890W_A", "EFG1"), ("C3_05230W_A", "SAP3")
+        self.phenotypes = [
+            self._phenotype(1, efg1, [sap3, efg1, ("C2_00020W_A", None)], pubmeds=(555, 666)),  # efg1: own mRNA
+            self._phenotype(2, ("C1_00010W_A", "ALG6"), [sap3]),                                 # not a regulator
+            self._phenotype(3, efg1, [sap3], qualifier="normal", change=None, effect="N/A"),      # no direction
+            self._phenotype(4, efg1, [sap3], created_by="RETIRED"),
+        ]
+        rows = regulation_phenotype.derived_regulation(None, 1, "C_albicans_SC5314")
+
+        assert sorted(rows) == [(1, 10, 30, 1555), (1, 10, 30, 1666), (1, 10, 50, 1555), (1, 10, 50, 1666),
+                                (4, 10, 30, 1555)]
+        row = rows[(1, 10, 30, 1555)]
+        assert (row["evidence_code"], row["experiment"], row["mutant_type"], row["association_type"]) == (
+            "Indirect", "Phenotype: RNA accumulation decreased", "null", "Positive")
+        assert row["regulation_note"] == "Reporter: SAP3 mRNA" and row["created_by"] == "CURATOR1"
+        assert rows[(4, 10, 30, 1555)]["created_by"] is None   # left to the column default
+
+    @staticmethod
+    def _existing(*keys):
+        rows = []
+        for no, tf, target, ref in keys:
+            rows.append(SimpleNamespace(
+                regulation_no=no * 100 + target, pheno_annotation_no=no, tf_feature_no=tf, target_feature_no=target,
+                reference_no=ref, experiment="Phenotype: RNA accumulation decreased", association_type="Positive",
+                tf_feature=SimpleNamespace(feature_name="CR_07890W_A", gene_name="EFG1"),
+                target_feature=SimpleNamespace(feature_name=f"T{target}", gene_name=None),
+                reference=SimpleNamespace(pubmed=ref - 1000)))
+        db = MagicMock()
+        db.query.return_value.join.return_value.filter.return_value.all.return_value = rows
+        return db, rows
+
+    def test_adds_new_removes_stale_keeps_the_rest(self):
+        targets = [("C3_05230W_A", "SAP3"), ("C2_00020W_A", None)]
+        self.phenotypes = [self._phenotype(1, ("CR_07890W_A", "EFG1"), targets)]
+        db, rows = self._existing((1, 10, 30, 1555), (9, 10, 40, 1555))
+        result = regulation_phenotype.transfer_phenotypes(db, 1, "C_albicans_SC5314")
+
+        assert [(r["tf"], r["target"], r["pubmed"]) for r in result["added"]] == [("EFG1", "C2_00020W_A", 555)]
+        assert [(r["target"], r["pubmed"]) for r in result["removed"]] == [("T40", 555)]
+        assert result["kept"] == 1
+        db.delete.assert_called_once_with(rows[1])
+        [added] = [c.args[0] for c in db.add.call_args_list]
+        assert (added.pheno_annotation_no, added.tf_feature_no, added.target_feature_no, added.reference_no) == (
+            1, 10, 50, 1555)
+        db.commit.assert_called_once()
+
+    def test_dry_run_changes_nothing(self):
+        self.phenotypes = [self._phenotype(1, ("CR_07890W_A", "EFG1"), [("C3_05230W_A", "SAP3")])]
+        db, _ = self._existing()
+        result = regulation_phenotype.transfer_phenotypes(db, 1, "C_albicans_SC5314", dry_run=True)
+        assert len(result["added"]) == 1
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_mass_removal_is_refused(self):
+        db, _ = self._existing(*[(n, 10, 30, 1555) for n in range(1, 31)])
+        with pytest.raises(RuntimeError, match="would remove 30 of 30"):
+            regulation_phenotype.transfer_phenotypes(db, 1, "C_albicans_SC5314", max_delete_fraction=0.2)
+        db.delete.assert_not_called()
+
+
+def test_phenotype_derived_rows_cannot_be_deleted():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.scalar.return_value = 1
+    with pytest.raises(RegulationCurationError, match="Correct or delete the phenotype annotation"):
+        RegulationCurationService(db).delete([5, 6], "CURATOR1")
+    db.commit.assert_not_called()

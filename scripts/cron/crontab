@@ -11,6 +11,9 @@
 0 1 * * * cd /opt/cgd_api/scripts/cron && ./cgd_run_tests.sh
 0 2 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_reindex_elasticsearch.sh
 0 4 * * * cd /opt/cgd_api/scripts/cron && ./slack-cron.sh ./cgd_check_data.sh
+# DAILY (05:00 UTC): transfer new RNA accumulation phenotypes of regulators into regulation data
+# (locus Regulation tab, "CGD phenotype"); emails curators when rows are added or removed
+0 5 * * * cd /opt/cgd_api/scripts/cron && REGULATION_EMAIL=candida-curator@lists.stanford.edu ./slack-cron.sh ./cgd_transfer_phenotype_regulation.sh
 
 # TUESDAY (Wednesday 00:00 UTC)
 0 0 * * 3 cd /opt/cgd_api/scripts/cron && ./cgd_send_agenda_reminder.sh
