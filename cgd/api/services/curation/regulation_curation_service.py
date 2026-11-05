@@ -21,6 +21,11 @@ The regulator must be a regulator (regulation_phenotype.is_regulator: a GO
 DNA-binding transcription factor, a PathoYeastract regulator, or a gene a
 curator admitted with allow_regulator()).
 
+Rows with a pheno_annotation_no come from RNA accumulation phenotypes
+(regulation_phenotype.transfer_phenotypes, run daily and when a regulator is
+admitted or removed). Curators may edit them, but not delete them: they follow
+their phenotype annotation, so a wrong one is fixed there.
+
 A batch entry is one regulator, one paper and one experiment/condition, with a
 pasted list of target genes; each target line may carry its own effect or
 direction of change and log2 fold change. Names are resolved within one
@@ -310,6 +315,7 @@ class RegulationCurationService:
                 "environmental_condition": r.environmental_condition,
                 "log2fc": r.log2fc,
                 "regulation_note": r.regulation_note,
+                "pheno_annotation_no": r.pheno_annotation_no,
                 "created_by": r.created_by,
                 "date_created": r.date_created.date().isoformat() if r.date_created else None,
                 "in_pathoyeastract": self._in_pathoyeastract(organism, r),
@@ -569,6 +575,20 @@ class RegulationCurationService:
         nos = sorted({int(n) for n in regulation_nos or []})
         if not nos:
             raise RegulationCurationError("No rows selected.")
+        derived = 0
+        for start in range(0, len(nos), 900):
+            derived += (
+                self.db.query(func.count(Regulation.regulation_no))
+                .filter(Regulation.regulation_no.in_(nos[start:start + 900]),
+                        Regulation.pheno_annotation_no.isnot(None))
+                .scalar()
+            )
+        if derived:
+            raise RegulationCurationError(
+                f"{derived} of the selected rows come from RNA accumulation phenotype annotations and would be "
+                "added back by the nightly transfer. Correct or delete the phenotype annotation instead; "
+                "nothing was deleted."
+            )
         deleted = 0
         for start in range(0, len(nos), 900):
             deleted += (
@@ -643,7 +663,8 @@ class RegulationCurationService:
             raise RegulationCurationError("Could not save; nothing was changed.")
         regulation_phenotype.clear_cache()
         logger.info("Admitted %s as a regulator by %s", feature.feature_name, curator_userid)
-        return {"gene": self._gene_out(feature), **self.regulator_status(organism, feature)}
+        return {"gene": self._gene_out(feature), **self.regulator_status(organism, feature),
+                "phenotype_transfer": self._transfer_phenotypes(organism, feature)}
 
     def remove_regulator(self, organism_abbrev: str, name: str, curator_userid: str) -> dict:
         organism = self._organism(organism_abbrev)
@@ -654,7 +675,24 @@ class RegulationCurationService:
         regulation_phenotype.clear_cache()
         logger.info("Removed %s from admitted regulators by %s (%d row)", feature.feature_name, curator_userid,
                     deleted)
-        return {"gene": self._gene_out(feature), **self.regulator_status(organism, feature)}
+        return {"gene": self._gene_out(feature), **self.regulator_status(organism, feature),
+                "phenotype_transfer": self._transfer_phenotypes(organism, feature)}
+
+    def _transfer_phenotypes(self, organism: Organism, feature: Feature) -> Optional[dict]:
+        """Add or remove one regulator's phenotype-derived rows now, rather than at the nightly run.
+
+        Returns {"added": n, "removed": n}, or None when it failed (the nightly
+        run catches up).
+        """
+        try:
+            result = regulation_phenotype.transfer_phenotypes(
+                self.db, organism.organism_no, organism.organism_abbrev,
+                regulator=regulation_phenotype.locus_name(feature.feature_name))
+        except SQLAlchemyError:
+            self.db.rollback()
+            logger.exception("Phenotype transfer for %s failed", feature.feature_name)
+            return None
+        return {"added": len(result["added"]), "removed": len(result["removed"])}
 
     def review(self, organism_abbrev: str) -> dict:
         """What curators may need to act on for one organism.

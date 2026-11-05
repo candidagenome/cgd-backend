@@ -2372,19 +2372,24 @@ class Regulation(Base):
     """Curator-entered TF -> target regulatory association (one evidence row).
 
     Created by scripts/regulation/create_regulation_table.py; shown on the
-    locus Regulation tab alongside PathoYeastract's associations.
+    locus Regulation tab alongside PathoYeastract's associations. Rows with a
+    pheno_annotation_no are transferred from RNA accumulation phenotypes by a
+    daily cron job and follow their phenotype.
     """
     __tablename__ = 'regulation'
     __table_args__ = (
         ForeignKeyConstraint(['tf_feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='regulation_tf_fk'),
         ForeignKeyConstraint(['target_feature_no'], ['MULTI.feature.feature_no'], ondelete='CASCADE', name='regulation_target_fk'),
         ForeignKeyConstraint(['reference_no'], ['MULTI.reference.reference_no'], ondelete='CASCADE', name='regulation_ref_fk'),
+        ForeignKeyConstraint(['pheno_annotation_no'], ['MULTI.pheno_annotation.pheno_annotation_no'], ondelete='CASCADE',
+                             name='regulation_pheno_fk'),
         CheckConstraint("evidence_code IN ('Direct', 'Indirect')", name='regulation_evidence_ck'),
         CheckConstraint("association_type IN ('Positive', 'Negative', 'N/A')", name='regulation_assoc_ck'),
         PrimaryKeyConstraint('regulation_no', name='regulation_pk'),
         Index('regulation_uk', 'tf_feature_no', 'target_feature_no', 'reference_no', 'experiment',
-              'mutant_type', 'strain_background', 'environmental_condition', unique=True),
+              'mutant_type', 'strain_background', 'environmental_condition', 'pheno_annotation_no', unique=True),
         Index('regulation_target_i', 'target_feature_no'),
+        Index('regulation_pheno_i', 'pheno_annotation_no'),
         Index('regulation_ref_i', 'reference_no'),
         {'comment': 'Curator-entered transcriptional regulatory associations (transcription factor -> '
                     'target gene), one row per evidence observation.', 'schema': 'MULTI'}
@@ -2405,6 +2410,7 @@ class Regulation(Base):
     environmental_condition: Mapped[Optional[str]] = mapped_column(VARCHAR(1000))
     log2fc: Mapped[Optional[float]] = mapped_column(NUMBER(asdecimal=False), comment='Log2 fold change of the target, when reported.')
     regulation_note: Mapped[Optional[str]] = mapped_column(VARCHAR(1000))
+    pheno_annotation_no: Mapped[Optional[int]] = mapped_column(NUMBER(10, 0, False), comment='RNA accumulation phenotype annotation the row was transferred from (scripts/regulation/transfer_phenotype_regulation.py); null for curator-entered rows.')
 
     tf_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[tf_feature_no])
     target_feature: Mapped['Feature'] = relationship('Feature', foreign_keys=[target_feature_no])

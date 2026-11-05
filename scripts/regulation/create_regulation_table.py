@@ -14,6 +14,8 @@ evidence observation, with the same fields PathoYeastract records:
                 association_type (Positive / Negative / N/A),
                 strain_background, condition_group, environmental_condition,
                 log2fc, regulation_note, date_created, created_by
+                pheno_annotation_no -> PHENO_ANNOTATION  (rows transferred from
+                RNA accumulation phenotypes; null for curator-entered rows)
 
     REGULATOR_ALLOW  feature_no -> FEATURE
                 Genes curators admit as regulators although they have no
@@ -63,11 +65,13 @@ CREATE TABLE MULTI.REGULATION (
     ENVIRONMENTAL_CONDITION VARCHAR2(1000),
     LOG2FC                  NUMBER,
     REGULATION_NOTE         VARCHAR2(1000),
+    PHENO_ANNOTATION_NO     NUMBER(10,0),
     DATE_CREATED            DATE DEFAULT SYSDATE NOT NULL,
     CREATED_BY              VARCHAR2(12) DEFAULT SUBSTR(USER,1,12) NOT NULL,
     CONSTRAINT REGULATION_PK PRIMARY KEY (REGULATION_NO) USING INDEX TABLESPACE INDEX1,
     CONSTRAINT REGULATION_UK UNIQUE (TF_FEATURE_NO, TARGET_FEATURE_NO, REFERENCE_NO, EXPERIMENT,
-                                     MUTANT_TYPE, STRAIN_BACKGROUND, ENVIRONMENTAL_CONDITION)
+                                     MUTANT_TYPE, STRAIN_BACKGROUND, ENVIRONMENTAL_CONDITION,
+                                     PHENO_ANNOTATION_NO)
         USING INDEX TABLESPACE INDEX1,
     CONSTRAINT REGULATION_TF_FK FOREIGN KEY (TF_FEATURE_NO)
         REFERENCES MULTI.FEATURE (FEATURE_NO) ON DELETE CASCADE,
@@ -75,10 +79,15 @@ CREATE TABLE MULTI.REGULATION (
         REFERENCES MULTI.FEATURE (FEATURE_NO) ON DELETE CASCADE,
     CONSTRAINT REGULATION_REF_FK FOREIGN KEY (REFERENCE_NO)
         REFERENCES MULTI.REFERENCE (REFERENCE_NO) ON DELETE CASCADE,
+    CONSTRAINT REGULATION_PHENO_FK FOREIGN KEY (PHENO_ANNOTATION_NO)
+        REFERENCES MULTI.PHENO_ANNOTATION (PHENO_ANNOTATION_NO) ON DELETE CASCADE,
     CONSTRAINT REGULATION_EVIDENCE_CK CHECK (EVIDENCE_CODE IN ('Direct', 'Indirect')),
     CONSTRAINT REGULATION_ASSOC_CK CHECK (ASSOCIATION_TYPE IN ('Positive', 'Negative', 'N/A'))
 ) TABLESPACE DATA2
 """
+
+PHENO_COMMENT = ("COMMENT ON COLUMN MULTI.REGULATION.PHENO_ANNOTATION_NO IS 'RNA accumulation phenotype annotation "
+                 "the row was transferred from (transfer_phenotype_regulation.py); null for curator-entered rows.'")
 
 COMMENTS = [
     "COMMENT ON TABLE MULTI.REGULATION IS 'Curator-entered transcriptional regulatory associations "
@@ -98,6 +107,7 @@ COMMENTS = [
     "COMMENT ON COLUMN MULTI.REGULATION.CONDITION_GROUP IS 'Environmental condition group (PathoYeastract "
     "vocabulary).'",
     "COMMENT ON COLUMN MULTI.REGULATION.LOG2FC IS 'Log2 fold change of the target, when reported.'",
+    PHENO_COMMENT,
     "COMMENT ON COLUMN MULTI.REGULATION.DATE_CREATED IS 'Date the record was entered into the database.'",
     "COMMENT ON COLUMN MULTI.REGULATION.CREATED_BY IS 'Person who entered the record into the database.'",
 ]
@@ -107,17 +117,26 @@ INDEXES = {
                            "TABLESPACE INDEX1",
     "REGULATION_REF_I": "CREATE INDEX MULTI.REGULATION_REF_I ON MULTI.REGULATION (REFERENCE_NO) "
                         "TABLESPACE INDEX1",
+    "REGULATION_PHENO_I": "CREATE INDEX MULTI.REGULATION_PHENO_I ON MULTI.REGULATION (PHENO_ANNOTATION_NO) "
+                          "TABLESPACE INDEX1",
 }
 
 # Columns added after the table was first created: {name: ALTER TABLE ... ADD}
 ADDED_COLUMNS = {
     "MUTANT_TYPE": "ALTER TABLE MULTI.REGULATION ADD (MUTANT_TYPE VARCHAR2(40))",
+    "PHENO_ANNOTATION_NO": "ALTER TABLE MULTI.REGULATION ADD (PHENO_ANNOTATION_NO NUMBER(10,0) "
+                           "CONSTRAINT REGULATION_PHENO_FK REFERENCES MULTI.PHENO_ANNOTATION (PHENO_ANNOTATION_NO) "
+                           "ON DELETE CASCADE)",
+}
+ADDED_COMMENTS = {
+    "PHENO_ANNOTATION_NO": PHENO_COMMENT,
 }
 
 # The unique key gained MUTANT_TYPE (a null and an overexpression mutant in one
-# paper are two observations)
+# paper are two observations) and PHENO_ANNOTATION_NO (two phenotype
+# annotations, e.g. of two alleles, are two observations)
 UK_COLUMNS = ["TF_FEATURE_NO", "TARGET_FEATURE_NO", "REFERENCE_NO", "EXPERIMENT", "MUTANT_TYPE",
-              "STRAIN_BACKGROUND", "ENVIRONMENTAL_CONDITION"]
+              "STRAIN_BACKGROUND", "ENVIRONMENTAL_CONDITION", "PHENO_ANNOTATION_NO"]
 UK_DDL = (f"ALTER TABLE MULTI.REGULATION ADD CONSTRAINT REGULATION_UK UNIQUE ({', '.join(UK_COLUMNS)}) "
           "USING INDEX TABLESPACE INDEX1")
 
@@ -165,7 +184,7 @@ END Regulation_BIUR;
 LOGGED_COLUMNS = [
     "TF_FEATURE_NO", "TARGET_FEATURE_NO", "REFERENCE_NO", "EVIDENCE_CODE", "EXPERIMENT", "MUTANT_TYPE",
     "ASSOCIATION_TYPE", "STRAIN_BACKGROUND", "CONDITION_GROUP", "ENVIRONMENTAL_CONDITION",
-    "LOG2FC", "REGULATION_NOTE",
+    "LOG2FC", "REGULATION_NOTE", "PHENO_ANNOTATION_NO",
 ]
 
 
@@ -340,7 +359,7 @@ def report(db) -> None:
     if exists(db, "TABLE", "REGULATION"):
         for column in ADDED_COLUMNS:
             state = "present" if column_exists(db, "REGULATION", column) else "MISSING"
-            print(f"COLUMN   REGULATION.{column:11} {state}")
+            print(f"COLUMN   REGULATION.{column:19} {state}")
         print("REGULATION rows:", db.execute(text("SELECT COUNT(*) FROM MULTI.REGULATION")).scalar())
     if exists(db, "TABLE", "REGULATOR_ALLOW"):
         print("REGULATOR_ALLOW rows:", db.execute(text("SELECT COUNT(*) FROM MULTI.REGULATOR_ALLOW")).scalar())
@@ -360,11 +379,13 @@ def create(db) -> None:
     for column, ddl in ADDED_COLUMNS.items():
         if not column_exists(db, "REGULATION", column):
             run(db, ddl)
+            if column in ADDED_COMMENTS:
+                run(db, ADDED_COMMENTS[column])
             print(f"added column REGULATION.{column}")
     if uk_columns(db) != UK_COLUMNS:
         run(db, "ALTER TABLE MULTI.REGULATION DROP CONSTRAINT REGULATION_UK DROP INDEX")
         run(db, UK_DDL)
-        print("rebuilt unique key REGULATION_UK with MUTANT_TYPE")
+        print(f"rebuilt unique key REGULATION_UK ({', '.join(UK_COLUMNS)})")
     for name, ddl in INDEXES.items():
         if not exists(db, "INDEX", name):
             run(db, ddl)

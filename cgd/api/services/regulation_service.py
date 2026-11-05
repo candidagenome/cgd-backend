@@ -8,10 +8,10 @@ tab from two sources:
     scripts/regulation/load_pathoyeastract_flatfiles.py (documented
     associations) and harvest_pathoyeastract.py (predicted sites) under
     <regulation data dir>/<organism_abbrev>/<ORF>.json;
-  * CGD curation: MULTI.REGULATION rows entered with the Curate Regulation
-    tool, merged in as evidence rows with source "CGD", and RNA accumulation
-    phenotype annotations of regulators (source "CGD phenotype", see
-    regulation_phenotype.py).
+  * CGD curation: MULTI.REGULATION rows, merged in as evidence rows: rows
+    entered with the Curate Regulation tool (source "CGD") and rows
+    transferred from RNA accumulation phenotype annotations of regulators
+    (source "CGD phenotype", see regulation_phenotype.transfer_phenotypes).
 
 TF and target names are resolved to CGD features (so they link to locus
 pages) and PubMed IDs to CGD references.
@@ -28,7 +28,6 @@ from urllib.parse import urlencode
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from cgd.api.services import regulation_phenotype
 from cgd.api.services.locus_service import _filter_features_by_preference
 from cgd.core.settings import settings
 from cgd.models.models import Feature, Organism, Reference, Regulation
@@ -274,7 +273,7 @@ def _curated_evidence(row: Regulation) -> dict:
         "environmental_group": row.condition_group,
         "environmental_condition": row.environmental_condition,
         "log2fc": row.log2fc,
-        "source": "CGD",
+        "source": "CGD phenotype" if row.pheno_annotation_no else "CGD",
         "curation_note": row.regulation_note,
     }
 
@@ -292,12 +291,11 @@ def _covered_by_pathoyeastract(entry: dict, pubmed: Optional[int]) -> bool:
 
 
 def _cgd_evidence(db: Session, feature: Feature) -> tuple[list[tuple], list[tuple]]:
-    """CGD evidence for a gene: curated REGULATION rows and RNA accumulation phenotypes.
+    """CGD evidence for a gene: its REGULATION rows (curated and phenotype-derived).
 
     Returns (as_target, as_tf): as_target items are ((tf_name, tf_gene), evidence)
     for regulators of this gene; as_tf items are ((target_name, target_gene),
-    evidence) for genes this one regulates. Phenotype rows count only when the
-    mutated gene is a regulator (regulation_phenotype.regulator_sources).
+    evidence) for genes this one regulates.
     """
     as_target, as_tf = [], []
     for row in (
@@ -314,28 +312,6 @@ def _cgd_evidence(db: Session, feature: Feature) -> tuple[list[tuple], list[tupl
         .all()
     ):
         as_tf.append(((row.target_feature.feature_name, row.target_feature.gene_name), _curated_evidence(row)))
-
-    organism = feature.organism
-    if organism is None:
-        return as_target, as_tf
-    rows = [row for row in regulation_phenotype.phenotype_rows(db, feature.organism_no)
-            if regulation_phenotype.shown(row)]
-    if not rows:
-        return as_target, as_tf
-    me = regulation_phenotype.locus_name(feature.feature_name)
-    regulators = set().union(*regulation_phenotype.regulator_sources(
-        db, feature.organism_no, organism.organism_abbrev).values())
-    for row in rows:
-        regulator = row["regulator"]
-        if regulator[0] not in regulators:
-            continue
-        if regulator[0] == me:
-            for target in row["targets"]:
-                for ref in row["references"]:
-                    as_tf.append((target, regulation_phenotype.phenotype_evidence(row, ref)))
-        elif any(t[0] == me for t in row["targets"]):
-            for ref in row["references"]:
-                as_target.append((regulator, regulation_phenotype.phenotype_evidence(row, ref)))
     return as_target, as_tf
 
 

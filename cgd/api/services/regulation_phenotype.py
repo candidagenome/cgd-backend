@@ -8,11 +8,13 @@ _regulators.json), or a gene a curator admitted (MULTI.REGULATOR_ALLOW).
 
 CGD's "RNA accumulation" phenotype annotations record expression changes in
 single-gene mutants, with the affected genes as Reporter experiment
-properties. Rows whose mutated gene is a regulator are shown on the tab as
-expression evidence (source "CGD phenotype"), so curators do not enter them
-twice. Reporter text is free ("CDR2 mRNA", "CDR1-RLUC", "ERG6|ERG11|CDR1");
-it is split into gene names, and words that are not genes are reported for
-review rather than guessed.
+properties. Annotations whose mutated gene is a regulator are transferred into
+MULTI.REGULATION as expression rows (transfer_phenotypes(), run daily by
+scripts/regulation/transfer_phenotype_regulation.py and when a curator admits
+a regulator), so curators do not enter them twice; the tab shows them with
+source "CGD phenotype". Reporter text is free ("CDR2 mRNA", "CDR1-RLUC",
+"ERG6|ERG11|CDR1"); it is split into gene names, and words that are not genes
+are reported for review rather than guessed.
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ import time
 from collections import defaultdict
 from typing import Optional
 
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 from sqlalchemy.orm import Session
 
 from cgd.models.models import (
@@ -36,6 +38,7 @@ from cgd.models.models import (
     Phenotype,
     Reference,
     RefLink,
+    Regulation,
     RegulatorAllow,
 )
 
@@ -256,18 +259,19 @@ class _GeneNames:
 def phenotype_rows(db: Session, organism_no: int) -> list[dict]:
     """The organism's RNA accumulation annotations, with reporters resolved to genes.
 
-    Each row: pheno_annotation_no, regulator (feature_name, gene_name), mutant_type,
+    Each row: pheno_annotation_no, created_by, regulator (feature_name, gene_name), mutant_type,
     qualifier, change (up/down/changed/None), association_type, reporter,
     targets [(feature_name, gene_name)], unresolved [tokens], strain, allele,
-    condition, details, references [{pubmed, citation, dbxref_id}].
+    condition, details, references [{reference_no, pubmed, citation, dbxref_id}].
     """
     return _cached(("phenotype", organism_no), lambda: _build_phenotype_rows(db, organism_no))
 
 
 def _build_phenotype_rows(db: Session, organism_no: int) -> list[dict]:
     annotations = (
-        db.query(PhenoAnnotation.pheno_annotation_no, PhenoAnnotation.experiment_no, Feature.feature_name,
-                 Feature.gene_name, Phenotype.mutant_type, Phenotype.qualifier, Phenotype.experiment_type)
+        db.query(PhenoAnnotation.pheno_annotation_no, PhenoAnnotation.experiment_no, PhenoAnnotation.created_by,
+                 Feature.feature_name, Feature.gene_name, Phenotype.mutant_type, Phenotype.qualifier,
+                 Phenotype.experiment_type)
         .join(Phenotype, Phenotype.phenotype_no == PhenoAnnotation.phenotype_no)
         .join(Feature, Feature.feature_no == PhenoAnnotation.feature_no)
         .filter(Feature.organism_no == organism_no, func.lower(Phenotype.observable) == OBSERVABLE.lower())
@@ -295,7 +299,8 @@ def _build_phenotype_rows(db: Session, organism_no: int) -> list[dict]:
                     RefLink.primary_key.in_(annotation_nos[start:start + 900]))
             .all()
         ):
-            refs[primary_key].append({"pubmed": ref.pubmed, "citation": ref.citation, "dbxref_id": ref.dbxref_id})
+            refs[primary_key].append({"reference_no": ref.reference_no, "pubmed": ref.pubmed,
+                                      "citation": ref.citation, "dbxref_id": ref.dbxref_id})
 
     names = _GeneNames(db, organism_no)
     reporters = {a.pheno_annotation_no: props[a.experiment_no].get("Reporter", []) for a in annotations}
@@ -311,6 +316,7 @@ def _build_phenotype_rows(db: Session, organism_no: int) -> list[dict]:
             targets, unresolved = reporter_genes(reporter, names.resolve)
             rows.append({
                 "pheno_annotation_no": a.pheno_annotation_no,
+                "created_by": a.created_by,
                 "regulator": regulator,
                 "mutant_type": a.mutant_type,
                 "qualifier": a.qualifier,
@@ -334,19 +340,26 @@ def shown(row: dict) -> bool:
     return row["change"] is not None and bool(row["targets"])
 
 
-def phenotype_evidence(row: dict, ref: dict) -> dict:
-    """A phenotype row in the per-gene JSON evidence format, for one of its references."""
-    qualifier = (row["qualifier"] or "").lower()
+def phenotype_experiment(row: dict) -> str:
+    return f"Phenotype: {OBSERVABLE} {(row['qualifier'] or '').lower()}".strip()
+
+
+def phenotype_note(row: dict) -> str:
     notes = [f"Reporter: {row['reporter']}"]
     if row["allele"]:
         notes.append(f"Allele: {row['allele']}")
     if row["details"]:
         notes.append(row["details"])
+    return "; ".join(notes)
+
+
+def phenotype_evidence(row: dict, ref: dict) -> dict:
+    """A phenotype row in the per-gene JSON evidence format, for one of its references."""
     return {
         "pubmed": ref["pubmed"],
         "citation": ref["citation"],
         "evidence_code": "Indirect",
-        "experiment": f"Phenotype: {OBSERVABLE} {qualifier}".strip(),
+        "experiment": phenotype_experiment(row),
         "mutant_type": row["mutant_type"],
         "association_type": row["association_type"],
         "strain": row["strain"],
@@ -354,14 +367,138 @@ def phenotype_evidence(row: dict, ref: dict) -> dict:
         "environmental_condition": row["condition"],
         "log2fc": None,
         "source": "CGD phenotype",
-        "curation_note": "; ".join(notes),
+        "curation_note": phenotype_note(row),
     }
+
+
+# ----------------------------------------------------------------------
+# Transfer into MULTI.REGULATION
+# ----------------------------------------------------------------------
+def _clip(value: Optional[str], size: int) -> Optional[str]:
+    return value[:size] if value else None
+
+
+def _feature_nos(db: Session, organism_no: int, names: set[str]) -> dict[str, int]:
+    wanted = sorted(names)
+    out = {}
+    for start in range(0, len(wanted), 900):
+        out.update(
+            db.query(Feature.feature_name, Feature.feature_no)
+            .filter(Feature.organism_no == organism_no, Feature.feature_name.in_(wanted[start:start + 900]))
+            .all()
+        )
+    return out
+
+
+def _valid_users(db: Session, userids: set[str]) -> set[str]:
+    """The phenotype curators who can still be recorded as created_by (CheckUser needs a DBUSER row)."""
+    wanted = sorted(u for u in userids if u)
+    if not wanted:
+        return set()
+    return {r[0] for r in db.execute(
+        text("SELECT userid FROM dbuser WHERE userid IN :ids").bindparams(bindparam("ids", expanding=True)),
+        {"ids": wanted})}
+
+
+def derived_regulation(db: Session, organism_no: int, organism_abbrev: str,
+                       regulator: Optional[str] = None) -> dict[tuple, dict]:
+    """The REGULATION rows the organism's RNA accumulation phenotypes call for.
+
+    Keyed (pheno_annotation_no, tf_feature_no, target_feature_no, reference_no):
+    one row per phenotype annotation, reporter gene and reference, for
+    annotations with a direction of change whose mutated gene is a regulator.
+    A reporter that is the mutated gene itself is skipped (a null mutant lacks
+    its own transcript). `regulator` (a locus name) limits it to one regulator.
+    """
+    regulators = set().union(*regulator_sources(db, organism_no, organism_abbrev).values())
+    rows = [row for row in _build_phenotype_rows(db, organism_no)
+            if shown(row) and row["regulator"][0] in regulators
+            and (regulator is None or row["regulator"][0] == regulator)]
+    names = {row["regulator"][0] for row in rows} | {t[0] for row in rows for t in row["targets"]}
+    feature_nos = _feature_nos(db, organism_no, names)
+    users = _valid_users(db, {row["created_by"] for row in rows})
+    out: dict[tuple, dict] = {}
+    for row in rows:
+        tf_no = feature_nos.get(row["regulator"][0])
+        if tf_no is None:
+            continue
+        for target, _gene in row["targets"]:
+            target_no = feature_nos.get(target)
+            if target_no is None or target_no == tf_no:
+                continue
+            for ref in row["references"]:
+                key = (row["pheno_annotation_no"], tf_no, target_no, ref["reference_no"])
+                out.setdefault(key, {
+                    "pheno_annotation_no": row["pheno_annotation_no"],
+                    "tf_feature_no": tf_no,
+                    "target_feature_no": target_no,
+                    "reference_no": ref["reference_no"],
+                    "evidence_code": "Indirect",
+                    "experiment": phenotype_experiment(row),
+                    "mutant_type": row["mutant_type"],
+                    "association_type": row["association_type"],
+                    "strain_background": _clip(row["strain"], 100),
+                    "environmental_condition": _clip(row["condition"], 1000),
+                    "regulation_note": _clip(phenotype_note(row), 1000),
+                    "created_by": row["created_by"] if row["created_by"] in users else None,
+                    "_tf": row["regulator"][1] or row["regulator"][0],
+                    "_target": _gene or target,
+                    "_pubmed": ref["pubmed"],
+                })
+    return out
+
+
+def transfer_phenotypes(db: Session, organism_no: int, organism_abbrev: str, regulator: Optional[str] = None,
+                        dry_run: bool = False, max_delete_fraction: Optional[float] = None) -> dict:
+    """Bring the organism's phenotype-derived REGULATION rows in line with its phenotypes.
+
+    Rows a phenotype now calls for are added; rows whose phenotype no longer
+    calls for them (reporter or qualifier changed, regulator no longer a
+    regulator) are removed. Rows already there are left as curators edited
+    them. Rows of a deleted phenotype annotation go with it (ON DELETE CASCADE).
+
+    Returns {"added": [...], "removed": [...], "kept": n}; with max_delete_fraction
+    set, removing more than that fraction of the existing rows (and more than
+    20) raises RuntimeError and changes nothing. Commits unless dry_run.
+    """
+    wanted = derived_regulation(db, organism_no, organism_abbrev, regulator)
+    query = (
+        db.query(Regulation)
+        .join(Feature, Feature.feature_no == Regulation.tf_feature_no)
+        .filter(Feature.organism_no == organism_no, Regulation.pheno_annotation_no.isnot(None))
+    )
+    if regulator is not None:
+        query = query.filter(Feature.feature_name == regulator)
+    existing = {(r.pheno_annotation_no, r.tf_feature_no, r.target_feature_no, r.reference_no): r
+                for r in query.all()}
+    to_add = [values for key, values in wanted.items() if key not in existing]
+    to_remove = [row for key, row in existing.items() if key not in wanted]
+    if (max_delete_fraction is not None and len(to_remove) > 20
+            and len(to_remove) > max_delete_fraction * len(existing)):
+        raise RuntimeError(f"{organism_abbrev}: would remove {len(to_remove)} of {len(existing)} phenotype-derived "
+                           f"rows (over {max_delete_fraction:.0%}); nothing changed")
+    added = [{k.lstrip("_"): v for k, v in values.items()
+              if k in ("_tf", "_target", "_pubmed", "experiment", "association_type")} for values in to_add]
+    removed = [{"tf": row.tf_feature.gene_name or row.tf_feature.feature_name,
+                "target": row.target_feature.gene_name or row.target_feature.feature_name,
+                "pubmed": row.reference.pubmed if row.reference else None,
+                "experiment": row.experiment, "association_type": row.association_type}
+               for row in to_remove]
+    if not dry_run and (to_add or to_remove):
+        for row in to_remove:
+            db.delete(row)
+        for values in to_add:
+            columns = {k: v for k, v in values.items() if not k.startswith("_") and v is not None}
+            db.add(Regulation(**columns))
+        db.commit()
+    return {"added": added, "removed": removed, "kept": len(existing) - len(to_remove)}
 
 
 __all__ = [
     "MUTANT_TYPES",
     "admitted_regulators",
     "clear_cache",
+    "derived_regulation",
     "infer_association",
     "is_regulator",
     "locus_name",
@@ -371,4 +508,5 @@ __all__ = [
     "reporter_genes",
     "shown",
     "split_reporter",
+    "transfer_phenotypes",
 ]
