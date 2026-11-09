@@ -16,8 +16,10 @@ gene_name is --old gets gene_name --new, and:
   - --headline-sub OLD=NEW rewrites matching text in the renamed features'
     headlines (e.g. Hex3p=Slx5p).
 
-Refuses to run if any feature already carries the new name. All changes go in
-one transaction through the normal triggers (update_log keeps the audit
+A feature that already carries the new name and shares an ortholog group with
+the features being renamed (a curator renamed it first) only gets the
+old-name alias; any other feature with the new name stops the run. All
+changes go in one transaction through the normal triggers (update_log keeps the audit
 trail). Dry-run by default.
 
 Usage:
@@ -93,10 +95,24 @@ def main() -> None:
                         FROM {DB_SCHEMA}.feature f JOIN {DB_SCHEMA}.organism o ON o.organism_no = f.organism_no
                         WHERE UPPER(f.gene_name) = UPPER(:old) ORDER BY o.organism_abbrev, f.feature_name""",
                     old=args.old)
-        clashes = q(f"SELECT feature_name FROM {DB_SCHEMA}.feature WHERE UPPER(gene_name) = UPPER(:new)",
-                    new=args.new)
-        if clashes:
-            sys.exit(f"{args.new} is already the name of {', '.join(r[0] for r in clashes)}; resolve by hand")
+        # A feature already carrying the new name is one a curator renamed ahead
+        # of this run when it shares an ortholog group with the features being
+        # renamed: it only gets the old-name alias. Any other is a real clash.
+        clashes = q(f"SELECT feature_no, feature_name, feature_type FROM {DB_SCHEMA}.feature"
+                    f" WHERE UPPER(gene_name) = UPPER(:new)", new=args.new)
+        renamed_already = []
+        if clashes and targets:
+            group_mates = {r[0] for r in q(
+                f"""SELECT DISTINCT mate.feature_no FROM {DB_SCHEMA}.feat_homology fh
+                    JOIN {DB_SCHEMA}.homology_group hg ON hg.homology_group_no = fh.homology_group_no
+                    JOIN {DB_SCHEMA}.feat_homology mate ON mate.homology_group_no = fh.homology_group_no
+                    WHERE hg.homology_group_type = 'ortholog'
+                      AND fh.feature_no IN ({",".join(str(t.feature_no) for t in targets)})""")}
+            renamed_already = [c for c in clashes if c.feature_no in group_mates]
+        stray = [c for c in clashes if c not in renamed_already]
+        if stray:
+            sys.exit(f"{args.new} is already the name of {', '.join(c.feature_name for c in stray)}, "
+                     f"outside the {args.old} ortholog group; resolve by hand")
         if not targets:
             logger.info("no features named %s — nothing to do (already applied?)", args.old)
             return
@@ -202,6 +218,13 @@ def main() -> None:
                 logger.info("    headline: %s%s", new_headline, tag)
                 ex(f"UPDATE {DB_SCHEMA}.feature SET headline = :h WHERE feature_no = :f",
                    h=new_headline, f=t.feature_no)
+
+        for c in renamed_already:
+            # Name, citations and headline are the curator's; only add the alias
+            logger.info("%s (%s): already named %s by a curator", c.feature_name, c.feature_type, args.new)
+            if c.feature_type != "allele":
+                ensure_alias(c.feature_no)
+                logger.info("    + alias %s (%s)%s", args.old, ALIAS_TYPE, tag)
 
         if dry:
             session.rollback()
