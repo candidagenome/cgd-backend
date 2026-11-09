@@ -95,13 +95,16 @@ def main() -> None:
                         FROM {DB_SCHEMA}.feature f JOIN {DB_SCHEMA}.organism o ON o.organism_no = f.organism_no
                         WHERE UPPER(f.gene_name) = UPPER(:old) ORDER BY o.organism_abbrev, f.feature_name""",
                     old=args.old)
+        if not targets:
+            logger.info("no features named %s — nothing to do (already applied?)", args.old)
+            return
         # A feature already carrying the new name is one a curator renamed ahead
         # of this run when it shares an ortholog group with the features being
         # renamed: it only gets the old-name alias. Any other is a real clash.
         clashes = q(f"SELECT feature_no, feature_name, feature_type FROM {DB_SCHEMA}.feature"
                     f" WHERE UPPER(gene_name) = UPPER(:new)", new=args.new)
         renamed_already = []
-        if clashes and targets:
+        if clashes:
             group_mates = {r[0] for r in q(
                 f"""SELECT DISTINCT mate.feature_no FROM {DB_SCHEMA}.feat_homology fh
                     JOIN {DB_SCHEMA}.homology_group hg ON hg.homology_group_no = fh.homology_group_no
@@ -113,9 +116,6 @@ def main() -> None:
         if stray:
             sys.exit(f"{args.new} is already the name of {', '.join(c.feature_name for c in stray)}, "
                      f"outside the {args.old} ortholog group; resolve by hand")
-        if not targets:
-            logger.info("no features named %s — nothing to do (already applied?)", args.old)
-            return
         unknown = set(cites) - {t.organism_abbrev for t in targets}
         if unknown:
             sys.exit(f"--cite organisms not among the {args.old} features: {', '.join(sorted(unknown))}")
