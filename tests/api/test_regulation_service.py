@@ -12,6 +12,8 @@ Tests cover:
   PathoYeastract already has the same TF, target and paper
 - Rows transferred from RNA accumulation phenotypes: shown as "CGD phenotype",
   and hidden like curated rows when PathoYeastract has the paper
+- Reference page: a paper's PathoYeastract rows (per-PMID index) and CGD rows,
+  with the same hide rule
 """
 import json
 from types import SimpleNamespace
@@ -25,7 +27,9 @@ from cgd.api.services.regulation_service import (
     _build_tf_targets,
     _regulation_for_feature,
     _resolve_gene,
+    get_reference_regulation,
 )
+from cgd.models.models import Organism
 
 INDEX = {
     "C3_05230W_A": ("C3_05230W_A", "SAP3"),
@@ -257,3 +261,83 @@ class TestRegulationForFeature:
         [target] = out.tf_targets.targets
         assert target.gene.feature_name == "C3_05230W_A"
         assert target.expression and target.repressed and target.cgd_curated and not target.binding
+
+
+class TestReferenceRegulation:
+    ALBICANS = SimpleNamespace(organism_abbrev="C_albicans_SC5314", organism_name="Candida albicans SC5314",
+                               organism_no=3)
+
+    @pytest.fixture
+    def data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(regulation_service.settings, "regulation_data_dir", str(tmp_path))
+        monkeypatch.setattr(regulation_service, "_name_index", lambda db, organism_no: INDEX)
+        return tmp_path
+
+    @classmethod
+    def _db(cls, cgd_rows=()):
+        """A session returning C. albicans for the Organism query and these REGULATION rows."""
+        db = MagicMock()
+
+        def query(model):
+            q = MagicMock()
+            if model is Organism:
+                q.filter.return_value.all.return_value = [cls.ALBICANS]
+            else:
+                q.options.return_value.filter.return_value.all.return_value = list(cgd_rows)
+            return q
+
+        db.query.side_effect = query
+        return db
+
+    @staticmethod
+    def _write_paper(data_dir, pubmed, rows):
+        paper_dir = data_dir / "C_albicans_SC5314" / "_by_pubmed"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / f"{pubmed}.json").write_text(json.dumps({
+            "pubmed": pubmed, "source": {"retrieved": "2026-10-07"}, "rows": rows}))
+
+    @classmethod
+    def _cgd_row(cls, tf, target, pheno_annotation_no=None):
+        organism = SimpleNamespace(organism_name=cls.ALBICANS.organism_name)
+        return SimpleNamespace(
+            tf_feature=SimpleNamespace(feature_name=tf[0], gene_name=tf[1], organism=organism, organism_no=3),
+            target_feature=SimpleNamespace(feature_name=target[0], gene_name=target[1]),
+            evidence_code="Indirect", experiment="Northern blot", association_type="Positive",
+            mutant_type="null", strain_background=None, environmental_condition=None, log2fc=None,
+            regulation_note="note", pheno_annotation_no=pheno_annotation_no)
+
+    PY_ROWS = [
+        {"tf_orf": "CR_07890W_A", "tf_protein": "Efg1p", "target_orf": "C3_03320W_B",
+         "evidence_code": "Indirect", "experiment": "Microarray", "association_type": "Negative",
+         "strain": "SC5314", "environmental_condition": "37C", "log2fc": -1.2},
+        {"tf_orf": "CR_07890W_A", "tf_protein": "Efg1p", "target_orf": "C3_05230W_A",
+         "evidence_code": "Direct", "experiment": "ChIP-chip", "association_type": None,
+         "strain": None, "environmental_condition": None, "log2fc": None},
+    ]
+
+    def test_pathoyeastract_and_cgd_rows(self, data_dir):
+        self._write_paper(data_dir, 222, self.PY_ROWS)
+        cgd = self._cgd_row(("C2_08890W_A", "IRF1"), ("C3_05230W_A", "SAP3"), pheno_annotation_no=9)
+        out = get_reference_regulation(self._db([cgd]), SimpleNamespace(reference_no=1, pubmed=222))
+
+        assert out.pathoyeastract_release == "2026-10-07"
+        assert [(r.regulator.display_name, r.target.display_name, r.evidence_code, r.source)
+                for r in out.regulations] == [
+            ("EFG1", "SAP3", "Direct", "PathoYeastract"),
+            ("EFG1", "C3_03320W_A", "Indirect", "PathoYeastract"),  # B haplotype -> A locus
+            ("IRF1", "SAP3", "Indirect", "CGD phenotype"),
+        ]
+        assert out.regulations[1].log2fc == -1.2
+        assert out.regulations[2].mutant_type == "null" and out.regulations[2].note == "note"
+
+    def test_cgd_row_hidden_when_pathoyeastract_has_it(self, data_dir):
+        self._write_paper(data_dir, 222, self.PY_ROWS)
+        cgd = self._cgd_row(("CR_07890W_A", "EFG1"), ("C3_05230W_A", "SAP3"))
+        out = get_reference_regulation(self._db([cgd]), SimpleNamespace(reference_no=1, pubmed=222))
+        assert [r.source for r in out.regulations] == ["PathoYeastract", "PathoYeastract"]
+
+    def test_paper_without_pathoyeastract_data(self, data_dir):
+        cgd = self._cgd_row(("CR_07890W_A", "EFG1"), ("C3_05230W_A", "SAP3"))
+        out = get_reference_regulation(self._db([cgd]), SimpleNamespace(reference_no=1, pubmed=None))
+        assert out.pathoyeastract_release is None
+        assert [(r.regulator.feature_name, r.source) for r in out.regulations] == [("CR_07890W_A", "CGD")]

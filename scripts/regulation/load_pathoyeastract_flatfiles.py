@@ -21,6 +21,8 @@ harvest_pathoyeastract.py writes), for every gene with data:
   * _regulators.json: the species' regulator ORFs, which (with GO
     DNA-binding transcription factors) decide which genes the tab and the
     curation tool accept as regulators.
+  * _by_pubmed/<PMID>.json: each paper's evidence rows, for the
+    reference page's Regulation section.
 
 The flat files hold documented associations only. Predicted (consensus)
 regulators, binding sites and promoter sequences come from
@@ -294,6 +296,7 @@ def load_old(path: Path) -> dict:
 
 
 REGULATORS_FILE = "_regulators.json"
+BY_PUBMED_DIR = "_by_pubmed"
 
 
 def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citations: dict[int, str],
@@ -309,15 +312,20 @@ def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citatio
         return orf
 
     by_target: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    by_pubmed: dict[int, list] = defaultdict(list)
     tf_targets: dict[str, dict[str, dict]] = defaultdict(dict)
     for row in rows:
         target = gene_key(row["target_orf"])
+        evidence = {k: row[k] for k in ("evidence_code", "experiment", "association_type", "strain",
+                                        "environmental_group", "environmental_condition", "log2fc")}
         by_target[target][row["tf_orf"]].append({
             "pubmed": row["pubmed"],
             "citation": citations.get(row["pubmed"]),
-            **{k: row[k] for k in ("evidence_code", "experiment", "association_type", "strain",
-                                   "environmental_group", "environmental_condition", "log2fc")},
+            **evidence,
         })
+        if row["pubmed"]:
+            by_pubmed[row["pubmed"]].append({"tf_orf": row["tf_orf"], "tf_protein": proteins.get(row["tf_orf"]),
+                                             "target_orf": target, **evidence})
         flags = tf_targets[row["tf_orf"]].setdefault(row["target_orf"], dict.fromkeys(FLAGS, False))
         flags["documented"] = True
         flags["binding"] |= row["evidence_code"] == "Direct"
@@ -373,6 +381,12 @@ def build_species(slug: str, rows: list[dict], proteins: dict[str, str], citatio
     if (old_dir / "_tf_orfs.json").exists():
         shutil.copy2(old_dir / "_tf_orfs.json", out_dir / "_tf_orfs.json")
     (out_dir / REGULATORS_FILE).write_text(json.dumps(sorted({row["tf_orf"] for row in rows}), indent=0))
+    pubmed_dir = out_dir / BY_PUBMED_DIR
+    pubmed_dir.mkdir(exist_ok=True)
+    for pmid, paper_rows in by_pubmed.items():
+        (pubmed_dir / f"{pmid}.json").write_text(
+            json.dumps({"pubmed": pmid, "source": source, "rows": paper_rows}, separators=(",", ":")))
+    counts["papers"] = len(by_pubmed)
     return counts
 
 
