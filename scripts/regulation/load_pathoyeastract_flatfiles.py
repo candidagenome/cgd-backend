@@ -35,9 +35,10 @@ logged.
 
 The new tree is built next to the output directory and swapped in at the end,
 so the API never reads a half-written set; the previous tree is kept as
-<out>.prev. Finally, CGD-curated rows (MULTI.REGULATION) that the new release
-also has are listed in <out>/_cgd_overlap.tsv, and emailed with --email when
-there are new ones, so curators can retire them.
+<out>.prev. Finally, CGD-curated rows (MULTI.REGULATION, excluding rows
+transferred from phenotypes) that the new release also has are listed in
+<out>/_cgd_overlap.tsv, and emailed with --email when there are new ones, so
+curators can retire them.
 
 Usage
 -----
@@ -400,7 +401,9 @@ def cgd_overlap_report(out: Path, previous: Path, recipients: list[str]) -> None
 
     The gene page shows only PathoYeastract's copy of these; curators review
     the list and retire the CGD rows. Written to <out>/_cgd_overlap.tsv and,
-    when there are new overlaps, emailed to `recipients`.
+    when there are new overlaps, emailed to `recipients`. Rows transferred
+    from RNA accumulation phenotypes are left out: curators cannot delete
+    them, and the nightly transfer would recreate them.
     """
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -416,6 +419,7 @@ def cgd_overlap_report(out: Path, previous: Path, recipients: list[str]) -> None
             db.query(Regulation)
             .options(joinedload(Regulation.tf_feature), joinedload(Regulation.target_feature),
                      joinedload(Regulation.reference))
+            .filter(Regulation.pheno_annotation_no.is_(None))
             .all()
         )
         for r in curated:
