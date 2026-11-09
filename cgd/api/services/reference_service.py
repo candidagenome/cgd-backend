@@ -18,6 +18,7 @@ from cgd.schemas.reference_schema import (
     ReferencePhenotypeResponse,
     PhenotypeForReference,
     ReferenceInteractionResponse,
+    ReferenceRegulationResponse,
     InteractionForReference,
     InteractorForReference,
     ReferenceLiteratureTopicsResponse,
@@ -43,6 +44,7 @@ from cgd.models.models import (
     Author,
     AuthorEditor,
     Interaction,
+    InteractPheno,
     FeatInteract,
     GoRef,
     GoAnnotation,
@@ -462,7 +464,10 @@ def get_reference_interaction_details(db: Session, identifier: str) -> Reference
             chunk_results = (
                 db.query(Interaction)
                 .options(
-                    joinedload(Interaction.feat_interact).joinedload(FeatInteract.feature),
+                    joinedload(Interaction.feat_interact)
+                    .joinedload(FeatInteract.feature)
+                    .joinedload(Feature.organism),
+                    joinedload(Interaction.interact_pheno).joinedload(InteractPheno.phenotype),
                 )
                 .filter(Interaction.interaction_no.in_(chunk))
                 .all()
@@ -471,26 +476,53 @@ def get_reference_interaction_details(db: Session, identifier: str) -> Reference
 
         for interaction in interaction_objs:
             interactors = []
-            for fi in interaction.feat_interact:
+            organism_name = None
+            for fi in sorted(interaction.feat_interact, key=lambda fi: fi.action or ""):
                 feature = fi.feature
                 if feature:
+                    organism_name = organism_name or _get_organism_info(feature)[0]
                     interactors.append(InteractorForReference(
                         feature_name=feature.feature_name,
                         gene_name=feature.gene_name,
                         action=fi.action,
                     ))
 
+            phenotypes = sorted({
+                f"{ip.phenotype.observable}: {ip.phenotype.qualifier}" if ip.phenotype.qualifier
+                else ip.phenotype.observable
+                for ip in interaction.interact_pheno if ip.phenotype
+            })
+
             interactions.append(InteractionForReference(
                 interaction_no=interaction.interaction_no,
                 experiment_type=interaction.experiment_type,
                 description=interaction.description,
+                source=interaction.source,
+                organism_name=organism_name,
+                phenotypes=phenotypes,
                 interactors=interactors,
             ))
+
+        interactions.sort(key=lambda i: (
+            i.experiment_type,
+            [(x.gene_name or x.feature_name).upper() for x in i.interactors],
+        ))
 
     return ReferenceInteractionResponse(
         reference_no=ref.reference_no,
         interactions=interactions,
     )
+
+
+def get_reference_regulation_details(db: Session, identifier: str) -> ReferenceRegulationResponse:
+    """
+    Get transcriptional regulatory associations reported by this reference:
+    PathoYeastract associations citing its PubMed ID plus CGD REGULATION rows.
+    """
+    from cgd.api.services.regulation_service import get_reference_regulation
+
+    ref = _get_reference_by_identifier(db, identifier)
+    return get_reference_regulation(db, ref)
 
 
 def get_reference_literature_topics(db: Session, identifier: str) -> ReferenceLiteratureTopicsResponse:

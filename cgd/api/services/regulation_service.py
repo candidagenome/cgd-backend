@@ -31,6 +31,11 @@ from sqlalchemy.orm import Session, joinedload
 from cgd.api.services.locus_service import _filter_features_by_preference
 from cgd.core.settings import settings
 from cgd.models.models import Feature, Organism, Reference, Regulation
+from cgd.schemas.reference_schema import (
+    ReferenceRegulationResponse,
+    RegulationForReference,
+    RegulationGeneForReference,
+)
 from cgd.schemas.regulation_schema import (
     BindingSite,
     MatchedConsensus,
@@ -70,6 +75,10 @@ def _data_dir() -> Path:
     if settings.regulation_data_dir:
         return Path(settings.regulation_data_dir)
     return Path(settings.cgd_data_dir) / "regulation" / "pathoyeastract"
+
+
+# Per-paper index the loader writes: <organism_abbrev>/_by_pubmed/<PMID>.json
+BY_PUBMED_DIR = "_by_pubmed"
 
 
 def _load_gene_file(organism_abbrev: str, feature_name: str) -> Optional[dict]:
@@ -436,3 +445,100 @@ def get_regulation_details(db: Session, name: str) -> RegulationDetailsResponse:
             continue
         results[organism.organism_name] = _regulation_for_feature(db, feature)
     return RegulationDetailsResponse(results=results)
+
+
+def _load_pubmed_file(organism_abbrev: str, pubmed: int) -> Optional[dict]:
+    path = _data_dir() / organism_abbrev / BY_PUBMED_DIR / f"{pubmed}.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        logger.error("Unreadable regulation file %s: %s", path, exc)
+        return None
+
+
+def _gene_for_reference(gene: RegulationGene) -> RegulationGeneForReference:
+    return RegulationGeneForReference(name=gene.name, feature_name=gene.feature_name,
+                                      gene_name=gene.gene_name, display_name=gene.display_name)
+
+
+def get_reference_regulation(db: Session, reference: Reference) -> ReferenceRegulationResponse:
+    """Regulatory associations reported by one paper, in every organism.
+
+    PathoYeastract rows come from the loader's per-PMID index; CGD rows are
+    the paper's REGULATION rows (curated and phenotype-derived). As on the
+    locus Regulation tab, a CGD row whose regulator, target and paper
+    PathoYeastract already has is left out.
+    """
+    out: list[RegulationForReference] = []
+    covered: set[tuple[str, str]] = set()
+    release = None
+
+    if reference.pubmed:
+        organisms = {
+            o.organism_abbrev: o
+            for o in db.query(Organism)
+            .filter(Organism.organism_abbrev.in_(list(PATHOYEASTRACT_SPECIES)))
+            .all()
+        }
+        for abbrev in PATHOYEASTRACT_SPECIES:
+            organism = organisms.get(abbrev)
+            data = _load_pubmed_file(abbrev, reference.pubmed) if organism else None
+            if not data:
+                continue
+            release = release or (data.get("source") or {}).get("retrieved")
+            index = _name_index(db, organism.organism_no)
+            for row in data.get("rows") or []:
+                regulator = _resolve_gene(row.get("tf_protein") or row["tf_orf"], row.get("tf_orf"), index)
+                target = _resolve_gene(row["target_orf"], None, index)
+                covered.add((regulator.feature_name or regulator.name, target.feature_name or target.name))
+                out.append(RegulationForReference(
+                    organism_name=organism.organism_name,
+                    regulator=_gene_for_reference(regulator),
+                    target=_gene_for_reference(target),
+                    evidence_code=row.get("evidence_code"),
+                    experiment=row.get("experiment"),
+                    association_type=row.get("association_type"),
+                    strain=row.get("strain"),
+                    environmental_condition=row.get("environmental_condition"),
+                    log2fc=row.get("log2fc"),
+                    source="PathoYeastract",
+                ))
+
+    for row in (
+        db.query(Regulation)
+        .options(
+            joinedload(Regulation.tf_feature).joinedload(Feature.organism),
+            joinedload(Regulation.target_feature),
+        )
+        .filter(Regulation.reference_no == reference.reference_no)
+        .all()
+    ):
+        tf, target = row.tf_feature, row.target_feature
+        if (tf.feature_name, target.feature_name) in covered:
+            continue
+        out.append(RegulationForReference(
+            organism_name=tf.organism.organism_name if tf.organism else str(tf.organism_no),
+            regulator=RegulationGeneForReference(name=tf.feature_name, feature_name=tf.feature_name,
+                                                 gene_name=tf.gene_name,
+                                                 display_name=tf.gene_name or tf.feature_name),
+            target=RegulationGeneForReference(name=target.feature_name, feature_name=target.feature_name,
+                                              gene_name=target.gene_name,
+                                              display_name=target.gene_name or target.feature_name),
+            evidence_code=row.evidence_code,
+            experiment=row.experiment,
+            association_type=row.association_type,
+            mutant_type=row.mutant_type,
+            strain=row.strain_background,
+            environmental_condition=row.environmental_condition,
+            log2fc=row.log2fc,
+            source="CGD phenotype" if row.pheno_annotation_no else "CGD",
+            note=row.regulation_note,
+        ))
+
+    # Binding evidence first, then by regulator and target
+    out.sort(key=lambda r: (r.organism_name, r.evidence_code != "Direct", r.regulator.display_name.upper(),
+                            r.target.display_name.upper(), r.experiment or ""))
+    return ReferenceRegulationResponse(reference_no=reference.reference_no,
+                                       pathoyeastract_release=release, regulations=out)

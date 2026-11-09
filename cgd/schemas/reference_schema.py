@@ -115,12 +115,46 @@ class InteractionForReference(BaseModel):
     interaction_no: int
     experiment_type: str
     description: typing.Optional[str] = None
+    source: typing.Optional[str] = None
+    organism_name: typing.Optional[str] = None
+    phenotypes: list[str] = []  # genetic interactions: the phenotypes scored
     interactors: list[InteractorForReference]
 
 
 class ReferenceInteractionResponse(BaseModel):
     reference_no: int
     interactions: list[InteractionForReference]
+
+
+# --- Regulation Details for Reference ---
+
+class RegulationGeneForReference(BaseModel):
+    name: str  # name as given by the source, when it does not resolve to a CGD feature
+    feature_name: typing.Optional[str] = None
+    gene_name: typing.Optional[str] = None
+    display_name: str
+
+
+class RegulationForReference(BaseModel):
+    """One evidence row: a regulator -> target association reported by this paper."""
+    organism_name: str
+    regulator: RegulationGeneForReference
+    target: RegulationGeneForReference
+    evidence_code: typing.Optional[str] = None  # Direct (DNA binding) or Indirect (expression)
+    experiment: typing.Optional[str] = None
+    association_type: typing.Optional[str] = None
+    mutant_type: typing.Optional[str] = None
+    strain: typing.Optional[str] = None
+    environmental_condition: typing.Optional[str] = None
+    log2fc: typing.Optional[float] = None
+    source: str  # PathoYeastract, CGD or CGD phenotype
+    note: typing.Optional[str] = None
+
+
+class ReferenceRegulationResponse(BaseModel):
+    reference_no: int
+    pathoyeastract_release: typing.Optional[str] = None
+    regulations: list[RegulationForReference]
 
 
 # --- Literature Topics for Reference ---

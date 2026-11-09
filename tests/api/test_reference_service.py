@@ -16,6 +16,7 @@ Tests cover:
 - Genome-wide analysis papers
 """
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 from fastapi import HTTPException
@@ -261,11 +262,15 @@ class MockInteraction:
         experiment_type: str = None,
         description: str = None,
         feat_interact: list = None,
+        source: str = None,
+        interact_pheno: list = None,
     ):
         self.interaction_no = interaction_no
         self.experiment_type = experiment_type
         self.description = description
         self.feat_interact = feat_interact or []
+        self.source = source
+        self.interact_pheno = interact_pheno or []
 
 
 class MockRefpropFeat:
@@ -652,6 +657,26 @@ class TestGetReferenceInteractionDetails:
         assert len(result.interactions) == 1
         assert result.interactions[0].experiment_type == "two-hybrid"
         assert len(result.interactions[0].interactors) == 1
+        assert result.interactions[0].organism_name == sample_feature.organism.organism_name
+        assert result.interactions[0].phenotypes == []
+
+    def test_genetic_interaction_lists_phenotypes(self, mock_db, sample_feature):
+        """Genetic interactions carry the phenotypes they were scored on."""
+        phenotype = SimpleNamespace(observable="filamentous growth", qualifier="decreased")
+        interaction = MockInteraction(
+            2, "Synthetic Growth Defect", None, [MockFeatInteract(sample_feature, "Hit")],
+            source="CGD", interact_pheno=[SimpleNamespace(phenotype=phenotype)],
+        )
+        mock_db.query.side_effect = [
+            MockQuery([MockReference(1, "CGD_REF:0001")]),
+            MockQuery([MockRefLink(1, "INTERACTION", 2)]),
+            MockQuery([interaction]),
+        ]
+
+        result = get_reference_interaction_details(mock_db, "1")
+
+        assert result.interactions[0].source == "CGD"
+        assert result.interactions[0].phenotypes == ["filamentous growth: decreased"]
 
 
 class TestGetReferenceLiteratureTopics:
