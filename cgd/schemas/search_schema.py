@@ -87,6 +87,9 @@ class ResolveResponse(BaseModel):
     redirect_url: Optional[str] = None  # URL to redirect to if resolved
     entity_type: Optional[str] = None  # "locus", "reference", "go_term"
     entity_name: Optional[str] = None  # Display name of the matched entity
+    # What the query matched: "gene_name", "systematic_name" (a feature_name, or
+    # an alias shaped like one, e.g. C1_13700W), "alias", or "cgdid"
+    match_type: Optional[str] = None
 
 
 # --- Autocomplete/Suggestions ---

@@ -26,6 +26,7 @@ from cgd.api.services.search_service import (
     _get_organism_name,
     _highlight_text,
     _build_reference_links,
+    _looks_systematic,
     resolve_identifier,
     search_genes,
     search_go_terms,
@@ -381,6 +382,7 @@ class TestResolveIdentifier:
         assert result.resolved is True
         assert result.entity_type == "locus"
         assert "/locus/" in result.redirect_url
+        assert result.match_type == "gene_name"
 
     def test_resolves_by_feature_name(self, mock_db, sample_feature):
         """Should resolve by feature name."""
@@ -393,6 +395,7 @@ class TestResolveIdentifier:
 
         assert result.resolved is True
         assert result.entity_type == "locus"
+        assert result.match_type == "systematic_name"
 
     def test_resolves_by_dbxref_id(self, mock_db, sample_feature):
         """Should resolve by dbxref_id."""
@@ -406,6 +409,27 @@ class TestResolveIdentifier:
 
         assert result.resolved is True
         assert result.entity_type == "locus"
+        assert result.match_type == "cgdid"
+
+    @pytest.mark.parametrize("query,match_type", [
+        ("C1_13700W", "systematic_name"),   # allele-less form of C1_13700W_A
+        ("CTRG_06249", "systematic_name"),  # retired systematic name
+        ("HEX3", "alias"),                  # former gene name
+    ])
+    def test_resolves_by_alias(self, mock_db, sample_feature, query, match_type):
+        """A unique alias resolves; only systematic-shaped aliases count as systematic names."""
+        mock_db.query.side_effect = [
+            MockQuery([]),  # gene_name
+            MockQuery([]),  # feature_name
+            MockQuery([]),  # feature dbxref_id
+            MockQuery([sample_feature]),  # alias lookup
+        ]
+
+        result = resolve_identifier(mock_db, query)
+
+        assert result.resolved is True
+        assert result.redirect_url == "/locus/CAL0001"
+        assert result.match_type == match_type
 
     def test_resolves_reference_by_dbxref_id(self, mock_db, sample_reference):
         """Should resolve reference by dbxref_id."""
@@ -421,6 +445,7 @@ class TestResolveIdentifier:
 
         assert result.resolved is True
         assert result.entity_type == "reference"
+        assert result.match_type == "cgdid"
 
     def test_returns_not_resolved_when_not_found(self, mock_db):
         """Should return not resolved when not found."""
@@ -429,6 +454,18 @@ class TestResolveIdentifier:
         result = resolve_identifier(mock_db, "UNKNOWN")
 
         assert result.resolved is False
+
+
+class TestLooksSystematic:
+    """Tests for _looks_systematic."""
+
+    @pytest.mark.parametrize("name", ["orf19.6062", "C1_13700W", "CTRG_06249", "CAWG_00001", "CaJ7.0001"])
+    def test_systematic_names(self, name):
+        assert _looks_systematic(name) is True
+
+    @pytest.mark.parametrize("name", ["HEX3", "ACT1", "CaRLC1-1", "zeta-Rc", "orf_"])
+    def test_gene_names(self, name):
+        assert _looks_systematic(name) is False
 
 
 class TestSearchGenes:

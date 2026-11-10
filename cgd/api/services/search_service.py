@@ -184,6 +184,15 @@ def _build_reference_links(db: Session, ref: Reference) -> list[SearchResultLink
     return links
 
 
+def _looks_systematic(name: str) -> bool:
+    """
+    True for alias names shaped like systematic names (orf19.6062, C1_13700W,
+    CTRG_06249, CAWG_00001) rather than gene names (HEX3, ACT1): gene names
+    carry no '_' or '.'.
+    """
+    return any(ch.isdigit() for ch in name) and ("_" in name or "." in name)
+
+
 def resolve_identifier(db: Session, query: str) -> ResolveResponse:
     """
     Check if query is an exact identifier match for a locus or reference.
@@ -215,6 +224,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
             redirect_url=f"/locus/{feature.gene_name}",
             entity_type="locus",
             entity_name=feature.gene_name,
+            match_type="gene_name",
         )
 
     # 2. Check Feature by feature_name (exact match)
@@ -230,6 +240,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
             redirect_url=f"/locus/{feature.feature_name}",
             entity_type="locus",
             entity_name=feature.gene_name or feature.feature_name,
+            match_type="systematic_name",
         )
 
     # 3. Check Feature by dbxref_id (exact match) - e.g., CAL0001571
@@ -245,6 +256,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
             redirect_url=f"/locus/{feature.feature_name}",
             entity_type="locus",
             entity_name=feature.gene_name or feature.feature_name,
+            match_type="cgdid",
         )
 
     # 3b. Check alias (exact match, case-insensitive) - e.g. retired systematic
@@ -268,6 +280,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
             redirect_url=f"/locus/{feature.feature_name}",
             entity_type="locus",
             entity_name=feature.gene_name or feature.feature_name,
+            match_type="systematic_name" if _looks_systematic(normalized) else "alias",
         )
 
     # 4. Check Reference by dbxref_id (exact match) - e.g., CAL0080639
@@ -283,6 +296,7 @@ def resolve_identifier(db: Session, query: str) -> ResolveResponse:
             redirect_url=f"/reference/{reference.dbxref_id}",
             entity_type="reference",
             entity_name=f"PMID:{reference.pubmed}" if reference.pubmed else reference.dbxref_id,
+            match_type="cgdid",
         )
 
     # No exact match found
