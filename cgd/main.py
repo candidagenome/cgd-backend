@@ -41,6 +41,7 @@ from cgd.api.routers.literature_topic_router import router as literature_topic_r
 from cgd.api.routers.genome_snapshot_router import router as genome_snapshot_router
 from cgd.api.routers.genome_synteny_router import router as genome_synteny_router
 from cgd.api.routers.virulence_router import router as virulence_router
+from cgd.api.routers.pangenome_router import router as pangenome_router
 from cgd.api.routers.crispr_router import router as crispr_router
 from cgd.api.routers.expression_router import router as expression_router
 from cgd.api.routers.phenotype_enrichment_router import router as phenotype_enrichment_router
@@ -153,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(genome_snapshot_router)
     app.include_router(genome_synteny_router)
     app.include_router(virulence_router)
+    app.include_router(pangenome_router)
     app.include_router(crispr_router)
     app.include_router(expression_router)
     app.include_router(phenotype_enrichment_router)
