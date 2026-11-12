@@ -14,7 +14,7 @@ Until 2026-11, that tool
 For each such reference this fetches the PubMed record, restores a title or
 abstract that the stored one is a truncated prefix of (anything else, e.g. a
 curator's edit, is left alone and reported), stores the issue, and rebuilds
-the citation in the loaders' format (cgd.utils.citation.format_citation) from
+the citation in the loaders' format (cgd.core.citation.format_citation) from
 the title, year, journal, volume, issue and pages and the authors in order.
 
 Only 'Curator PubMed reference' rows whose citation does not contain the
@@ -46,7 +46,7 @@ from cgd.api.services.curation.reference_curation_service import (  # noqa: E402
     ReferenceCurationService,
 )
 from cgd.db.engine import SessionLocal  # noqa: E402
-from cgd.utils.citation import format_citation  # noqa: E402
+from cgd.core.citation import format_citation  # noqa: E402
 
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
 SOURCE = "Curator PubMed reference"

@@ -57,7 +57,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal  # noqa: E402
-from cgd.utils.citation import format_citation  # noqa: E402
+from cgd.core.citation import format_citation  # noqa: E402
 
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")

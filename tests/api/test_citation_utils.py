@@ -1,5 +1,5 @@
-"""Tests for cgd.utils.citation.format_citation."""
-from cgd.utils.citation import CITATION_MAX, format_citation
+"""Tests for cgd.core.citation.format_citation."""
+from cgd.core.citation import CITATION_MAX, format_citation
 
 TITLE = "Gene flow contributes to diversification of the major fungal pathogen Candida albicans."
 

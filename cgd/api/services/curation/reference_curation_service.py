@@ -36,7 +36,7 @@ from cgd.models.models import (
     RefpropFeat,
     Url,
 )
-from cgd.utils.citation import CITATION_MAX, format_citation
+from cgd.core.citation import CITATION_MAX, format_citation
 
 logger = logging.getLogger(__name__)
 
