@@ -26,5 +26,8 @@ pytest>=7.0
 biopython>=1.83
 pyBigWig>=0.3
 
+# Reading supplementary tables (scripts/pangenome/load_pangenome_study.py)
+openpyxl>=3.1
+
 # Testing / Smoke tests
 playwright>=1.40
