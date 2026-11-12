@@ -56,7 +56,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 # Add parent directory to path to import cgd modules
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from cgd.db.engine import SessionLocal
+from cgd.db.engine import SessionLocal  # noqa: E402
+from cgd.utils.citation import format_citation  # noqa: E402
 
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
@@ -199,40 +200,7 @@ class MedlineParser:
         authors: list[str]
     ) -> str | None:
         """Create a citation string from parsed Medline data."""
-        if not title or not authors:
-            return None
-
-        # Format authors
-        if len(authors) == 1:
-            author_str = authors[0]
-        elif len(authors) == 2:
-            author_str = f"{authors[0]} and {authors[1]}"
-        else:
-            author_str = f"{authors[0]} et al."
-
-        # Build citation
-        parts = [f"{author_str} ({year or 'n.d.'})"]
-
-        if title:
-            parts.append(title)
-
-        if journal:
-            journal_part = journal
-            if volume:
-                journal_part += f" {volume}"
-            if issue:
-                journal_part += f"({issue})"
-            if pages:
-                journal_part += f":{pages}"
-            parts.append(journal_part)
-
-        citation = " ".join(parts)
-
-        # Truncate if too long
-        if len(citation) > 480:
-            citation = citation[:477] + "..."
-
-        return citation
+        return format_citation(year, title, journal, volume, issue, pages, authors)
 
 
 class JournalFileParser:

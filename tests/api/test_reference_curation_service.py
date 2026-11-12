@@ -18,6 +18,7 @@ from cgd.api.services.curation.reference_curation_service import (
     ReferenceCurationService,
     ReferenceCurationError,
 )
+from cgd.models.models import Reference
 
 
 class MockReference:
@@ -398,6 +399,8 @@ class TestCreateManualReference:
         # Should have added reference, journal, and authors
         assert mock_db.add.call_count >= 1
         mock_db.commit.assert_called_once()
+        reference = next(c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Reference))
+        assert reference.citation == "Smith J and Doe JA (2024) Test Paper"
 
 
 class TestCreateReferenceFromPubmed:
@@ -454,6 +457,54 @@ class TestCreateReferenceFromPubmed:
             )
 
         assert "Invalid status" in str(exc_info.value)
+
+
+class TestCreateReferenceFromPubmedCitation:
+    """The citation matches the weekly PubMed loader's format."""
+
+    METADATA = {
+        "title": "Gene flow contributes to diversification of the major fungal pathogen Candida albicans.",
+        "journal_abbrev": "Nat Commun",
+        "year": 2018,
+        "volume": "9",
+        "issue": "1",
+        "pages": "2253",
+        "authors": [{"last_name": "Ropars", "initials": "J"}, {"last_name": "Maufrais", "initials": "C"},
+                    {"last_name": "Diogo", "initials": "D"}],
+        "abstract": "",
+    }
+
+    def test_full_citation_and_issue(self, mock_db):
+        mock_db.query.return_value = MockQuery([])
+        service = ReferenceCurationService(mock_db)
+        with patch.object(service, "fetch_pubmed_metadata", return_value=self.METADATA):
+            service.create_reference_from_pubmed(
+                pubmed=29884848, reference_status="Published", curator_userid="curator1")
+
+        reference = next(c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Reference))
+        assert reference.citation == (
+            "Ropars J et al. (2018) Gene flow contributes to diversification of the major fungal pathogen "
+            "Candida albicans. Nat Commun 9(1):2253")
+        assert reference.issue == "1"
+
+
+class TestParsePubmedXml:
+    """Titles and abstracts keep text inside markup such as <i>Candida</i>."""
+
+    XML = """<PubmedArticleSet><PubmedArticle><MedlineCitation><Article>
+      <Journal><JournalIssue><Volume>11</Volume><Issue>5</Issue><PubDate><Year>2020</Year></PubDate></JournalIssue>
+        <ISOAbbreviation>mBio</ISOAbbreviation></Journal>
+      <ArticleTitle>Survival Strategies of Pathogenic <i>Candida</i> Species in Human Blood.</ArticleTitle>
+      <Abstract><AbstractText Label="BACKGROUND">Only <i>C. albicans</i> grows.</AbstractText>
+        <AbstractText Label="RESULTS">It survives.</AbstractText></Abstract>
+      <AuthorList><Author><LastName>K\u00e4mmer</LastName><Initials>P</Initials></Author></AuthorList>
+    </Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+
+    def test_markup_and_structured_abstract(self, mock_db):
+        metadata = ReferenceCurationService(mock_db)._parse_pubmed_xml(self.XML)
+        assert metadata["title"] == "Survival Strategies of Pathogenic Candida Species in Human Blood."
+        assert metadata["abstract"] == "BACKGROUND: Only C. albicans grows. RESULTS: It survives."
+        assert metadata["issue"] == "5"
 
 
 class TestUpdateReference:

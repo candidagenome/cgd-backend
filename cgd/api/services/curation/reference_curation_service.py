@@ -36,11 +36,25 @@ from cgd.models.models import (
     RefpropFeat,
     Url,
 )
+from cgd.utils.citation import CITATION_MAX, format_citation
 
 logger = logging.getLogger(__name__)
 
 # PubMed E-utilities URL
 PUBMED_EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+
+def element_text(elem) -> str:
+    """All text inside a PubMed XML element, including markup such as <i>Candida</i>."""
+    return "".join(elem.itertext()).strip() if elem is not None else ""
+
+
+def author_display_name(author: dict) -> str:
+    """PubMed author as CGD stores it: "Last Initials" (e.g. "Ropars J")."""
+    name = author.get("last_name", "")
+    if author.get("initials"):
+        name += f" {author['initials']}"
+    return name.strip()
 
 
 class ReferenceCurationError(Exception):
@@ -153,8 +167,7 @@ class ReferenceCurationService:
                 raise ReferenceCurationError("No article found in PubMed response")
 
             # Title
-            title_elem = article.find("ArticleTitle")
-            title = title_elem.text if title_elem is not None else ""
+            title = element_text(article.find("ArticleTitle"))
 
             # Journal
             journal_elem = article.find("Journal/Title")
@@ -197,8 +210,15 @@ class ReferenceCurationService:
                     })
 
             # Abstract
-            abstract_elem = article.find("Abstract/AbstractText")
-            abstract = abstract_elem.text if abstract_elem is not None else ""
+            # (a structured abstract has several labelled sections)
+            sections = []
+            for section in article.findall("Abstract/AbstractText"):
+                text = element_text(section)
+                if text and section.get("Label"):
+                    text = f"{section.get('Label')}: {text}"
+                if text:
+                    sections.append(text)
+            abstract = " ".join(sections)
 
             # DOI
             doi = None
@@ -272,27 +292,11 @@ class ReferenceCurationService:
         if not year:
             raise ReferenceCurationError("Year is required")
 
-        # Build citation string
-        if authors:
-            first_author = authors[0].split()[0] if authors[0] else ""
-            if len(authors) > 1:
-                author_str = f"{first_author} et al."
-            else:
-                author_str = first_author
-        else:
-            author_str = ""
-
-        citation_parts = [author_str]
-        citation_parts.append(f"({year})")
-        if journal_abbrev:
-            citation_parts.append(journal_abbrev)
-        if volume:
-            vol_str = volume
-            if pages:
-                vol_str += f":{pages}"
-            citation_parts.append(vol_str)
-
-        citation = " ".join(filter(None, citation_parts)) or title[:50]
+        # Same citation format as the PubMed loaders
+        citation = (
+            format_citation(year, title, journal_abbrev, volume, None, pages, authors or [])
+            or f"({year}) {title}"[:CITATION_MAX]
+        )
 
         # Check for duplicate citation
         existing = (
@@ -462,28 +466,16 @@ class ReferenceCurationService:
                 "authors": [],
             }
 
-        # Build citation string
-        if metadata.get("authors"):
-            first_author = metadata["authors"][0].get("last_name", "")
-            if len(metadata["authors"]) > 1:
-                author_str = f"{first_author} et al."
-            else:
-                author_str = first_author
-        else:
-            author_str = ""
-
-        citation_parts = [author_str]
-        if metadata.get("year"):
-            citation_parts.append(f"({metadata['year']})")
-        if metadata.get("journal_abbrev"):
-            citation_parts.append(metadata["journal_abbrev"])
-        if metadata.get("volume"):
-            vol_str = metadata["volume"]
-            if metadata.get("pages"):
-                vol_str += f":{metadata['pages']}"
-            citation_parts.append(vol_str)
-
-        citation = " ".join(filter(None, citation_parts)) or f"PMID:{pubmed}"
+        # Same citation format as the PubMed loaders
+        citation = format_citation(
+            metadata.get("year"),
+            metadata.get("title"),
+            metadata.get("journal_abbrev"),
+            metadata.get("volume"),
+            metadata.get("issue"),
+            metadata.get("pages"),
+            [author_display_name(a) for a in metadata.get("authors", [])],
+        ) or f"PMID:{pubmed}"
 
         # Get or create journal
         journal_no = None
@@ -506,6 +498,7 @@ class ReferenceCurationService:
             year=metadata.get("year") or datetime.now().year,
             title=metadata.get("title", "")[:400],  # Truncate to fit column
             volume=metadata.get("volume", "")[:20] if metadata.get("volume") else None,
+            issue=metadata.get("issue")[:40] if metadata.get("issue") else None,
             page=metadata.get("pages", "")[:20] if metadata.get("pages") else None,
             journal_no=journal_no,
             created_by=curator_userid[:12],
@@ -517,11 +510,8 @@ class ReferenceCurationService:
         # Add authors
         if metadata.get("authors"):
             for order, author_data in enumerate(metadata["authors"], start=1):
-                author_name = author_data.get("last_name", "")
-                if author_data.get("initials"):
-                    author_name += f" {author_data['initials']}"
-
-                if not author_name.strip():
+                author_name = author_display_name(author_data)
+                if not author_name:
                     continue
 
                 # Get or create author

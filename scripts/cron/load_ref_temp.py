@@ -46,6 +46,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgd.db.engine import SessionLocal
+from cgd.utils.citation import format_citation  # noqa: E402
 
 # Configuration
 DB_SCHEMA = os.getenv("DB_SCHEMA", "MULTI")
@@ -74,43 +75,15 @@ logger = logging.getLogger(__name__)
 
 def create_citation(record: dict) -> str | None:
     """Create a citation string from a PubMed record."""
-    authors = record.get("AU", [])
-    title = record.get("TI", "")
-    journal = record.get("TA", "")
-    year = record.get("DP", "")[:4] if record.get("DP") else ""
-    volume = record.get("VI", "")
-    issue = record.get("IP", "")
-    pages = record.get("PG", "")
-
-    if not authors or not title:
-        return None
-
-    # Format authors
-    if len(authors) == 1:
-        author_str = authors[0]
-    elif len(authors) == 2:
-        author_str = f"{authors[0]} and {authors[1]}"
-    else:
-        author_str = f"{authors[0]} et al."
-
-    # Build citation
-    citation = f"{author_str} ({year}) {title}"
-
-    if journal:
-        journal_part = journal
-        if volume:
-            journal_part += f" {volume}"
-        if issue:
-            journal_part += f"({issue})"
-        if pages:
-            journal_part += f":{pages}"
-        citation += f" {journal_part}"
-
-    # Truncate if too long
-    if len(citation) > 480:
-        citation = citation[:477] + "..."
-
-    return citation
+    return format_citation(
+        record.get("DP", "")[:4] if record.get("DP") else "",
+        record.get("TI", ""),
+        record.get("TA", ""),
+        record.get("VI", ""),
+        record.get("IP", ""),
+        record.get("PG", ""),
+        record.get("AU", []),
+    )
 
 
 def get_fulltext_url(pmid: int) -> str | None:
