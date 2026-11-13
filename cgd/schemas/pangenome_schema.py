@@ -141,6 +141,7 @@ class MapGene(BaseModel):
     start: Optional[int] = None
     end: Optional[int] = None
     placed_by: Optional[str] = None  # "own" coordinates, or those of its "reference_gene"
+    drawn_at: Optional[str] = None  # the gene whose coordinates it is drawn at, when not its own
     stops: list[MapStop] = []
 
 

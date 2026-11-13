@@ -77,7 +77,11 @@ RYAN_FILES = {
     "isolates": "mbio.01320-25-s0002.xlsx",   # Table S1 (A isolates, B assemblies, C accessory, D stops)
     "divergent": "mbio.01320-25-s0006.xlsx",  # Table S5 (all pangenome genes vs PEU651 / EGM1079)
 }
-CPAR2_ID = re.compile(r"^(CPAR2_\d{6})")
+# CDC317 systematic names, including split genes such as CPAR2_100850.1 (their own CGD loci).
+# Study IDs may add a suffix: _A/_B/_C fusion forms, _nontrunc full-length forms of genes
+# CDC317 carries truncated (e.g. DAL4).
+CPAR2_ID = re.compile(r"^(CPAR2_\d{6}(?:\.\d+)?)")
+CPAR2_EXACT = re.compile(r"^CPAR2_\d{6}(?:\.\d+)?$")
 
 
 def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
@@ -170,10 +174,20 @@ def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
                 reference_gene = acc["closest_reference_gene"]
         else:
             g["category"] = "core"
-            g["in_reference"] = g["id"].startswith("CPAR2_")
+            g["in_reference"] = bool(CPAR2_EXACT.match(g["id"]))
             g["presence"] = None
-            g["type"] = "CDC317 Reference Gene" if g["in_reference"] else "Not in CDC317"
+            if g["in_reference"]:
+                g["type"] = "CDC317 Reference Gene"
+            elif g["id"].endswith("_nontrunc"):
+                g["type"] = "Full-length form"
+                g["note"] = f"Full-length gene; CDC317 carries a truncated copy ({reference_gene})"
+            else:
+                g["type"] = "Not in CDC317"
         g["reference_gene"] = reference_gene
+        # Where to draw a gene the study gives no coordinates for: the CDC317 gene it derives from
+        # (CPAR2_100850 for CPAR2_100850.1, CPAR2_103390 for CPAR2_103390_B)
+        anchor = re.match(r"^(CPAR2_\d{6})", reference_gene or "")
+        g["anchor_gene"] = anchor.group(1) if anchor and not g.get("chromosome") else None
         g["stop_codons"] = stops.get(g["id"], [])
 
     study = {

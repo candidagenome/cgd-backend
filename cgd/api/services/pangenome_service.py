@@ -181,8 +181,8 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
     Every gene placed on the study's chromosomes, for the graphical browser.
 
     Genes without their own coordinates (paralogs, fusions and other variants
-    not in the reference) are placed at the reference gene they derive from;
-    those with neither are returned as unplaced. Chromosome lengths are the
+    not in the reference) are placed at the reference gene they derive from,
+    or at the study's anchor_gene for them; the rest are returned as unplaced. Chromosome lengths are the
     furthest gene end, as the study gives no assembly lengths.
     """
     data = _load(study_id)
@@ -192,7 +192,8 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
     genes, unplaced = [], []
     for g in data["genes"]:
         ref = g.get("reference_gene")
-        anchor = coords.get(g["id"].upper()) or (coords.get(ref.upper()) if ref else None)
+        anchor = (coords.get(g["id"].upper()) or (coords.get(ref.upper()) if ref else None)
+                  or (coords.get(g["anchor_gene"].upper()) if g.get("anchor_gene") else None))
         stops = [MapStop(position=s.get("position"), isolates=len(s.get("heterozygous", []) + s.get("homozygous", [])),
                          homozygous=len(s.get("homozygous", [])))
                  for s in g.get("stop_codons") or [] if s.get("position")]
@@ -205,6 +206,7 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
         start, end = sorted((int(anchor["start"]), int(anchor["end"] or anchor["start"])))
         record.chromosome, record.start, record.end = anchor["chromosome"], start, end
         record.placed_by = "own" if anchor is g else "reference_gene"
+        record.drawn_at = None if anchor is g else anchor["id"]
         lengths[anchor["chromosome"]] = max(lengths.get(anchor["chromosome"], 0), end)
         genes.append(record)
 

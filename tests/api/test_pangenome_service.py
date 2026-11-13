@@ -29,6 +29,8 @@ GENES = [
      "presence": 3, "reference_gene": "CPAR2_100020", "stop_codons": []},
     {"id": "HYPOTHETICAL_000001", "category": "core", "in_reference": False, "type": "Not in CDC317",
      "reference_gene": None, "stop_codons": []},
+    {"id": "CPAR2_100010.1", "category": "core", "in_reference": True, "type": "CDC317 Reference Gene",
+     "reference_gene": "CPAR2_100010.1", "anchor_gene": "CPAR2_100010", "stop_codons": []},
 ]
 
 
@@ -68,7 +70,7 @@ def test_get_study_has_isolates(data_dir, db):
 
 
 def test_list_genes_filters(data_dir, db):
-    assert svc.list_genes(db, "demo2025").total == 4
+    assert svc.list_genes(db, "demo2025").total == 5
     accessory = svc.list_genes(db, "demo2025", category="accessory", sort="presence").genes
     assert [g.id for g in accessory] == ["PARALOG_100020_1", "CPAR2_100020"]
     assert {g.id for g in svc.list_genes(db, "demo2025", reference="novel").genes} == {
@@ -81,7 +83,7 @@ def test_list_genes_filters(data_dir, db):
 
 def test_list_genes_pages_without_stop_detail(data_dir, db):
     page = svc.list_genes(db, "demo2025", page=2, page_size=3)
-    assert page.total == 4 and len(page.genes) == 1
+    assert page.total == 5 and len(page.genes) == 2
     first = svc.list_genes(db, "demo2025", stops=True).genes[0]
     assert first.stop_codon_count == 1 and first.stop_codon_isolates == 2 and first.stop_codons == []
 
@@ -132,3 +134,6 @@ def test_map_places_variants_at_their_reference_gene(data_dir, db):
     assert placed["CPAR2_100020"].placed_by == "own" and placed["CPAR2_100020"].gene_name == "SIT1"
     assert placed["CPAR2_100010"].stops[0].isolates == 2 and placed["CPAR2_100010"].stops[0].homozygous == 1
     assert [g.id for g in result.unplaced] == ["HYPOTHETICAL_000001"]
+    # a split gene with no coordinates of its own is drawn at its anchor gene
+    assert (placed["CPAR2_100010.1"].start, placed["CPAR2_100010.1"].drawn_at) == (1, "CPAR2_100010")
+    assert paralog.drawn_at == "CPAR2_100020" and placed["CPAR2_100020"].drawn_at is None
