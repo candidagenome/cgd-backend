@@ -41,7 +41,8 @@ SORT_KEYS = {
     "presence": lambda g: (g.get("presence") is None, g.get("presence") or 0),
     "stops": lambda g: -len({s for stop in g.get("stop_codons") or []
                              for s in stop.get("heterozygous", []) + stop.get("homozygous", [])}),
-    "position": lambda g: (g.get("chromosome") or "~", g.get("start") or 0),
+    # genes without coordinates (most not in the reference) follow, by ID
+    "position": lambda g: (g.get("chromosome") or "~", g.get("start") or 0, g["id"]),
 }
 
 _studies: dict[str, dict] = {}  # study_id -> {"mtime", "study", "genes", "by_reference"}
