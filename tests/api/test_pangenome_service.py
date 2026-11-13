@@ -121,3 +121,14 @@ def test_get_gene_includes_stops(data_dir, db):
     assert gene.stop_codons[0].homozygous == ["B"] and gene.divergent_strains["S1"].identity == 99.5
     with pytest.raises(svc.PangenomeNotFound):
         svc.get_gene(db, "demo2025", "CPAR2_999999")
+
+
+def test_map_places_variants_at_their_reference_gene(data_dir, db):
+    result = svc.get_map(db, "demo2025")
+    placed = {g.id: g for g in result.genes}
+    assert [c.name for c in result.chromosomes] == ["chr1"] and result.chromosomes[0].length == 900
+    paralog = placed["PARALOG_100020_1"]
+    assert (paralog.start, paralog.end, paralog.placed_by) == (400, 900, "reference_gene")
+    assert placed["CPAR2_100020"].placed_by == "own" and placed["CPAR2_100020"].gene_name == "SIT1"
+    assert placed["CPAR2_100010"].stops[0].isolates == 2 and placed["CPAR2_100010"].stops[0].homozygous == 1
+    assert [g.id for g in result.unplaced] == ["HYPOTHETICAL_000001"]

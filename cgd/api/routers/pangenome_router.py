@@ -14,6 +14,7 @@ from cgd.schemas.pangenome_schema import (
     PangenomeGene,
     PangenomeGenePage,
     PangenomeLocusResponse,
+    PangenomeMap,
     PangenomeStudy,
     PangenomeStudyList,
 )
@@ -52,6 +53,15 @@ def list_genes(
     """A study's pangenome genes, filtered and paged."""
     try:
         return pangenome_service.list_genes(db, study_id, category, reference, stops, q, sort, page, page_size)
+    except PangenomeNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/studies/{study_id}/map", response_model=PangenomeMap, response_model_exclude_none=True)
+def get_map(study_id: str, db: Session = Depends(get_db)):
+    """Every gene placed on the study's chromosomes, for the graphical browser."""
+    try:
+        return pangenome_service.get_map(db, study_id)
     except PangenomeNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 

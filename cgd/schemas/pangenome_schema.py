@@ -119,3 +119,39 @@ class PangenomeLocusResponse(BaseModel):
     gene_name: Optional[str] = None
     organism: Optional[str] = None
     studies: list[PangenomeLocusStudy] = []
+
+
+class MapStop(BaseModel):
+    position: int
+    isolates: int
+    homozygous: int = 0
+
+
+class MapGene(BaseModel):
+    """A gene drawn on the graphical browser."""
+    id: str
+    reference_gene: Optional[str] = None
+    gene_name: Optional[str] = None
+    category: str
+    in_reference: bool
+    presence: Optional[int] = None
+    type: Optional[str] = None
+    ortholog: Optional[str] = None
+    chromosome: Optional[str] = None
+    start: Optional[int] = None
+    end: Optional[int] = None
+    placed_by: Optional[str] = None  # "own" coordinates, or those of its "reference_gene"
+    stops: list[MapStop] = []
+
+
+class MapChromosome(BaseModel):
+    name: str
+    length: int
+
+
+class PangenomeMap(BaseModel):
+    study_id: str
+    isolate_count: int
+    chromosomes: list[MapChromosome]
+    genes: list[MapGene]
+    unplaced: list[MapGene] = []

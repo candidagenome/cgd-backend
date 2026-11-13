@@ -24,10 +24,14 @@ from cgd.api.services.locus_service import _filter_features_by_preference
 from cgd.core.settings import settings
 from cgd.models.models import Feature, Organism, Reference
 from cgd.schemas.pangenome_schema import (
+    MapChromosome,
+    MapGene,
+    MapStop,
     PangenomeGene,
     PangenomeGenePage,
     PangenomeLocusResponse,
     PangenomeLocusStudy,
+    PangenomeMap,
     PangenomeStudy,
     PangenomeStudyList,
     PangenomeStudySummary,
@@ -170,6 +174,47 @@ def list_genes(db: Session, study_id: str, category: Optional[str] = None, refer
     start = (page - 1) * page_size
     return PangenomeGenePage(study_id=study_id, total=len(genes), page=page, page_size=page_size,
                              genes=[_gene(g, names, with_stops=False) for g in genes[start:start + page_size]])
+
+
+def get_map(db: Session, study_id: str) -> PangenomeMap:
+    """
+    Every gene placed on the study's chromosomes, for the graphical browser.
+
+    Genes without their own coordinates (paralogs, fusions and other variants
+    not in the reference) are placed at the reference gene they derive from;
+    those with neither are returned as unplaced. Chromosome lengths are the
+    furthest gene end, as the study gives no assembly lengths.
+    """
+    data = _load(study_id)
+    names = _gene_name_map(db, data["study"]["organism_abbrev"])
+    coords = {g["id"].upper(): g for g in data["genes"] if g.get("chromosome") and g.get("start")}
+    lengths: dict[str, int] = {}
+    genes, unplaced = [], []
+    for g in data["genes"]:
+        ref = g.get("reference_gene")
+        anchor = coords.get(g["id"].upper()) or (coords.get(ref.upper()) if ref else None)
+        stops = [MapStop(position=s.get("position"), isolates=len(s.get("heterozygous", []) + s.get("homozygous", [])),
+                         homozygous=len(s.get("homozygous", [])))
+                 for s in g.get("stop_codons") or [] if s.get("position")]
+        record = MapGene(id=g["id"], reference_gene=ref, gene_name=names.get(ref.upper()) if ref else None,
+                         category=g["category"], in_reference=g["in_reference"], presence=g.get("presence"),
+                         type=g.get("type"), ortholog=g.get("ortholog"), stops=stops)
+        if anchor is None:
+            unplaced.append(record)
+            continue
+        start, end = sorted((int(anchor["start"]), int(anchor["end"] or anchor["start"])))
+        record.chromosome, record.start, record.end = anchor["chromosome"], start, end
+        record.placed_by = "own" if anchor is g else "reference_gene"
+        lengths[anchor["chromosome"]] = max(lengths.get(anchor["chromosome"], 0), end)
+        genes.append(record)
+
+    def chrom_key(name: str):
+        number = name.rsplit("_", 1)[-1]
+        return (0, int(number), name) if number.isdigit() else (1, 0, name)
+    chromosomes = [MapChromosome(name=c, length=lengths[c]) for c in sorted(lengths, key=chrom_key)]
+    genes.sort(key=lambda r: (r.chromosome, r.start, r.placed_by != "own", r.id))
+    return PangenomeMap(study_id=study_id, isolate_count=data["study"]["isolate_count"],
+                        chromosomes=chromosomes, genes=genes, unplaced=unplaced)
 
 
 def get_gene(db: Session, study_id: str, gene_id: str) -> PangenomeGene:
