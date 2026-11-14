@@ -21,6 +21,7 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study ryan2025
     python scripts/pangenome/load_pangenome_study.py --study ryan2025 --source-dir <dir with the .xlsx files>
     python scripts/pangenome/load_pangenome_study.py --study marcet2022
+    python scripts/pangenome/load_pangenome_study.py --study bergin2024
 """
 from __future__ import annotations
 
@@ -390,7 +391,101 @@ def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
+
+BERGIN_FILES = {
+    "copy_number": "aac.01619-23-s0006.xlsx",  # Table S2: estimated copy number, every CDC317 gene x 42 strains
+    "features": "C_parapsilosis_CDC317_current_chromosomal_feature.tab",  # CGD, for CDC317 gene coordinates
+}
+BERGIN_URLS = {
+    BERGIN_FILES["copy_number"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC11620501.1/aac.01619-23-s0006.xlsx",
+    BERGIN_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/"
+                              "C_parapsilosis_CDC317/C_parapsilosis_CDC317_current_chromosomal_feature.tab",
+}
+# A gene counts as absent from a strain below this estimated copy number (diploid ~2); the paper sets none
+BERGIN_ABSENT_BELOW = 0.2
+
+
+def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
+    features = cgd_features(src / BERGIN_FILES["features"])
+    ws = openpyxl.load_workbook(src / BERGIN_FILES["copy_number"], read_only=True, data_only=True)["ORF"]
+    rows = [r for r in ws.iter_rows(values_only=True) if r and r[0]]
+    gene_ids = [str(g).strip() for g in rows[0][1:]]
+    strains = [str(r[0]).strip() for r in rows[1:]]
+    total = len(strains)
+
+    # CGD names the CDC317 chromosomes by contig; label each by the chromosome its CPAR2 genes are numbered
+    # for (CPAR2_1xxxxx on chromosome 1), as Ryan et al. do (cpar_Chr_1), so both studies' maps read alike
+    digits: dict[str, dict[str, int]] = {}
+    for name, f in features.items():
+        m = re.match(r"^CPAR2_(\d)\d{5}", name)
+        if m:
+            digits.setdefault(f["chromosome"], {}).setdefault(m.group(1), 0)
+            digits[f["chromosome"]][m.group(1)] += 1
+    chrom_label = {contig: f"cpar_Chr_{max(counts, key=counts.get)}" for contig, counts in digits.items()}
+
+    missing = [g for g in gene_ids if g not in features]
+    current = resolve_retired_names(missing, "C_parapsilosis_CDC317")
+    genes = []
+    for col, gid in enumerate(gene_ids, start=1):
+        copies = {strain: round(float(r[col]), 2) for strain, r in zip(strains, rows[1:])}
+        absent = [s for s, cn in copies.items() if cn < BERGIN_ABSENT_BELOW]
+        feature = features.get(gid) or features.get(current.get(gid, ""))
+        genes.append({
+            "id": gid,
+            "category": "accessory" if absent else "core",
+            "in_reference": True,
+            "reference_gene": feature["feature_name"] if feature else current.get(gid, gid),
+            "presence": total - len(absent),
+            "type": f"Absent from {len(absent)} strain{'s' if len(absent) > 1 else ''}" if absent else "CDC317 gene",
+            "chromosome": chrom_label.get(feature["chromosome"], feature["chromosome"]) if feature else None,
+            "start": feature["start"] if feature else None,
+            "end": feature["end"] if feature else None,
+            "note": f"Absent from {', '.join(absent)}" if absent else None,
+            "copy_number": copies,
+            "copy_number_min": min(copies.values()),
+            "copy_number_max": max(copies.values()),
+            "stop_codons": [],
+            "divergent_strains": {},
+        })
+    study = {
+        "isolate_count": total,
+        "isolates": [{"name": s} for s in strains],
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "copy_number_reported": True,
+        "core_definition": f"detected (estimated copy number at least {BERGIN_ABSENT_BELOW}) in all {total} strains",
+        "notes": [
+            f"Estimated copy number of every CDC317 gene in {total} strains, from genome sequencing read coverage "
+            "(Table S2; a diploid gene with no copy-number change is about 2). The study covers CDC317 genes only, "
+            "so it finds no genes outside the reference; see Ryan et al. 2025 for those.",
+            f"CGD counts a gene absent from a strain when its estimated copy number is below {BERGIN_ABSENT_BELOW}; "
+            "the paper sets no threshold. Accessory genes here are those absent from at least one strain.",
+            "High copy numbers can reflect whole-chromosome aneuploidy as well as gene amplification (the paper "
+            "reports amplification of CDR1B, CPAR2_304370, in fluconazole-resistant isolates).",
+            "Per-strain copy numbers are in each gene's details and the copy number download.",
+        ],
+    }
+    return study, genes
+
+
 STUDIES = {
+    "bergin2024": {
+        "organism_abbrev": "C_parapsilosis_CDC317",
+        "species": "Candida parapsilosis",
+        "reference_strain": "CDC317",
+        "pubmed": 38712935,
+        "pmcid": "PMC11620501",
+        "doi": "10.1128/aac.01619-23",
+        "citation": "Bergin S et al. (2024) Analysis of clinical Candida parapsilosis isolates reveals copy number "
+                    "variation in key fluconazole resistance genes. Antimicrob Agents Chemother 68(6):e0161923",
+        "title": "Candida parapsilosis gene copy number (Bergin et al. 2024)",
+        "license": "CC BY 4.0",
+        "data_source": "CDC317 gene positions from CGD; Supplementary Table S2 of the paper",
+        "files": list(BERGIN_FILES.values()),
+        "urls": BERGIN_URLS,
+        "parser": parse_bergin2024,
+    },
     "marcet2022": {
         "organism_abbrev": "C_glabrata_CBS138",
         "species": "Candida glabrata",

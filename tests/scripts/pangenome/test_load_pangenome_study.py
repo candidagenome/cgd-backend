@@ -64,3 +64,34 @@ def test_parse_marcet2022(tmp_path):
                                     "gene_count": 5292}
     assert "its 1 CBS138 genes are listed as core" in study["notes"][1]
     assert "the 1 such families with no CBS138 gene are not shown" in study["notes"][1]
+
+
+CPAR_FEATURES = (
+    "! header\n"
+    "CPAR2_100010\t\t\tORF|Verified\tContig005569_C_parapsilosis_CDC317\t100\t400\tW\n"
+    "CPAR2_100020\t\t\tORF|Verified\tContig005569_C_parapsilosis_CDC317\t900\t500\tC\n"
+)
+
+
+def test_parse_bergin2024(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ORF"
+    ws.append(["Strain", "CPAR2_100010", "CPAR2_100020"])
+    ws.append(["Cp1", 2.04, 0.01])
+    ws.append(["Cp2", 41.83, 1.97])
+    ws.append([None, None, None])  # trailing blank rows in the sheet
+    wb.save(tmp_path / loader.BERGIN_FILES["copy_number"])
+    (tmp_path / loader.BERGIN_FILES["features"]).write_text(CPAR_FEATURES)
+    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
+        study, genes = loader.parse_bergin2024(tmp_path)
+    by_id = {g["id"]: g for g in genes}
+    core, absent = by_id["CPAR2_100010"], by_id["CPAR2_100020"]
+    assert (core["category"], core["presence"], core["copy_number_max"]) == ("core", 2, 41.83)
+    assert core["copy_number"] == {"Cp1": 2.04, "Cp2": 41.83}
+    # contigs are labelled by the chromosome their CPAR2 genes are numbered for
+    assert (core["chromosome"], absent["start"], absent["end"]) == ("cpar_Chr_1", 500, 900)
+    assert (absent["category"], absent["presence"], absent["type"], absent["note"]) == (
+        "accessory", 1, "Absent from 1 strain", "Absent from Cp1")
+    assert study["isolate_count"] == 2 and study["copy_number_reported"] is True
+    assert [i["name"] for i in study["isolates"]] == ["Cp1", "Cp2"]

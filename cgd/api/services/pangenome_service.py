@@ -121,13 +121,14 @@ def _summary(db: Session, data: dict) -> PangenomeStudySummary:
 
 
 def _gene(record: dict, names: dict[str, str], detail: bool = True) -> PangenomeGene:
-    """A study gene; list rows (detail=False) leave out the per-isolate stops, divergent-strain hits and genes."""
+    """A study gene; list rows (detail=False) leave out the per-isolate stops, divergent-strain hits, genes
+    and copy numbers."""
     stops = record.get("stop_codons") or []
     isolates_with_stop = {s for stop in stops for s in stop.get("heterozygous", []) + stop.get("homozygous", [])}
     reference = record.get("reference_gene")
     fields = PangenomeGene.model_fields
     data = {k: v for k, v in record.items()
-            if k in fields and k not in ("stop_codons", "divergent_strains", "isolate_genes")}
+            if k in fields and k not in ("stop_codons", "divergent_strains", "isolate_genes", "copy_number")}
     return PangenomeGene(
         **data,
         gene_name=names.get(reference.upper()) if reference else None,
@@ -136,6 +137,7 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
         stop_codons=stops if detail else [],
         divergent_strains=(record.get("divergent_strains") or {}) if detail else {},
         isolate_genes=(record.get("isolate_genes") or {}) if detail else {},
+        copy_number=(record.get("copy_number") or {}) if detail else {},
     )
 
 
@@ -282,7 +284,7 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
     return PangenomeLocusResponse(**organisms[0].model_dump(), organisms=organisms)
 
 
-DOWNLOAD_TABLES = ("genes", "accessory", "stop_codons", "isolates")
+DOWNLOAD_TABLES = ("genes", "accessory", "stop_codons", "isolates", "copy_number")
 
 
 def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
@@ -313,11 +315,22 @@ def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
                                  stop.get("position") or "", stop.get("aa_position") or "", stop.get("isolates") or 0,
                                  stop.get("homozygous_isolates") or 0, ",".join(stop.get("heterozygous", [])),
                                  ",".join(stop.get("homozygous", []))])
+    elif table == "copy_number":
+        # gene x isolate matrix of estimated copy number (empty for studies without copy numbers)
+        isolates = [i["name"] for i in study.get("isolates", [])]
+        writer.writerow(["gene", "gene_name"] + isolates)
+        for g in data["genes"]:
+            if g.get("copy_number"):
+                ref = (g.get("reference_gene") or "").upper()
+                writer.writerow([g["id"], names.get(ref, "")] + [g["copy_number"].get(i, "") for i in isolates])
     else:
         cols = ["id", "category", "in_reference", "type", "presence", "reference_gene", "gene_name", "chromosome",
                 "start", "end", "length_nt", "length_aa", "ortholog", "interpro", "note", "stop_codon_count"]
-        # Studies with a per-isolate presence matrix also list the isolates carrying each gene
+        # Studies with a per-isolate presence matrix also list the isolates carrying each gene, and studies
+        # with copy numbers their range
         carried = any(g.get("isolate_genes") for g in data["genes"])
+        if study.get("copy_number_reported"):
+            cols += ["copy_number_min", "copy_number_max"]
         writer.writerow(cols[:4] + [f"presence_of_{study['isolate_count']}"] + cols[5:]
                         + (["carried_by"] if carried else []))
         for g in data["genes"]:

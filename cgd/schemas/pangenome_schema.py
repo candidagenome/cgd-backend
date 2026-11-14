@@ -47,6 +47,7 @@ class PangenomeStudySummary(BaseModel):
     core_definition: Optional[str] = None
     license: Optional[str] = None
     stop_codons_reported: bool = True
+    copy_number_reported: bool = False
     data_source: Optional[str] = None
     loaded: Optional[str] = None
     counts: PangenomeCounts
@@ -103,6 +104,9 @@ class PangenomeGene(BaseModel):
     stop_codons: list[StopCodon] = []
     divergent_strains: dict[str, DivergentStrainHit] = {}
     isolate_genes: dict[str, list[str]] = {}  # isolate -> its genes in this gene family, when the study lists them
+    copy_number_min: Optional[float] = None  # estimated copy number range across isolates, when the study gives it
+    copy_number_max: Optional[float] = None
+    copy_number: dict[str, float] = {}  # isolate -> estimated copy number
 
 
 class PangenomeGenePage(BaseModel):
