@@ -31,6 +31,7 @@ def write_tables(path: Path) -> None:
     s4.append(["OG2", "Accessory", "Genuine", "-", "a3", "-"])
     s4.append(["OG3", "Accessory", "Sequencing error", "CAGL0C00100g", "a4", "-"])
     s4.append(["OG4", "Accessory", "Unclear", "CAGL0K07348g", "-", "b4"])
+    s4.append(["OG5", "Accessory", "Miss-prediction", "-", "a5", "-"])
     wb.save(path)
 
 
@@ -38,12 +39,16 @@ def test_parse_marcet2022(tmp_path):
     write_tables(tmp_path / loader.MARCET_FILES["tables"])
     (tmp_path / loader.MARCET_FILES["features"]).write_text(FEATURES)
     # CAGL0B00116g was renamed in CGD; CAGL0K07348g was merged and keeps its name
-    renamed = {"CAGL0B00116g": "CAGL0B00154g", "CAGL0K07348g": "CAGL0K07348g"}
+    renamed = {"CAGL0B00116g": "CAGL0B00154g", "CAGL0K07348g": "CAGL0K07348g", "CAGL0C00100g": "CAGL0C00100g"}
     with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: renamed[n] for n in names}):
         study, genes = loader.parse_marcet2022(tmp_path)
     by_id = {g["id"]: g for g in genes}
-    # one record per CBS138 gene, family-level presence; artefact families are dropped
-    assert set(by_id) == {"CAGL0A00110g", "CAGL0B00116g", "OG2", "CAGL0K07348g"}
+    # one record per CBS138 gene, family-level presence; artefact families' CBS138 genes are core,
+    # flagged, and artefact families without a CBS138 gene are dropped
+    assert set(by_id) == {"CAGL0A00110g", "CAGL0B00116g", "OG2", "CAGL0C00100g", "CAGL0K07348g"}
+    artefact = by_id["CAGL0C00100g"]
+    assert (artefact["category"], artefact["type"], artefact["presence"]) == (
+        "core", "Core (gap: sequencing error)", 1)
     a = by_id["CAGL0A00110g"]
     assert (a["category"], a["presence"], a["chromosome"], a["start"], a["end"]) == (
         "core", 2, "ChrA_C_glabrata_CBS138", 100, 900)
@@ -57,4 +62,5 @@ def test_parse_marcet2022(tmp_path):
     assert study["isolates"][0] == {"name": "S1", "assembly_level": "Chromosome-level",
                                     "platform": "long + short reads", "contigs": 15, "n50": 1049635,
                                     "gene_count": 5292}
-    assert "1 attributed to sequencing errors" in study["notes"][1]
+    assert "its 1 CBS138 genes are listed as core" in study["notes"][1]
+    assert "the 1 such families with no CBS138 gene are not shown" in study["notes"][1]

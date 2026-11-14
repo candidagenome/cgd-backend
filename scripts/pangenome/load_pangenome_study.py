@@ -221,9 +221,11 @@ MARCET_URLS = {
     MARCET_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_glabrata_CBS138/"
                               "C_glabrata_CBS138_current_chromosomal_feature.tab",
 }
-# Table S4 "Filtering" of accessory orthogroups after the authors' manual curation; the
-# sequencing-error and mis-prediction families are artefacts and are not loaded
+# Table S4 "Filtering" of accessory orthogroups after the authors' manual curation
 MARCET_KEEP = {"Genuine": "Accessory (confirmed)", "Unclear": "Accessory (unclear)"}
+# Families whose variable presence the authors put down to an artefact: their CBS138 genes are
+# listed as core, flagged with the reason; artefact families without a CBS138 gene are not loaded
+MARCET_ARTEFACT = {"Sequencing error": "sequencing error", "Miss-prediction": "gene mis-prediction"}
 MAX_FAMILY_LISTED = 5
 
 
@@ -297,24 +299,31 @@ def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
         return [] if clean(cell) in (None, "-") else [m.strip() for m in str(cell).split(",") if m.strip()]
 
     rows = [r for r in rows if r and r[0]]
-    kept = [r for r in rows if clean(r[1]) == "Core" or clean(r[2]) in MARCET_KEEP]
+    kept = [r for r in rows if clean(r[1]) == "Core" or clean(r[2]) in MARCET_KEEP
+            or (clean(r[2]) in MARCET_ARTEFACT and members(r[3]))]
     missing = sorted({m for r in kept for m in members(r[3]) if m not in features})
     current = resolve_retired_names(missing, "C_glabrata_CBS138")
     logger.info("%d CBS138 IDs not in the feature file; %d renamed in CGD", len(missing),
                 sum(1 for n in missing if current[n] != n))
 
-    genes, skipped = [], {}
+    genes, skipped, artefact_genes = [], {}, 0
     for r in rows:
         family, tag, filtering = str(r[0]).strip(), clean(r[1]), clean(r[2])
-        if tag == "Accessory" and filtering not in MARCET_KEEP:
+        if r not in kept:
             skipped[filtering] = skipped.get(filtering, 0) + 1
             continue
         isolate_genes = {strain: members(r[i]) for i, strain in strain_cols if members(r[i])}
-        category = "core" if tag == "Core" else "accessory"
+        if tag == "Core":
+            category, kind = "core", "Core gene family"
+        elif filtering in MARCET_ARTEFACT:
+            category, kind = "core", f"Core (gap: {MARCET_ARTEFACT[filtering]})"
+            artefact_genes += len(members(r[3]))
+        else:
+            category, kind = "accessory", MARCET_KEEP[filtering]
         common = {
             "category": category,
             "presence": len(isolate_genes),
-            "type": "Core gene family" if category == "core" else MARCET_KEEP[filtering],
+            "type": kind,
             "isolate_genes": isolate_genes,
             "stop_codons": [],
             "divergent_strains": {},
@@ -357,7 +366,8 @@ def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
             "n50": clean(asm[3]) if asm else None,
             "gene_count": gene_counts.get(strain),
         })
-    logger.info("skipped artefact accessory families: %s", skipped)
+    logger.info("artefact families: %d CBS138 genes listed as core; skipped without a CBS138 gene: %s",
+                artefact_genes, skipped)
     study = {
         "isolate_count": total,
         "isolates": isolates,
@@ -368,8 +378,10 @@ def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
             f"Gene families (OrthoFinder orthogroups) are from Table S4 across {total} chromosome-level genomes; "
             "each CBS138 gene in a family is listed with that family's presence, and families with no CBS138 "
             "gene are listed by family ID. The paper counts families: 5,072 core and 323 accessory.",
-            "The authors curated the accessory families by hand: confirmed and unclear families are shown, "
-            f"and the {sum(skipped.values())} attributed to sequencing errors or gene mis-prediction are not.",
+            "The authors curated the accessory families by hand. Confirmed and unclear families are shown as "
+            "accessory. Where they attributed a family's gaps to sequencing errors or gene mis-prediction, its "
+            f"{artefact_genes} CBS138 genes are listed as core, flagged with the reason and the strains annotated; "
+            f"the {sum(skipped.values())} such families with no CBS138 gene are not shown.",
             "Strain gene IDs per family are in each gene's details. The study did not report premature stop codons.",
             "CBS138 gene positions are from the current CGD annotation; genes since merged or split in CGD "
             "are listed but not drawn.",
