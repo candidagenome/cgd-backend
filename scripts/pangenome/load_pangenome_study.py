@@ -248,9 +248,10 @@ def cgd_features(path: Path) -> dict[str, dict]:
 
 def resolve_retired_names(names: list[str], organism_abbrev: str) -> dict[str, str]:
     """
-    CGD's current systematic name for study gene IDs missing from the feature file: renamed
-    genes resolve through the alias table, as the locus page does (CAGL0B00116g -> CAGL0B00154g).
-    Merged/split genes keep their own name (their locus page says what they became).
+    CGD's current systematic name for study gene IDs missing from the feature file, resolved as the
+    locus page does: an ID that is a live feature keeps its name; an ID whose own feature is deleted,
+    or that is only an alias, goes to the live feature carrying it as an alias (CAGL0B00116g ->
+    CAGL0B00154g). IDs with no live match keep their own name.
     """
     if not names:
         return {}
@@ -258,20 +259,23 @@ def resolve_retired_names(names: list[str], organism_abbrev: str) -> dict[str, s
     from sqlalchemy import func
 
     from cgd.db.engine import SessionLocal
-    from cgd.models.models import Alias, FeatAlias, Feature, Organism
+    from cgd.models.models import Alias, FeatAlias, FeatProperty, Feature, Organism
 
     upper = [n.upper() for n in names]
     with SessionLocal() as session:
-        own = {f.upper() for (f,) in session.query(Feature.feature_name)
-               .join(Organism, Organism.organism_no == Feature.organism_no)
-               .filter(Organism.organism_abbrev == organism_abbrev, func.upper(Feature.feature_name).in_(upper))}
-        rows = (session.query(Alias.alias_name, Feature.feature_name)
+        deleted = {no for (no,) in session.query(FeatProperty.feature_no)
+                   .filter(func.lower(FeatProperty.property_value).like("%deleted%"))}
+        live = {name.upper() for name, no in session.query(Feature.feature_name, Feature.feature_no)
+                .join(Organism, Organism.organism_no == Feature.organism_no)
+                .filter(Organism.organism_abbrev == organism_abbrev, func.upper(Feature.feature_name).in_(upper))
+                if no not in deleted}
+        rows = (session.query(Alias.alias_name, Feature.feature_name, Feature.feature_no)
                 .join(FeatAlias, FeatAlias.alias_no == Alias.alias_no)
                 .join(Feature, Feature.feature_no == FeatAlias.feature_no)
                 .join(Organism, Organism.organism_no == Feature.organism_no)
                 .filter(Organism.organism_abbrev == organism_abbrev, func.upper(Alias.alias_name).in_(upper))
                 .all())
-    renamed = {alias.upper(): feature for alias, feature in rows if alias.upper() not in own}
+    renamed = {alias.upper(): feature for alias, feature, no in rows if alias.upper() not in live and no not in deleted}
     return {n: renamed.get(n.upper(), n) for n in names}
 
 
