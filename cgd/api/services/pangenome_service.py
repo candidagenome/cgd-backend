@@ -120,12 +120,13 @@ def _summary(db: Session, data: dict) -> PangenomeStudySummary:
 
 
 def _gene(record: dict, names: dict[str, str], detail: bool = True) -> PangenomeGene:
-    """A study gene; list rows (detail=False) leave out the per-isolate stops and divergent-strain hits."""
+    """A study gene; list rows (detail=False) leave out the per-isolate stops, divergent-strain hits and genes."""
     stops = record.get("stop_codons") or []
     isolates_with_stop = {s for stop in stops for s in stop.get("heterozygous", []) + stop.get("homozygous", [])}
     reference = record.get("reference_gene")
     fields = PangenomeGene.model_fields
-    data = {k: v for k, v in record.items() if k in fields and k not in ("stop_codons", "divergent_strains")}
+    data = {k: v for k, v in record.items()
+            if k in fields and k not in ("stop_codons", "divergent_strains", "isolate_genes")}
     return PangenomeGene(
         **data,
         gene_name=names.get(reference.upper()) if reference else None,
@@ -133,6 +134,7 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
         stop_codon_isolates=len(isolates_with_stop),
         stop_codons=stops if detail else [],
         divergent_strains=(record.get("divergent_strains") or {}) if detail else {},
+        isolate_genes=(record.get("isolate_genes") or {}) if detail else {},
     )
 
 
@@ -307,10 +309,14 @@ def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
     else:
         cols = ["id", "category", "in_reference", "type", "presence", "reference_gene", "gene_name", "chromosome",
                 "start", "end", "length_nt", "length_aa", "ortholog", "interpro", "note", "stop_codon_count"]
-        writer.writerow(cols[:4] + [f"presence_of_{study['isolate_count']}"] + cols[5:])
+        # Studies with a per-isolate presence matrix also list the isolates carrying each gene
+        carried = any(g.get("isolate_genes") for g in data["genes"])
+        writer.writerow(cols[:4] + [f"presence_of_{study['isolate_count']}"] + cols[5:]
+                        + (["carried_by"] if carried else []))
         for g in data["genes"]:
             if table == "accessory" and g["category"] != "accessory":
                 continue
             row = _gene(g, names, detail=False).model_dump()
-            writer.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
+            writer.writerow(["" if row.get(c) is None else row.get(c) for c in cols]
+                            + ([",".join(g.get("isolate_genes") or {})] if carried else []))
     return f"{study_id}_{table}.tsv", out.getvalue()

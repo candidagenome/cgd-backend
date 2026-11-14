@@ -18,6 +18,7 @@ class PangenomeIsolate(BaseModel):
     contigs: Optional[int] = None
     assembly_length: Optional[int] = None
     n50: Optional[int] = None
+    gene_count: Optional[int] = None  # genes annotated in the isolate's assembly
 
 
 class PangenomeCounts(BaseModel):
@@ -45,6 +46,7 @@ class PangenomeStudySummary(BaseModel):
     isolate_count: int
     core_definition: Optional[str] = None
     license: Optional[str] = None
+    stop_codons_reported: bool = True
     data_source: Optional[str] = None
     loaded: Optional[str] = None
     counts: PangenomeCounts
@@ -100,6 +102,7 @@ class PangenomeGene(BaseModel):
     stop_codon_isolates: int = 0  # isolates with a premature stop at any site
     stop_codons: list[StopCodon] = []
     divergent_strains: dict[str, DivergentStrainHit] = {}
+    isolate_genes: dict[str, list[str]] = {}  # isolate -> its genes in this gene family, when the study lists them
 
 
 class PangenomeGenePage(BaseModel):

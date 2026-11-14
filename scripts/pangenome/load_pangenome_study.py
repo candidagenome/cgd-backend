@@ -20,6 +20,7 @@ adding a species or paper means adding a parser, not changing the viewer.
 Usage:
     python scripts/pangenome/load_pangenome_study.py --study ryan2025
     python scripts/pangenome/load_pangenome_study.py --study ryan2025 --source-dir <dir with the .xlsx files>
+    python scripts/pangenome/load_pangenome_study.py --study marcet2022
 """
 from __future__ import annotations
 
@@ -195,6 +196,7 @@ def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
         "isolates": isolates,
         "stop_codon_isolates": [s for _, s in strain_cols],
         "divergent_strains": ["PEU651", "EGM1079"],
+        "stop_codons_reported": True,
         "core_definition": "present in at least 99.5% of isolates",
         "notes": [
             "The paper describes 372 isolates; accessory gene presence is given as the number of the 376 "
@@ -207,7 +209,188 @@ def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- Marcet-Houben et al. 2022, C. glabrata -------------------------------------------------------
+
+MARCET_FILES = {
+    "tables": "12915_2022_1412_MOESM2_ESM.xlsx",  # Additional file 2: Tables S1-S8
+    "features": "C_glabrata_CBS138_current_chromosomal_feature.tab",  # CGD, for CBS138 gene coordinates
+}
+MARCET_URLS = {
+    MARCET_FILES["tables"]: "https://static-content.springer.com/esm/art%3A10.1186%2Fs12915-022-01412-1/"
+                            "MediaObjects/12915_2022_1412_MOESM2_ESM.xlsx",
+    MARCET_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_glabrata_CBS138/"
+                              "C_glabrata_CBS138_current_chromosomal_feature.tab",
+}
+# Table S4 "Filtering" of accessory orthogroups after the authors' manual curation; the
+# sequencing-error and mis-prediction families are artefacts and are not loaded
+MARCET_KEEP = {"Genuine": "Accessory (confirmed)", "Unclear": "Accessory (unclear)"}
+MAX_FAMILY_LISTED = 5
+
+
+def cgd_features(path: Path) -> dict[str, dict]:
+    """CGD chromosomal feature file -> {systematic name or alias: coordinates of the current feature}."""
+    features, aliases = {}, {}
+    for line in path.read_text().splitlines():
+        if line.startswith("!") or not line.strip():
+            continue
+        f = line.split("\t")
+        if len(f) < 7 or not f[5] or not f[6]:
+            continue
+        start, end = sorted((int(f[5]), int(f[6])))
+        features[f[0]] = {"feature_name": f[0], "chromosome": f[4], "start": start, "end": end}
+        for alias in f[2].split("|"):
+            if alias:
+                aliases.setdefault(alias, f[0])
+    for alias, name in aliases.items():
+        features.setdefault(alias, features[name])
+    return features
+
+
+def resolve_retired_names(names: list[str], organism_abbrev: str) -> dict[str, str]:
+    """
+    CGD's current systematic name for study gene IDs missing from the feature file: renamed
+    genes resolve through the alias table, as the locus page does (CAGL0B00116g -> CAGL0B00154g).
+    Merged/split genes keep their own name (their locus page says what they became).
+    """
+    if not names:
+        return {}
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from sqlalchemy import func
+
+    from cgd.db.engine import SessionLocal
+    from cgd.models.models import Alias, FeatAlias, Feature, Organism
+
+    upper = [n.upper() for n in names]
+    with SessionLocal() as session:
+        own = {f.upper() for (f,) in session.query(Feature.feature_name)
+               .join(Organism, Organism.organism_no == Feature.organism_no)
+               .filter(Organism.organism_abbrev == organism_abbrev, func.upper(Feature.feature_name).in_(upper))}
+        rows = (session.query(Alias.alias_name, Feature.feature_name)
+                .join(FeatAlias, FeatAlias.alias_no == Alias.alias_no)
+                .join(Feature, Feature.feature_no == FeatAlias.feature_no)
+                .join(Organism, Organism.organism_no == Feature.organism_no)
+                .filter(Organism.organism_abbrev == organism_abbrev, func.upper(Alias.alias_name).in_(upper))
+                .all())
+    renamed = {alias.upper(): feature for alias, feature in rows if alias.upper() not in own}
+    return {n: renamed.get(n.upper(), n) for n in names}
+
+
+def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
+    tables = src / MARCET_FILES["tables"]
+    features = cgd_features(src / MARCET_FILES["features"])
+
+    assemblies = {str(r[0]).strip(): r for r in sheet_rows(tables, "Supplementary_table_1", 2)}
+    gene_counts = {str(r[0]).split(" (")[0].strip(): clean(r[1])
+                   for r in sheet_rows(tables, "Supplementary_table_3", 2)}
+
+    ws = openpyxl.load_workbook(tables, read_only=True, data_only=True)["Supplementary_table_4"]
+    rows = ws.iter_rows(values_only=True)
+    header = next(rows)
+    strain_cols = [(i, str(h).strip()) for i, h in enumerate(header) if i >= 4 and h not in (None, "")]
+    total = len(strain_cols)
+
+    def members(cell) -> list[str]:
+        return [] if clean(cell) in (None, "-") else [m.strip() for m in str(cell).split(",") if m.strip()]
+
+    rows = [r for r in rows if r and r[0]]
+    kept = [r for r in rows if clean(r[1]) == "Core" or clean(r[2]) in MARCET_KEEP]
+    missing = sorted({m for r in kept for m in members(r[3]) if m not in features})
+    current = resolve_retired_names(missing, "C_glabrata_CBS138")
+    logger.info("%d CBS138 IDs not in the feature file; %d renamed in CGD", len(missing),
+                sum(1 for n in missing if current[n] != n))
+
+    genes, skipped = [], {}
+    for r in rows:
+        family, tag, filtering = str(r[0]).strip(), clean(r[1]), clean(r[2])
+        if tag == "Accessory" and filtering not in MARCET_KEEP:
+            skipped[filtering] = skipped.get(filtering, 0) + 1
+            continue
+        isolate_genes = {strain: members(r[i]) for i, strain in strain_cols if members(r[i])}
+        category = "core" if tag == "Core" else "accessory"
+        common = {
+            "category": category,
+            "presence": len(isolate_genes),
+            "type": "Core gene family" if category == "core" else MARCET_KEEP[filtering],
+            "isolate_genes": isolate_genes,
+            "stop_codons": [],
+            "divergent_strains": {},
+        }
+        reference = members(r[3])
+        if not reference:
+            genes.append({"id": family, "in_reference": False, "reference_gene": None,
+                          "chromosome": None, "start": None, "end": None,
+                          "note": f"Gene family {family}; no CBS138 gene in the reference annotation", **common})
+            continue
+        for cagl in reference:
+            feature = features.get(cagl) or features.get(current.get(cagl, ""))
+            others = [m for m in reference if m != cagl]
+            note = f"Gene family {family}"
+            if others:
+                listed = ", ".join(others[:MAX_FAMILY_LISTED])
+                more = len(others) - MAX_FAMILY_LISTED
+                note += f" with {len(others)} other CBS138 gene{'s' if len(others) > 1 else ''}: {listed}"
+                note += f" and {more} more" if more > 0 else ""
+            genes.append({
+                "id": cagl,
+                "in_reference": True,
+                # Current CGD name when the study's ID is now an alias
+                "reference_gene": feature["feature_name"] if feature else current.get(cagl, cagl),
+                "chromosome": feature["chromosome"] if feature else None,
+                "start": feature["start"] if feature else None,
+                "end": feature["end"] if feature else None,
+                "note": note,
+                **common,
+            })
+
+    isolates = []
+    for _, strain in strain_cols:
+        asm = assemblies.get(strain)
+        isolates.append({
+            "name": strain,
+            "assembly_level": "Chromosome-level",
+            "platform": "long + short reads",
+            "contigs": clean(asm[2]) if asm else None,
+            "n50": clean(asm[3]) if asm else None,
+            "gene_count": gene_counts.get(strain),
+        })
+    logger.info("skipped artefact accessory families: %s", skipped)
+    study = {
+        "isolate_count": total,
+        "isolates": isolates,
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "core_definition": f"present in all {total} strains",
+        "notes": [
+            f"Gene families (OrthoFinder orthogroups) are from Table S4 across {total} chromosome-level genomes; "
+            "each CBS138 gene in a family is listed with that family's presence, and families with no CBS138 "
+            "gene are listed by family ID. The paper counts families: 5,072 core and 323 accessory.",
+            "The authors curated the accessory families by hand: confirmed and unclear families are shown, "
+            f"and the {sum(skipped.values())} attributed to sequencing errors or gene mis-prediction are not.",
+            "Strain gene IDs per family are in each gene's details. The study did not report premature stop codons.",
+            "CBS138 gene positions are from the current CGD annotation; genes since merged or split in CGD "
+            "are listed but not drawn.",
+        ],
+    }
+    return study, genes
+
+
 STUDIES = {
+    "marcet2022": {
+        "organism_abbrev": "C_glabrata_CBS138",
+        "species": "Candida glabrata",
+        "reference_strain": "CBS138",
+        "pubmed": 36209154,
+        "pmcid": "PMC9548116",
+        "doi": "10.1186/s12915-022-01412-1",
+        "citation": "Marcet-Houben M et al. (2022) Chromosome-level assemblies from diverse clades reveal limited "
+                    "structural and gene content variation in the genome of Candida glabrata. BMC Biol 20:226",
+        "title": "Candida glabrata pangenome (Marcet-Houben et al. 2022)",
+        "license": "CC BY 4.0",
+        "data_source": "Additional file 2 (Tables S1, S3 and S4) of the paper; CBS138 coordinates from CGD",
+        "files": list(MARCET_FILES.values()),
+        "urls": MARCET_URLS,
+        "parser": parse_marcet2022,
+    },
     "ryan2025": {
         "organism_abbrev": "C_parapsilosis_CDC317",
         "species": "Candida parapsilosis",
@@ -255,11 +438,16 @@ def main() -> None:
     if args.source_dir:
         for f in spec["files"]:
             shutil.copy2(args.source_dir / f, new / "source" / f)
+    elif spec.get("urls"):
+        for f in spec["files"]:
+            logger.info("downloading %s", spec["urls"][f])
+            with urllib.request.urlopen(spec["urls"][f], timeout=300) as resp:
+                (new / "source" / f).write_bytes(resp.read())
     else:
         fetch_supplements(spec["pmcid"], spec["files"], new / "source")
 
     study, genes = spec["parser"](new / "source")
-    meta = {k: v for k, v in spec.items() if k not in ("parser", "files")}
+    meta = {k: v for k, v in spec.items() if k not in ("parser", "files", "urls")}
     study = {"study_id": args.study, **meta, "loaded": date.today().isoformat(), **study}
     counts = {
         "genes": len(genes),

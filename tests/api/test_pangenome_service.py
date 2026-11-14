@@ -21,7 +21,8 @@ STOP = {"chromosome": "chr1", "position": 50, "aa_position": 10, "isolates": 2, 
 GENES = [
     {"id": "CPAR2_100010", "category": "core", "in_reference": True, "type": "CDC317 Reference Gene",
      "reference_gene": "CPAR2_100010", "chromosome": "chr1", "start": 1, "end": 300, "stop_codons": [STOP],
-     "divergent_strains": {"S1": {"presence": "Present", "identity": 99.5, "hit_status": "MBH"}}},
+     "divergent_strains": {"S1": {"presence": "Present", "identity": 99.5, "hit_status": "MBH"}},
+     "isolate_genes": {"A": ["a1"], "B": ["b1", "b2"]}},
     {"id": "CPAR2_100020", "category": "accessory", "in_reference": True, "type": "CDC317 Reference Gene",
      "presence": 7, "reference_gene": "CPAR2_100020", "ortholog": "SIT1", "chromosome": "chr1", "start": 400,
      "end": 900, "stop_codons": []},
@@ -114,6 +115,11 @@ def test_downloads(data_dir, db):
     lines = [line for line in body.splitlines() if not line.startswith("#")]
     assert name == "demo2025_accessory.tsv"
     assert lines[0].split("\t")[4] == "presence_of_10" and len(lines) == 3
+    # a study with per-isolate genes lists the isolates carrying each gene
+    _, all_genes = svc.download_table(db, "demo2025", "genes")
+    rows = [line.split("\t") for line in all_genes.splitlines() if not line.startswith("#")]
+    header, first = rows[0], rows[1]
+    assert header[-1] == "carried_by" and first[0] == "CPAR2_100010" and first[-1] == "A,B"
     _, stops = svc.download_table(db, "demo2025", "stop_codons")
     assert "CPAR2_100010\tCPAR2_100010\t\tchr1\t50\t10\t2\t1\tA\tB" in stops
     with pytest.raises(svc.PangenomeNotFound):
@@ -123,6 +129,9 @@ def test_downloads(data_dir, db):
 def test_get_gene_includes_stops(data_dir, db):
     gene = svc.get_gene(db, "demo2025", "cpar2_100010")
     assert gene.stop_codons[0].homozygous == ["B"] and gene.divergent_strains["S1"].identity == 99.5
+    assert gene.isolate_genes == {"A": ["a1"], "B": ["b1", "b2"]}
+    # list rows leave the per-isolate genes out
+    assert svc.list_genes(db, "demo2025", query="CPAR2_100010").genes[0].isolate_genes == {}
     with pytest.raises(svc.PangenomeNotFound):
         svc.get_gene(db, "demo2025", "CPAR2_999999")
 
