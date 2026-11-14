@@ -25,6 +25,9 @@ class PangenomeCounts(BaseModel):
     core: int
     accessory: int
     not_in_reference: int
+    # not_in_reference split by category (derived from the genes when the study is served)
+    not_in_reference_core: Optional[int] = None
+    not_in_reference_accessory: Optional[int] = None
     with_stop_codons: int
     isolates_listed: int
 

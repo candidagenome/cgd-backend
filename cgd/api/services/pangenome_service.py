@@ -106,13 +106,17 @@ def _gene_name_map(db: Session, organism_abbrev: str) -> dict[str, str]:
     return names
 
 
-def _summary(db: Session, study: dict) -> PangenomeStudySummary:
+def _summary(db: Session, data: dict) -> PangenomeStudySummary:
+    study = data["study"]
+    novel = [g["category"] for g in data["genes"] if not g["in_reference"]]
+    counts = {**study.get("counts", {}), "not_in_reference_core": novel.count("core"),
+              "not_in_reference_accessory": novel.count("accessory")}
     dbxref_id = None
     if study.get("pubmed"):
         dbxref_id = db.query(Reference.dbxref_id).filter(Reference.pubmed == study["pubmed"]).scalar()
     fields = PangenomeStudySummary.model_fields
-    return PangenomeStudySummary(**{k: v for k, v in study.items() if k in fields},
-                                 reference_dbxref_id=dbxref_id)
+    return PangenomeStudySummary(**{k: v for k, v in study.items() if k in fields and k != "counts"},
+                                 counts=counts, reference_dbxref_id=dbxref_id)
 
 
 def _gene(record: dict, names: dict[str, str], detail: bool = True) -> PangenomeGene:
@@ -133,12 +137,13 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
 
 
 def list_studies(db: Session) -> PangenomeStudyList:
-    return PangenomeStudyList(studies=[_summary(db, _load(study_id)["study"]) for study_id in _study_dirs()])
+    return PangenomeStudyList(studies=[_summary(db, _load(study_id)) for study_id in _study_dirs()])
 
 
 def get_study(db: Session, study_id: str) -> PangenomeStudy:
-    study = _load(study_id)["study"]
-    summary = _summary(db, study)
+    data = _load(study_id)
+    study = data["study"]
+    summary = _summary(db, data)
     return PangenomeStudy(**summary.model_dump(), notes=study.get("notes", []),
                           divergent_strains=study.get("divergent_strains", []),
                           isolates=study.get("isolates", []))
@@ -259,7 +264,7 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
             records = data["by_reference"].get(feature.feature_name.upper(), [])
             if records:
                 records = sorted(records, key=lambda g: (g["id"] != feature.feature_name, g["id"]))
-                found.append(PangenomeLocusStudy(study=_summary(db, data["study"]),
+                found.append(PangenomeLocusStudy(study=_summary(db, data),
                                                  isolate_count=data["study"]["isolate_count"],
                                                  genes=[_gene(g, names) for g in records]))
         if found:

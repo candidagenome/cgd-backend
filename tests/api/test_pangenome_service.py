@@ -60,6 +60,8 @@ def test_list_studies(data_dir, db):
     assert [s.study_id for s in studies] == ["demo2025"]
     assert studies[0].reference_dbxref_id == "CAL0000271000"
     assert studies[0].counts.accessory == 2
+    # not-in-reference split comes from the genes: HYPOTHETICAL_000001 (core), PARALOG_100020_1 (accessory)
+    assert (studies[0].counts.not_in_reference_core, studies[0].counts.not_in_reference_accessory) == (1, 1)
 
 
 def test_get_study_has_isolates(data_dir, db):
