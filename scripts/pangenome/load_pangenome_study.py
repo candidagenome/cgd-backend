@@ -454,7 +454,7 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
         "divergent_strains": [],
         "stop_codons_reported": False,
         "copy_number_reported": True,
-        "core_definition": f"detected (estimated copy number at least {BERGIN_ABSENT_BELOW}) in all {total} strains",
+        "core_definition": f"at least {BERGIN_ABSENT_BELOW} estimated copies in all {total} strains",
         "notes": [
             f"Estimated copy number of every CDC317 gene in {total} strains, from genome sequencing read coverage "
             "(Table S2; a diploid gene with no copy-number change is about 2). The study covers CDC317 genes only, "
