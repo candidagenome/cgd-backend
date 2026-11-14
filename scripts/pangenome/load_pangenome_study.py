@@ -390,7 +390,7 @@ STUDIES = {
                     "structural and gene content variation in the genome of Candida glabrata. BMC Biol 20:226",
         "title": "Candida glabrata pangenome (Marcet-Houben et al. 2022)",
         "license": "CC BY 4.0",
-        "data_source": "Additional file 2 (Tables S1, S3 and S4) of the paper; CBS138 coordinates from CGD",
+        "data_source": "CBS138 gene positions from CGD; Additional file 2 (Tables S1, S3 and S4) of the paper",
         "files": list(MARCET_FILES.values()),
         "urls": MARCET_URLS,
         "parser": parse_marcet2022,
