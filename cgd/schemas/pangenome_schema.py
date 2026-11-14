@@ -120,11 +120,18 @@ class PangenomeLocusStudy(BaseModel):
     genes: list[PangenomeGene]
 
 
-class PangenomeLocusResponse(BaseModel):
+class PangenomeLocusOrganism(BaseModel):
+    """The locus in one organism and the studies covering it there."""
     feature_name: Optional[str] = None
     gene_name: Optional[str] = None
     organism: Optional[str] = None
     studies: list[PangenomeLocusStudy] = []
+
+
+class PangenomeLocusResponse(PangenomeLocusOrganism):
+    """The first organism's records at the top level; every organism with records in organisms
+    (a gene name such as ACT1 names a locus in several species)."""
+    organisms: list[PangenomeLocusOrganism] = []
 
 
 class MapStop(BaseModel):

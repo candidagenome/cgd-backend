@@ -103,6 +103,32 @@ def test_locus_includes_derived_accessory_genes(data_dir, db):
     genes = result.studies[0].genes
     assert [g.id for g in genes] == ["CPAR2_100020", "PARALOG_100020_1"]  # the gene itself first
     assert genes[0].gene_name == "SIT1" and result.studies[0].isolate_count == 10
+    assert [o.organism for o in result.organisms] == ["Candida parapsilosis CDC317"]
+
+
+def test_locus_lists_every_organism_with_studies(data_dir, db, tmp_path):
+    # the same gene name in a second studied organism (ACT1 in C. parapsilosis and C. glabrata)
+    other = tmp_path / "C_glabrata_CBS138" / "glab2022"
+    other.mkdir(parents=True)
+    (other / "study.json").write_text(json.dumps({**STUDY, "study_id": "glab2022",
+                                                  "organism_abbrev": "C_glabrata_CBS138"}))
+    (other / "genes.json").write_text(json.dumps([{**GENES[1], "id": "CAGL0A00110g",
+                                                   "reference_gene": "CAGL0A00110g"}]))
+    features = [
+        SimpleNamespace(feature_name=name, gene_name="SIT1",
+                        organism=SimpleNamespace(organism_abbrev=abbrev, organism_name=organism))
+        for name, abbrev, organism in [("CPAR2_100020", "C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
+                                       ("CAGL0A00110g", "C_glabrata_CBS138", "Candida glabrata CBS138")]
+    ]
+    db.query.return_value.options.return_value.join.return_value.filter.return_value \
+        .filter.return_value.filter.return_value.all.return_value = features
+    with patch.object(svc, "_filter_features_by_preference", lambda db, features: features):
+        result = svc.get_locus_pangenome(db, "SIT1")
+    assert result.organism == "Candida parapsilosis CDC317"
+    by_organism = {o.organism: o for o in result.organisms}
+    assert set(by_organism) == {"Candida parapsilosis CDC317", "Candida glabrata CBS138"}
+    glabrata = by_organism["Candida glabrata CBS138"]
+    assert glabrata.feature_name == "CAGL0A00110g" and glabrata.studies[0].study.study_id == "glab2022"
 
 
 def test_locus_without_studies_is_empty(tmp_path, monkeypatch, db):

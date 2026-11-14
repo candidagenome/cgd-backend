@@ -29,6 +29,7 @@ from cgd.schemas.pangenome_schema import (
     MapStop,
     PangenomeGene,
     PangenomeGenePage,
+    PangenomeLocusOrganism,
     PangenomeLocusResponse,
     PangenomeLocusStudy,
     PangenomeMap,
@@ -237,7 +238,10 @@ def get_gene(db: Session, study_id: str, gene_id: str) -> PangenomeGene:
 
 
 def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
-    """Pangenome records for a locus: the study's copy of the gene plus accessory genes derived from it."""
+    """
+    Pangenome records for a locus: the study's copy of the gene plus accessory genes derived from it,
+    for every organism in which the name matches a locus covered by a study.
+    """
     studies_by_organism: dict[str, list[str]] = {}
     for study_id, directory in _study_dirs().items():
         studies_by_organism.setdefault(directory.parent.name, []).append(study_id)
@@ -257,6 +261,7 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
         .all()
     )
     features = _filter_features_by_preference(db, features)
+    organisms = []
     for feature in features:
         abbrev = feature.organism.organism_abbrev
         names = _gene_name_map(db, abbrev)
@@ -270,9 +275,11 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
                                                  isolate_count=data["study"]["isolate_count"],
                                                  genes=[_gene(g, names) for g in records]))
         if found:
-            return PangenomeLocusResponse(feature_name=feature.feature_name, gene_name=feature.gene_name,
-                                          organism=feature.organism.organism_name, studies=found)
-    return PangenomeLocusResponse()
+            organisms.append(PangenomeLocusOrganism(feature_name=feature.feature_name, gene_name=feature.gene_name,
+                                                    organism=feature.organism.organism_name, studies=found))
+    if not organisms:
+        return PangenomeLocusResponse()
+    return PangenomeLocusResponse(**organisms[0].model_dump(), organisms=organisms)
 
 
 DOWNLOAD_TABLES = ("genes", "accessory", "stop_codons", "isolates")
