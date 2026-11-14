@@ -115,7 +115,8 @@ def _summary(db: Session, study: dict) -> PangenomeStudySummary:
                                  reference_dbxref_id=dbxref_id)
 
 
-def _gene(record: dict, names: dict[str, str], with_stops: bool = True) -> PangenomeGene:
+def _gene(record: dict, names: dict[str, str], detail: bool = True) -> PangenomeGene:
+    """A study gene; list rows (detail=False) leave out the per-isolate stops and divergent-strain hits."""
     stops = record.get("stop_codons") or []
     isolates_with_stop = {s for stop in stops for s in stop.get("heterozygous", []) + stop.get("homozygous", [])}
     reference = record.get("reference_gene")
@@ -126,8 +127,8 @@ def _gene(record: dict, names: dict[str, str], with_stops: bool = True) -> Pange
         gene_name=names.get(reference.upper()) if reference else None,
         stop_codon_count=len(stops),
         stop_codon_isolates=len(isolates_with_stop),
-        stop_codons=stops if with_stops else [],
-        divergent_strains=record.get("divergent_strains") or {},
+        stop_codons=stops if detail else [],
+        divergent_strains=(record.get("divergent_strains") or {}) if detail else {},
     )
 
 
@@ -173,7 +174,7 @@ def list_genes(db: Session, study_id: str, category: Optional[str] = None, refer
     genes.sort(key=SORT_KEYS.get(sort, SORT_KEYS["position"]))
     start = (page - 1) * page_size
     return PangenomeGenePage(study_id=study_id, total=len(genes), page=page, page_size=page_size,
-                             genes=[_gene(g, names, with_stops=False) for g in genes[start:start + page_size]])
+                             genes=[_gene(g, names, detail=False) for g in genes[start:start + page_size]])
 
 
 def get_map(db: Session, study_id: str) -> PangenomeMap:
@@ -305,6 +306,6 @@ def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
         for g in data["genes"]:
             if table == "accessory" and g["category"] != "accessory":
                 continue
-            row = _gene(g, names, with_stops=False).model_dump()
+            row = _gene(g, names, detail=False).model_dump()
             writer.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
     return f"{study_id}_{table}.tsv", out.getvalue()
