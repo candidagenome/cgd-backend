@@ -463,7 +463,7 @@ def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
         "isolates": [{"name": strain} for _, strain in strain_cols],
         "divergent_strains": [],
         "stop_codons_reported": False,
-        "core_definition": f"present in at least 103 of {total} isolates (the paper's core and soft-core)",
+        "core_definition": f"present in at least 103 of {total} isolates, the paper's core and soft-core",
         "notes": [
             f"Gene families are from Dataset S7 across {total} clinical isolates from China, with each isolate's "
             "gene in the family and the family's CBS138 homolog. Families with a CBS138 homolog are listed by "
@@ -545,7 +545,7 @@ def parse_xu2025(src: Path) -> tuple[dict, list[dict]]:
         "isolates": isolates,
         "divergent_strains": [],
         "stop_codons_reported": False,
-        "core_definition": f"present in more than 95% of the {total} genomes (the paper's core and soft-core)",
+        "core_definition": f"present in more than 95% of the {total:,} genomes, the paper's core and soft-core",
         "notes": [
             f"Gene presence across {total:,} genomes of all six clades is from Table S4: the number of genomes "
             "carrying each gene. The per-isolate presence/absence matrix was not published.",
