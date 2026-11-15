@@ -22,6 +22,8 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study ryan2025 --source-dir <dir with the .xlsx files>
     python scripts/pangenome/load_pangenome_study.py --study marcet2022
     python scripts/pangenome/load_pangenome_study.py --study bergin2024
+    python scripts/pangenome/load_pangenome_study.py --study wang2025
+    python scripts/pangenome/load_pangenome_study.py --study xu2025
 """
 from __future__ import annotations
 
@@ -391,6 +393,172 @@ def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- Wang et al. 2025, C. glabrata (109 clinical isolates) ------------------------------------------
+
+WANG_FILES = {
+    "pangenome": "TEMI_A_2595789_SM5779.xlsx",  # Dataset S7: families x isolates, CBS138 homolog, PG type
+    "features": MARCET_FILES["features"],
+}
+WANG_URLS = {
+    WANG_FILES["pangenome"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC12704144.1/TEMI_A_2595789_SM5779.xlsx",
+    WANG_FILES["features"]: MARCET_URLS[MARCET_FILES["features"]],
+}
+# The paper's four classes; CGD counts core and soft-core together as core, as the paper does
+PANGENOME_CLASSES = {"Core": ("core", "Core"), "Softcore": ("core", "Soft-core"),
+                     "Shell": ("accessory", "Shell"), "Cloud": ("accessory", "Cloud")}
+
+
+def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
+    features = cgd_features(src / WANG_FILES["features"])
+    ws = openpyxl.load_workbook(src / WANG_FILES["pangenome"], read_only=True, data_only=True).worksheets[0]
+    rows = [r for r in ws.iter_rows(values_only=True) if r and r[0]]
+    header = [str(h).strip() if h is not None else "" for h in rows[0]]
+    homolog_col, class_col = header.index("CBS138_homolog"), header.index("PG_type")
+    strain_cols = [(i, h) for i, h in enumerate(header) if 0 < i < homolog_col and h]
+    total = len(strain_cols)
+
+    families = []
+    for r in rows[1:]:
+        isolate_genes = {strain: [str(r[i]).strip()] for i, strain in strain_cols if clean(r[i]) not in (None, "-")}
+        homolog = clean(r[homolog_col])
+        families.append((str(r[0]).strip(), homolog if homolog != "-" else None, clean(r[class_col]), isolate_genes))
+    # A CBS138 gene in more than one family (a split gene): the most widespread family carries its name,
+    # the others are listed by family ID as variants of it
+    named = {}
+    for family, homolog, _, isolate_genes in sorted(families, key=lambda f: -len(f[3])):
+        if homolog and homolog not in named:
+            named[homolog] = family
+    missing = sorted(h for h in named if h not in features)
+    current = resolve_retired_names(missing, "C_glabrata_CBS138")
+
+    genes = []
+    for family, homolog, pg_type, isolate_genes in families:
+        category, label = PANGENOME_CLASSES[pg_type]
+        feature = (features.get(homolog) or features.get(current.get(homolog, ""))) if homolog else None
+        reference = (feature["feature_name"] if feature else current.get(homolog, homolog)) if homolog else None
+        own = homolog is not None and named[homolog] == family
+        note = f"Gene family {family}"
+        if homolog and not own:
+            note += f"; also matches {homolog}, which is named for family {named[homolog]}"
+        elif not homolog:
+            note += "; no CBS138 homolog"
+        genes.append({
+            "id": homolog if own else family,
+            "category": category,
+            "in_reference": homolog is not None,
+            "reference_gene": reference,
+            "presence": len(isolate_genes),
+            "type": label,
+            # a variant is drawn at the CBS138 gene it matches
+            "chromosome": feature["chromosome"] if feature and own else None,
+            "start": feature["start"] if feature and own else None,
+            "end": feature["end"] if feature and own else None,
+            "note": note,
+            "isolate_genes": isolate_genes,
+            "stop_codons": [],
+            "divergent_strains": {},
+        })
+    study = {
+        "isolate_count": total,
+        "isolates": [{"name": strain} for _, strain in strain_cols],
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "core_definition": f"present in at least 103 of {total} isolates (the paper's core and soft-core)",
+        "notes": [
+            f"Gene families are from Dataset S7 across {total} clinical isolates from China, with each isolate's "
+            "gene in the family and the family's CBS138 homolog. Families with a CBS138 homolog are listed by "
+            "that gene; the rest by family ID.",
+            "The paper classes families as core (all isolates), soft-core, shell or cloud; CGD counts core and "
+            "soft-core as core, as the paper does, and shows the paper's class as the type.",
+            "Where a CBS138 gene matches more than one family, the most widespread family is listed by the gene "
+            "and the others by family ID.",
+            "Isolate gene IDs per family are in each gene's details. The study did not report premature stop codons.",
+        ],
+    }
+    return study, genes
+
+
+# --- Xu et al. 2025, C. auris (1,307 genomes, six clades) -----------------------------------------
+
+XU_FILES = {
+    "tables": "EXP2-5-20240482-s001.xlsx",  # Tables S1 (isolates), S3 (assemblies), S4 (gene distribution)
+    "features": "C_auris_B8441_current_chromosomal_feature.tab",  # CGD, for B8441 gene coordinates
+}
+XU_URLS = {
+    XU_FILES["tables"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC12752650.1/EXP2-5-20240482-s001.xlsx",
+    XU_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_auris_B8441/"
+                          "C_auris_B8441_current_chromosomal_feature.tab",
+}
+
+
+def parse_xu2025(src: Path) -> tuple[dict, list[dict]]:
+    tables = src / XU_FILES["tables"]
+    features = cgd_features(src / XU_FILES["features"])
+    # each table has a title row, then its header
+    s1 = sheet_rows(tables, "Table S1", 3)
+    s3 = {str(r[0]).strip(): r for r in sheet_rows(tables, "Table S3", 3)}
+    s4 = sheet_rows(tables, "Table S4", 3)
+
+    def isolate(run: str, row) -> dict:
+        asm = s3.get(run)
+        return {
+            "name": clean(row[1]) if row is not None and clean(row[1]) else run,
+            "origin": ", ".join(str(v) for v in (clean(row[2]), clean(row[12])) if v and v != "unknown")
+            if row is not None else None,
+            "short_read_accession": run if re.match(r"^[SED]RR\d+$", run) else None,
+            "platform": clean(row[10]) if row is not None else None,
+            "contigs": clean(asm[2]) if asm else None,
+            "assembly_length": clean(asm[1]) if asm else None,
+            "n50": clean(asm[3]) if asm else None,
+        }
+    listed = {str(r[0]).strip() for r in s1}
+    isolates = [isolate(str(r[0]).strip(), r) for r in s1]
+    # Table S3 has assemblies Table S1 does not list (BJCA001); presence counts include them
+    isolates += [isolate(run, None) for run in s3 if run not in listed]
+    total = max(int(r[2]) for r in s4)
+
+    b8441 = [str(r[0]).strip() for r in s4 if str(r[0]).startswith("B9J08_")]
+    current = resolve_retired_names([g for g in b8441 if g not in features], "C_auris_B8441")
+    genes = []
+    for r in s4:
+        gid, pg_type, presence = str(r[0]).strip(), clean(r[1]), int(r[2])
+        category, label = PANGENOME_CLASSES[pg_type]
+        in_reference = gid.startswith("B9J08_")
+        feature = (features.get(gid) or features.get(current.get(gid, ""))) if in_reference else None
+        genes.append({
+            "id": gid,
+            "category": category,
+            "in_reference": in_reference,
+            "reference_gene": (feature["feature_name"] if feature else current.get(gid, gid)) if in_reference else None,
+            "presence": presence,
+            "type": label,
+            "chromosome": feature["chromosome"] if feature else None,
+            "start": feature["start"] if feature else None,
+            "end": feature["end"] if feature else None,
+            "note": None if in_reference else "Gene not in the B8441 reference annotation",
+            "stop_codons": [],
+            "divergent_strains": {},
+        })
+    study = {
+        "isolate_count": total,
+        "isolates": isolates,
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "core_definition": f"present in more than 95% of the {total} genomes (the paper's core and soft-core)",
+        "notes": [
+            f"Gene presence across {total:,} genomes of all six clades is from Table S4: the number of genomes "
+            "carrying each gene. The per-isolate presence/absence matrix was not published.",
+            f"The paper describes {len(listed):,} isolates (Table S1); presence counts are out of {total:,}, which "
+            "includes the assemblies listed only in Table S3 (BJCA001).",
+            "The paper classes genes as core (all genomes), soft-core (over 95%), shell (5-95%) or cloud (under 5%); "
+            "CGD counts core and soft-core as core and shows the paper's class as the type.",
+            "Genes named CA_ are the study's genes with no B8441 counterpart; they are listed but not drawn. "
+            "The study did not report premature stop codons.",
+        ],
+    }
+    return study, genes
+
+
 # --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
 
 BERGIN_FILES = {
@@ -470,6 +638,39 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
+    "xu2025": {
+        "organism_abbrev": "C_auris_B8441",
+        "species": "Candida auris",
+        "reference_strain": "B8441",
+        "pubmed": 41476647,
+        "pmcid": "PMC12752650",
+        "doi": "10.1002/EXP.20240482",
+        "citation": "Xu C et al. (2025) Global stress responses identify the functionally divergent regulators "
+                    "required for Candida auris commensalism and pathogenicity. Exploration 5(6):20240482",
+        "title": "Candida auris pangenome (Xu et al. 2025)",
+        "license": "CC BY 4.0",
+        "data_source": "B8441 gene positions from CGD; Supplementary Tables S1, S3 and S4 of the paper",
+        "files": list(XU_FILES.values()),
+        "urls": XU_URLS,
+        "parser": parse_xu2025,
+    },
+    "wang2025": {
+        "organism_abbrev": "C_glabrata_CBS138",
+        "species": "Candida glabrata",
+        "reference_strain": "CBS138",
+        "pubmed": 41307179,
+        "pmcid": "PMC12704144",
+        "doi": "10.1080/22221751.2025.2595789",
+        "citation": "Wang Q et al. (2025) Genome analysis and machine learning-based feature selection strategy "
+                    "reveal potential drug-resistance determinants in Nakaseomyces glabratus. Emerg Microbes Infect "
+                    "14(1):2595789",
+        "title": "Candida glabrata pangenome (Wang et al. 2025)",
+        "license": "CC BY 4.0",
+        "data_source": "CBS138 gene positions from CGD; Supplementary Dataset S7 of the paper",
+        "files": list(WANG_FILES.values()),
+        "urls": WANG_URLS,
+        "parser": parse_wang2025,
+    },
     "bergin2024": {
         "organism_abbrev": "C_parapsilosis_CDC317",
         "species": "Candida parapsilosis",
