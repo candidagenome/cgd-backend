@@ -139,6 +139,8 @@ def test_parse_xu2025(tmp_path):
                "Layout", "Platform", "Model", "Sample type", "Isolation Source"])
     s1.append(["SRR1", "CBS1", "Korea", "x", "PRJ", "WGS", "PCR", "GENOMIC", "PAIRED", "ILLUMINA", "NovaSeq",
                "unknown", "blood"])
+    s1.append(["SRR2", 9109611, "USA", "x", "PRJ", "WGS", "PCR", "GENOMIC", "PAIRED", "ILLUMINA", "NovaSeq",
+               "unknown", "NA"])
     s3 = wb.create_sheet("Table S3")
     s3.append(["Table S3. Assemblies"])
     s3.append(["ID", "Total length", "Number of contigs", "N50"])
@@ -162,5 +164,6 @@ def test_parse_xu2025(tmp_path):
     novel = by_id["CA_000001"]
     assert (novel["category"], novel["in_reference"], novel["reference_gene"]) == ("accessory", False, None)
     assert study["isolate_count"] == 2
-    assert [i["name"] for i in study["isolates"]] == ["CBS1", "BJCA001"]
+    # a strain named by a number in the sheet keeps it as text
+    assert [i["name"] for i in study["isolates"]] == ["CBS1", "9109611", "BJCA001"]
     assert study["isolates"][0]["origin"] == "Korea, blood" and study["isolates"][0]["n50"] == 180000

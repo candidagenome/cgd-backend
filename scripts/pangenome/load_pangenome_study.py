@@ -502,7 +502,8 @@ def parse_xu2025(src: Path) -> tuple[dict, list[dict]]:
     def isolate(run: str, row) -> dict:
         asm = s3.get(run)
         return {
-            "name": clean(row[1]) if row is not None and clean(row[1]) else run,
+            # some strain names are numbers in the sheet (9109611)
+            "name": str(clean(row[1])) if row is not None and clean(row[1]) is not None else run,
             "origin": ", ".join(str(v) for v in (clean(row[2]), clean(row[12])) if v and v != "unknown")
             if row is not None else None,
             "short_read_accession": run if re.match(r"^[SED]RR\d+$", run) else None,
