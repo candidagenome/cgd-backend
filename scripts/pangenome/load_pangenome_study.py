@@ -284,42 +284,61 @@ def resolve_retired_names(names: list[str], organism_abbrev: str) -> dict[str, s
     return {n: renamed.get(n.upper(), n) for n in names}
 
 
-CHROMOSOME_SAMPLE = 5  # reference genes per chromosome used to find its CGD sequence
+CHROMOSOME_SAMPLE = 7  # reference genes per chromosome, spread along it, used to find its CGD sequence
+COORDINATE_TOLERANCE = 1000  # study and CGD gene starts may differ this much (UTRs included or not)
 
 
 def chromosome_lengths(genes: list[dict], organism_abbrev: str) -> dict[str, int]:
     """
     CGD sequence length of each chromosome the study's genes are placed on, keyed by the study's own
-    chromosome name (cpar_Chr_1, ChrA_C_glabrata_CBS138, ...): found through the root sequence of a few of
-    its reference genes, so the name need not be CGD's. Selects seq_length only, never the residues.
+    chromosome name (cpar_Chr_1, ChrA_C_glabrata_CBS138, ...): found through the root sequence of reference
+    genes spread along it, so the name need not be CGD's. Selects seq_length only, never the residues.
+    A length is used only when those genes all lie on the same CGD sequence near their study coordinates
+    and it covers the study's furthest gene: a study on its own assembly (Ryan et al. join CDC317 contigs
+    differently on chromosomes 3 and 4) keeps the gene-end estimate.
     """
-    samples: dict[str, list[str]] = {}
+    placed: dict[str, list[tuple[int, int, str]]] = {}
     for g in genes:
-        chrom, ref = g.get("chromosome"), g.get("reference_gene")
-        if chrom and ref and g.get("start") and len(samples.setdefault(chrom, [])) < CHROMOSOME_SAMPLE:
-            samples[chrom].append(ref)
-    if not samples:
+        if g.get("chromosome") and g.get("reference_gene") and g.get("start"):
+            placed.setdefault(g["chromosome"], []).append(
+                (int(g["start"]), int(g["end"] or g["start"]), g["reference_gene"].upper()))
+    if not placed:
         return {}
+    samples: dict[str, list[tuple[int, int, str]]] = {}
+    for chrom, items in placed.items():
+        items.sort()
+        step = max(1, (len(items) - 1) // (CHROMOSOME_SAMPLE - 1))
+        samples[chrom] = items[::step][:CHROMOSOME_SAMPLE - 1] + [items[-1]]
     sys.path.insert(0, str(PROJECT_ROOT))
     from sqlalchemy import func
 
     from cgd.db.engine import SessionLocal
     from cgd.models.models import FeatLocation, Feature, Organism, Seq
 
-    gene_chrom = {ref.upper(): chrom for chrom, refs in samples.items() for ref in refs}
+    names = list({ref for items in samples.values() for _, _, ref in items})
     with SessionLocal() as session:
-        rows = (session.query(Feature.feature_name, Seq.seq_length)
+        rows = (session.query(Feature.feature_name, FeatLocation.root_seq_no, Seq.seq_length,
+                              FeatLocation.start_coord, FeatLocation.stop_coord)
                 .join(Organism, Organism.organism_no == Feature.organism_no)
                 .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
                 .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
                 .filter(Organism.organism_abbrev == organism_abbrev, FeatLocation.is_loc_current == "Y",
-                        Seq.is_seq_current == "Y", func.upper(Feature.feature_name).in_(list(gene_chrom)))
+                        Seq.is_seq_current == "Y", func.upper(Feature.feature_name).in_(names))
                 .all())
-    found: dict[str, list[int]] = {}
-    for name, length in rows:
-        found.setdefault(gene_chrom[name.upper()], []).append(int(length))
-    # the length most of the chromosome's sample genes agree on
-    return {chrom: max(set(lengths), key=lengths.count) for chrom, lengths in found.items()}
+    cgd = {name.upper(): (root, int(length), min(int(a), int(b))) for name, root, length, a, b in rows}
+    lengths, rejected = {}, []
+    for chrom, items in samples.items():
+        found = [(cgd[ref], start) for start, _, ref in items if ref in cgd]
+        furthest = max(end for _, end, _ in placed[chrom])
+        if (found and len({root for (root, _, _), _ in found}) == 1
+                and all(abs(cgd_start - start) <= COORDINATE_TOLERANCE for (_, _, cgd_start), start in found)
+                and found[0][0][1] >= furthest):
+            lengths[chrom] = found[0][0][1]
+        else:
+            rejected.append(chrom)
+    if rejected:
+        logger.info("study coordinates differ from CGD on %s; their lengths are not used", sorted(rejected))
+    return lengths
 
 
 def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
