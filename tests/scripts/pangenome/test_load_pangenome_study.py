@@ -101,7 +101,7 @@ def test_parse_wang2025(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(["PG_ID", "BMU_1", "BMU_2", "CBS138_homolog", "PG_type"])
-    ws.append(["2PG1", "1_g", "7_g", "CAGL0A00110g", "Core"])
+    ws.append(["2PG1", "1_g", "7_g|9_g", "CAGL0A00110g", "Core"])
     ws.append(["1PG2", "2_g", "-", "CAGL0A00110g", "Cloud"])  # a split piece of the same CBS138 gene
     ws.append(["1PG3", "-", "8_g", "-", "Shell"])
     ws.append(["1PG4", "3_g", "-", "CAGL0B00116g", "Softcore"])
@@ -113,7 +113,7 @@ def test_parse_wang2025(tmp_path):
     assert set(by_id) == {"CAGL0A00110g", "1PG2", "1PG3", "CAGL0B00116g"}
     named = by_id["CAGL0A00110g"]
     assert (named["category"], named["type"], named["presence"], named["start"]) == ("core", "Core", 2, 100)
-    assert named["isolate_genes"] == {"BMU_1": ["1_g"], "BMU_2": ["7_g"]}
+    assert named["isolate_genes"] == {"BMU_1": ["1_g"], "BMU_2": ["7_g", "9_g"]}
     # the less widespread family matching the same gene is listed by family ID, drawn at the gene
     piece = by_id["1PG2"]
     assert (piece["reference_gene"], piece["chromosome"], piece["category"]) == ("CAGL0A00110g", None, "accessory")

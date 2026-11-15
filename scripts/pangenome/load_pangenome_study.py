@@ -284,6 +284,44 @@ def resolve_retired_names(names: list[str], organism_abbrev: str) -> dict[str, s
     return {n: renamed.get(n.upper(), n) for n in names}
 
 
+CHROMOSOME_SAMPLE = 5  # reference genes per chromosome used to find its CGD sequence
+
+
+def chromosome_lengths(genes: list[dict], organism_abbrev: str) -> dict[str, int]:
+    """
+    CGD sequence length of each chromosome the study's genes are placed on, keyed by the study's own
+    chromosome name (cpar_Chr_1, ChrA_C_glabrata_CBS138, ...): found through the root sequence of a few of
+    its reference genes, so the name need not be CGD's. Selects seq_length only, never the residues.
+    """
+    samples: dict[str, list[str]] = {}
+    for g in genes:
+        chrom, ref = g.get("chromosome"), g.get("reference_gene")
+        if chrom and ref and g.get("start") and len(samples.setdefault(chrom, [])) < CHROMOSOME_SAMPLE:
+            samples[chrom].append(ref)
+    if not samples:
+        return {}
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from sqlalchemy import func
+
+    from cgd.db.engine import SessionLocal
+    from cgd.models.models import FeatLocation, Feature, Organism, Seq
+
+    gene_chrom = {ref.upper(): chrom for chrom, refs in samples.items() for ref in refs}
+    with SessionLocal() as session:
+        rows = (session.query(Feature.feature_name, Seq.seq_length)
+                .join(Organism, Organism.organism_no == Feature.organism_no)
+                .join(FeatLocation, FeatLocation.feature_no == Feature.feature_no)
+                .join(Seq, Seq.seq_no == FeatLocation.root_seq_no)
+                .filter(Organism.organism_abbrev == organism_abbrev, FeatLocation.is_loc_current == "Y",
+                        Seq.is_seq_current == "Y", func.upper(Feature.feature_name).in_(list(gene_chrom)))
+                .all())
+    found: dict[str, list[int]] = {}
+    for name, length in rows:
+        found.setdefault(gene_chrom[name.upper()], []).append(int(length))
+    # the length most of the chromosome's sample genes agree on
+    return {chrom: max(set(lengths), key=lengths.count) for chrom, lengths in found.items()}
+
+
 def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
     tables = src / MARCET_FILES["tables"]
     features = cgd_features(src / MARCET_FILES["features"])
@@ -419,7 +457,9 @@ def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
 
     families = []
     for r in rows[1:]:
-        isolate_genes = {strain: [str(r[i]).strip()] for i, strain in strain_cols if clean(r[i]) not in (None, "-")}
+        # an isolate with several genes in the family lists them joined by "|"
+        isolate_genes = {strain: [g.strip() for g in str(r[i]).split("|") if g.strip()]
+                         for i, strain in strain_cols if clean(r[i]) not in (None, "-")}
         homolog = clean(r[homolog_col])
         families.append((str(r[0]).strip(), homolog if homolog != "-" else None, clean(r[class_col]), isolate_genes))
     # A CBS138 gene in more than one family (a split gene): the most widespread family carries its name,
@@ -771,6 +811,11 @@ def main() -> None:
         "isolates_listed": len(study["isolates"]),
     }
     study["counts"] = counts
+    try:
+        study["chromosome_lengths"] = chromosome_lengths(genes, spec["organism_abbrev"])
+        logger.info("chromosome lengths from CGD: %s", study["chromosome_lengths"])
+    except Exception as e:  # the map falls back to the furthest gene end
+        logger.warning("could not read chromosome lengths from CGD: %s", e)
     (new / "study.json").write_text(json.dumps(study, indent=1))
     (new / "genes.json").write_text(json.dumps(genes))
 

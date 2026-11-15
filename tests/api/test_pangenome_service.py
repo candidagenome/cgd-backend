@@ -171,6 +171,14 @@ def test_map_places_variants_at_their_reference_gene(data_dir, db):
     result = svc.get_map(db, "demo2025")
     placed = {g.id: g for g in result.genes}
     assert [c.name for c in result.chromosomes] == ["chr1"] and result.chromosomes[0].length == 900
+    # CGD chromosome lengths recorded at load time replace the furthest gene end
+    study = json.loads((data_dir / "C_parapsilosis_CDC317" / "demo2025" / "study.json").read_text())
+    (data_dir / "C_parapsilosis_CDC317" / "demo2025" / "study.json").write_text(
+        json.dumps({**study, "chromosome_lengths": {"chr1": 5000}}))
+    genes_file = data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json"
+    genes_file.write_text(genes_file.read_text())  # a reload rewrites genes.json, which the cache watches
+    svc._studies.clear()
+    assert svc.get_map(db, "demo2025").chromosomes[0].length == 5000
     paralog = placed["PARALOG_100020_1"]
     assert (paralog.start, paralog.end, paralog.placed_by) == (400, 900, "reference_gene")
     assert placed["CPAR2_100020"].placed_by == "own" and placed["CPAR2_100020"].gene_name == "SIT1"

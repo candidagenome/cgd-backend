@@ -193,8 +193,8 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
 
     Genes without their own coordinates (paralogs, fusions and other variants
     not in the reference) are placed at the reference gene they derive from,
-    or at the study's anchor_gene for them; the rest are returned as unplaced. Chromosome lengths are the
-    furthest gene end, as the study gives no assembly lengths.
+    or at the study's anchor_gene for them; the rest are returned as unplaced. Chromosome lengths are CGD's
+    sequence lengths recorded at load time, or the furthest gene end for studies loaded without them.
     """
     data = _load(study_id)
     names = _gene_name_map(db, data["study"]["organism_abbrev"])
@@ -224,7 +224,9 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
     def chrom_key(name: str):
         number = name.rsplit("_", 1)[-1]
         return (0, int(number), name) if number.isdigit() else (1, 0, name)
-    chromosomes = [MapChromosome(name=c, length=lengths[c]) for c in sorted(lengths, key=chrom_key)]
+    known = data["study"].get("chromosome_lengths") or {}
+    chromosomes = [MapChromosome(name=c, length=max(lengths[c], known.get(c, 0)))
+                   for c in sorted(lengths, key=chrom_key)]
     genes.sort(key=lambda r: (r.chromosome, r.start, r.placed_by != "own", r.id))
     return PangenomeMap(study_id=study_id, isolate_count=data["study"]["isolate_count"],
                         chromosomes=chromosomes, genes=genes, unplaced=unplaced)
