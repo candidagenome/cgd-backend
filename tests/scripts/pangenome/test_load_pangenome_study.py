@@ -167,3 +167,31 @@ def test_parse_xu2025(tmp_path):
     # a strain named by a number in the sheet keeps it as text
     assert [i["name"] for i in study["isolates"]] == ["CBS1", "9109611", "BJCA001"]
     assert study["isolates"][0]["origin"] == "Korea, blood" and study["isolates"][0]["n50"] == 180000
+
+
+def test_parse_wang2025_cnv(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["PG_ID", "BMU_1", "BMU_2", "CBS138_homolog", "PG_type"])
+    ws.append(["2PG1", "1_g", "7_g|9_g", "CAGL0A00110g", "Core"])
+    ws.append(["1PG3", "-", "8_g", "-", "Shell"])
+    wb.save(tmp_path / loader.WANG_CNV_FILES["pangenome"])
+    cnv = openpyxl.Workbook()
+    sheet = cnv.active
+    sheet.title = "Copy_number_varied_PG_families"
+    sheet.append(["PG_ID", "BMU_1", "BMU_2"])
+    sheet.append(["2PG1", "1_g", "7_g|9_g|10_g"])
+    sheet.append(["1PG3", "-", "8_g|11_g"])
+    cnv.save(tmp_path / loader.WANG_CNV_FILES["copy_number"])
+    (tmp_path / loader.WANG_CNV_FILES["features"]).write_text(FEATURES)
+    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
+        study, genes = loader.parse_wang2025_cnv(tmp_path)
+    by_id = {g["id"]: g for g in genes}
+    # copy number is the count of an isolate's genes in the family; families are named as in the pangenome
+    named = by_id["CAGL0A00110g"]
+    assert named["copy_number"] == {"BMU_1": 1, "BMU_2": 3} and named["category"] == "core"
+    assert (named["chromosome"], named["type"]) == ("ChrA_C_glabrata_CBS138", "Core family")
+    unnamed = by_id["1PG3"]
+    assert (unnamed["copy_number_min"], unnamed["copy_number_max"], unnamed["presence"]) == (0, 2, 1)
+    assert unnamed["type"] == "Absent from 1 isolate"
+    assert study["copy_number_baseline"] == 1 and study["isolate_count"] == 2

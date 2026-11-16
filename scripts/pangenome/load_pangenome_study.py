@@ -23,6 +23,7 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study marcet2022
     python scripts/pangenome/load_pangenome_study.py --study bergin2024
     python scripts/pangenome/load_pangenome_study.py --study wang2025
+    python scripts/pangenome/load_pangenome_study.py --study wang2025_cnv
     python scripts/pangenome/load_pangenome_study.py --study xu2025
 """
 from __future__ import annotations
@@ -465,14 +466,17 @@ PANGENOME_CLASSES = {"Core": ("core", "Core"), "Softcore": ("core", "Soft-core")
                      "Shell": ("accessory", "Shell"), "Cloud": ("accessory", "Cloud")}
 
 
-def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
+def wang_families(src: Path) -> tuple[list[str], list[dict]]:
+    """
+    Wang 2025 Dataset S7 as (isolates, family records): each family with its CBS138 homolog, the
+    paper's class, each isolate's genes, and the CGD gene and position it is listed and drawn by.
+    """
     features = cgd_features(src / WANG_FILES["features"])
     ws = openpyxl.load_workbook(src / WANG_FILES["pangenome"], read_only=True, data_only=True).worksheets[0]
     rows = [r for r in ws.iter_rows(values_only=True) if r and r[0]]
     header = [str(h).strip() if h is not None else "" for h in rows[0]]
     homolog_col, class_col = header.index("CBS138_homolog"), header.index("PG_type")
     strain_cols = [(i, h) for i, h in enumerate(header) if 0 < i < homolog_col and h]
-    total = len(strain_cols)
 
     families = []
     for r in rows[1:]:
@@ -490,9 +494,8 @@ def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
     missing = sorted(h for h in named if h not in features)
     current = resolve_retired_names(missing, "C_glabrata_CBS138")
 
-    genes = []
+    records = []
     for family, homolog, pg_type, isolate_genes in families:
-        category, label = PANGENOME_CLASSES[pg_type]
         feature = (features.get(homolog) or features.get(current.get(homolog, ""))) if homolog else None
         reference = (feature["feature_name"] if feature else current.get(homolog, homolog)) if homolog else None
         own = homolog is not None and named[homolog] == family
@@ -501,25 +504,40 @@ def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
             note += f"; also matches {homolog}, which is named for family {named[homolog]}"
         elif not homolog:
             note += "; no CBS138 homolog"
-        genes.append({
+        records.append({
+            "family": family,
+            "pg_type": pg_type,
             "id": homolog if own else family,
-            "category": category,
             "in_reference": homolog is not None,
             "reference_gene": reference,
-            "presence": len(isolate_genes),
-            "type": label,
             # a variant is drawn at the CBS138 gene it matches
             "chromosome": feature["chromosome"] if feature and own else None,
             "start": feature["start"] if feature and own else None,
             "end": feature["end"] if feature and own else None,
             "note": note,
             "isolate_genes": isolate_genes,
+        })
+    return [strain for _, strain in strain_cols], records
+
+
+def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
+    isolates, records = wang_families(src)
+    total = len(isolates)
+    genes = []
+    for r in records:
+        category, label = PANGENOME_CLASSES[r["pg_type"]]
+        genes.append({
+            **{k: r[k] for k in ("id", "in_reference", "reference_gene", "chromosome", "start", "end", "note",
+                                 "isolate_genes")},
+            "category": category,
+            "presence": len(r["isolate_genes"]),
+            "type": label,
             "stop_codons": [],
             "divergent_strains": {},
         })
     study = {
         "isolate_count": total,
-        "isolates": [{"name": strain} for _, strain in strain_cols],
+        "isolates": [{"name": strain} for strain in isolates],
         "divergent_strains": [],
         "stop_codons_reported": False,
         "core_definition": f"present in at least 103 of {total} isolates, the paper's core and soft-core",
@@ -532,6 +550,70 @@ def parse_wang2025(src: Path) -> tuple[dict, list[dict]]:
             "Where a CBS138 gene matches more than one family, the most widespread family is listed by the gene "
             "and the others by family ID.",
             "Isolate gene IDs per family are in each gene's details. The study did not report premature stop codons.",
+        ],
+    }
+    return study, genes
+
+
+WANG_CNV_FILES = {
+    **WANG_FILES,
+    "copy_number": "TEMI_A_2595789_SM5799.xlsx",  # Dataset S8: copy-number-varied families x isolates
+}
+WANG_CNV_URLS = {
+    **WANG_URLS,
+    WANG_CNV_FILES["copy_number"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC12704144.1/TEMI_A_2595789_SM5799.xlsx",
+}
+
+
+def parse_wang2025_cnv(src: Path) -> tuple[dict, list[dict]]:
+    """Wang 2025 Dataset S8: the families whose copy number varies, counted as genes per isolate assembly."""
+    isolates, records = wang_families(src)
+    by_family = {r["family"]: r for r in records}
+    ws = openpyxl.load_workbook(src / WANG_CNV_FILES["copy_number"], read_only=True,
+                                data_only=True)["Copy_number_varied_PG_families"]
+    rows = [r for r in ws.iter_rows(values_only=True) if r and r[0]]
+    header = [str(h).strip() if h is not None else "" for h in rows[0]]
+    cols = [(i, h) for i, h in enumerate(header) if i > 0 and h]
+    total = len(cols)
+    genes = []
+    for r in rows[1:]:
+        family = by_family[str(r[0]).strip()]
+        # each isolate's genes in the family, joined by "|"; "-" is none
+        copies = {strain: (0 if clean(r[i]) in (None, "-") else len([g for g in str(r[i]).split("|") if g.strip()]))
+                  for i, strain in cols}
+        absent = [s for s, n in copies.items() if n == 0]
+        genes.append({
+            **{k: family[k] for k in ("id", "in_reference", "reference_gene", "chromosome", "start", "end")},
+            "category": "accessory" if absent else "core",
+            "presence": total - len(absent),
+            "type": f"Absent from {len(absent)} isolate{'s' if len(absent) > 1 else ''}" if absent
+            else f"{PANGENOME_CLASSES[family['pg_type']][1]} family",
+            "note": family["note"],
+            "copy_number": copies,
+            "copy_number_min": min(copies.values()),
+            "copy_number_max": max(copies.values()),
+            "stop_codons": [],
+            "divergent_strains": {},
+        })
+    study = {
+        "isolate_count": total,
+        "isolates": [{"name": strain} for _, strain in cols],
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "copy_number_reported": True,
+        "copy_number_baseline": 1,
+        "copy_number_kind": "count",  # genes per isolate assembly
+        "core_definition": f"present in all {total} isolates",
+        "notes": [
+            f"The {len(genes)} gene families of the Wang et al. 2025 pangenome whose copy number varies across "
+            f"{total} clinical isolates (Dataset S8). Copy number is the number of the family's genes in each "
+            "isolate's annotated assembly; C. glabrata is haploid, so a single-copy gene is 1.",
+            "The paper counts families with 2 or more copies as amplified and 3 or more as amplified in several "
+            "rounds; GLEYA-domain adhesins and other cell wall proteins dominate.",
+            "Counts come from short-read assemblies, which can merge identical tandem copies, so high copy "
+            "numbers may be underestimated.",
+            "Families are listed by their CBS138 homolog where they have one, as in the Wang et al. 2025 "
+            "pangenome; per-isolate copy numbers are in each gene's details and the copy number download.",
         ],
     }
     return study, genes
@@ -682,6 +764,8 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
         "divergent_strains": [],
         "stop_codons_reported": False,
         "copy_number_reported": True,
+        "copy_number_baseline": 2,
+        "copy_number_kind": "estimate",  # from read coverage
         "core_definition": f"at least {BERGIN_ABSENT_BELOW} estimated copies in all {total} strains",
         "notes": [
             f"Estimated copy number of every CDC317 gene in {total} strains, from genome sequencing read coverage "
@@ -698,6 +782,24 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
+    "wang2025_cnv": {
+        "section": "strain_variation",
+        "organism_abbrev": "C_glabrata_CBS138",
+        "species": "Candida glabrata",
+        "reference_strain": "CBS138",
+        "pubmed": 41307179,
+        "pmcid": "PMC12704144",
+        "doi": "10.1080/22221751.2025.2595789",
+        "citation": "Wang Q et al. (2025) Genome analysis and machine learning-based feature selection strategy "
+                    "reveal potential drug-resistance determinants in Nakaseomyces glabratus. Emerg Microbes Infect "
+                    "14(1):2595789",
+        "title": "Candida glabrata gene family copy number (Wang et al. 2025)",
+        "license": "CC BY 4.0",
+        "data_source": "CBS138 gene positions from CGD; Supplementary Datasets S7 and S8 of the paper",
+        "files": list(WANG_CNV_FILES.values()),
+        "urls": WANG_CNV_URLS,
+        "parser": parse_wang2025_cnv,
+    },
     "xu2025": {
         "organism_abbrev": "C_auris_B8441",
         "species": "Candida auris",
