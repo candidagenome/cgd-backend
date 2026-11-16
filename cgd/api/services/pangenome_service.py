@@ -141,8 +141,9 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
     )
 
 
-def list_studies(db: Session) -> PangenomeStudyList:
-    return PangenomeStudyList(studies=[_summary(db, _load(study_id)) for study_id in _study_dirs()])
+def list_studies(db: Session, section: Optional[str] = None) -> PangenomeStudyList:
+    studies = [_summary(db, _load(study_id)) for study_id in _study_dirs()]
+    return PangenomeStudyList(studies=[s for s in studies if section is None or s.section == section])
 
 
 def get_study(db: Session, study_id: str) -> PangenomeStudy:

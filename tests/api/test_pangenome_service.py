@@ -64,6 +64,9 @@ def test_list_studies(data_dir, db):
     assert studies[0].counts.accessory == 2
     # not-in-reference split comes from the genes: HYPOTHETICAL_000001 (core), PARALOG_100020_1 (accessory)
     assert (studies[0].counts.not_in_reference_core, studies[0].counts.not_in_reference_accessory) == (1, 1)
+    # studies default to the pangenome section and can be filtered by section
+    assert studies[0].section == "pangenome"
+    assert svc.list_studies(db, "strain_variation").studies == []
 
 
 def test_get_study_has_isolates(data_dir, db):

@@ -35,6 +35,9 @@ class PangenomeCounts(BaseModel):
 
 class PangenomeStudySummary(BaseModel):
     study_id: str
+    # "pangenome" (gene families across isolates) or "strain_variation" (how reference genes vary across
+    # isolates: copy number, variants), each with its own browser and locus-page row
+    section: str = "pangenome"
     organism_abbrev: str
     species: str
     reference_strain: str

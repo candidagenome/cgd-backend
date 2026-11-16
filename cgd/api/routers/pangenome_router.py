@@ -23,9 +23,13 @@ router = APIRouter(prefix="/api/pangenome", tags=["pangenome"])
 
 
 @router.get("/studies", response_model=PangenomeStudyList)
-def list_studies(db: Session = Depends(get_db)):
-    """All loaded pangenome studies with their summary counts."""
-    return pangenome_service.list_studies(db)
+def list_studies(
+    section: Optional[str] = Query(None, pattern="^(pangenome|strain_variation)$",
+                                   description="only studies of this section"),
+    db: Session = Depends(get_db),
+):
+    """All loaded studies with their summary counts."""
+    return pangenome_service.list_studies(db, section)
 
 
 @router.get("/studies/{study_id}", response_model=PangenomeStudy)

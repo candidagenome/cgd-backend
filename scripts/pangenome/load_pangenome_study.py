@@ -732,6 +732,7 @@ STUDIES = {
         "parser": parse_wang2025,
     },
     "bergin2024": {
+        "section": "strain_variation",  # copy number of reference genes, not gene families
         "organism_abbrev": "C_parapsilosis_CDC317",
         "species": "Candida parapsilosis",
         "reference_strain": "CDC317",
