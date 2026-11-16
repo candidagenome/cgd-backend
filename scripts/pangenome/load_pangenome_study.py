@@ -854,13 +854,13 @@ def parse_munoz2021(src: Path) -> tuple[dict, list[dict]]:
 OBRIEN_FILES = {
     "variants": "VCFFilesfor_GenotypePhenotype.vcf.gz",  # figshare: GATK + snpEff, 68 non-hybrid isolates
     "isolates": "ppat.1009138.s010.xlsx",  # S1 Table: strain names, codes, sources
-    "features": "C_tropicalis_MYA-3404_chromosomal_feature.tab",  # CGD, for gene coordinates and strand
+    "features": "C_tropicalis_current_chromosomal_feature.tab",  # CGD's current annotation (CP047869-75)
 }
 OBRIEN_URLS = {
     OBRIEN_FILES["variants"]: "https://api.figshare.com/v2/file/download/25195637",
     OBRIEN_FILES["isolates"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC8041210.1/ppat.1009138.s010.xlsx",
     OBRIEN_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/"
-                              "C_tropicalis_MYA-3404/C_tropicalis_MYA-3404_chromosomal_feature.tab",
+                              "C_tropicalis/C_tropicalis_current_chromosomal_feature.tab",
 }
 HGVS_STOP = re.compile(r"^p\.[A-Za-z]{3}(\d+)\*$")
 
@@ -975,9 +975,9 @@ def parse_obrien2021_stops(src: Path) -> tuple[dict, list[dict]]:
             "isolates are the non-hybrid ones the paper used for genotype-phenotype analysis.",
             "A heterozygous stop leaves one intact copy in this diploid species; a homozygous stop removes "
             "the full-length protein.",
-            "The variants were called on the authors' improved assembly (Assembly B), not CGD's MYA-3404 "
-            "assembly: each stop is drawn on CGD's gene from its protein position (approximate where a gene "
-            "has introns), and its Assembly B position is given in the gene's details.",
+            "The variants were called on the authors' Assembly B, not the chromosome-level assembly CGD uses: "
+            "each stop is drawn on CGD's gene from its protein position (approximate where a gene has introns), "
+            "and its Assembly B position is given in the gene's details.",
             "Frameshifts in the same calls are not shown: short insertions and deletions in repeats are "
             "frequent and need filtering first.",
         ],
