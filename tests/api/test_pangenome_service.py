@@ -145,12 +145,26 @@ def test_downloads(data_dir, db):
     name, body = svc.download_table(db, "demo2025", "accessory")
     lines = [line for line in body.splitlines() if not line.startswith("#")]
     assert name == "demo2025_accessory.tsv"
-    assert lines[0].split("\t")[4] == "presence_of_10" and len(lines) == 3
-    # a study with per-isolate genes lists the isolates carrying each gene
+    header = lines[0].split("\t")
+    assert header[:3] == ["id", "core", "accessory"] and header[6] == "presence_of_10" and len(lines) == 3
+    # a study gene not in CGD points to the CGD gene it derives from
+    paralog = dict(zip(header, lines[2].split("\t")))
+    assert (paralog["id"], paralog["core"], paralog["accessory"]) == ("PARALOG_100020_1", "", "X")
+    assert paralog["cgd_page"] == "https://www.candidagenome.org/locus/CPAR2_100020"
+    assert paralog["about_id"] == "Study ID, not in CGD; related to CGD gene CPAR2_100020 (SIT1)"
+    # a study with per-isolate genes lists the isolates carrying each gene; every gene is ticked core or accessory
     _, all_genes = svc.download_table(db, "demo2025", "genes")
     rows = [line.split("\t") for line in all_genes.splitlines() if not line.startswith("#")]
-    header, first = rows[0], rows[1]
-    assert header[-1] == "carried_by" and first[0] == "CPAR2_100010" and first[-1] == "A,B"
+    first = dict(zip(rows[0], rows[1]))
+    assert (first["id"], first["core"], first["accessory"], first["carried_by"]) == ("CPAR2_100010", "X", "", "A,B")
+    assert (first["about_id"], first["cgd_page"]) == ("CGD gene", "https://www.candidagenome.org/locus/CPAR2_100010")
+    hypothetical = next(dict(zip(rows[0], r)) for r in rows if r[0] == "HYPOTHETICAL_000001")
+    assert (hypothetical["cgd_page"], hypothetical["about_id"]) == ("", "Study ID, not in CGD; no CDC317 counterpart")
+    split = next(dict(zip(rows[0], r)) for r in rows if r[0] == "CPAR2_100010.1")
+    assert split["about_id"] == "CGD gene"
+    _, core = svc.download_table(db, "demo2025", "core")
+    core_ids = [line.split("\t")[0] for line in core.splitlines() if not line.startswith("#")][1:]
+    assert core_ids == ["CPAR2_100010", "HYPOTHETICAL_000001", "CPAR2_100010.1"]
     _, matrix = svc.download_table(db, "demo2025", "copy_number")
     rows = [line.split("\t") for line in matrix.splitlines() if not line.startswith("#")]
     assert rows[0] == ["gene", "gene_name", "A", "B"] and rows[1] == ["CPAR2_100010", "", "2.1", "6.4"]

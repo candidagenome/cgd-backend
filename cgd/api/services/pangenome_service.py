@@ -291,7 +291,24 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
     return PangenomeLocusResponse(**organisms[0].model_dump(), organisms=organisms)
 
 
-DOWNLOAD_TABLES = ("genes", "accessory", "stop_codons", "isolates", "copy_number")
+DOWNLOAD_TABLES = ("genes", "core", "accessory", "stop_codons", "isolates", "copy_number")
+LOCUS_URL = "https://www.candidagenome.org/locus/{}"
+
+
+def _about_id(gene: dict, names: dict[str, str], strain: str) -> tuple[str, str]:
+    """(where to find the gene in CGD, what its ID is) for the gene tables: study IDs such as
+    PARALOG_103390_1 are not CGD names, so point to the CGD gene they derive from where there is one."""
+    if gene["in_reference"]:
+        # some studies suffix a CGD gene they split (CPAR2_103390_A for CPAR2_103390)
+        cgd = gene.get("reference_gene") or gene["id"]
+        return LOCUS_URL.format(cgd), "CGD gene" if cgd == gene["id"] else f"Study ID for CGD gene {cgd}"
+    ref = gene.get("anchor_gene") or gene.get("reference_gene")
+    if ref:
+        name = names.get(ref.upper())
+        return (LOCUS_URL.format(ref),
+                f"Study ID, not in CGD; related to CGD gene {ref}"
+                + (f" ({name})" if name else ""))
+    return "", f"Study ID, not in CGD; no {strain} counterpart"
 
 
 def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
@@ -338,12 +355,22 @@ def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
         carried = any(g.get("isolate_genes") for g in data["genes"])
         if study.get("copy_number_reported"):
             cols += ["copy_number_min", "copy_number_max"]
-        writer.writerow(cols[:4] + [f"presence_of_{study['isolate_count']}"] + cols[5:]
-                        + (["carried_by"] if carried else []))
+        # Pangenomes tick core or accessory, for sorting and filtering in a spreadsheet
+        ticks = study.get("section", "pangenome") == "pangenome"
+        strain = study.get("reference_strain") or "reference"
+        out.write(f"# id: a CGD gene, or the study's own ID for a gene not in CGD's {strain} annotation; "
+                  "about_id says which, and cgd_page links to the CGD gene, or to the CGD gene a study gene "
+                  "derives from (paralog, fusion, full-length form)\n")
+        writer.writerow(["id"] + (["core", "accessory"] if ticks else []) + cols[1:4]
+                        + [f"presence_of_{study['isolate_count']}"] + cols[5:]
+                        + (["carried_by"] if carried else []) + ["cgd_page", "about_id"])
         for g in data["genes"]:
-            if table == "accessory" and g["category"] != "accessory":
+            if table in ("core", "accessory") and g["category"] != table:
                 continue
             row = _gene(g, names, detail=False).model_dump()
-            writer.writerow(["" if row.get(c) is None else row.get(c) for c in cols]
-                            + ([",".join(g.get("isolate_genes") or {})] if carried else []))
+            values = ["" if row.get(c) is None else row.get(c) for c in cols]
+            ticked = ["X" if g["category"] == "core" else "", "X" if g["category"] == "accessory" else ""]
+            writer.writerow(values[:1] + (ticked if ticks else []) + values[1:]
+                            + ([",".join(g.get("isolate_genes") or {})] if carried else [])
+                            + list(_about_id(g, names, strain)))
     return f"{study_id}_{table}.tsv", out.getvalue()
