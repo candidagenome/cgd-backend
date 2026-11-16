@@ -298,3 +298,44 @@ def test_parse_obrien2021_stops(tmp_path):
     assert genes[0]["type"] == "Stop in 2 isolates, homozygous in 1"
     assert study["isolate_count"] == 3 and study["presence_reported"] is False
     assert study["isolates"][0] == {"name": "SJH2014 ct01", "origin": "Clinical, Dublin"}
+
+
+ALB_FEATURES = (
+    "! header\n"
+    "C1_05860W_A\t\t\tORF|Verified\tCa22chr1A_C_albicans_SC5314\t1218269\t1219270\tW\n"
+    "C1_00290W_A\t\t\tORF|Verified\tCa22chr1A_C_albicans_SC5314\t60000\t58000\tC\n"
+)
+
+
+def test_parse_ropars2018_stops(tmp_path):
+    stops = openpyxl.Workbook()
+    sheet = stops.active
+    sheet.title = "ORFs with stop codons"
+    sheet.append(["ORF name", "clade1 n=40", "clade13 n=35"])
+    sheet.append(["C1_05860W_A", 0, 35])
+    sheet.append(["C1_00290W_A", 2, 1])
+    sheet.append(["C1_00300W_A", 0, 0])  # no strain carries it
+    fixed = stops.create_sheet("38 ORFs spe to clade 13")
+    fixed.append(["ORF name", "Gene name", "Ortholog", "Start", "Stop", "ORF size", "Protein size", "Position (aa)"])
+    fixed.append(["C1_05860W_A", "PRN2", None, 1218269, 1219270, 1002, 334, 133])
+    stops.save(tmp_path / loader.ROPARS_FILES["stops"])
+    strains = openpyxl.Workbook()
+    strains.active.title = "Feuil1"
+    strains.active.append(["Strain", "Other", "First", "Tech", "Platform", "Country", "Site", "Clade", "DST",
+                           "Cluster (SNPs)"])
+    strains.active.append([None] * 10)
+    strains.active.append(["SC5314", None, None, None, None, "USA", "invasive", 1, 52, 1])
+    strains.active.append(["CEC999", None, None, None, None, "France", "superficial", 9, 1, 9])  # other cluster
+    strains.save(tmp_path / loader.ROPARS_FILES["isolates"])
+    (tmp_path / loader.ROPARS_FILES["features"]).write_text(ALB_FEATURES)
+    study, genes = loader.parse_ropars2018_stops(tmp_path)
+    by_id = {g["id"]: g for g in genes}
+    assert set(by_id) == {"C1_05860W_A", "C1_00290W_A"}
+    prn2 = by_id["C1_05860W_A"]
+    assert prn2["type"] == "Homozygous stop in 35 isolates (cluster 13: 35)"
+    # placed from the protein position on CGD's gene: 1218269 + 3 * 132
+    assert prn2["stop_codons"][0]["position"] == 1218665 and prn2["note"].startswith("Fixed in")
+    other = by_id["C1_00290W_A"]["stop_codons"][0]
+    assert other["position"] is None and other["group_counts"] == {"cluster 1": 2, "cluster 13": 1}
+    assert study["isolate_count"] == 75 and study["isolates"] == [
+        {"name": "SC5314", "origin": "cluster 1, USA, invasive"}]

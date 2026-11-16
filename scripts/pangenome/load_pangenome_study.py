@@ -28,6 +28,7 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study xu2025
     python scripts/pangenome/load_pangenome_study.py --study munoz2021
     python scripts/pangenome/load_pangenome_study.py --study obrien2021_stops
+    python scripts/pangenome/load_pangenome_study.py --study ropars2018_stops
 """
 from __future__ import annotations
 
@@ -985,6 +986,100 @@ def parse_obrien2021_stops(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- Ropars et al. 2018, C. albicans homozygous premature stop codons -------------------------------
+
+ROPARS_FILES = {
+    "isolates": "41467_2018_4787_MOESM4_ESM.xlsx",  # Supplementary Data 1: strains, cluster, country, site
+    "stops": "41467_2018_4787_MOESM9_ESM.xlsx",  # Supplementary Data 6: ORFs with stop codons by cluster
+    "features": "C_albicans_SC5314_A22_current_chromosomal_feature.tab",  # CGD, gene coordinates and strand
+}
+ROPARS_URLS = {
+    ROPARS_FILES["isolates"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC5993739.1/41467_2018_4787_MOESM4_ESM.xlsx",
+    ROPARS_FILES["stops"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC5993739.1/41467_2018_4787_MOESM9_ESM.xlsx",
+    ROPARS_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_albicans_SC5314/"
+                              "C_albicans_SC5314_A22_current_chromosomal_feature.tab",
+}
+
+
+def parse_ropars2018_stops(src: Path) -> tuple[dict, list[dict]]:
+    """
+    Supplementary Data 6: the ORFs with a homozygous premature stop codon, counted by the strains of each
+    SNP cluster that carry one (no per-strain lists); the 39 fixed in cluster 13 also give the protein
+    position, which places their stop on CGD's gene.
+    """
+    features = cgd_features(src / ROPARS_FILES["features"])
+    wb = openpyxl.load_workbook(src / ROPARS_FILES["stops"], read_only=True, data_only=True)
+    rows = [r for r in wb["ORFs with stop codons"].iter_rows(values_only=True) if r and r[0]]
+    clusters = [(i, str(h).split()[0].replace("clade", "cluster "), int(str(h).split("n=")[1]))
+                for i, h in enumerate(rows[0]) if i > 0 and h]  # "clade13 n=35" -> ("cluster 13", 35)
+    fixed = wb["38 ORFs spe to clade 13"].iter_rows(min_row=2, values_only=True)
+    aa_positions = {str(r[0]).strip(): int(r[7]) for r in fixed if r and r[0] and isinstance(r[7], (int, float))}
+
+    genes = []
+    for r in rows[1:]:
+        gene = str(r[0]).strip()
+        counts = {name: int(r[i] or 0) for i, name, _ in clusters if int(r[i] or 0)}
+        if not counts:
+            continue
+        feature = features.get(gene)
+        aa = aa_positions.get(gene)
+        position = None
+        if feature and aa:  # the stop codon's first base on CGD's gene, ignoring any intron
+            offset = 3 * (aa - 1)
+            position = feature["start"] + offset if feature["strand"] != "C" else feature["end"] - offset
+        total = sum(counts.values())
+        by_cluster = ", ".join(f"{name}: {n}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        genes.append({
+            "id": gene,
+            "category": "core",
+            "in_reference": True,
+            "reference_gene": feature["feature_name"] if feature else gene,
+            "presence": None,
+            "type": f"Homozygous stop in {total} isolate{'s' if total > 1 else ''} ({by_cluster})",
+            "chromosome": feature["chromosome"] if feature else None,
+            "start": feature["start"] if feature else None,
+            "end": feature["end"] if feature else None,
+            "note": "Fixed in, and specific to, cluster 13" if gene in aa_positions else None,
+            "stop_codons": [{
+                "chromosome": feature["chromosome"] if feature else None,
+                "position": position,
+                "position_approximate": position is not None,
+                "aa_position": aa,
+                "isolates": total,
+                "homozygous_isolates": total,
+                "heterozygous": [],
+                "homozygous": [],
+                "group_counts": counts,
+            }],
+            "divergent_strains": {},
+        })
+
+    cluster_names = {name.split()[1] for _, name, _ in clusters}
+    isolates = [{"name": str(r[0]).strip(),
+                 "origin": ", ".join(str(v) for v in (f"cluster {r[9]}", clean(r[5]), clean(r[6])) if v)}
+                for r in sheet_rows(src / ROPARS_FILES["isolates"], "Feuil1", 3)
+                if r[0] and str(r[9]).strip() in cluster_names]
+    study = {
+        "isolate_count": sum(n for _, _, n in clusters),
+        "isolates": isolates,
+        "divergent_strains": [],
+        "stop_codons_reported": True,
+        "presence_reported": False,
+        "core_definition": None,
+        "notes": [
+            f"Genes with a homozygous premature stop codon (nonsense mutation) in strains of the {len(clusters)} "
+            f"largest SNP clusters of {sum(n for _, _, n in clusters)} C. albicans isolates (Supplementary Data 6): "
+            + ", ".join(f"{name} ({n})" for _, name, n in clusters) + ".",
+            "The paper gives the number of strains in each cluster carrying a stop, not which strains, so gene "
+            "details show counts by cluster.",
+            f"{len(aa_positions)} stops are fixed in, and specific to, cluster 13, whose strains grow less well "
+            "and are less virulent; the paper gives their protein position, which places them on CGD's gene. "
+            "The other stops have no position and are not marked on the map.",
+        ],
+    }
+    return study, genes
+
+
 # --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
 
 BERGIN_FILES = {
@@ -1066,6 +1161,23 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
+    "ropars2018_stops": {
+        "section": "strain_variation",
+        "organism_abbrev": "C_albicans_SC5314",
+        "species": "Candida albicans",
+        "reference_strain": "SC5314",
+        "pubmed": 29884848,
+        "pmcid": "PMC5993739",
+        "doi": "10.1038/s41467-018-04787-4",
+        "citation": "Ropars J et al. (2018) Gene flow contributes to diversification of the major fungal pathogen "
+                    "Candida albicans. Nat Commun 9:2253",
+        "title": "Candida albicans homozygous premature stop codons (Ropars et al. 2018)",
+        "license": "CC BY 4.0",
+        "data_source": "Gene positions from CGD; Supplementary Data 1 and 6 of the paper",
+        "files": list(ROPARS_FILES.values()),
+        "urls": ROPARS_URLS,
+        "parser": parse_ropars2018_stops,
+    },
     "obrien2021_stops": {
         "section": "strain_variation",
         "organism_abbrev": "C_tropicalis",  # CGD's organism code for MYA-3404

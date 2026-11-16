@@ -160,6 +160,13 @@ def test_downloads(data_dir, db):
         svc.download_table(db, "demo2025", "everything")
 
 
+def test_stop_isolates_from_counts(data_dir, db):
+    # a study giving per-site counts but no isolate lists still reports how many isolates carry a stop
+    record = {"id": "C1_00290W_A", "category": "core", "in_reference": True,
+              "stop_codons": [{"isolates": 3, "homozygous_isolates": 3, "heterozygous": [], "homozygous": []}]}
+    assert svc._gene(record, {}, detail=False).stop_codon_isolates == 3
+
+
 def test_get_gene_includes_stops(data_dir, db):
     gene = svc.get_gene(db, "demo2025", "cpar2_100010")
     assert gene.stop_codons[0].homozygous == ["B"] and gene.divergent_strains["S1"].identity == 99.5

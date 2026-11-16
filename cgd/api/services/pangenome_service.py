@@ -134,7 +134,8 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
         **data,
         gene_name=names.get(reference.upper()) if reference else None,
         stop_codon_count=len(stops),
-        stop_codon_isolates=len(isolates_with_stop),
+        # studies giving counts but no isolate lists (Ropars 2018): the largest count of any site
+        stop_codon_isolates=len(isolates_with_stop) or max((stop.get("isolates") or 0 for stop in stops), default=0),
         stop_codons=stops if detail else [],
         divergent_strains=(record.get("divergent_strains") or {}) if detail else {},
         isolate_genes=(record.get("isolate_genes") or {}) if detail else {},
