@@ -51,6 +51,7 @@ class PangenomeStudySummary(BaseModel):
     core_definition: Optional[str] = None
     license: Optional[str] = None
     stop_codons_reported: bool = True
+    presence_reported: bool = True  # False: the study says which variants isolates carry, not which genes
     copy_number_reported: bool = False
     copy_number_baseline: Optional[float] = None  # copy number of an unchanged gene: 2 diploid, 1 haploid
     copy_number_kind: Optional[str] = None  # "estimate" (read coverage) or "count" (genes per assembly)

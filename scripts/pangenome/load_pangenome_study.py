@@ -20,6 +20,7 @@ adding a species or paper means adding a parser, not changing the viewer.
 Usage:
     python scripts/pangenome/load_pangenome_study.py --study ryan2025
     python scripts/pangenome/load_pangenome_study.py --study ryan2025 --source-dir <dir with the .xlsx files>
+    python scripts/pangenome/load_pangenome_study.py --study ryan2025_stops --source-dir <same dir>
     python scripts/pangenome/load_pangenome_study.py --study marcet2022
     python scripts/pangenome/load_pangenome_study.py --study bergin2024
     python scripts/pangenome/load_pangenome_study.py --study wang2025
@@ -90,7 +91,8 @@ CPAR2_ID = re.compile(r"^(CPAR2_\d{6}(?:\.\d+)?)")
 CPAR2_EXACT = re.compile(r"^CPAR2_\d{6}(?:\.\d+)?$")
 
 
-def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
+def ryan2025_tables(src: Path) -> tuple[dict, list[dict]]:
+    """Ryan 2025 Tables S1 and S5: the pangenome genes with their premature stop codons, and the isolates."""
     s1, s5 = src / RYAN_FILES["isolates"], src / RYAN_FILES["divergent"]
 
     assemblies = {str(r[0]): r for r in sheet_rows(s1, "1B", 3)}
@@ -197,21 +199,79 @@ def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
         g["stop_codons"] = stops.get(g["id"], [])
 
     study = {
-        "isolate_count": 376,  # Table S1C presence is given out of 376 genomes
         "isolates": isolates,
         "stop_codon_isolates": [s for _, s in strain_cols],
+    }
+    return study, genes
+
+
+def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
+    """The pangenome: core / accessory genes; the premature stop codons load as ryan2025_stops."""
+    tables, genes = ryan2025_tables(src)
+    for g in genes:
+        g["stop_codons"] = []
+    study = {
+        "isolate_count": 376,  # Table S1C presence is given out of 376 genomes
+        "isolates": tables["isolates"],
         "divergent_strains": ["PEU651", "EGM1079"],
-        "stop_codons_reported": True,
+        "stop_codons_reported": False,
         "core_definition": "present in at least 99.5% of isolates",
         "notes": [
             "The paper describes 372 isolates; accessory gene presence is given as the number of the 376 "
             "genomes analysed that carry the gene (Table S1C). The per-isolate presence/absence matrix was "
             "not published.",
-            "Premature stop codons per isolate are from Table S1D (heterozygous or homozygous).",
             "PEU651 and EGM1079 are the two highly divergent isolates compared gene by gene in Table S5.",
+            "The study's premature stop codons per isolate (Table S1D) are in the Strain Variation Browser.",
         ],
     }
     return study, genes
+
+
+def parse_ryan2025_stops(src: Path) -> tuple[dict, list[dict]]:
+    """Ryan 2025 Table S1D: the genes with a premature stop codon in some isolates, homozygous or not."""
+    tables, genes = ryan2025_tables(src)
+    stop_isolates = set(tables["stop_codon_isolates"])
+    with_stops, uncarried = [], 0
+    for g in genes:
+        # Table S1D also lists stop sites carried by no isolate; they are left out
+        carried = [stop for stop in g["stop_codons"] if stop["heterozygous"] or stop["homozygous"]]
+        uncarried += len(g["stop_codons"]) - len(carried)
+        if not carried:
+            continue
+        g = {**g, "stop_codons": carried}
+        carriers = {s for stop in carried for s in stop["heterozygous"] + stop["homozygous"]}
+        homozygous = {s for stop in carried for s in stop["homozygous"]}
+        sites = len(carried)
+        with_stops.append({
+            **{k: g.get(k) for k in ("id", "in_reference", "reference_gene", "chromosome", "start", "end",
+                                     "anchor_gene", "length_aa", "ortholog", "interpro", "note", "stop_codons")},
+            "category": "core",  # the study reports stop codons, not whether isolates carry the gene
+            "presence": None,
+            "type": f"Stop in {len(carriers)} isolate{'s' if len(carriers) > 1 else ''}"
+                    + (f", homozygous in {len(homozygous)}" if homozygous else "")
+                    + (f" ({sites} sites)" if sites > 1 else ""),
+            "divergent_strains": {},
+        })
+    study = {
+        "isolate_count": len(stop_isolates),
+        "isolates": [i for i in tables["isolates"] if i["name"] in stop_isolates]
+        + [{"name": s} for s in tables["stop_codon_isolates"]
+           if s not in {i["name"] for i in tables["isolates"]}],
+        "divergent_strains": [],
+        "stop_codons_reported": True,
+        "presence_reported": False,
+        "core_definition": None,
+        "notes": [
+            f"The {len(with_stops)} genes of the Ryan et al. 2025 C. parapsilosis pangenome with a premature stop "
+            f"codon in at least one of {len(stop_isolates)} isolates (Table S1D), with the isolates carrying each "
+            "stop heterozygously or homozygously.",
+            "A heterozygous stop leaves one intact copy in this diploid species; a homozygous stop removes "
+            "the full-length protein.",
+            f"Table S1D also lists {uncarried} stop sites that no isolate carries; they are left out.",
+            "Core and accessory genes of the same study are in the Pangenome Browser.",
+        ],
+    }
+    return study, with_stops
 
 
 # --- Marcet-Houben et al. 2022, C. glabrata -------------------------------------------------------
@@ -964,6 +1024,22 @@ STUDIES = {
         "files": list(MARCET_FILES.values()),
         "urls": MARCET_URLS,
         "parser": parse_marcet2022,
+    },
+    "ryan2025_stops": {
+        "section": "strain_variation",
+        "organism_abbrev": "C_parapsilosis_CDC317",
+        "species": "Candida parapsilosis",
+        "reference_strain": "CDC317",
+        "pubmed": 40852993,
+        "pmcid": "PMC12505961",
+        "doi": "10.1128/mbio.01320-25",
+        "citation": "Ryan AP et al. (2025) Small pangenome of Candida parapsilosis reflects overall low "
+                    "intraspecific diversity. mBio 16(10):e0132025",
+        "title": "Candida parapsilosis premature stop codons (Ryan et al. 2025)",
+        "license": "CC BY 4.0",
+        "data_source": "Supplementary Tables S1 and S5 of the paper; reads at NCBI BioProject PRJNA1173375",
+        "files": list(RYAN_FILES.values()),
+        "parser": parse_ryan2025_stops,
     },
     "ryan2025": {
         "organism_abbrev": "C_parapsilosis_CDC317",

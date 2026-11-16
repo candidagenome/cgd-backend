@@ -231,3 +231,31 @@ def test_parse_munoz2021(tmp_path):
     assert study["isolates"] == [{"name": "B11220", "origin": "clade II, Japan"},
                                  {"name": "B14308", "origin": "clade II"}]
     assert study["copy_number_baseline"] == 1 and loader.STUDIES["munoz2021"]["section"] == "strain_variation"
+
+
+def test_ryan2025_split(tmp_path):
+    het = {"chromosome": "cpar_Chr_1", "position": 50, "heterozygous": ["A"], "homozygous": [], "isolates": 1}
+    hom = {"chromosome": "cpar_Chr_1", "position": 90, "heterozygous": [], "homozygous": ["B"], "isolates": 1}
+    nobody = {"chromosome": "cpar_Chr_1", "position": 70, "heterozygous": [], "homozygous": [], "isolates": 0}
+    genes = [
+        {"id": "CPAR2_100010", "category": "core", "in_reference": True, "reference_gene": "CPAR2_100010",
+         "presence": None, "chromosome": "cpar_Chr_1", "start": 1, "end": 300, "stop_codons": [het, hom, nobody]},
+        {"id": "CPAR2_100020", "category": "core", "in_reference": True, "reference_gene": "CPAR2_100020",
+         "presence": None, "stop_codons": [nobody]},
+        {"id": "CPAR2_100030", "category": "accessory", "in_reference": True, "presence": 7, "stop_codons": []},
+    ]
+    tables = {"isolates": [{"name": "A", "origin": "Ireland"}, {"name": "B"}, {"name": "C"}],
+              "stop_codon_isolates": ["A", "B"]}
+    with patch.object(loader, "ryan2025_tables", lambda src: (tables, [dict(g) for g in genes])):
+        pangenome, pan_genes = loader.parse_ryan2025(tmp_path)
+        stops, stop_genes = loader.parse_ryan2025_stops(tmp_path)
+    # the pangenome keeps every gene but no stop codons
+    assert len(pan_genes) == 3 and all(g["stop_codons"] == [] for g in pan_genes)
+    assert pangenome["stop_codons_reported"] is False and pangenome["isolate_count"] == 376
+    # strain variation: genes with a stop some isolate carries, without the sites nobody carries
+    assert [g["id"] for g in stop_genes] == ["CPAR2_100010"]
+    gene = stop_genes[0]
+    assert gene["type"] == "Stop in 2 isolates, homozygous in 1 (2 sites)" and len(gene["stop_codons"]) == 2
+    assert stops["presence_reported"] is False and stops["isolate_count"] == 2
+    assert [i["name"] for i in stops["isolates"]] == ["A", "B"]
+    assert "2 stop sites that no isolate carries" in stops["notes"][2]
