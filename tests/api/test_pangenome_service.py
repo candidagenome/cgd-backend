@@ -166,6 +166,14 @@ def test_stop_isolates_from_counts(data_dir, db):
               "stop_codons": [{"isolates": 3, "homozygous_isolates": 3, "heterozygous": [], "homozygous": []}]}
     assert svc._gene(record, {}, detail=False).stop_codon_isolates == 3
 
+    # and the map draws its stops with those counts
+    genes = json.loads((data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json").read_text())
+    genes[0]["stop_codons"] = [{"position": 50, "isolates": 3, "homozygous_isolates": 3,
+                                "heterozygous": [], "homozygous": []}]
+    (data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json").write_text(json.dumps(genes))
+    stop = {g.id: g for g in svc.get_map(db, "demo2025").genes}["CPAR2_100010"].stops[0]
+    assert (stop.isolates, stop.homozygous) == (3, 3)
+
 
 def test_get_gene_includes_stops(data_dir, db):
     gene = svc.get_gene(db, "demo2025", "cpar2_100010")

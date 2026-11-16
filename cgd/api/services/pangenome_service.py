@@ -208,8 +208,10 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
         ref = g.get("reference_gene")
         anchor = (coords.get(g["id"].upper()) or (coords.get(ref.upper()) if ref else None)
                   or (coords.get(g["anchor_gene"].upper()) if g.get("anchor_gene") else None))
-        stops = [MapStop(position=s.get("position"), isolates=len(s.get("heterozygous", []) + s.get("homozygous", [])),
-                         homozygous=len(s.get("homozygous", [])))
+        # studies giving counts but no isolate lists (Ropars 2018) use their per-site counts
+        stops = [MapStop(position=s.get("position"),
+                         isolates=len(s.get("heterozygous", []) + s.get("homozygous", [])) or s.get("isolates") or 0,
+                         homozygous=len(s.get("homozygous", [])) or s.get("homozygous_isolates") or 0)
                  for s in g.get("stop_codons") or [] if s.get("position")]
         record = MapGene(id=g["id"], reference_gene=ref, gene_name=names.get(ref.upper()) if ref else None,
                          category=g["category"], in_reference=g["in_reference"], presence=g.get("presence"),
