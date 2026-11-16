@@ -914,7 +914,7 @@ def parse_obrien2021_stops(src: Path) -> tuple[dict, list[dict]]:
         return str(strains[code][0]).strip() if code in strains else code
 
     missing = [g for g in sites if g not in features]
-    current = resolve_retired_names(missing, "C_tropicalis_MYA-3404")
+    current = resolve_retired_names(missing, "C_tropicalis")
     genes = []
     for gene, gene_sites in sorted(sites.items()):
         feature = features.get(gene) or features.get(current.get(gene, ""))
@@ -1068,7 +1068,7 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 STUDIES = {
     "obrien2021_stops": {
         "section": "strain_variation",
-        "organism_abbrev": "C_tropicalis_MYA-3404",
+        "organism_abbrev": "C_tropicalis",  # CGD's organism code for MYA-3404
         "species": "Candida tropicalis",
         "reference_strain": "MYA-3404",
         "pubmed": 33788904,
