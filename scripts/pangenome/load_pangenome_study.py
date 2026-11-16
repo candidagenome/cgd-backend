@@ -27,10 +27,12 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study wang2025_cnv
     python scripts/pangenome/load_pangenome_study.py --study xu2025
     python scripts/pangenome/load_pangenome_study.py --study munoz2021
+    python scripts/pangenome/load_pangenome_study.py --study obrien2021_stops
 """
 from __future__ import annotations
 
 import argparse
+import gzip
 import io
 import json
 import logging
@@ -227,6 +229,15 @@ def parse_ryan2025(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+def stop_type(stops: list[dict]) -> str:
+    """Type text for a gene's premature stops: how many isolates carry one, homozygous in how many, sites."""
+    carriers = {s for stop in stops for s in stop["heterozygous"] + stop["homozygous"]}
+    homozygous = {s for stop in stops for s in stop["homozygous"]}
+    return (f"Stop in {len(carriers)} isolate{'s' if len(carriers) > 1 else ''}"
+            + (f", homozygous in {len(homozygous)}" if homozygous else "")
+            + (f" ({len(stops)} sites)" if len(stops) > 1 else ""))
+
+
 def parse_ryan2025_stops(src: Path) -> tuple[dict, list[dict]]:
     """Ryan 2025 Table S1D: the genes with a premature stop codon in some isolates, homozygous or not."""
     tables, genes = ryan2025_tables(src)
@@ -239,17 +250,12 @@ def parse_ryan2025_stops(src: Path) -> tuple[dict, list[dict]]:
         if not carried:
             continue
         g = {**g, "stop_codons": carried}
-        carriers = {s for stop in carried for s in stop["heterozygous"] + stop["homozygous"]}
-        homozygous = {s for stop in carried for s in stop["homozygous"]}
-        sites = len(carried)
         with_stops.append({
             **{k: g.get(k) for k in ("id", "in_reference", "reference_gene", "chromosome", "start", "end",
                                      "anchor_gene", "length_aa", "ortholog", "interpro", "note", "stop_codons")},
             "category": "core",  # the study reports stop codons, not whether isolates carry the gene
             "presence": None,
-            "type": f"Stop in {len(carriers)} isolate{'s' if len(carriers) > 1 else ''}"
-                    + (f", homozygous in {len(homozygous)}" if homozygous else "")
-                    + (f" ({sites} sites)" if sites > 1 else ""),
+            "type": stop_type(carried),
             "divergent_strains": {},
         })
     study = {
@@ -304,7 +310,8 @@ def cgd_features(path: Path) -> dict[str, dict]:
         if len(f) < 7 or not f[5] or not f[6]:
             continue
         start, end = sorted((int(f[5]), int(f[6])))
-        features[f[0]] = {"feature_name": f[0], "chromosome": f[4], "start": start, "end": end}
+        features[f[0]] = {"feature_name": f[0], "chromosome": f[4], "start": start, "end": end,
+                          "strand": f[7] if len(f) > 7 else None}
         for alias in f[2].split("|"):
             if alias:
                 aliases.setdefault(alias, f[0])
@@ -842,6 +849,142 @@ def parse_munoz2021(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- O'Brien et al. 2021, C. tropicalis premature stop codons ---------------------------------------
+
+OBRIEN_FILES = {
+    "variants": "VCFFilesfor_GenotypePhenotype.vcf.gz",  # figshare: GATK + snpEff, 68 non-hybrid isolates
+    "isolates": "ppat.1009138.s010.xlsx",  # S1 Table: strain names, codes, sources
+    "features": "C_tropicalis_MYA-3404_chromosomal_feature.tab",  # CGD, for gene coordinates and strand
+}
+OBRIEN_URLS = {
+    OBRIEN_FILES["variants"]: "https://api.figshare.com/v2/file/download/25195637",
+    OBRIEN_FILES["isolates"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC8041210.1/ppat.1009138.s010.xlsx",
+    OBRIEN_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/"
+                              "C_tropicalis_MYA-3404/C_tropicalis_MYA-3404_chromosomal_feature.tab",
+}
+HGVS_STOP = re.compile(r"^p\.[A-Za-z]{3}(\d+)\*$")
+
+
+def parse_obrien2021_stops(src: Path) -> tuple[dict, list[dict]]:
+    """
+    The genes with a premature stop codon (snpEff stop_gained) in the O'Brien et al. 2021 variant calls,
+    with the isolates carrying each one heterozygously or homozygously. The calls are positioned on the
+    authors' Assembly B, not CGD's MYA-3404 assembly, so stops are placed on CGD's gene coordinates from
+    their protein position and the Assembly B position is kept as the source position.
+    """
+    features = cgd_features(src / OBRIEN_FILES["features"])
+    strains = {}
+    for r in openpyxl.load_workbook(src / OBRIEN_FILES["isolates"], read_only=True,
+                                    data_only=True).worksheets[0].iter_rows(values_only=True):
+        if r and r[1] and str(r[1]).startswith("ct"):
+            strains[str(r[1]).strip()] = r
+
+    sites: dict[str, dict[tuple, dict]] = {}  # gene -> (contig, position, allele) -> stop
+    samples: list[str] = []
+    with gzip.open(src / OBRIEN_FILES["variants"], "rt") as vcf:
+        for line in vcf:
+            if line.startswith("##"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if line.startswith("#"):
+                samples = [c.split(".")[0] for c in f[9:]]  # "ct01.ct01" -> ct01
+                continue
+            if f[6] != "PASS" or "stop_gained" not in f[7]:
+                continue
+            alts = f[4].split(",")
+            ann = next((x[4:] for x in f[7].split(";") if x.startswith("ANN=")), "")
+            stops = {}  # allele index -> (gene, protein change)
+            for a in ann.split(","):
+                p = a.split("|")
+                if len(p) > 10 and "stop_gained" in p[1].split("&") and p[3].startswith("CTRG_") and p[0] in alts:
+                    stops.setdefault(alts.index(p[0]) + 1, (p[3], p[10]))
+            if not stops:
+                continue
+            gt_index = f[8].split(":").index("GT")
+            for allele, (gene, change) in stops.items():
+                site = sites.setdefault(gene, {}).setdefault((f[0], int(f[1]), allele), {
+                    "change": change, "heterozygous": [], "homozygous": []})
+                for sample, value in zip(samples, f[9:]):
+                    called = [x for x in value.split(":")[gt_index].replace("|", "/").split("/") if x != "."]
+                    carried = sum(1 for x in called if x == str(allele))
+                    if carried:
+                        site["homozygous" if carried == len(called) else "heterozygous"].append(sample)
+
+    def name(code: str) -> str:
+        return str(strains[code][0]).strip() if code in strains else code
+
+    missing = [g for g in sites if g not in features]
+    current = resolve_retired_names(missing, "C_tropicalis_MYA-3404")
+    genes = []
+    for gene, gene_sites in sorted(sites.items()):
+        feature = features.get(gene) or features.get(current.get(gene, ""))
+        stops = []
+        for (contig, position, _), site in sorted(gene_sites.items()):
+            if not (site["heterozygous"] or site["homozygous"]):
+                continue
+            m = HGVS_STOP.match(site["change"])
+            aa = int(m.group(1)) if m else None
+            cgd_position = None
+            if feature and aa:  # the stop codon's first base on CGD's gene, ignoring any intron
+                offset = 3 * (aa - 1)
+                cgd_position = feature["start"] + offset if feature["strand"] != "C" else feature["end"] - offset
+            stops.append({
+                "chromosome": feature["chromosome"] if feature else None,
+                "position": cgd_position,
+                "position_approximate": True,
+                "aa_position": aa,
+                "protein_change": site["change"],
+                "source_position": f"{contig}:{position:,} (Assembly B)",
+                "isolates": len(site["heterozygous"]) + len(site["homozygous"]),
+                "homozygous_isolates": len(site["homozygous"]),
+                "heterozygous": [name(c) for c in site["heterozygous"]],
+                "homozygous": [name(c) for c in site["homozygous"]],
+            })
+        if not stops:
+            continue
+        genes.append({
+            "id": gene,
+            "category": "core",
+            "in_reference": True,
+            "reference_gene": feature["feature_name"] if feature else current.get(gene, gene),
+            "presence": None,
+            "type": stop_type(stops),
+            "chromosome": feature["chromosome"] if feature else None,
+            "start": feature["start"] if feature else None,
+            "end": feature["end"] if feature else None,
+            "note": None,
+            "stop_codons": stops,
+            "divergent_strains": {},
+        })
+
+    isolates = []
+    for code in samples:
+        r = strains.get(code)
+        isolates.append({"name": name(code),
+                         "origin": ", ".join(str(v).strip() for v in (r[2], r[3]) if v) if r else None})
+    study = {
+        "isolate_count": len(samples),
+        "isolates": isolates,
+        "divergent_strains": [],
+        "stop_codons_reported": True,
+        "presence_reported": False,
+        "core_definition": None,
+        "notes": [
+            f"Genes with a premature stop codon in at least one of {len(samples)} C. tropicalis isolates, from the "
+            "authors' variant calls (GATK, annotated with SnpEff; figshare 10.6084/m9.figshare.13128839). The "
+            "isolates are the non-hybrid ones the paper used for genotype-phenotype analysis.",
+            "A heterozygous stop leaves one intact copy in this diploid species; a homozygous stop removes "
+            "the full-length protein.",
+            "The variants were called on the authors' improved assembly (Assembly B), not CGD's MYA-3404 "
+            "assembly: each stop is drawn on CGD's gene from its protein position (approximate where a gene "
+            "has introns), and its Assembly B position is given in the gene's details.",
+            "Frameshifts in the same calls are not shown: short insertions and deletions in repeats are "
+            "frequent and need filtering first.",
+        ],
+    }
+    return study, genes
+
+
 # --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
 
 BERGIN_FILES = {
@@ -923,6 +1066,24 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
+    "obrien2021_stops": {
+        "section": "strain_variation",
+        "organism_abbrev": "C_tropicalis_MYA-3404",
+        "species": "Candida tropicalis",
+        "reference_strain": "MYA-3404",
+        "pubmed": 33788904,
+        "pmcid": "PMC8041210",
+        "doi": "10.1371/journal.ppat.1009138",
+        "citation": "O'Brien CE et al. (2021) Population genomics of the pathogenic yeast Candida tropicalis "
+                    "identifies hybrid isolates in environmental samples. PLoS Pathog 17(3):e1009138",
+        "title": "Candida tropicalis premature stop codons (O'Brien et al. 2021)",
+        "license": "CC BY 4.0",
+        "data_source": "Gene positions from CGD; the authors' variant calls (figshare 10.6084/m9.figshare.13128839) "
+                       "and S1 Table of the paper",
+        "files": list(OBRIEN_FILES.values()),
+        "urls": OBRIEN_URLS,
+        "parser": parse_obrien2021_stops,
+    },
     "munoz2021": {
         "section": "strain_variation",
         "organism_abbrev": "C_auris_B8441",

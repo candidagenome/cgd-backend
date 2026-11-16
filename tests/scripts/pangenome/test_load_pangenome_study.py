@@ -259,3 +259,42 @@ def test_ryan2025_split(tmp_path):
     assert stops["presence_reported"] is False and stops["isolate_count"] == 2
     assert [i["name"] for i in stops["isolates"]] == ["A", "B"]
     assert "2 stop sites that no isolate carries" in stops["notes"][2]
+
+
+TROP_FEATURES = (
+    "! header\n"
+    "CTRG_00005\t\t\tORF|Verified\tSupercontig_3.1_C_tropicalis_MYA-3404\t1000\t4012\tW\n"
+    "CTRG_00009\t\t\tORF|Verified\tSupercontig_3.1_C_tropicalis_MYA-3404\t9000\t6001\tC\n"
+)
+
+
+def test_parse_obrien2021_stops(tmp_path):
+    import gzip
+    ann = "T|stop_gained|HIGH|CTRG_00005|CTRG_00005|transcript|t|protein_coding|1/1|c.2702C>A|p.Ser901*|x|x|901/1337||"
+    ann2 = "G|stop_gained|HIGH|CTRG_00009|CTRG_00009|transcript|t|protein_coding|1/1|c.4G>T|p.Glu2*|x|x|2/999||"
+    lines = [
+        "##fileformat=VCFv4.2",
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tct01.ct01\tct02.ct02\tct03.ct03",
+        f"ctro_c_1.2\t9672\t.\tC\tT\t100\tPASS\tAC=3;ANN={ann}\tGT:DP\t0/1:20\t1/1:30\t./.:0",
+        f"ctro_c_1.2\t500\t.\tA\tG\t100\tPASS\tAC=0;ANN={ann2}\tGT\t0/0\t0/0\t0/0",  # carried by no isolate
+        f"ctro_c_1.2\t800\t.\tA\tG\t100\tLowQual\tANN={ann2}\tGT\t1/1\t1/1\t1/1",  # filtered out
+    ]
+    with gzip.open(tmp_path / loader.OBRIEN_FILES["variants"], "wt") as f:
+        f.write("\n".join(lines) + "\n")
+    wb = openpyxl.Workbook()
+    wb.active.append(["Table S1. List of strains"])
+    wb.active.append(["Strain name", "Strain code", "Strain description", "Source"])
+    wb.active.append(["SJH2014 ct01", "ct01", "Clinical", "Dublin"])
+    wb.save(tmp_path / loader.OBRIEN_FILES["isolates"])
+    (tmp_path / loader.OBRIEN_FILES["features"]).write_text(TROP_FEATURES)
+    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
+        study, genes = loader.parse_obrien2021_stops(tmp_path)
+    assert [g["id"] for g in genes] == ["CTRG_00005"]
+    stop = genes[0]["stop_codons"][0]
+    assert (stop["heterozygous"], stop["homozygous"]) == (["SJH2014 ct01"], ["ct02"])
+    # drawn on CGD's gene from the protein position: 1000 + 3 * 900
+    assert (stop["position"], stop["protein_change"], stop["aa_position"]) == (3700, "p.Ser901*", 901)
+    assert stop["source_position"] == "ctro_c_1.2:9,672 (Assembly B)" and stop["position_approximate"]
+    assert genes[0]["type"] == "Stop in 2 isolates, homozygous in 1"
+    assert study["isolate_count"] == 3 and study["presence_reported"] is False
+    assert study["isolates"][0] == {"name": "SJH2014 ct01", "origin": "Clinical, Dublin"}

@@ -78,6 +78,9 @@ class StopCodon(BaseModel):
     homozygous_isolates: Optional[int] = None
     heterozygous: list[str] = []
     homozygous: list[str] = []
+    protein_change: Optional[str] = None  # e.g. p.Ser901*
+    position_approximate: bool = False  # position placed on CGD's gene from the protein position
+    source_position: Optional[str] = None  # where the study called it, when not on CGD's assembly
 
 
 class DivergentStrainHit(BaseModel):
