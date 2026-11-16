@@ -25,6 +25,7 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study wang2025
     python scripts/pangenome/load_pangenome_study.py --study wang2025_cnv
     python scripts/pangenome/load_pangenome_study.py --study xu2025
+    python scripts/pangenome/load_pangenome_study.py --study munoz2021
 """
 from __future__ import annotations
 
@@ -701,6 +702,86 @@ def parse_xu2025(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
+# --- Muñoz et al. 2021, C. auris clade II gene loss -------------------------------------------------
+
+MUNOZ_FILES = {
+    "isolates": "SuppTable1.xlsx",  # S1: sequenced isolates (clade, country)
+    "regions": "SuppTable2.xlsx",  # S2: B8441 regions over 5 kb missing from clade II (B11220), with gene IDs
+    "deletions": "SuppTable3.xlsx",  # S3: deletion calls for each region in each clade II isolate
+    "features": XU_FILES["features"],
+}
+MUNOZ_URLS = {
+    MUNOZ_FILES["isolates"]: "https://api.figshare.com/v2/file/download/26384548",
+    MUNOZ_FILES["regions"]: "https://api.figshare.com/v2/file/download/26384551",
+    MUNOZ_FILES["deletions"]: "https://api.figshare.com/v2/file/download/26384557",
+    MUNOZ_FILES["features"]: XU_URLS[XU_FILES["features"]],
+}
+
+
+def parse_munoz2021(src: Path) -> tuple[dict, list[dict]]:
+    features = cgd_features(src / MUNOZ_FILES["features"])
+    regions = [r for r in sheet_rows(src / MUNOZ_FILES["regions"], "S2. Genes loss", 4) if str(r[0]).startswith("del")]
+    depth: dict[str, dict[str, float]] = {}  # region -> isolate -> read depth relative to the genome
+    for r in sheet_rows(src / MUNOZ_FILES["deletions"], "S3. DeletedinOtherClade2", 3):
+        if str(r[0]).startswith("del") and r[1]:
+            depth.setdefault(str(r[0]), {})[str(r[1]).strip()] = round(float(r[5]), 2)
+    isolates = sorted({i for d in depth.values() for i in d})
+    known = {str(r[0]).strip(): r for r in sheet_rows(src / MUNOZ_FILES["isolates"], "S1. Sequencing", 3)}
+
+    gene_ids = [g.strip() for r in regions for g in str(r[9]).split(";") if g.strip()]
+    current = resolve_retired_names([g for g in gene_ids if g not in features], "C_auris_B8441")
+    genes = []
+    for r in regions:
+        region, chrom, start, end, notes = str(r[0]), clean(r[2]), int(r[3]), int(r[4]), clean(r[8])
+        copies = {i: depth.get(region, {}).get(i, 1.0) for i in isolates}  # not called deleted: present
+        absent = [i for i, d in copies.items() if d < BERGIN_ABSENT_BELOW]
+        where = f"{chrom}:{start:,}-{end:,}, {(end - start + 1) / 1000:.1f} kb"
+        for gid in (g.strip() for g in str(r[9]).split(";") if g.strip()):
+            feature = features.get(gid) or features.get(current.get(gid, ""))
+            genes.append({
+                "id": gid,
+                "category": "accessory" if absent else "core",
+                "in_reference": True,
+                "reference_gene": feature["feature_name"] if feature else current.get(gid, gid),
+                "presence": len(isolates) - len(absent),
+                "type": f"Lost in clade II ({region})" if absent else "Present",
+                "chromosome": feature["chromosome"] if feature else None,
+                "start": feature["start"] if feature else None,
+                "end": feature["end"] if feature else None,
+                "note": f"Region {region} ({where})" + (f": {notes}" if notes else ""),
+                "copy_number": copies,
+                "copy_number_min": min(copies.values()),
+                "copy_number_max": max(copies.values()),
+                "stop_codons": [],
+                "divergent_strains": {},
+            })
+    study = {
+        "isolate_count": len(isolates),
+        # all are clade II (Table S3); Table S1 gives the country of those it lists
+        "isolates": [{"name": i, "origin": "clade II" + (f", {clean(known[i][2])}" if i in known else "")}
+                     for i in isolates],
+        "divergent_strains": [],
+        "stop_codons_reported": False,
+        "copy_number_reported": True,
+        "copy_number_baseline": 1,
+        "copy_number_kind": "estimate",
+        "core_definition": None,
+        "notes": [
+            f"The {len(regions)} B8441 (clade I) regions over 5 kb missing from the clade II genome B11220 "
+            f"(Table S2), and their {len(genes)} genes; read-depth analysis found each region deleted in all "
+            f"{len(isolates)} clade II isolates examined (Table S3). Genes outside these regions were not "
+            "reported and are not listed.",
+            "Values per isolate are the region's read depth relative to the genome average (C. auris is haploid, "
+            "so about 1 for a single-copy region); near 0 means the region is absent.",
+            "Region del2 is the mating-type locus: B8441 (clade I) carries MTLa and clade II isolates MTLalpha "
+            "(Muñoz et al. 2018), so its absence reflects the other mating type rather than a loss.",
+            "The paper finds these subtelomeric losses remove adhesins (Hyr/Iff family) and transporters from "
+            "clade II, which is linked to ear infections rather than invasive disease.",
+        ],
+    }
+    return study, genes
+
+
 # --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
 
 BERGIN_FILES = {
@@ -782,6 +863,24 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
+    "munoz2021": {
+        "section": "strain_variation",
+        "organism_abbrev": "C_auris_B8441",
+        "species": "Candida auris",
+        "reference_strain": "B8441",
+        "pubmed": 33769478,
+        "pmcid": "PMC8128392",
+        "doi": "10.1093/genetics/iyab029",
+        "citation": "Muñoz JF et al. (2021) Clade-specific chromosomal rearrangements and loss of subtelomeric "
+                    "adhesins in Candida auris. Genetics 218(1):iyab029",
+        "title": "Candida auris clade II gene loss (Muñoz et al. 2021)",
+        "license": "CC BY 4.0",
+        "data_source": "B8441 gene positions from CGD; Supplementary Tables S1-S3 of the paper (figshare "
+                       "10.25386/genetics.13759276)",
+        "files": list(MUNOZ_FILES.values()),
+        "urls": MUNOZ_URLS,
+        "parser": parse_munoz2021,
+    },
     "wang2025_cnv": {
         "section": "strain_variation",
         "organism_abbrev": "C_glabrata_CBS138",

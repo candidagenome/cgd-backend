@@ -195,3 +195,39 @@ def test_parse_wang2025_cnv(tmp_path):
     assert (unnamed["copy_number_min"], unnamed["copy_number_max"], unnamed["presence"]) == (0, 2, 1)
     assert unnamed["type"] == "Absent from 1 isolate"
     assert study["copy_number_baseline"] == 1 and study["isolate_count"] == 2
+
+
+def test_parse_munoz2021(tmp_path):
+    s1 = openpyxl.Workbook()
+    s1.active.title = "S1. Sequencing"
+    s1.active.append(["Supplementary Table 1."])
+    s1.active.append(["Strain", "Clade", "Country"])
+    s1.active.append(["B11220", 2, "Japan"])
+    s1.save(tmp_path / loader.MUNOZ_FILES["isolates"])
+    s2 = openpyxl.Workbook()
+    s2.active.title = "S2. Genes loss"
+    s2.active.append(["Supplementary Table 2."])
+    s2.active.append(["B8441 regions not present in B11220 of length > 5kb"])
+    s2.active.append(["Region ID", "B8441 scaffold", "Chromosome", "Start", "End", "Length", "# genes",
+                      "# multi copy", "Notes", "IDs"])
+    s2.active.append(["del1", "scaffold00001", "chr1", 100, 1000, 901, 1, 0, "2 adhesins", "B9J08_000010"])
+    s2.save(tmp_path / loader.MUNOZ_FILES["regions"])
+    s3 = openpyxl.Workbook()
+    s3.active.title = "S3. DeletedinOtherClade2"
+    s3.active.append(["Supplementary Table 3."])
+    s3.active.append(["Region ID", "strain", "type", "coordinates", "length", "normalizedRD", "p-val"])
+    s3.active.append(["del1", "B11220", "deletion", "scaffold00001:1-1000", 1000, 0.0469, 1e-12])
+    s3.active.append(["del1", "B14308", "deletion", "scaffold00001:1-1000", 1000, 0.0042, 1e-12])
+    s3.active.append(["*Manual annotation", None, None, None, None, None, None])
+    s3.save(tmp_path / loader.MUNOZ_FILES["deletions"])
+    (tmp_path / loader.MUNOZ_FILES["features"]).write_text(AURIS_FEATURES)
+    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
+        study, genes = loader.parse_munoz2021(tmp_path)
+    gene = genes[0]
+    assert (gene["id"], gene["category"], gene["presence"], gene["chromosome"]) == (
+        "B9J08_000010", "accessory", 0, "Chr1_C_auris_B8441")
+    assert gene["copy_number"] == {"B11220": 0.05, "B14308": 0.0} and gene["type"] == "Lost in clade II (del1)"
+    assert gene["note"] == "Region del1 (chr1:100-1,000, 0.9 kb): 2 adhesins"
+    assert study["isolates"] == [{"name": "B11220", "origin": "clade II, Japan"},
+                                 {"name": "B14308", "origin": "clade II"}]
+    assert study["copy_number_baseline"] == 1 and loader.STUDIES["munoz2021"]["section"] == "strain_variation"
