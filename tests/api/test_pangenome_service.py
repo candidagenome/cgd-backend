@@ -66,6 +66,7 @@ def test_list_studies(data_dir, db):
     assert (studies[0].counts.not_in_reference_core, studies[0].counts.not_in_reference_accessory) == (1, 1)
     # studies default to the pangenome section and can be filtered by section
     assert studies[0].section == "pangenome"
+    assert studies[0].counts.absent_from_all == 0
     assert svc.list_studies(db, "strain_variation").studies == []
 
 

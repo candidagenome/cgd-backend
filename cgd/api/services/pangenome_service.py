@@ -111,7 +111,8 @@ def _summary(db: Session, data: dict) -> PangenomeStudySummary:
     study = data["study"]
     novel = [g["category"] for g in data["genes"] if not g["in_reference"]]
     counts = {**study.get("counts", {}), "not_in_reference_core": novel.count("core"),
-              "not_in_reference_accessory": novel.count("accessory")}
+              "not_in_reference_accessory": novel.count("accessory"),
+              "absent_from_all": sum(1 for g in data["genes"] if g.get("presence") == 0)}
     dbxref_id = None
     if study.get("pubmed"):
         dbxref_id = db.query(Reference.dbxref_id).filter(Reference.pubmed == study["pubmed"]).scalar()
