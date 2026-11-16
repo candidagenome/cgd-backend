@@ -1,4 +1,4 @@
-"""Tests for the C. glabrata parser in scripts/pangenome/load_pangenome_study.py."""
+"""Tests for the study parsers in scripts/pangenome/load_pangenome_study.py."""
 import importlib.util
 from pathlib import Path
 from unittest.mock import patch
@@ -15,55 +15,6 @@ FEATURES = (
     "CAGL0A00110g\t\tOLD_A00110\tORF|Verified\tChrA_C_glabrata_CBS138\t900\t100\tC\n"
     "CAGL0B00154g\t\t\tORF|Verified\tChrB_C_glabrata_CBS138\t2000\t3000\tW\n"
 )
-
-
-def write_tables(path: Path) -> None:
-    wb = openpyxl.Workbook()
-    wb.active.title = "Supplementary_table_1"
-    wb["Supplementary_table_1"].append(["Strain", "Genome size (Mb)", "Number of scaffolds", "N50"])
-    wb["Supplementary_table_1"].append(["S1", 12.4, 15, 1049635])
-    s3 = wb.create_sheet("Supplementary_table_3")
-    s3.append(["Strain", "Number of genes"])
-    s3.append(["S1 (Cg16)", 5292])
-    s4 = wb.create_sheet("Supplementary_table_4")
-    s4.append(["OrthoGroup", "Tag", "Filtering", "Reference", "S1", "S2"])
-    s4.append(["OG1", "Core", "-", "CAGL0A00110g, CAGL0B00116g", "a1, a2", "b1, b2"])
-    s4.append(["OG2", "Accessory", "Genuine", "-", "a3", "-"])
-    s4.append(["OG3", "Accessory", "Sequencing error", "CAGL0C00100g", "a4", "-"])
-    s4.append(["OG4", "Accessory", "Unclear", "CAGL0K07348g", "-", "b4"])
-    s4.append(["OG5", "Accessory", "Miss-prediction", "-", "a5", "-"])
-    wb.save(path)
-
-
-def test_parse_marcet2022(tmp_path):
-    write_tables(tmp_path / loader.MARCET_FILES["tables"])
-    (tmp_path / loader.MARCET_FILES["features"]).write_text(FEATURES)
-    # CAGL0B00116g was renamed in CGD; CAGL0K07348g was merged and keeps its name
-    renamed = {"CAGL0B00116g": "CAGL0B00154g", "CAGL0K07348g": "CAGL0K07348g", "CAGL0C00100g": "CAGL0C00100g"}
-    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: renamed[n] for n in names}):
-        study, genes = loader.parse_marcet2022(tmp_path)
-    by_id = {g["id"]: g for g in genes}
-    # one record per CBS138 gene, family-level presence; artefact families' CBS138 genes are core,
-    # flagged, and artefact families without a CBS138 gene are dropped
-    assert set(by_id) == {"CAGL0A00110g", "CAGL0B00116g", "OG2", "CAGL0C00100g", "CAGL0K07348g"}
-    artefact = by_id["CAGL0C00100g"]
-    assert (artefact["category"], artefact["type"], artefact["presence"]) == (
-        "core", "Core (gap: sequencing error)", 1)
-    a = by_id["CAGL0A00110g"]
-    assert (a["category"], a["presence"], a["chromosome"], a["start"], a["end"]) == (
-        "core", 2, "ChrA_C_glabrata_CBS138", 100, 900)
-    assert a["isolate_genes"] == {"S1": ["a1", "a2"], "S2": ["b1", "b2"]}
-    assert "1 other CBS138 gene: CAGL0B00116g" in a["note"]
-    assert (by_id["CAGL0B00116g"]["reference_gene"], by_id["CAGL0B00116g"]["start"]) == ("CAGL0B00154g", 2000)
-    merged = by_id["CAGL0K07348g"]
-    assert (merged["type"], merged["presence"], merged["chromosome"]) == ("Accessory (unclear)", 1, None)
-    assert (by_id["OG2"]["in_reference"], by_id["OG2"]["reference_gene"]) == (False, None)
-    assert study["isolate_count"] == 2 and study["stop_codons_reported"] is False
-    assert study["isolates"][0] == {"name": "S1", "assembly_level": "Chromosome-level",
-                                    "platform": "long + short reads", "contigs": 15, "n50": 1049635,
-                                    "gene_count": 5292}
-    assert "its 1 CBS138 genes are listed as core" in study["notes"][1]
-    assert "the 1 such families with no CBS138 gene are not shown" in study["notes"][1]
 
 
 CPAR_FEATURES = (
@@ -197,42 +148,6 @@ def test_parse_wang2025_cnv(tmp_path):
     assert study["copy_number_baseline"] == 1 and study["isolate_count"] == 2
 
 
-def test_parse_munoz2021(tmp_path):
-    s1 = openpyxl.Workbook()
-    s1.active.title = "S1. Sequencing"
-    s1.active.append(["Supplementary Table 1."])
-    s1.active.append(["Strain", "Clade", "Country"])
-    s1.active.append(["B11220", 2, "Japan"])
-    s1.save(tmp_path / loader.MUNOZ_FILES["isolates"])
-    s2 = openpyxl.Workbook()
-    s2.active.title = "S2. Genes loss"
-    s2.active.append(["Supplementary Table 2."])
-    s2.active.append(["B8441 regions not present in B11220 of length > 5kb"])
-    s2.active.append(["Region ID", "B8441 scaffold", "Chromosome", "Start", "End", "Length", "# genes",
-                      "# multi copy", "Notes", "IDs"])
-    s2.active.append(["del1", "scaffold00001", "chr1", 100, 1000, 901, 1, 0, "2 adhesins", "B9J08_000010"])
-    s2.save(tmp_path / loader.MUNOZ_FILES["regions"])
-    s3 = openpyxl.Workbook()
-    s3.active.title = "S3. DeletedinOtherClade2"
-    s3.active.append(["Supplementary Table 3."])
-    s3.active.append(["Region ID", "strain", "type", "coordinates", "length", "normalizedRD", "p-val"])
-    s3.active.append(["del1", "B11220", "deletion", "scaffold00001:1-1000", 1000, 0.0469, 1e-12])
-    s3.active.append(["del1", "B14308", "deletion", "scaffold00001:1-1000", 1000, 0.0042, 1e-12])
-    s3.active.append(["*Manual annotation", None, None, None, None, None, None])
-    s3.save(tmp_path / loader.MUNOZ_FILES["deletions"])
-    (tmp_path / loader.MUNOZ_FILES["features"]).write_text(AURIS_FEATURES)
-    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
-        study, genes = loader.parse_munoz2021(tmp_path)
-    gene = genes[0]
-    assert (gene["id"], gene["category"], gene["presence"], gene["chromosome"]) == (
-        "B9J08_000010", "accessory", 0, "Chr1_C_auris_B8441")
-    assert gene["copy_number"] == {"B11220": 0.05, "B14308": 0.0} and gene["type"] == "Lost in clade II (del1)"
-    assert gene["note"] == "Region del1 (chr1:100-1,000, 0.9 kb): 2 adhesins"
-    assert study["isolates"] == [{"name": "B11220", "origin": "clade II, Japan"},
-                                 {"name": "B14308", "origin": "clade II"}]
-    assert study["copy_number_baseline"] == 1 and loader.STUDIES["munoz2021"]["section"] == "strain_variation"
-
-
 def test_ryan2025_split(tmp_path):
     het = {"chromosome": "cpar_Chr_1", "position": 50, "heterozygous": ["A"], "homozygous": [], "isolates": 1}
     hom = {"chromosome": "cpar_Chr_1", "position": 90, "heterozygous": [], "homozygous": ["B"], "isolates": 1}
@@ -259,83 +174,3 @@ def test_ryan2025_split(tmp_path):
     assert stops["presence_reported"] is False and stops["isolate_count"] == 2
     assert [i["name"] for i in stops["isolates"]] == ["A", "B"]
     assert "2 stop sites that no isolate carries" in stops["notes"][2]
-
-
-TROP_FEATURES = (
-    "! header\n"
-    "CTRG_00005\t\t\tORF|Verified\tSupercontig_3.1_C_tropicalis_MYA-3404\t1000\t4012\tW\n"
-    "CTRG_00009\t\t\tORF|Verified\tSupercontig_3.1_C_tropicalis_MYA-3404\t9000\t6001\tC\n"
-)
-
-
-def test_parse_obrien2021_stops(tmp_path):
-    import gzip
-    ann = "T|stop_gained|HIGH|CTRG_00005|CTRG_00005|transcript|t|protein_coding|1/1|c.2702C>A|p.Ser901*|x|x|901/1337||"
-    ann2 = "G|stop_gained|HIGH|CTRG_00009|CTRG_00009|transcript|t|protein_coding|1/1|c.4G>T|p.Glu2*|x|x|2/999||"
-    lines = [
-        "##fileformat=VCFv4.2",
-        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tct01.ct01\tct02.ct02\tct03.ct03",
-        f"ctro_c_1.2\t9672\t.\tC\tT\t100\tPASS\tAC=3;ANN={ann}\tGT:DP\t0/1:20\t1/1:30\t./.:0",
-        f"ctro_c_1.2\t500\t.\tA\tG\t100\tPASS\tAC=0;ANN={ann2}\tGT\t0/0\t0/0\t0/0",  # carried by no isolate
-        f"ctro_c_1.2\t800\t.\tA\tG\t100\tLowQual\tANN={ann2}\tGT\t1/1\t1/1\t1/1",  # filtered out
-    ]
-    with gzip.open(tmp_path / loader.OBRIEN_FILES["variants"], "wt") as f:
-        f.write("\n".join(lines) + "\n")
-    wb = openpyxl.Workbook()
-    wb.active.append(["Table S1. List of strains"])
-    wb.active.append(["Strain name", "Strain code", "Strain description", "Source"])
-    wb.active.append(["SJH2014 ct01", "ct01", "Clinical", "Dublin"])
-    wb.save(tmp_path / loader.OBRIEN_FILES["isolates"])
-    (tmp_path / loader.OBRIEN_FILES["features"]).write_text(TROP_FEATURES)
-    with patch.object(loader, "resolve_retired_names", lambda names, abbrev: {n: n for n in names}):
-        study, genes = loader.parse_obrien2021_stops(tmp_path)
-    assert [g["id"] for g in genes] == ["CTRG_00005"]
-    stop = genes[0]["stop_codons"][0]
-    assert (stop["heterozygous"], stop["homozygous"]) == (["SJH2014 ct01"], ["ct02"])
-    # drawn on CGD's gene from the protein position: 1000 + 3 * 900
-    assert (stop["position"], stop["protein_change"], stop["aa_position"]) == (3700, "p.Ser901*", 901)
-    assert stop["source_position"] == "ctro_c_1.2:9,672 (Assembly B)" and stop["position_approximate"]
-    assert genes[0]["type"] == "Stop in 2 isolates, homozygous in 1"
-    assert study["isolate_count"] == 3 and study["presence_reported"] is False
-    assert study["isolates"][0] == {"name": "SJH2014 ct01", "origin": "Clinical, Dublin"}
-
-
-ALB_FEATURES = (
-    "! header\n"
-    "C1_05860W_A\t\t\tORF|Verified\tCa22chr1A_C_albicans_SC5314\t1218269\t1219270\tW\n"
-    "C1_00290W_A\t\t\tORF|Verified\tCa22chr1A_C_albicans_SC5314\t60000\t58000\tC\n"
-)
-
-
-def test_parse_ropars2018_stops(tmp_path):
-    stops = openpyxl.Workbook()
-    sheet = stops.active
-    sheet.title = "ORFs with stop codons"
-    sheet.append(["ORF name", "clade1 n=40", "clade13 n=35"])
-    sheet.append(["C1_05860W_A", 0, 35])
-    sheet.append(["C1_00290W_A", 2, 1])
-    sheet.append(["C1_00300W_A", 0, 0])  # no strain carries it
-    fixed = stops.create_sheet("38 ORFs spe to clade 13")
-    fixed.append(["ORF name", "Gene name", "Ortholog", "Start", "Stop", "ORF size", "Protein size", "Position (aa)"])
-    fixed.append(["C1_05860W_A", "PRN2", None, 1218269, 1219270, 1002, 334, 133])
-    stops.save(tmp_path / loader.ROPARS_FILES["stops"])
-    strains = openpyxl.Workbook()
-    strains.active.title = "Feuil1"
-    strains.active.append(["Strain", "Other", "First", "Tech", "Platform", "Country", "Site", "Clade", "DST",
-                           "Cluster (SNPs)"])
-    strains.active.append([None] * 10)
-    strains.active.append(["SC5314", None, None, None, None, "USA", "invasive", 1, 52, 1])
-    strains.active.append(["CEC999", None, None, None, None, "France", "superficial", 9, 1, 9])  # other cluster
-    strains.save(tmp_path / loader.ROPARS_FILES["isolates"])
-    (tmp_path / loader.ROPARS_FILES["features"]).write_text(ALB_FEATURES)
-    study, genes = loader.parse_ropars2018_stops(tmp_path)
-    by_id = {g["id"]: g for g in genes}
-    assert set(by_id) == {"C1_05860W_A", "C1_00290W_A"}
-    prn2 = by_id["C1_05860W_A"]
-    assert prn2["type"] == "Homozygous stop in 35 isolates (cluster 13: 35)"
-    # placed from the protein position on CGD's gene: 1218269 + 3 * 132
-    assert prn2["stop_codons"][0]["position"] == 1218665 and prn2["note"].startswith("Fixed in")
-    other = by_id["C1_00290W_A"]["stop_codons"][0]
-    assert other["position"] is None and other["group_counts"] == {"cluster 1": 2, "cluster 13": 1}
-    assert study["isolate_count"] == 75 and study["isolates"] == [
-        {"name": "SC5314", "origin": "cluster 1, USA, invasive"}]

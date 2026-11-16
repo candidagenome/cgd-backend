@@ -21,19 +21,14 @@ Usage:
     python scripts/pangenome/load_pangenome_study.py --study ryan2025
     python scripts/pangenome/load_pangenome_study.py --study ryan2025 --source-dir <dir with the .xlsx files>
     python scripts/pangenome/load_pangenome_study.py --study ryan2025_stops --source-dir <same dir>
-    python scripts/pangenome/load_pangenome_study.py --study marcet2022
     python scripts/pangenome/load_pangenome_study.py --study bergin2024
     python scripts/pangenome/load_pangenome_study.py --study wang2025
     python scripts/pangenome/load_pangenome_study.py --study wang2025_cnv
     python scripts/pangenome/load_pangenome_study.py --study xu2025
-    python scripts/pangenome/load_pangenome_study.py --study munoz2021
-    python scripts/pangenome/load_pangenome_study.py --study obrien2021_stops
-    python scripts/pangenome/load_pangenome_study.py --study ropars2018_stops
 """
 from __future__ import annotations
 
 import argparse
-import gzip
 import io
 import json
 import logging
@@ -281,24 +276,11 @@ def parse_ryan2025_stops(src: Path) -> tuple[dict, list[dict]]:
     return study, with_stops
 
 
-# --- Marcet-Houben et al. 2022, C. glabrata -------------------------------------------------------
+# --- CGD annotation -------------------------------------------------------------------------------
 
-MARCET_FILES = {
-    "tables": "12915_2022_1412_MOESM2_ESM.xlsx",  # Additional file 2: Tables S1-S8
-    "features": "C_glabrata_CBS138_current_chromosomal_feature.tab",  # CGD, for CBS138 gene coordinates
-}
-MARCET_URLS = {
-    MARCET_FILES["tables"]: "https://static-content.springer.com/esm/art%3A10.1186%2Fs12915-022-01412-1/"
-                            "MediaObjects/12915_2022_1412_MOESM2_ESM.xlsx",
-    MARCET_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_glabrata_CBS138/"
-                              "C_glabrata_CBS138_current_chromosomal_feature.tab",
-}
-# Table S4 "Filtering" of accessory orthogroups after the authors' manual curation
-MARCET_KEEP = {"Genuine": "Accessory (confirmed)", "Unclear": "Accessory (unclear)"}
-# Families whose variable presence the authors put down to an artefact: their CBS138 genes are
-# listed as core, flagged with the reason; artefact families without a CBS138 gene are not loaded
-MARCET_ARTEFACT = {"Sequencing error": "sequencing error", "Miss-prediction": "gene mis-prediction"}
-MAX_FAMILY_LISTED = 5
+GLABRATA_FEATURES = "C_glabrata_CBS138_current_chromosomal_feature.tab"  # CGD, for CBS138 gene coordinates
+GLABRATA_FEATURES_URL = ("https://www.candidagenome.org/download/chromosomal_feature_files/C_glabrata_CBS138/"
+                         "C_glabrata_CBS138_current_chromosomal_feature.tab")
 
 
 def cgd_features(path: Path) -> dict[str, dict]:
@@ -411,124 +393,15 @@ def chromosome_lengths(genes: list[dict], organism_abbrev: str) -> dict[str, int
     return lengths
 
 
-def parse_marcet2022(src: Path) -> tuple[dict, list[dict]]:
-    tables = src / MARCET_FILES["tables"]
-    features = cgd_features(src / MARCET_FILES["features"])
-
-    assemblies = {str(r[0]).strip(): r for r in sheet_rows(tables, "Supplementary_table_1", 2)}
-    gene_counts = {str(r[0]).split(" (")[0].strip(): clean(r[1])
-                   for r in sheet_rows(tables, "Supplementary_table_3", 2)}
-
-    ws = openpyxl.load_workbook(tables, read_only=True, data_only=True)["Supplementary_table_4"]
-    rows = ws.iter_rows(values_only=True)
-    header = next(rows)
-    strain_cols = [(i, str(h).strip()) for i, h in enumerate(header) if i >= 4 and h not in (None, "")]
-    total = len(strain_cols)
-
-    def members(cell) -> list[str]:
-        return [] if clean(cell) in (None, "-") else [m.strip() for m in str(cell).split(",") if m.strip()]
-
-    rows = [r for r in rows if r and r[0]]
-    kept = [r for r in rows if clean(r[1]) == "Core" or clean(r[2]) in MARCET_KEEP
-            or (clean(r[2]) in MARCET_ARTEFACT and members(r[3]))]
-    missing = sorted({m for r in kept for m in members(r[3]) if m not in features})
-    current = resolve_retired_names(missing, "C_glabrata_CBS138")
-    logger.info("%d CBS138 IDs not in the feature file; %d renamed in CGD", len(missing),
-                sum(1 for n in missing if current[n] != n))
-
-    genes, skipped, artefact_genes = [], {}, 0
-    for r in rows:
-        family, tag, filtering = str(r[0]).strip(), clean(r[1]), clean(r[2])
-        if r not in kept:
-            skipped[filtering] = skipped.get(filtering, 0) + 1
-            continue
-        isolate_genes = {strain: members(r[i]) for i, strain in strain_cols if members(r[i])}
-        if tag == "Core":
-            category, kind = "core", "Core gene family"
-        elif filtering in MARCET_ARTEFACT:
-            category, kind = "core", f"Core (gap: {MARCET_ARTEFACT[filtering]})"
-            artefact_genes += len(members(r[3]))
-        else:
-            category, kind = "accessory", MARCET_KEEP[filtering]
-        common = {
-            "category": category,
-            "presence": len(isolate_genes),
-            "type": kind,
-            "isolate_genes": isolate_genes,
-            "stop_codons": [],
-            "divergent_strains": {},
-        }
-        reference = members(r[3])
-        if not reference:
-            genes.append({"id": family, "in_reference": False, "reference_gene": None,
-                          "chromosome": None, "start": None, "end": None,
-                          "note": f"Gene family {family}; no CBS138 gene in the reference annotation", **common})
-            continue
-        for cagl in reference:
-            feature = features.get(cagl) or features.get(current.get(cagl, ""))
-            others = [m for m in reference if m != cagl]
-            note = f"Gene family {family}"
-            if others:
-                listed = ", ".join(others[:MAX_FAMILY_LISTED])
-                more = len(others) - MAX_FAMILY_LISTED
-                note += f" with {len(others)} other CBS138 gene{'s' if len(others) > 1 else ''}: {listed}"
-                note += f" and {more} more" if more > 0 else ""
-            genes.append({
-                "id": cagl,
-                "in_reference": True,
-                # Current CGD name when the study's ID is now an alias
-                "reference_gene": feature["feature_name"] if feature else current.get(cagl, cagl),
-                "chromosome": feature["chromosome"] if feature else None,
-                "start": feature["start"] if feature else None,
-                "end": feature["end"] if feature else None,
-                "note": note,
-                **common,
-            })
-
-    isolates = []
-    for _, strain in strain_cols:
-        asm = assemblies.get(strain)
-        isolates.append({
-            "name": strain,
-            "assembly_level": "Chromosome-level",
-            "platform": "long + short reads",
-            "contigs": clean(asm[2]) if asm else None,
-            "n50": clean(asm[3]) if asm else None,
-            "gene_count": gene_counts.get(strain),
-        })
-    logger.info("artefact families: %d CBS138 genes listed as core; skipped without a CBS138 gene: %s",
-                artefact_genes, skipped)
-    study = {
-        "isolate_count": total,
-        "isolates": isolates,
-        "divergent_strains": [],
-        "stop_codons_reported": False,
-        "core_definition": f"present in all {total} strains",
-        "notes": [
-            f"Gene families (OrthoFinder orthogroups) are from Table S4 across {total} chromosome-level genomes; "
-            "each CBS138 gene in a family is listed with that family's presence, and families with no CBS138 "
-            "gene are listed by family ID. The paper counts families: 5,072 core and 323 accessory.",
-            "The authors curated the accessory families by hand. Confirmed and unclear families are shown as "
-            "accessory. Where they attributed a family's gaps to sequencing errors or gene mis-prediction, its "
-            f"{artefact_genes} CBS138 genes are listed as core, flagged with the reason and the strains annotated; "
-            f"the {sum(skipped.values())} such families with no CBS138 gene are not shown.",
-            "Strain gene IDs per family are in each gene's details. The study did not report premature stop codons.",
-            "CBS138 gene positions are from the current CGD annotation; genes since merged or split in CGD "
-            "are listed but not drawn.",
-        ],
-    }
-    return study, genes
-
-
 # --- Wang et al. 2025, C. glabrata (109 clinical isolates) ------------------------------------------
 
 WANG_FILES = {
     "pangenome": "TEMI_A_2595789_SM5779.xlsx",  # Dataset S7: families x isolates, CBS138 homolog, PG type
-    "features": MARCET_FILES["features"],
+    "features": GLABRATA_FEATURES,
 }
 WANG_URLS = {
     WANG_FILES["pangenome"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC12704144.1/TEMI_A_2595789_SM5779.xlsx",
-    WANG_FILES["features"]: MARCET_URLS[MARCET_FILES["features"]],
+    WANG_FILES["features"]: GLABRATA_FEATURES_URL,
 }
 # The paper's four classes; CGD counts core and soft-core together as core, as the paper does
 PANGENOME_CLASSES = {"Core": ("core", "Core"), "Softcore": ("core", "Soft-core"),
@@ -770,316 +643,6 @@ def parse_xu2025(src: Path) -> tuple[dict, list[dict]]:
     return study, genes
 
 
-# --- Muñoz et al. 2021, C. auris clade II gene loss -------------------------------------------------
-
-MUNOZ_FILES = {
-    "isolates": "SuppTable1.xlsx",  # S1: sequenced isolates (clade, country)
-    "regions": "SuppTable2.xlsx",  # S2: B8441 regions over 5 kb missing from clade II (B11220), with gene IDs
-    "deletions": "SuppTable3.xlsx",  # S3: deletion calls for each region in each clade II isolate
-    "features": XU_FILES["features"],
-}
-MUNOZ_URLS = {
-    MUNOZ_FILES["isolates"]: "https://api.figshare.com/v2/file/download/26384548",
-    MUNOZ_FILES["regions"]: "https://api.figshare.com/v2/file/download/26384551",
-    MUNOZ_FILES["deletions"]: "https://api.figshare.com/v2/file/download/26384557",
-    MUNOZ_FILES["features"]: XU_URLS[XU_FILES["features"]],
-}
-
-
-def parse_munoz2021(src: Path) -> tuple[dict, list[dict]]:
-    features = cgd_features(src / MUNOZ_FILES["features"])
-    regions = [r for r in sheet_rows(src / MUNOZ_FILES["regions"], "S2. Genes loss", 4) if str(r[0]).startswith("del")]
-    depth: dict[str, dict[str, float]] = {}  # region -> isolate -> read depth relative to the genome
-    for r in sheet_rows(src / MUNOZ_FILES["deletions"], "S3. DeletedinOtherClade2", 3):
-        if str(r[0]).startswith("del") and r[1]:
-            depth.setdefault(str(r[0]), {})[str(r[1]).strip()] = round(float(r[5]), 2)
-    isolates = sorted({i for d in depth.values() for i in d})
-    known = {str(r[0]).strip(): r for r in sheet_rows(src / MUNOZ_FILES["isolates"], "S1. Sequencing", 3)}
-
-    gene_ids = [g.strip() for r in regions for g in str(r[9]).split(";") if g.strip()]
-    current = resolve_retired_names([g for g in gene_ids if g not in features], "C_auris_B8441")
-    genes = []
-    for r in regions:
-        region, chrom, start, end, notes = str(r[0]), clean(r[2]), int(r[3]), int(r[4]), clean(r[8])
-        copies = {i: depth.get(region, {}).get(i, 1.0) for i in isolates}  # not called deleted: present
-        absent = [i for i, d in copies.items() if d < BERGIN_ABSENT_BELOW]
-        where = f"{chrom}:{start:,}-{end:,}, {(end - start + 1) / 1000:.1f} kb"
-        for gid in (g.strip() for g in str(r[9]).split(";") if g.strip()):
-            feature = features.get(gid) or features.get(current.get(gid, ""))
-            genes.append({
-                "id": gid,
-                "category": "accessory" if absent else "core",
-                "in_reference": True,
-                "reference_gene": feature["feature_name"] if feature else current.get(gid, gid),
-                "presence": len(isolates) - len(absent),
-                "type": f"Lost in clade II ({region})" if absent else "Present",
-                "chromosome": feature["chromosome"] if feature else None,
-                "start": feature["start"] if feature else None,
-                "end": feature["end"] if feature else None,
-                "note": f"Region {region} ({where})" + (f": {notes}" if notes else ""),
-                "copy_number": copies,
-                "copy_number_min": min(copies.values()),
-                "copy_number_max": max(copies.values()),
-                "stop_codons": [],
-                "divergent_strains": {},
-            })
-    study = {
-        "isolate_count": len(isolates),
-        # all are clade II (Table S3); Table S1 gives the country of those it lists
-        "isolates": [{"name": i, "origin": "clade II" + (f", {clean(known[i][2])}" if i in known else "")}
-                     for i in isolates],
-        "divergent_strains": [],
-        "stop_codons_reported": False,
-        "copy_number_reported": True,
-        "copy_number_baseline": 1,
-        "copy_number_kind": "estimate",
-        "core_definition": None,
-        "notes": [
-            f"The {len(regions)} B8441 (clade I) regions over 5 kb missing from the clade II genome B11220 "
-            f"(Table S2), and their {len(genes)} genes; read-depth analysis found each region deleted in all "
-            f"{len(isolates)} clade II isolates examined (Table S3). Genes outside these regions were not "
-            "reported and are not listed.",
-            "Values per isolate are the region's read depth relative to the genome average (C. auris is haploid, "
-            "so about 1 for a single-copy region); near 0 means the region is absent.",
-            "Region del2 is the mating-type locus: B8441 (clade I) carries MTLa and clade II isolates MTLalpha "
-            "(Muñoz et al. 2018), so its absence reflects the other mating type rather than a loss.",
-            "The paper finds these subtelomeric losses remove adhesins (Hyr/Iff family) and transporters from "
-            "clade II, which is linked to ear infections rather than invasive disease.",
-        ],
-    }
-    return study, genes
-
-
-# --- O'Brien et al. 2021, C. tropicalis premature stop codons ---------------------------------------
-
-OBRIEN_FILES = {
-    "variants": "VCFFilesfor_GenotypePhenotype.vcf.gz",  # figshare: GATK + snpEff, 68 non-hybrid isolates
-    "isolates": "ppat.1009138.s010.xlsx",  # S1 Table: strain names, codes, sources
-    "features": "C_tropicalis_current_chromosomal_feature.tab",  # CGD's current annotation (CP047869-75)
-}
-OBRIEN_URLS = {
-    OBRIEN_FILES["variants"]: "https://api.figshare.com/v2/file/download/25195637",
-    OBRIEN_FILES["isolates"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC8041210.1/ppat.1009138.s010.xlsx",
-    OBRIEN_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/"
-                              "C_tropicalis/C_tropicalis_current_chromosomal_feature.tab",
-}
-HGVS_STOP = re.compile(r"^p\.[A-Za-z]{3}(\d+)\*$")
-
-
-def parse_obrien2021_stops(src: Path) -> tuple[dict, list[dict]]:
-    """
-    The genes with a premature stop codon (snpEff stop_gained) in the O'Brien et al. 2021 variant calls,
-    with the isolates carrying each one heterozygously or homozygously. The calls are positioned on the
-    authors' Assembly B, not CGD's MYA-3404 assembly, so stops are placed on CGD's gene coordinates from
-    their protein position and the Assembly B position is kept as the source position.
-    """
-    features = cgd_features(src / OBRIEN_FILES["features"])
-    strains = {}
-    for r in openpyxl.load_workbook(src / OBRIEN_FILES["isolates"], read_only=True,
-                                    data_only=True).worksheets[0].iter_rows(values_only=True):
-        if r and r[1] and str(r[1]).startswith("ct"):
-            strains[str(r[1]).strip()] = r
-
-    sites: dict[str, dict[tuple, dict]] = {}  # gene -> (contig, position, allele) -> stop
-    samples: list[str] = []
-    with gzip.open(src / OBRIEN_FILES["variants"], "rt") as vcf:
-        for line in vcf:
-            if line.startswith("##"):
-                continue
-            f = line.rstrip("\n").split("\t")
-            if line.startswith("#"):
-                samples = [c.split(".")[0] for c in f[9:]]  # "ct01.ct01" -> ct01
-                continue
-            if f[6] != "PASS" or "stop_gained" not in f[7]:
-                continue
-            alts = f[4].split(",")
-            ann = next((x[4:] for x in f[7].split(";") if x.startswith("ANN=")), "")
-            stops = {}  # allele index -> (gene, protein change)
-            for a in ann.split(","):
-                p = a.split("|")
-                if len(p) > 10 and "stop_gained" in p[1].split("&") and p[3].startswith("CTRG_") and p[0] in alts:
-                    stops.setdefault(alts.index(p[0]) + 1, (p[3], p[10]))
-            if not stops:
-                continue
-            gt_index = f[8].split(":").index("GT")
-            for allele, (gene, change) in stops.items():
-                site = sites.setdefault(gene, {}).setdefault((f[0], int(f[1]), allele), {
-                    "change": change, "heterozygous": [], "homozygous": []})
-                for sample, value in zip(samples, f[9:]):
-                    called = [x for x in value.split(":")[gt_index].replace("|", "/").split("/") if x != "."]
-                    carried = sum(1 for x in called if x == str(allele))
-                    if carried:
-                        site["homozygous" if carried == len(called) else "heterozygous"].append(sample)
-
-    def name(code: str) -> str:
-        return str(strains[code][0]).strip() if code in strains else code
-
-    missing = [g for g in sites if g not in features]
-    current = resolve_retired_names(missing, "C_tropicalis")
-    genes = []
-    for gene, gene_sites in sorted(sites.items()):
-        feature = features.get(gene) or features.get(current.get(gene, ""))
-        stops = []
-        for (contig, position, _), site in sorted(gene_sites.items()):
-            if not (site["heterozygous"] or site["homozygous"]):
-                continue
-            m = HGVS_STOP.match(site["change"])
-            aa = int(m.group(1)) if m else None
-            cgd_position = None
-            if feature and aa:  # the stop codon's first base on CGD's gene, ignoring any intron
-                offset = 3 * (aa - 1)
-                cgd_position = feature["start"] + offset if feature["strand"] != "C" else feature["end"] - offset
-            stops.append({
-                "chromosome": feature["chromosome"] if feature else None,
-                "position": cgd_position,
-                "position_approximate": True,
-                "aa_position": aa,
-                "protein_change": site["change"],
-                "source_position": f"{contig}:{position:,} (Assembly B)",
-                "isolates": len(site["heterozygous"]) + len(site["homozygous"]),
-                "homozygous_isolates": len(site["homozygous"]),
-                "heterozygous": [name(c) for c in site["heterozygous"]],
-                "homozygous": [name(c) for c in site["homozygous"]],
-            })
-        if not stops:
-            continue
-        genes.append({
-            "id": gene,
-            "category": "core",
-            "in_reference": True,
-            "reference_gene": feature["feature_name"] if feature else current.get(gene, gene),
-            "presence": None,
-            "type": stop_type(stops),
-            "chromosome": feature["chromosome"] if feature else None,
-            "start": feature["start"] if feature else None,
-            "end": feature["end"] if feature else None,
-            "note": None,
-            "stop_codons": stops,
-            "divergent_strains": {},
-        })
-
-    isolates = []
-    for code in samples:
-        r = strains.get(code)
-        isolates.append({"name": name(code),
-                         "origin": ", ".join(str(v).strip() for v in (r[2], r[3]) if v) if r else None})
-    study = {
-        "isolate_count": len(samples),
-        "isolates": isolates,
-        "divergent_strains": [],
-        "stop_codons_reported": True,
-        "presence_reported": False,
-        "core_definition": None,
-        "notes": [
-            f"Genes with a premature stop codon in at least one of {len(samples)} C. tropicalis isolates, from the "
-            "authors' variant calls (GATK, annotated with SnpEff; figshare 10.6084/m9.figshare.13128839). The "
-            "isolates are the non-hybrid ones the paper used for genotype-phenotype analysis.",
-            "A heterozygous stop leaves one intact copy in this diploid species; a homozygous stop removes "
-            "the full-length protein.",
-            "The variants were called on the authors' Assembly B, not the chromosome-level assembly CGD uses: "
-            "each stop is drawn on CGD's gene from its protein position (approximate where a gene has introns), "
-            "and its Assembly B position is given in the gene's details.",
-            "Frameshifts in the same calls are not shown: short insertions and deletions in repeats are "
-            "frequent and need filtering first.",
-        ],
-    }
-    return study, genes
-
-
-# --- Ropars et al. 2018, C. albicans homozygous premature stop codons -------------------------------
-
-ROPARS_FILES = {
-    "isolates": "41467_2018_4787_MOESM4_ESM.xlsx",  # Supplementary Data 1: strains, cluster, country, site
-    "stops": "41467_2018_4787_MOESM9_ESM.xlsx",  # Supplementary Data 6: ORFs with stop codons by cluster
-    "features": "C_albicans_SC5314_A22_current_chromosomal_feature.tab",  # CGD, gene coordinates and strand
-}
-ROPARS_URLS = {
-    ROPARS_FILES["isolates"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC5993739.1/41467_2018_4787_MOESM4_ESM.xlsx",
-    ROPARS_FILES["stops"]: "https://pmc-oa-opendata.s3.amazonaws.com/PMC5993739.1/41467_2018_4787_MOESM9_ESM.xlsx",
-    ROPARS_FILES["features"]: "https://www.candidagenome.org/download/chromosomal_feature_files/C_albicans_SC5314/"
-                              "C_albicans_SC5314_A22_current_chromosomal_feature.tab",
-}
-
-
-def parse_ropars2018_stops(src: Path) -> tuple[dict, list[dict]]:
-    """
-    Supplementary Data 6: the ORFs with a homozygous premature stop codon, counted by the strains of each
-    SNP cluster that carry one (no per-strain lists); the 39 fixed in cluster 13 also give the protein
-    position, which places their stop on CGD's gene.
-    """
-    features = cgd_features(src / ROPARS_FILES["features"])
-    wb = openpyxl.load_workbook(src / ROPARS_FILES["stops"], read_only=True, data_only=True)
-    rows = [r for r in wb["ORFs with stop codons"].iter_rows(values_only=True) if r and r[0]]
-    clusters = [(i, str(h).split()[0].replace("clade", "cluster "), int(str(h).split("n=")[1]))
-                for i, h in enumerate(rows[0]) if i > 0 and h]  # "clade13 n=35" -> ("cluster 13", 35)
-    fixed = wb["38 ORFs spe to clade 13"].iter_rows(min_row=2, values_only=True)
-    aa_positions = {str(r[0]).strip(): int(r[7]) for r in fixed if r and r[0] and isinstance(r[7], (int, float))}
-
-    genes = []
-    for r in rows[1:]:
-        gene = str(r[0]).strip()
-        counts = {name: int(r[i] or 0) for i, name, _ in clusters if int(r[i] or 0)}
-        if not counts:
-            continue
-        feature = features.get(gene)
-        aa = aa_positions.get(gene)
-        position = None
-        if feature and aa:  # the stop codon's first base on CGD's gene, ignoring any intron
-            offset = 3 * (aa - 1)
-            position = feature["start"] + offset if feature["strand"] != "C" else feature["end"] - offset
-        total = sum(counts.values())
-        by_cluster = ", ".join(f"{name}: {n}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1]))
-        genes.append({
-            "id": gene,
-            "category": "core",
-            "in_reference": True,
-            "reference_gene": feature["feature_name"] if feature else gene,
-            "presence": None,
-            "type": f"Homozygous stop in {total} isolate{'s' if total > 1 else ''} ({by_cluster})",
-            "chromosome": feature["chromosome"] if feature else None,
-            "start": feature["start"] if feature else None,
-            "end": feature["end"] if feature else None,
-            "note": "Fixed in, and specific to, cluster 13" if gene in aa_positions else None,
-            "stop_codons": [{
-                "chromosome": feature["chromosome"] if feature else None,
-                "position": position,
-                "position_approximate": position is not None,
-                "aa_position": aa,
-                "isolates": total,
-                "homozygous_isolates": total,
-                "heterozygous": [],
-                "homozygous": [],
-                "group_counts": counts,
-            }],
-            "divergent_strains": {},
-        })
-
-    cluster_names = {name.split()[1] for _, name, _ in clusters}
-    isolates = [{"name": str(r[0]).strip(),
-                 "origin": ", ".join(str(v) for v in (f"cluster {r[9]}", clean(r[5]), clean(r[6])) if v)}
-                for r in sheet_rows(src / ROPARS_FILES["isolates"], "Feuil1", 3)
-                if r[0] and str(r[9]).strip() in cluster_names]
-    study = {
-        "isolate_count": sum(n for _, _, n in clusters),
-        "isolates": isolates,
-        "divergent_strains": [],
-        "stop_codons_reported": True,
-        "presence_reported": False,
-        "core_definition": None,
-        "notes": [
-            f"Genes with a homozygous premature stop codon (nonsense mutation) in strains of the {len(clusters)} "
-            f"largest SNP clusters of {sum(n for _, _, n in clusters)} C. albicans isolates (Supplementary Data 6): "
-            + ", ".join(f"{name} ({n})" for _, name, n in clusters) + ".",
-            "The paper gives the number of strains in each cluster carrying a stop, not which strains, so gene "
-            "details show counts by cluster.",
-            f"{len(aa_positions)} stops are fixed in, and specific to, cluster 13, whose strains grow less well "
-            "and are less virulent; the paper gives their protein position, which places them on CGD's gene. "
-            "The other stops have no position and are not marked on the map.",
-        ],
-    }
-    return study, genes
-
-
 # --- Bergin et al. 2024, C. parapsilosis gene copy number ---------------------------------------
 
 BERGIN_FILES = {
@@ -1161,59 +724,6 @@ def parse_bergin2024(src: Path) -> tuple[dict, list[dict]]:
 
 
 STUDIES = {
-    "ropars2018_stops": {
-        "section": "strain_variation",
-        "organism_abbrev": "C_albicans_SC5314",
-        "species": "Candida albicans",
-        "reference_strain": "SC5314",
-        "pubmed": 29884848,
-        "pmcid": "PMC5993739",
-        "doi": "10.1038/s41467-018-04787-4",
-        "citation": "Ropars J et al. (2018) Gene flow contributes to diversification of the major fungal pathogen "
-                    "Candida albicans. Nat Commun 9:2253",
-        "title": "Candida albicans homozygous premature stop codons (Ropars et al. 2018)",
-        "license": "CC BY 4.0",
-        "data_source": "Gene positions from CGD; Supplementary Data 1 and 6 of the paper",
-        "files": list(ROPARS_FILES.values()),
-        "urls": ROPARS_URLS,
-        "parser": parse_ropars2018_stops,
-    },
-    "obrien2021_stops": {
-        "section": "strain_variation",
-        "organism_abbrev": "C_tropicalis",  # CGD's organism code for MYA-3404
-        "species": "Candida tropicalis",
-        "reference_strain": "MYA-3404",
-        "pubmed": 33788904,
-        "pmcid": "PMC8041210",
-        "doi": "10.1371/journal.ppat.1009138",
-        "citation": "O'Brien CE et al. (2021) Population genomics of the pathogenic yeast Candida tropicalis "
-                    "identifies hybrid isolates in environmental samples. PLoS Pathog 17(3):e1009138",
-        "title": "Candida tropicalis premature stop codons (O'Brien et al. 2021)",
-        "license": "CC BY 4.0",
-        "data_source": "Gene positions from CGD; the authors' variant calls (figshare 10.6084/m9.figshare.13128839) "
-                       "and S1 Table of the paper",
-        "files": list(OBRIEN_FILES.values()),
-        "urls": OBRIEN_URLS,
-        "parser": parse_obrien2021_stops,
-    },
-    "munoz2021": {
-        "section": "strain_variation",
-        "organism_abbrev": "C_auris_B8441",
-        "species": "Candida auris",
-        "reference_strain": "B8441",
-        "pubmed": 33769478,
-        "pmcid": "PMC8128392",
-        "doi": "10.1093/genetics/iyab029",
-        "citation": "Muñoz JF et al. (2021) Clade-specific chromosomal rearrangements and loss of subtelomeric "
-                    "adhesins in Candida auris. Genetics 218(1):iyab029",
-        "title": "Candida auris clade II gene loss (Muñoz et al. 2021)",
-        "license": "CC BY 4.0",
-        "data_source": "B8441 gene positions from CGD; Supplementary Tables S1-S3 of the paper (figshare "
-                       "10.25386/genetics.13759276)",
-        "files": list(MUNOZ_FILES.values()),
-        "urls": MUNOZ_URLS,
-        "parser": parse_munoz2021,
-    },
     "wang2025_cnv": {
         "section": "strain_variation",
         "organism_abbrev": "C_glabrata_CBS138",
@@ -1281,22 +791,6 @@ STUDIES = {
         "files": list(BERGIN_FILES.values()),
         "urls": BERGIN_URLS,
         "parser": parse_bergin2024,
-    },
-    "marcet2022": {
-        "organism_abbrev": "C_glabrata_CBS138",
-        "species": "Candida glabrata",
-        "reference_strain": "CBS138",
-        "pubmed": 36209154,
-        "pmcid": "PMC9548116",
-        "doi": "10.1186/s12915-022-01412-1",
-        "citation": "Marcet-Houben M et al. (2022) Chromosome-level assemblies from diverse clades reveal limited "
-                    "structural and gene content variation in the genome of Candida glabrata. BMC Biol 20:226",
-        "title": "Candida glabrata pangenome (Marcet-Houben et al. 2022)",
-        "license": "CC BY 4.0",
-        "data_source": "CBS138 gene positions from CGD; Additional file 2 (Tables S1, S3 and S4) of the paper",
-        "files": list(MARCET_FILES.values()),
-        "urls": MARCET_URLS,
-        "parser": parse_marcet2022,
     },
     "ryan2025_stops": {
         "section": "strain_variation",

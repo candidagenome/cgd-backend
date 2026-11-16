@@ -134,7 +134,7 @@ def _gene(record: dict, names: dict[str, str], detail: bool = True) -> Pangenome
         **data,
         gene_name=names.get(reference.upper()) if reference else None,
         stop_codon_count=len(stops),
-        # studies giving counts but no isolate lists (Ropars 2018): the largest count of any site
+        # studies giving counts but no isolate lists (e.g. per population): the largest count of any site
         stop_codon_isolates=len(isolates_with_stop) or max((stop.get("isolates") or 0 for stop in stops), default=0),
         stop_codons=stops if detail else [],
         divergent_strains=(record.get("divergent_strains") or {}) if detail else {},
@@ -208,7 +208,7 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
         ref = g.get("reference_gene")
         anchor = (coords.get(g["id"].upper()) or (coords.get(ref.upper()) if ref else None)
                   or (coords.get(g["anchor_gene"].upper()) if g.get("anchor_gene") else None))
-        # studies giving counts but no isolate lists (Ropars 2018) use their per-site counts
+        # studies giving counts but no isolate lists (e.g. per population) use their per-site counts
         stops = [MapStop(position=s.get("position"),
                          isolates=len(s.get("heterozygous", []) + s.get("homozygous", [])) or s.get("isolates") or 0,
                          homozygous=len(s.get("homozygous", [])) or s.get("homozygous_isolates") or 0)
