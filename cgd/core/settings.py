@@ -57,6 +57,13 @@ class Settings(BaseSettings):
         validation_alias="REGULATION_DATA_DIR"
     )
 
+    # Pangenome study files for the pangenome viewer
+    # (defaults to <cgd_data_dir>/pangenome; see scripts/pangenome/load_pangenome_study.py)
+    pangenome_data_dir: str = Field(
+        default="",
+        validation_alias="PANGENOME_DATA_DIR"
+    )
+
     # Back-compat toggle for CGI-style dispatch endpoint
     allow_search_dispatch: bool = True
 

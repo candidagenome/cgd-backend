@@ -1,0 +1,222 @@
+"""Tests for the pangenome viewer service (cgd/api/services/pangenome_service.py)."""
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from cgd.api.services import pangenome_service as svc
+
+STUDY = {
+    "study_id": "demo2025", "organism_abbrev": "C_parapsilosis_CDC317", "species": "Candida parapsilosis",
+    "reference_strain": "CDC317", "title": "Demo pangenome", "citation": "Doe J et al. (2025) Demo. J 1:1",
+    "pubmed": 1, "isolate_count": 10, "loaded": "2026-11-12",
+    "counts": {"genes": 4, "core": 2, "accessory": 2, "not_in_reference": 1, "with_stop_codons": 1,
+               "isolates_listed": 2},
+    "notes": ["demo"], "divergent_strains": ["S1"],
+    "isolates": [{"name": "A", "origin": "Ireland"}, {"name": "B", "origin": "USA"}],
+}
+STOP = {"chromosome": "chr1", "position": 50, "aa_position": 10, "isolates": 2, "homozygous_isolates": 1,
+        "heterozygous": ["A"], "homozygous": ["B"]}
+GENES = [
+    {"id": "CPAR2_100010", "category": "core", "in_reference": True, "type": "CDC317 Reference Gene",
+     "reference_gene": "CPAR2_100010", "chromosome": "chr1", "start": 1, "end": 300, "stop_codons": [STOP],
+     "divergent_strains": {"S1": {"presence": "Present", "identity": 99.5, "hit_status": "MBH"}},
+     "isolate_genes": {"A": ["a1"], "B": ["b1", "b2"]},
+     "copy_number": {"A": 2.1, "B": 6.4}, "copy_number_min": 2.1, "copy_number_max": 6.4},
+    {"id": "CPAR2_100020", "category": "accessory", "in_reference": True, "type": "CDC317 Reference Gene",
+     "presence": 7, "reference_gene": "CPAR2_100020", "ortholog": "SIT1", "chromosome": "chr1", "start": 400,
+     "end": 900, "stop_codons": []},
+    {"id": "PARALOG_100020_1", "category": "accessory", "in_reference": False, "type": "Tandem Duplicate",
+     "presence": 3, "reference_gene": "CPAR2_100020", "stop_codons": []},
+    {"id": "HYPOTHETICAL_000001", "category": "core", "in_reference": False, "type": "Not in CDC317",
+     "reference_gene": None, "stop_codons": []},
+    {"id": "CPAR2_100010.1", "category": "core", "in_reference": True, "type": "CDC317 Reference Gene",
+     "reference_gene": "CPAR2_100010.1", "anchor_gene": "CPAR2_100010", "stop_codons": []},
+]
+
+
+@pytest.fixture
+def data_dir(tmp_path, monkeypatch):
+    study_dir = tmp_path / "C_parapsilosis_CDC317" / "demo2025"
+    study_dir.mkdir(parents=True)
+    (study_dir / "study.json").write_text(json.dumps(STUDY))
+    (study_dir / "genes.json").write_text(json.dumps(GENES))
+    # a half-written reload must be ignored
+    (tmp_path / "C_parapsilosis_CDC317" / "demo2025.new").mkdir()
+    monkeypatch.setattr(svc.settings, "pangenome_data_dir", str(tmp_path))
+    monkeypatch.setattr(svc, "_studies", {})
+    monkeypatch.setattr(svc, "_gene_name_map", lambda db, abbrev: {"CPAR2_100020": "SIT1"})
+    return tmp_path
+
+
+@pytest.fixture
+def db():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.scalar.return_value = "CAL0000271000"
+    return db
+
+
+def test_list_studies(data_dir, db):
+    studies = svc.list_studies(db).studies
+    assert [s.study_id for s in studies] == ["demo2025"]
+    assert studies[0].reference_dbxref_id == "CAL0000271000"
+    assert studies[0].counts.accessory == 2
+    # not-in-reference split comes from the genes: HYPOTHETICAL_000001 (core), PARALOG_100020_1 (accessory)
+    assert (studies[0].counts.not_in_reference_core, studies[0].counts.not_in_reference_accessory) == (1, 1)
+    # studies default to the pangenome section and can be filtered by section
+    assert studies[0].section == "pangenome"
+    assert studies[0].counts.absent_from_all == 0
+    assert svc.list_studies(db, "strain_variation").studies == []
+
+
+def test_get_study_has_isolates(data_dir, db):
+    study = svc.get_study(db, "demo2025")
+    assert [i.name for i in study.isolates] == ["A", "B"]
+    with pytest.raises(svc.PangenomeNotFound):
+        svc.get_study(db, "nope")
+
+
+def test_list_genes_filters(data_dir, db):
+    assert svc.list_genes(db, "demo2025").total == 5
+    accessory = svc.list_genes(db, "demo2025", category="accessory", sort="presence").genes
+    assert [g.id for g in accessory] == ["PARALOG_100020_1", "CPAR2_100020"]
+    assert {g.id for g in svc.list_genes(db, "demo2025", reference="novel").genes} == {
+        "PARALOG_100020_1", "HYPOTHETICAL_000001"}
+    assert [g.id for g in svc.list_genes(db, "demo2025", stops=True).genes] == ["CPAR2_100010"]
+    # search matches the current CGD gene name, not just study IDs
+    found = {g.id for g in svc.list_genes(db, "demo2025", query="sit1").genes}
+    assert found == {"CPAR2_100020", "PARALOG_100020_1"}
+
+
+def test_list_genes_pages_without_stop_detail(data_dir, db):
+    page = svc.list_genes(db, "demo2025", page=2, page_size=3)
+    assert page.total == 5 and len(page.genes) == 2
+    first = svc.list_genes(db, "demo2025", stops=True).genes[0]
+    assert first.stop_codon_count == 1 and first.stop_codon_isolates == 2 and first.stop_codons == []
+
+
+def test_locus_includes_derived_accessory_genes(data_dir, db):
+    feature = SimpleNamespace(feature_name="CPAR2_100020", gene_name="SIT1",
+                              organism=SimpleNamespace(organism_abbrev="C_parapsilosis_CDC317",
+                                                       organism_name="Candida parapsilosis CDC317"))
+    db.query.return_value.options.return_value.join.return_value.filter.return_value \
+        .filter.return_value.filter.return_value.all.return_value = [feature]
+    with patch.object(svc, "_filter_features_by_preference", lambda db, features: features):
+        result = svc.get_locus_pangenome(db, "SIT1")
+    assert result.feature_name == "CPAR2_100020"
+    genes = result.studies[0].genes
+    assert [g.id for g in genes] == ["CPAR2_100020", "PARALOG_100020_1"]  # the gene itself first
+    assert genes[0].gene_name == "SIT1" and result.studies[0].isolate_count == 10
+    assert [o.organism for o in result.organisms] == ["Candida parapsilosis CDC317"]
+
+
+def test_locus_lists_every_organism_with_studies(data_dir, db, tmp_path):
+    # the same gene name in a second studied organism (ACT1 in C. parapsilosis and C. glabrata)
+    other = tmp_path / "C_glabrata_CBS138" / "glab2022"
+    other.mkdir(parents=True)
+    (other / "study.json").write_text(json.dumps({**STUDY, "study_id": "glab2022",
+                                                  "organism_abbrev": "C_glabrata_CBS138"}))
+    (other / "genes.json").write_text(json.dumps([{**GENES[1], "id": "CAGL0A00110g",
+                                                   "reference_gene": "CAGL0A00110g"}]))
+    features = [
+        SimpleNamespace(feature_name=name, gene_name="SIT1",
+                        organism=SimpleNamespace(organism_abbrev=abbrev, organism_name=organism))
+        for name, abbrev, organism in [("CPAR2_100020", "C_parapsilosis_CDC317", "Candida parapsilosis CDC317"),
+                                       ("CAGL0A00110g", "C_glabrata_CBS138", "Candida glabrata CBS138")]
+    ]
+    db.query.return_value.options.return_value.join.return_value.filter.return_value \
+        .filter.return_value.filter.return_value.all.return_value = features
+    with patch.object(svc, "_filter_features_by_preference", lambda db, features: features):
+        result = svc.get_locus_pangenome(db, "SIT1")
+    assert result.organism == "Candida parapsilosis CDC317"
+    by_organism = {o.organism: o for o in result.organisms}
+    assert set(by_organism) == {"Candida parapsilosis CDC317", "Candida glabrata CBS138"}
+    glabrata = by_organism["Candida glabrata CBS138"]
+    assert glabrata.feature_name == "CAGL0A00110g" and glabrata.studies[0].study.study_id == "glab2022"
+
+
+def test_locus_without_studies_is_empty(tmp_path, monkeypatch, db):
+    monkeypatch.setattr(svc.settings, "pangenome_data_dir", str(tmp_path / "missing"))
+    assert svc.get_locus_pangenome(db, "ACT1").studies == []
+
+
+def test_downloads(data_dir, db):
+    name, body = svc.download_table(db, "demo2025", "accessory")
+    lines = [line for line in body.splitlines() if not line.startswith("#")]
+    assert name == "demo2025_accessory.tsv"
+    header = lines[0].split("\t")
+    assert header[:3] == ["id", "core", "accessory"] and header[6] == "presence_of_10" and len(lines) == 3
+    # a study gene not in CGD points to the CGD gene it derives from
+    paralog = dict(zip(header, lines[2].split("\t")))
+    assert (paralog["id"], paralog["core"], paralog["accessory"]) == ("PARALOG_100020_1", "", "X")
+    assert paralog["cgd_page"] == "https://www.candidagenome.org/locus/CPAR2_100020"
+    assert paralog["about_id"] == "Study ID, not in CGD; related to CGD gene CPAR2_100020 (SIT1)"
+    # a study with per-isolate genes lists the isolates carrying each gene; every gene is ticked core or accessory
+    _, all_genes = svc.download_table(db, "demo2025", "genes")
+    rows = [line.split("\t") for line in all_genes.splitlines() if not line.startswith("#")]
+    first = dict(zip(rows[0], rows[1]))
+    assert (first["id"], first["core"], first["accessory"], first["carried_by"]) == ("CPAR2_100010", "X", "", "A,B")
+    assert (first["about_id"], first["cgd_page"]) == ("CGD gene", "https://www.candidagenome.org/locus/CPAR2_100010")
+    hypothetical = next(dict(zip(rows[0], r)) for r in rows if r[0] == "HYPOTHETICAL_000001")
+    assert (hypothetical["cgd_page"], hypothetical["about_id"]) == ("", "Study ID, not in CGD; no CDC317 counterpart")
+    split = next(dict(zip(rows[0], r)) for r in rows if r[0] == "CPAR2_100010.1")
+    assert split["about_id"] == "CGD gene"
+    _, core = svc.download_table(db, "demo2025", "core")
+    core_ids = [line.split("\t")[0] for line in core.splitlines() if not line.startswith("#")][1:]
+    assert core_ids == ["CPAR2_100010", "HYPOTHETICAL_000001", "CPAR2_100010.1"]
+    _, matrix = svc.download_table(db, "demo2025", "copy_number")
+    rows = [line.split("\t") for line in matrix.splitlines() if not line.startswith("#")]
+    assert rows[0] == ["gene", "gene_name", "A", "B"] and rows[1] == ["CPAR2_100010", "", "2.1", "6.4"]
+    _, stops = svc.download_table(db, "demo2025", "stop_codons")
+    assert "CPAR2_100010\tCPAR2_100010\t\tchr1\t50\t10\t2\t1\tA\tB" in stops
+    with pytest.raises(svc.PangenomeNotFound):
+        svc.download_table(db, "demo2025", "everything")
+
+
+def test_stop_isolates_from_counts(data_dir, db):
+    # a study giving per-site counts but no isolate lists still reports how many isolates carry a stop
+    record = {"id": "C1_00290W_A", "category": "core", "in_reference": True,
+              "stop_codons": [{"isolates": 3, "homozygous_isolates": 3, "heterozygous": [], "homozygous": []}]}
+    assert svc._gene(record, {}, detail=False).stop_codon_isolates == 3
+
+    # and the map draws its stops with those counts
+    genes = json.loads((data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json").read_text())
+    genes[0]["stop_codons"] = [{"position": 50, "isolates": 3, "homozygous_isolates": 3,
+                                "heterozygous": [], "homozygous": []}]
+    (data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json").write_text(json.dumps(genes))
+    stop = {g.id: g for g in svc.get_map(db, "demo2025").genes}["CPAR2_100010"].stops[0]
+    assert (stop.isolates, stop.homozygous) == (3, 3)
+
+
+def test_get_gene_includes_stops(data_dir, db):
+    gene = svc.get_gene(db, "demo2025", "cpar2_100010")
+    assert gene.stop_codons[0].homozygous == ["B"] and gene.divergent_strains["S1"].identity == 99.5
+    assert gene.isolate_genes == {"A": ["a1"], "B": ["b1", "b2"]} and gene.copy_number == {"A": 2.1, "B": 6.4}
+    # list rows leave the per-isolate genes and copy numbers out, keeping the copy-number range
+    row = svc.list_genes(db, "demo2025", query="CPAR2_100010").genes[0]
+    assert row.isolate_genes == {} and row.copy_number == {} and row.copy_number_max == 6.4
+    with pytest.raises(svc.PangenomeNotFound):
+        svc.get_gene(db, "demo2025", "CPAR2_999999")
+
+
+def test_map_places_variants_at_their_reference_gene(data_dir, db):
+    result = svc.get_map(db, "demo2025")
+    placed = {g.id: g for g in result.genes}
+    assert [c.name for c in result.chromosomes] == ["chr1"] and result.chromosomes[0].length == 900
+    # CGD chromosome lengths recorded at load time replace the furthest gene end
+    study = json.loads((data_dir / "C_parapsilosis_CDC317" / "demo2025" / "study.json").read_text())
+    (data_dir / "C_parapsilosis_CDC317" / "demo2025" / "study.json").write_text(
+        json.dumps({**study, "chromosome_lengths": {"chr1": 5000}}))
+    genes_file = data_dir / "C_parapsilosis_CDC317" / "demo2025" / "genes.json"
+    genes_file.write_text(genes_file.read_text())  # a reload rewrites genes.json, which the cache watches
+    svc._studies.clear()
+    assert svc.get_map(db, "demo2025").chromosomes[0].length == 5000
+    paralog = placed["PARALOG_100020_1"]
+    assert (paralog.start, paralog.end, paralog.placed_by) == (400, 900, "reference_gene")
+    assert placed["CPAR2_100020"].placed_by == "own" and placed["CPAR2_100020"].gene_name == "SIT1"
+    assert placed["CPAR2_100010"].stops[0].isolates == 2 and placed["CPAR2_100010"].stops[0].homozygous == 1
+    assert [g.id for g in result.unplaced] == ["HYPOTHETICAL_000001"]
+    # a split gene with no coordinates of its own is drawn at its anchor gene
+    assert (placed["CPAR2_100010.1"].start, placed["CPAR2_100010.1"].drawn_at) == (1, "CPAR2_100010")
+    assert paralog.drawn_at == "CPAR2_100020" and placed["CPAR2_100020"].drawn_at is None
