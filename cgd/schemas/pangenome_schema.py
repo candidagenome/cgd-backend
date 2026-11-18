@@ -30,6 +30,7 @@ class PangenomeCounts(BaseModel):
     not_in_reference_core: Optional[int] = None
     not_in_reference_accessory: Optional[int] = None
     absent_from_all: Optional[int] = None  # genes found in none of the study's isolates (derived when served)
+    duplicated: Optional[int] = None  # genes duplicated in at least one isolate (copy-number studies; derived)
     with_stop_codons: int
     isolates_listed: int
 
@@ -55,6 +56,8 @@ class PangenomeStudySummary(BaseModel):
     copy_number_reported: bool = False
     copy_number_baseline: Optional[float] = None  # copy number of an unchanged gene: 2 diploid, 1 haploid
     copy_number_kind: Optional[str] = None  # "estimate" (read coverage) or "count" (genes per assembly)
+    # a gene counts as duplicated in an isolate at or above this copy number (twice the baseline)
+    duplication_threshold: Optional[float] = None
     data_source: Optional[str] = None
     loaded: Optional[str] = None
     counts: PangenomeCounts
@@ -118,6 +121,7 @@ class PangenomeGene(BaseModel):
     copy_number_min: Optional[float] = None  # estimated copy number range across isolates, when the study gives it
     copy_number_max: Optional[float] = None
     copy_number: dict[str, float] = {}  # isolate -> estimated copy number
+    duplicated_isolates: int = 0  # isolates with at least the study's duplication_threshold copies
 
 
 class PangenomeGenePage(BaseModel):
@@ -170,6 +174,7 @@ class MapGene(BaseModel):
     end: Optional[int] = None
     placed_by: Optional[str] = None  # "own" coordinates, or those of its "reference_gene"
     drawn_at: Optional[str] = None  # the gene whose coordinates it is drawn at, when not its own
+    duplicated: int = 0  # isolates in which the gene is duplicated (copy-number studies)
     stops: list[MapStop] = []
 
 

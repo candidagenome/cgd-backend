@@ -48,15 +48,18 @@ def list_genes(
     reference: Optional[str] = Query(None, pattern="^(in|novel)$",
                                      description="in = in the reference annotation; novel = not in it"),
     stops: Optional[bool] = Query(None, description="only genes with (true) or without (false) premature stops"),
+    duplicated: Optional[bool] = Query(None, description="only genes duplicated (true) or not (false) in any "
+                                                         "isolate, for studies that give copy numbers"),
     q: Optional[str] = Query(None, description="gene ID, CGD name, ortholog, type, note or InterPro text"),
-    sort: str = Query("position", pattern="^(position|id|presence|stops)$"),
+    sort: str = Query("position", pattern="^(position|id|presence|stops|duplicated)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=50000),
     db: Session = Depends(get_db),
 ):
     """A study's pangenome genes, filtered and paged."""
     try:
-        return pangenome_service.list_genes(db, study_id, category, reference, stops, q, sort, page, page_size)
+        return pangenome_service.list_genes(db, study_id, category, reference, stops, q, sort, page, page_size,
+                                            duplicated)
     except PangenomeNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 

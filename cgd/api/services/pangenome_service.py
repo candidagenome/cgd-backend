@@ -41,11 +41,16 @@ from cgd.schemas.pangenome_schema import (
 logger = logging.getLogger(__name__)
 
 GENE_NAME_TTL = 600  # seconds; gene names change with curation
+# A gene counts as duplicated in an isolate at twice the study's baseline copy number or more (4 for a diploid
+# read-coverage estimate, 2 for a haploid gene count): lower cut-offs flag whole-chromosome trisomies and
+# read-depth noise across thousands of genes
+DUPLICATION_FOLD = 2
 SORT_KEYS = {
     "id": lambda g: g["id"],
     "presence": lambda g: (g.get("presence") is None, g.get("presence") or 0),
     "stops": lambda g: -len({s for stop in g.get("stop_codons") or []
                              for s in stop.get("heterozygous", []) + stop.get("homozygous", [])}),
+    "duplicated": lambda g: (-g.get("duplicated_isolates", 0), -(g.get("copy_number_max") or 0)),
     # genes without coordinates (most not in the reference) follow, by ID
     "position": lambda g: (g.get("chromosome") or "~", g.get("start") or 0, g["id"]),
 }
@@ -82,6 +87,11 @@ def _load(study_id: str) -> dict:
         return cached
     study = json.loads((directory / "study.json").read_text())
     genes = json.loads((directory / "genes.json").read_text())
+    threshold = _duplication_threshold(study)
+    if threshold:
+        for gene in genes:
+            gene["duplicated_isolates"] = sum(1 for cn in (gene.get("copy_number") or {}).values()
+                                              if cn is not None and cn >= threshold)
     by_reference: dict[str, list[dict]] = {}
     for gene in genes:
         if gene.get("reference_gene"):
@@ -89,6 +99,13 @@ def _load(study_id: str) -> dict:
     cached = {"mtime": mtime, "study": study, "genes": genes, "by_reference": by_reference}
     _studies[study_id] = cached
     return cached
+
+
+def _duplication_threshold(study: dict) -> Optional[float]:
+    """Copy number at which a gene counts as duplicated in an isolate, for studies that give copy numbers."""
+    if study.get("copy_number_reported") and study.get("copy_number_baseline"):
+        return DUPLICATION_FOLD * study["copy_number_baseline"]
+    return None
 
 
 def _gene_name_map(db: Session, organism_abbrev: str) -> dict[str, str]:
@@ -113,12 +130,15 @@ def _summary(db: Session, data: dict) -> PangenomeStudySummary:
     counts = {**study.get("counts", {}), "not_in_reference_core": novel.count("core"),
               "not_in_reference_accessory": novel.count("accessory"),
               "absent_from_all": sum(1 for g in data["genes"] if g.get("presence") == 0)}
+    threshold = _duplication_threshold(study)
+    if threshold:
+        counts["duplicated"] = sum(1 for g in data["genes"] if g.get("duplicated_isolates"))
     dbxref_id = None
     if study.get("pubmed"):
         dbxref_id = db.query(Reference.dbxref_id).filter(Reference.pubmed == study["pubmed"]).scalar()
     fields = PangenomeStudySummary.model_fields
     return PangenomeStudySummary(**{k: v for k, v in study.items() if k in fields and k != "counts"},
-                                 counts=counts, reference_dbxref_id=dbxref_id)
+                                 counts=counts, reference_dbxref_id=dbxref_id, duplication_threshold=threshold)
 
 
 def _gene(record: dict, names: dict[str, str], detail: bool = True) -> PangenomeGene:
@@ -158,7 +178,7 @@ def get_study(db: Session, study_id: str) -> PangenomeStudy:
 
 
 def _matches(gene: dict, names: dict[str, str], category: Optional[str], reference: Optional[str],
-             stops: Optional[bool], query: Optional[str]) -> bool:
+             stops: Optional[bool], query: Optional[str], duplicated: Optional[bool] = None) -> bool:
     if category and gene["category"] != category:
         return False
     if reference == "in" and not gene["in_reference"]:
@@ -166,6 +186,8 @@ def _matches(gene: dict, names: dict[str, str], category: Optional[str], referen
     if reference == "novel" and gene["in_reference"]:
         return False
     if stops is not None and bool(gene.get("stop_codons")) != stops:
+        return False
+    if duplicated is not None and bool(gene.get("duplicated_isolates")) != duplicated:
         return False
     if query:
         q = query.strip().upper()
@@ -180,10 +202,10 @@ def _matches(gene: dict, names: dict[str, str], category: Optional[str], referen
 
 def list_genes(db: Session, study_id: str, category: Optional[str] = None, reference: Optional[str] = None,
                stops: Optional[bool] = None, query: Optional[str] = None, sort: str = "position",
-               page: int = 1, page_size: int = 50) -> PangenomeGenePage:
+               page: int = 1, page_size: int = 50, duplicated: Optional[bool] = None) -> PangenomeGenePage:
     data = _load(study_id)
     names = _gene_name_map(db, data["study"]["organism_abbrev"])
-    genes = [g for g in data["genes"] if _matches(g, names, category, reference, stops, query)]
+    genes = [g for g in data["genes"] if _matches(g, names, category, reference, stops, query, duplicated)]
     genes.sort(key=SORT_KEYS.get(sort, SORT_KEYS["position"]))
     start = (page - 1) * page_size
     return PangenomeGenePage(study_id=study_id, total=len(genes), page=page, page_size=page_size,
@@ -215,7 +237,8 @@ def get_map(db: Session, study_id: str) -> PangenomeMap:
                  for s in g.get("stop_codons") or [] if s.get("position")]
         record = MapGene(id=g["id"], reference_gene=ref, gene_name=names.get(ref.upper()) if ref else None,
                          category=g["category"], in_reference=g["in_reference"], presence=g.get("presence"),
-                         type=g.get("type"), ortholog=g.get("ortholog"), stops=stops)
+                         type=g.get("type"), ortholog=g.get("ortholog"), stops=stops,
+                         duplicated=g.get("duplicated_isolates", 0))
         if anchor is None:
             unplaced.append(record)
             continue
@@ -291,7 +314,7 @@ def get_locus_pangenome(db: Session, name: str) -> PangenomeLocusResponse:
     return PangenomeLocusResponse(**organisms[0].model_dump(), organisms=organisms)
 
 
-DOWNLOAD_TABLES = ("genes", "core", "accessory", "stop_codons", "isolates", "copy_number")
+DOWNLOAD_TABLES = ("genes", "core", "accessory", "duplicated", "stop_codons", "isolates", "copy_number")
 LOCUS_URL = "https://www.candidagenome.org/locus/{}"
 
 
@@ -353,19 +376,25 @@ def download_table(db: Session, study_id: str, table: str) -> tuple[str, str]:
         # Studies with a per-isolate presence matrix also list the isolates carrying each gene, and studies
         # with copy numbers their range
         carried = any(g.get("isolate_genes") for g in data["genes"])
+        threshold = _duplication_threshold(study)
         if study.get("copy_number_reported"):
-            cols += ["copy_number_min", "copy_number_max"]
+            cols += ["copy_number_min", "copy_number_max"] + (["duplicated_isolates"] if threshold else [])
         # Pangenomes tick core or accessory, for sorting and filtering in a spreadsheet
         ticks = study.get("section", "pangenome") == "pangenome"
         strain = study.get("reference_strain") or "reference"
         out.write(f"# id: a CGD gene, or the study's own ID for a gene not in CGD's {strain} annotation; "
                   "about_id says which, and cgd_page links to the CGD gene, or to the CGD gene a study gene "
                   "derives from (paralog, fusion, full-length form)\n")
+        if threshold:
+            out.write(f"# duplicated_isolates: isolates with at least {threshold:g} copies of the gene (twice the "
+                      f"normal {study['copy_number_baseline']:g})\n")
         writer.writerow(["id"] + (["core", "accessory"] if ticks else []) + cols[1:4]
                         + [f"presence_of_{study['isolate_count']}"] + cols[5:]
                         + (["carried_by"] if carried else []) + ["cgd_page", "about_id"])
         for g in data["genes"]:
             if table in ("core", "accessory") and g["category"] != table:
+                continue
+            if table == "duplicated" and not g.get("duplicated_isolates"):
                 continue
             row = _gene(g, names, detail=False).model_dump()
             values = ["" if row.get(c) is None else row.get(c) for c in cols]
