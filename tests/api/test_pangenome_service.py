@@ -220,3 +220,36 @@ def test_map_places_variants_at_their_reference_gene(data_dir, db):
     # a split gene with no coordinates of its own is drawn at its anchor gene
     assert (placed["CPAR2_100010.1"].start, placed["CPAR2_100010.1"].drawn_at) == (1, "CPAR2_100010")
     assert paralog.drawn_at == "CPAR2_100020" and placed["CPAR2_100020"].drawn_at is None
+
+
+def test_duplications_for_copy_number_studies(data_dir, db):
+    # demo2025 gives no copy-number baseline, so it has no duplication threshold or count
+    demo = svc.get_study(db, "demo2025")
+    assert demo.duplication_threshold is None and demo.counts.duplicated is None
+
+    # a diploid read-coverage study: duplicated at twice the baseline (4 copies) or more
+    cnv = data_dir / "C_parapsilosis_CDC317" / "cnv2024"
+    cnv.mkdir()
+    (cnv / "study.json").write_text(json.dumps({**STUDY, "study_id": "cnv2024", "section": "strain_variation",
+                                                "copy_number_reported": True, "copy_number_baseline": 2}))
+    gene = {"category": "core", "in_reference": True, "chromosome": "chr1", "stop_codons": []}
+    (cnv / "genes.json").write_text(json.dumps([
+        {**gene, "id": "CPAR2_100010", "start": 1, "end": 300, "copy_number": {"A": 2.1, "B": 6.4},
+         "copy_number_max": 6.4},
+        {**gene, "id": "CPAR2_100020", "start": 400, "end": 900, "copy_number": {"A": 4.0, "B": 41.8},
+         "copy_number_max": 41.8},
+        {**gene, "id": "CPAR2_100030", "start": 1000, "end": 1200, "copy_number": {"A": 2.0, "B": 3.9},
+         "copy_number_max": 3.9},
+    ]))
+    study = svc.get_study(db, "cnv2024")
+    assert study.duplication_threshold == 4 and study.counts.duplicated == 2
+    duplicated = svc.list_genes(db, "cnv2024", duplicated=True, sort="duplicated").genes
+    assert [(g.id, g.duplicated_isolates) for g in duplicated] == [("CPAR2_100020", 2), ("CPAR2_100010", 1)]
+    assert [g.id for g in svc.list_genes(db, "cnv2024", duplicated=False).genes] == ["CPAR2_100030"]
+    assert {g.id: g.duplicated for g in svc.get_map(db, "cnv2024").genes} == {
+        "CPAR2_100010": 1, "CPAR2_100020": 2, "CPAR2_100030": 0}
+
+    _, body = svc.download_table(db, "cnv2024", "duplicated")
+    assert "# duplicated_isolates: isolates with at least 4 copies of the gene (twice the normal 2)" in body
+    rows = [line.split("\t") for line in body.splitlines() if not line.startswith("#")]
+    assert [dict(zip(rows[0], r))["duplicated_isolates"] for r in rows[1:]] == ["1", "2"]
